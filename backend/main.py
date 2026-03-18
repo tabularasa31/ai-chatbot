@@ -1,27 +1,25 @@
 """FastAPI application entry point."""
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from backend.auth.routes import auth_router
+from backend.chat.routes import chat_router
 from backend.clients.routes import clients_router
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.search.routes import search_router
-from backend.chat.routes import chat_router
+from backend.widget.routes import widget_router
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "https://ai-chatbot-three-lovat-32.vercel.app",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -32,6 +30,14 @@ app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")
 app.include_router(search_router, prefix="/search")
 app.include_router(chat_router, prefix="/chat")
+app.include_router(widget_router, prefix="/widget")
+
+
+@app.get("/embed.js")
+def serve_embed():
+    """Serve the embed widget script."""
+    path = Path(__file__).resolve().parent / "widget" / "static" / "embed.js"
+    return FileResponse(path, media_type="application/javascript")
 
 
 @app.get("/health")

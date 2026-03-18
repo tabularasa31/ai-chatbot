@@ -103,7 +103,7 @@ class Client(Base):
     )
     name = Column(String(255), nullable=False)
     api_key = Column(String(32), unique=True, nullable=False, index=True)
-    openai_api_key = Column(String(200), nullable=True, default=None)
+    openai_api_key = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)

@@ -9,6 +9,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from backend.core.limiter import limiter
+from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
 from backend.clients.routes import clients_router
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/auth")
+app.include_router(admin_router)
 app.include_router(clients_router, prefix="/clients")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")

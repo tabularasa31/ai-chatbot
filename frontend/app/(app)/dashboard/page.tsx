@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
+import { api, type ClientResponse } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
@@ -28,7 +28,7 @@ export default function DashboardPage() {
         ]);
         setUserEmail(user.email);
 
-        let client = clientOrNull;
+        let client: ClientResponse | null = clientOrNull;
         if (!client) {
           try {
             client = await api.clients.create("My Workspace");

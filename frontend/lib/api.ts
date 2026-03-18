@@ -45,6 +45,43 @@ export type ChatDebugResponse = {
   };
 };
 
+export type ClientResponse = {
+  id: string;
+  name: string;
+  api_key: string;
+  has_openai_key: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ClientMeResponse = ClientResponse & {
+  is_admin: boolean;
+};
+
+export type AdminMetricsSummary = {
+  total_users: number;
+  total_clients: number;
+  active_clients: number;
+  total_documents: number;
+  total_chat_sessions: number;
+  total_messages_user: number;
+  total_messages_assistant: number;
+  total_tokens_chat: number;
+};
+
+export type AdminClientMetricsItem = {
+  client_id: string;
+  name: string;
+  users_count: number;
+  documents_count: number;
+  embedded_documents_count: number;
+  chat_sessions_count: number;
+  messages_user_count: number;
+  messages_assistant_count: number;
+  tokens_used_chat: number;
+  has_openai_key: boolean;
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -123,13 +160,13 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
+      return data as ClientResponse;
     },
     async getMe() {
       const res = await authFetch(`${BASE_URL}/clients/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
-      return data as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
+      return data as ClientMeResponse;
     },
     async update(data: { name?: string; openai_api_key?: string | null }) {
       const res = await authFetch(`${BASE_URL}/clients/me`, {
@@ -139,7 +176,7 @@ export const api = {
       });
       const responseData = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
-      return responseData as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
+      return responseData as ClientResponse;
     },
   },
   documents: {
@@ -269,6 +306,19 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Debug failed"));
       return data as ChatDebugResponse;
+    },
+  },
+  admin: {
+    async getSummary(): Promise<AdminMetricsSummary> {
+      const res = await authFetch(`${BASE_URL}/admin/metrics/summary`);
+      if (!res.ok) throw new Error("Failed to load admin metrics summary");
+      return res.json();
+    },
+    async getClients(): Promise<AdminClientMetricsItem[]> {
+      const res = await authFetch(`${BASE_URL}/admin/metrics/clients`);
+      if (!res.ok) throw new Error("Failed to load admin client metrics");
+      const data = await res.json();
+      return data.items;
     },
   },
 };

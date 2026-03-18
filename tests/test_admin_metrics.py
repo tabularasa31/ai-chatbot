@@ -206,6 +206,49 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     assert our["tokens_used_chat"] == 0
 
 
+def test_admin_metrics_clients_users_count_by_client_id(
+    client: TestClient, db_session: Session
+) -> None:
+    """users_count reflects users with client_id, not just owner (user_id)."""
+    reg = client.post(
+        "/auth/register",
+        json={"email": "admin3@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Multi-User Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    user = db_session.query(User).filter(User.email == "admin3@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    # Owner has client_id set by create_client. Add a second user with same client_id.
+    from backend.auth.service import hash_password
+
+    user2 = User(
+        email="member@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        client_id=client_id,
+    )
+    db_session.add(user2)
+    db_session.commit()
+
+    resp = client.get(
+        "/admin/metrics/clients",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    our = next((i for i in items if i["client_id"] == str(client_id)), None)
+    assert our is not None
+    assert our["users_count"] == 2
+
+
 def test_clients_me_includes_is_admin(client: TestClient, db_session: Session) -> None:
     """GET /clients/me returns is_admin from user."""
     reg = client.post(

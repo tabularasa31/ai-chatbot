@@ -72,6 +72,12 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
+    client_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="SET NULL", use_alter=True, name="fk_users_client_id"),
+        nullable=True,
+        index=True,
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,
@@ -83,6 +89,7 @@ class User(Base):
     clients = relationship(
         "Client",
         back_populates="user",
+        foreign_keys="Client.user_id",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
@@ -115,7 +122,7 @@ class Client(Base):
         onupdate=_utcnow,
     )
 
-    user = relationship("User", back_populates="clients")
+    user = relationship("User", back_populates="clients", foreign_keys="Client.user_id")
     documents = relationship(
         "Document",
         back_populates="client",

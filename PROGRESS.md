@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-18 09:44 UTC  
+**Last Updated:** 2026-03-18 12:05 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** ALL 11 PHASES COMPLETE ✅ | Full Stack LIVE + Secured 🔐🚀
+**Status:** ALL 11 PHASES COMPLETE ✅ | Full Stack LIVE + Secured 🔐🚀 | RAG Quality Sprints IN PROGRESS 🧠
 
 ---
 
@@ -416,7 +416,33 @@ tokens_used: 230 ✅
   - POST /documents → 20/hour
 - Document limit: max 20 per client
 - CORS: allow_origins=["*"] for widget embedding
-- 94 tests all passing (rate limiting disabled in test env)
+- Custom OpenAI API key per client (required):
+  - `openai_api_key` on Client model
+  - Encrypted at rest via Fernet + ENCRYPTION_KEY
+  - Dashboard UI for setting/removing client key
+- 100+ tests all passing (rate limiting + encryption disabled/handled in test env)
+
+---
+
+### RAG Quality Sprints 🧠 (2026-03-18+)
+
+**What was done so far:**
+- RAG prompt tuned for support-style answers:
+  - assistant acts as technical support agent for client product (SaaS, API, docs)
+  - answers in the same language as the question (RU/EN)
+  - for "which setting / какая настройка" questions names the exact setting and UI path when present in context
+  - avoids false "I don't know" when relevant context exists
+- Hybrid retrieval:
+  - primary: vector search (text-embedding-3-small + cosine similarity)
+  - fallback: keyword search over chunk_text when max similarity < 0.3
+- Debug tooling:
+  - `/chat/debug` endpoint with full retrieval debug (mode + chunks)
+  - Dashboard "Debug" page: question → answer + retrieval debug (vector/keyword/none, previews)
+
+**Next candidates (see FEATURE_IDEAS_BACKLOG.md):**
+- Per-client system prompt (FI-007)
+- Improved chunking + metadata (FI-009)
+- Feedback 👍/👎 + bad answers report (FI-010)
 
 ---
 
@@ -466,7 +492,7 @@ pytest tests/ -v --cov=backend --cov-min-percentage=80
 | **Phases Complete** | 11/11 + Security Sprint ✅ |
 | **Phases Remaining** | 0 |
 | **Total Lines** | ~4,500 |
-| **Test Cases (Total)** | 94 |
+| **Test Cases (Total)** | 108 |
 | **Code Coverage** | All tests passing ✅ |
 | **Time Spent** | ~14 hours total |
 | **Timeline** | MVP DONE in 2 days! 🚀 |

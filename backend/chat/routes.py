@@ -11,11 +11,21 @@ from sqlalchemy.orm import Session
 from backend.core.limiter import limiter
 from backend.chat.schemas import (
     ChatHistoryResponse,
+    ChatMessageLogItem,
+    ChatMessageLogResponse,
     ChatRequest,
     ChatResponse,
+    ChatSessionListResponse,
+    ChatSessionSummaryResponse,
     MessageResponse,
 )
-from backend.chat.service import get_chat_history, process_chat_message, run_debug
+from backend.chat.service import (
+    get_chat_history,
+    get_session_logs,
+    list_chat_sessions,
+    process_chat_message,
+    run_debug,
+)
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.auth.middleware import get_current_user
@@ -152,6 +162,65 @@ def chat_debug(
         answer=answer,
         tokens_used=tokens_used,
         debug=debug_resp,
+    )
+
+
+@chat_router.get("/sessions", response_model=ChatSessionListResponse)
+def get_sessions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatSessionListResponse:
+    """
+    List all chat sessions for the authenticated client (inbox-style).
+    JWT auth required. Returns sessions sorted by last_activity DESC.
+    """
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    summaries = list_chat_sessions(client.id, db)
+    return ChatSessionListResponse(
+        sessions=[
+            ChatSessionSummaryResponse(
+                session_id=s.session_id,
+                message_count=s.message_count,
+                last_question=s.last_question,
+                last_answer_preview=s.last_answer_preview,
+                last_activity=s.last_activity,
+            )
+            for s in summaries
+        ],
+    )
+
+
+@chat_router.get("/logs/session/{session_id}", response_model=ChatMessageLogResponse)
+def get_session_logs_route(
+    session_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ChatMessageLogResponse:
+    """
+    Get full message log for a session (read-only).
+    JWT auth required. Returns 404 if session not found or not owner.
+    """
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    logs = get_session_logs(session_id, client.id, db)
+    if logs is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return ChatMessageLogResponse(
+        messages=[
+            ChatMessageLogItem(
+                session_id=sid,
+                role=role,
+                content=content,
+                created_at=created_at,
+            )
+            for sid, role, content, created_at in logs
+        ],
     )
 
 

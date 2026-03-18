@@ -631,6 +631,290 @@ def test_get_history_unauthenticated(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+# --- Sessions / logs inbox endpoint tests ---
+
+
+def test_get_sessions_returns_only_own_client_sessions(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """GET /chat/sessions returns only sessions for the authenticated client."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Chat, Message, MessageRole
+
+    reg_a = client.post(
+        "/auth/register",
+        json={"email": "sessions_a@example.com", "password": "SecurePass1!"},
+    )
+    token_a = reg_a.json()["token"]
+    cl_a = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Client A"},
+    )
+    set_client_openai_key(client, token_a)
+    client_id_a = uuid.UUID(cl_a.json()["id"])
+
+    # Create chat + messages for client A
+    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    db_session.add(chat_a)
+    db_session.commit()
+    db_session.refresh(chat_a)
+    msg1 = Message(chat_id=chat_a.id, role=MessageRole.user, content="Q1")
+    msg2 = Message(chat_id=chat_a.id, role=MessageRole.assistant, content="A1")
+    db_session.add_all([msg1, msg2])
+    db_session.commit()
+
+    # Create user B and client B with their own session
+    reg_b = client.post(
+        "/auth/register",
+        json={"email": "sessions_b@example.com", "password": "SecurePass1!"},
+    )
+    token_b = reg_b.json()["token"]
+    cl_b = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Client B"},
+    )
+    client_id_b = uuid.UUID(cl_b.json()["id"])
+    chat_b = Chat(client_id=client_id_b, session_id=uuid.uuid4())
+    db_session.add(chat_b)
+    db_session.commit()
+
+    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token_a}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sessions" in data
+    assert len(data["sessions"]) == 1
+    assert data["sessions"][0]["session_id"] == str(chat_a.session_id)
+    assert data["sessions"][0]["message_count"] == 2
+    assert data["sessions"][0]["last_question"] == "Q1"
+    assert data["sessions"][0]["last_answer_preview"] == "A1"
+
+
+def test_get_sessions_sorted_by_last_activity_desc(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """GET /chat/sessions returns sessions sorted by last_activity DESC."""
+    from datetime import datetime, timedelta
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "sessions_sort@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Sort Client"},
+    )
+    client_id = uuid.UUID(cl.json()["id"])
+
+    base_time = datetime.utcnow()
+    chat1 = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat2 = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add_all([chat1, chat2])
+    db_session.commit()
+    db_session.refresh(chat1)
+    db_session.refresh(chat2)
+
+    m1 = Message(chat_id=chat1.id, role=MessageRole.user, content="Q1")
+    m2 = Message(chat_id=chat1.id, role=MessageRole.assistant, content="A1")
+    m3 = Message(chat_id=chat2.id, role=MessageRole.user, content="Q2")
+    m4 = Message(chat_id=chat2.id, role=MessageRole.assistant, content="A2")
+    db_session.add_all([m1, m2, m3, m4])
+    db_session.commit()
+
+    # Manually set created_at so chat2 is more recent
+    from sqlalchemy import update
+    from backend.models import Message as MsgModel
+    db_session.execute(
+        update(MsgModel).where(MsgModel.id == m4.id).values(created_at=base_time + timedelta(hours=1))
+    )
+    db_session.execute(
+        update(MsgModel).where(MsgModel.id == m2.id).values(created_at=base_time)
+    )
+    db_session.commit()
+
+    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["sessions"]) == 2
+    # chat2 (more recent) should be first
+    assert data["sessions"][0]["session_id"] == str(chat2.session_id)
+    assert data["sessions"][0]["last_question"] == "Q2"
+    assert data["sessions"][1]["session_id"] == str(chat1.session_id)
+    assert data["sessions"][1]["last_question"] == "Q1"
+
+
+def test_get_sessions_last_answer_preview_truncated(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """last_answer_preview is truncated to ~120 chars with ... if longer."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "sessions_preview@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Preview Client"},
+    )
+    client_id = uuid.UUID(cl.json()["id"])
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    long_answer = "x" * 150
+    m1 = Message(chat_id=chat.id, role=MessageRole.user, content="Q")
+    m2 = Message(chat_id=chat.id, role=MessageRole.assistant, content=long_answer)
+    db_session.add_all([m1, m2])
+    db_session.commit()
+
+    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["sessions"]) == 1
+    preview = data["sessions"][0]["last_answer_preview"]
+    assert preview is not None
+    assert len(preview) <= 124  # 120 + "..."
+    assert preview.endswith("...")
+
+
+def test_get_session_logs_success(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """GET /chat/logs/session/{id} returns full message list for valid session."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "logs@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Logs Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl.json()["id"])
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    m1 = Message(chat_id=chat.id, role=MessageRole.user, content="Hello")
+    m2 = Message(chat_id=chat.id, role=MessageRole.assistant, content="Hi there")
+    db_session.add_all([m1, m2])
+    db_session.commit()
+
+    resp = client.get(
+        f"/chat/logs/session/{chat.session_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "messages" in data
+    assert len(data["messages"]) == 2
+    assert data["messages"][0]["role"] == "user"
+    assert data["messages"][0]["content"] == "Hello"
+    assert data["messages"][0]["session_id"] == str(chat.session_id)
+    assert data["messages"][1]["role"] == "assistant"
+    assert data["messages"][1]["content"] == "Hi there"
+    assert data["messages"][0]["created_at"] <= data["messages"][1]["created_at"]
+
+
+def test_get_session_logs_404_wrong_client(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """GET /chat/logs/session/{id} returns 404 if session belongs to another client."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg_a = client.post(
+        "/auth/register",
+        json={"email": "logsa@example.com", "password": "SecurePass1!"},
+    )
+    token_a = reg_a.json()["token"]
+    cl_a = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Client A"},
+    )
+    client_id_a = uuid.UUID(cl_a.json()["id"])
+    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    db_session.add(chat_a)
+    db_session.commit()
+    db_session.refresh(chat_a)
+    m = Message(chat_id=chat_a.id, role=MessageRole.user, content="Secret")
+    db_session.add(m)
+    db_session.commit()
+
+    reg_b = client.post(
+        "/auth/register",
+        json={"email": "logsb@example.com", "password": "SecurePass1!"},
+    )
+    token_b = reg_b.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Client B"},
+    )
+
+    resp = client.get(
+        f"/chat/logs/session/{chat_a.session_id}",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_get_session_logs_404_nonexistent(client: TestClient) -> None:
+    """GET /chat/logs/session/{id} returns 404 for nonexistent session."""
+    reg = client.post(
+        "/auth/register",
+        json={"email": "logs404@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Client"},
+    )
+    fake_id = uuid.uuid4()
+    resp = client.get(
+        f"/chat/logs/session/{fake_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_get_sessions_requires_auth(client: TestClient) -> None:
+    """GET /chat/sessions requires JWT."""
+    resp = client.get("/chat/sessions")
+    assert resp.status_code == 401
+
+
+def test_get_session_logs_requires_auth(client: TestClient) -> None:
+    """GET /chat/logs/session/{id} requires JWT."""
+    resp = client.get(f"/chat/logs/session/{uuid.uuid4()}")
+    assert resp.status_code == 401
+
+
 # --- Debug endpoint tests ---
 
 

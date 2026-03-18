@@ -43,6 +43,29 @@
 
 ---
 
+## Ключевые месседжи
+
+### "Chat9 as a team member" — главная метафора
+
+Не "AI chatbot". Не "widget". А **новый сотрудник саппорта**.
+
+- Отвечает на вопросы 24/7.
+- Отчитывается каждое утро.
+- Сам говорит где ему не хватает знаний.
+- Учится на обратной связи.
+
+**Применение:**
+- Заголовок лендинга: "Meet your new support team member."
+- Hero subheadline: "Works 24/7. Sends you a daily report. Gets better every week."
+- LinkedIn пост: "I added a new member to our support team. They work 24/7, never complain, and send me a report every morning."
+
+**Почему работает:**
+- Снимает страх "бот заменит людей" → бот помогает людям.
+- Создаёт эмоциональную связь с продуктом.
+- Отличает нас от сухих "AI chatbot platform" конкурентов.
+
+---
+
 ## Контент в работе
 
 ### LinkedIn пост (EN) — готов

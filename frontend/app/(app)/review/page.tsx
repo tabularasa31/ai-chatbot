@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { api, type BadAnswerItem } from "@/lib/api";
+import { api, type BadAnswerItem, type ChatDebugResponse } from "@/lib/api";
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -73,6 +73,12 @@ export default function ReviewPage() {
   );
 }
 
+type DebugState =
+  | null
+  | { loading: true }
+  | { loading: false; data: ChatDebugResponse }
+  | { loading: false; error: string };
+
 function BadAnswerCard({
   item,
   onUpdate,
@@ -84,6 +90,37 @@ function BadAnswerCard({
   const [idealText, setIdealText] = useState(item.ideal_answer ?? "");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [debugState, setDebugState] = useState<DebugState>(null);
+  const [showDebug, setShowDebug] = useState(false);
+
+  const loadDebug = useCallback(async () => {
+    if (!item.question) return;
+    setDebugState({ loading: true });
+    try {
+      const data = await api.chat.debug(item.question);
+      setDebugState({ loading: false, data });
+    } catch (err) {
+      setDebugState({
+        loading: false,
+        error: err instanceof Error ? err.message : "Failed to load debug",
+      });
+    }
+  }, [item.question]);
+
+  const handleToggleDebug = useCallback(() => {
+    if (showDebug) {
+      setShowDebug(false);
+    } else {
+      if (debugState === null) {
+        loadDebug();
+      }
+      setShowDebug(true);
+    }
+  }, [showDebug, debugState, loadDebug]);
+
+  const handleRetryDebug = useCallback(() => {
+    loadDebug();
+  }, [loadDebug]);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -166,6 +203,63 @@ function BadAnswerCard({
             </div>
           )}
           {saved && <span className="text-xs text-green-600 ml-2">Saved</span>}
+        </div>
+        <div>
+          <p className="text-xs font-medium text-slate-500 uppercase mb-1">Retrieval debug</p>
+          {item.question == null || item.question === "" ? (
+            <span className="text-xs text-slate-400 italic">No question for debug</span>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={handleToggleDebug}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                {showDebug ? "Hide debug" : "Show debug"}
+              </button>
+              {debugState?.loading && (
+                <span className="text-xs text-slate-500 ml-2">Loading…</span>
+              )}
+              {showDebug && debugState && !debugState.loading && "error" in debugState && (
+                <div className="mt-2 text-xs text-red-600">
+                  {debugState.error}
+                  <button
+                    type="button"
+                    onClick={handleRetryDebug}
+                    className="ml-2 text-blue-600 hover:underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {showDebug && debugState && !debugState.loading && "data" in debugState && (
+                <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-sm">
+                  <div className="mb-1 font-medium text-slate-700">
+                    Retrieval mode: {debugState.data.debug.mode}
+                  </div>
+                  {debugState.data.debug.chunks.length === 0 ? (
+                    <div className="text-slate-500 text-xs">No chunks retrieved.</div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {debugState.data.debug.chunks.map((chunk, i) => (
+                        <li
+                          key={`${chunk.document_id}-${i}`}
+                          className="border-t border-slate-200 pt-1 first:border-t-0 first:pt-0"
+                        >
+                          <div className="text-xs text-slate-500">
+                            Doc: {chunk.document_id} | score: {chunk.score?.toFixed(4) ?? "–"}
+                          </div>
+                          <div className="text-xs text-slate-800 whitespace-pre-wrap">
+                            {chunk.preview}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </div>

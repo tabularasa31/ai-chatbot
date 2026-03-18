@@ -32,6 +32,19 @@ export type BadAnswerItem = {
   created_at: string;
 };
 
+export type ChatDebugResponse = {
+  answer: string;
+  tokens_used: number;
+  debug: {
+    mode: "vector" | "keyword" | "none";
+    chunks: Array<{
+      document_id: string;
+      score: number;
+      preview: string;
+    }>;
+  };
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -247,7 +260,7 @@ export const api = {
         }>;
       };
     },
-    async debug(question: string) {
+    async debug(question: string): Promise<ChatDebugResponse> {
       const res = await authFetch(`${BASE_URL}/chat/debug`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -255,14 +268,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Debug failed"));
-      return data as {
-        answer: string;
-        tokens_used: number;
-        debug: {
-          mode: "vector" | "keyword" | "none";
-          chunks: Array<{ document_id: string; score: number; preview: string }>;
-        };
-      };
+      return data as ChatDebugResponse;
     },
   },
 };

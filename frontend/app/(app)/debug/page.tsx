@@ -1,28 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { api } from "@/lib/api";
-
-type DebugChunk = {
-  document_id: string;
-  score: number;
-  preview: string;
-};
-
-type DebugResult = {
-  answer: string;
-  tokens_used: number;
-  debug: {
-    mode: "vector" | "keyword" | "none";
-    chunks: DebugChunk[];
-  };
-};
+import { api, type ChatDebugResponse } from "@/lib/api";
 
 export default function DebugPage() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [result, setResult] = useState<DebugResult | null>(null);
+  const [result, setResult] = useState<ChatDebugResponse | null>(null);
 
   async function handleRun() {
     const q = question.trim();

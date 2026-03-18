@@ -27,7 +27,7 @@ export default function SignupPage() {
     try {
       const { token } = await api.auth.register(email, password);
       saveToken(token);
-      router.replace("/dashboard");
+      router.replace("/dashboard?verification_sent=1");
     } catch (err) {
       const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
       setError(typeof msg === "string" ? msg : "Registration failed");

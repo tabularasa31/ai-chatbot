@@ -78,6 +78,13 @@ class User(Base):
         nullable=True,
         index=True,
     )
+    is_verified = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )
+    verification_token = Column(String(128), nullable=True, unique=True)
+    verification_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

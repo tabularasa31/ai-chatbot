@@ -60,6 +60,12 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
+class VerifyEmailRequest(BaseModel):
+    """Request body for email verification."""
+
+    token: str
+
+
 class ErrorResponse(BaseModel):
     """Error response model."""
 

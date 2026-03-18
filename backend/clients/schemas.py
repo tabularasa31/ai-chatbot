@@ -42,6 +42,7 @@ class ClientMeResponse(ClientResponse):
     """Extended client response for /clients/me with user context."""
 
     is_admin: bool
+    is_verified: bool
 
 
 class UpdateClientRequest(BaseModel):

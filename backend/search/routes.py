@@ -32,12 +32,18 @@ def search_route(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if not client.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        )
 
     results_tuples = search_similar_chunks(
         client_id=client.id,
         query=body.query,
         top_k=body.top_k,
         db=db,
+        api_key=client.openai_api_key,
     )
 
     items = [

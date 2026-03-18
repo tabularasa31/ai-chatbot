@@ -4,19 +4,16 @@ from __future__ import annotations
 
 import math
 import uuid
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from backend.core.config import settings
+from backend.core.openai_client import get_openai_client
 from backend.models import Document, Embedding
-
-openai_client = OpenAI(api_key=settings.openai_api_key)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 
 
-def embed_query(query: str) -> list[float]:
+def embed_query(query: str, *, api_key: str) -> list[float]:
     """
     Embed a search query using OpenAI embeddings API.
 
@@ -26,6 +23,7 @@ def embed_query(query: str) -> list[float]:
     Returns:
         1536-dimensional embedding vector.
     """
+    openai_client = get_openai_client(api_key)
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=query,
@@ -60,6 +58,8 @@ def search_similar_chunks(
     query: str,
     top_k: int,
     db: Session,
+    *,
+    api_key: str,
 ) -> list[tuple[Embedding, float]]:
     """
     Search for similar chunks by embedding the query and comparing to stored vectors.
@@ -76,7 +76,7 @@ def search_similar_chunks(
     Returns:
         List of (embedding, similarity) tuples, sorted by similarity DESC.
     """
-    query_vector = embed_query(query)
+    query_vector = embed_query(query, api_key=api_key)
 
     embeddings = (
         db.query(Embedding)

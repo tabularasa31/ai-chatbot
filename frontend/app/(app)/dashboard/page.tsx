@@ -8,12 +8,16 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function DashboardPage() {
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [docCount, setDocCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [copiedApiKey, setCopiedApiKey] = useState(false);
   const [copiedEmbed, setCopiedEmbed] = useState(false);
+  const [openaiKeyInput, setOpenaiKeyInput] = useState("");
+  const [openaiKeySaving, setOpenaiKeySaving] = useState(false);
+  const [openaiKeyError, setOpenaiKeyError] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -39,6 +43,7 @@ export default function DashboardPage() {
           }
         }
         setApiKey(client.api_key);
+        setHasOpenaiKey(client.has_openai_key ?? false);
 
         const docs = await api.documents.list();
         setDocCount(docs.length);
@@ -50,6 +55,40 @@ export default function DashboardPage() {
     }
     load();
   }, []);
+
+  async function saveOpenaiKey() {
+    setOpenaiKeyError("");
+    const key = openaiKeyInput.trim();
+    if (!key) return;
+    if (!key.startsWith("sk-")) {
+      setOpenaiKeyError("OpenAI API key must start with 'sk-'");
+      return;
+    }
+    setOpenaiKeySaving(true);
+    try {
+      await api.clients.update({ openai_api_key: key });
+      setHasOpenaiKey(true);
+      setOpenaiKeyInput("");
+    } catch (err) {
+      setOpenaiKeyError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setOpenaiKeySaving(false);
+    }
+  }
+
+  async function removeOpenaiKey() {
+    setOpenaiKeyError("");
+    setOpenaiKeySaving(true);
+    try {
+      await api.clients.update({ openai_api_key: null });
+      setHasOpenaiKey(false);
+      setOpenaiKeyInput("");
+    } catch (err) {
+      setOpenaiKeyError(err instanceof Error ? err.message : "Failed to remove");
+    } finally {
+      setOpenaiKeySaving(false);
+    }
+  }
 
   function copyApiKey() {
     if (apiKey) {
@@ -112,6 +151,64 @@ export default function DashboardPage() {
             {copiedApiKey ? "Copied!" : "Copy"}
           </button>
         </div>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h2 className="text-lg font-medium text-slate-800 mb-2">OpenAI API Key</h2>
+        {!hasOpenaiKey ? (
+          <>
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg mb-4">
+              ⚠️ Add your OpenAI API key to enable chat
+            </div>
+            <input
+              type="password"
+              placeholder="sk-..."
+              value={openaiKeyInput}
+              onChange={(e) => setOpenaiKeyInput(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-md text-slate-800 mb-2"
+            />
+            <button
+              onClick={saveOpenaiKey}
+              disabled={openaiKeySaving || !openaiKeyInput.trim()}
+              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {openaiKeySaving ? "Saving..." : "Save"}
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-green-600 mb-2">✅ API key configured</p>
+            <input
+              type="password"
+              placeholder="sk-..."
+              value={openaiKeyInput}
+              onChange={(e) => setOpenaiKeyInput(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-300 rounded-md text-slate-800 mb-2"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={saveOpenaiKey}
+                disabled={openaiKeySaving || !openaiKeyInput.trim()}
+                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {openaiKeySaving ? "Saving..." : "Update key"}
+              </button>
+              <button
+                onClick={removeOpenaiKey}
+                disabled={openaiKeySaving}
+                className="px-4 py-2 bg-slate-200 text-slate-700 text-sm font-medium rounded-md hover:bg-slate-300 disabled:opacity-50"
+              >
+                Remove key
+              </button>
+            </div>
+          </>
+        )}
+        {openaiKeyError && (
+          <p className="text-red-600 text-sm mt-2">{openaiKeyError}</p>
+        )}
+        <p className="text-slate-500 text-xs mt-2">
+          Your key is used for embeddings and chat. Get yours at platform.openai.com
+        </p>
       </div>
 
       <div className="bg-white rounded-lg shadow-md p-6">

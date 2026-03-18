@@ -48,10 +48,15 @@ def create_embeddings_route(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if not client.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        )
 
     get_document(document_id, client.id, db)  # 404 if not found or not owner
 
-    embeddings = create_embeddings_for_document(document_id, db)
+    embeddings = create_embeddings_for_document(document_id, db, api_key=client.openai_api_key)
     return {
         "document_id": str(document_id),
         "chunks_created": len(embeddings),

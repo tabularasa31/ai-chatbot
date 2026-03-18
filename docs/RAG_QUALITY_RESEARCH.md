@@ -259,22 +259,101 @@ rewrite → retrieve → rerank → validate → answer
 
 ---
 
+---
+
+## Источник 4: Gemini
+
+### Что совпадает со всеми тремя
+- Overlap 50–75 токенов.
+- Hybrid search (BM25 + vector) с RRF.
+- Reranking через Cohere Rerank или BGE-Reranker (+20–30%).
+- Graceful degradation: fallback + org config в system prompt.
+- Метрики через RAGAS/TruLens.
+- Tenant isolation по tenant_id.
+
+### Что добавил Gemini (уникальное)
+
+#### 1. Small-to-Big Retrieval
+Новый паттерн chunking:
+- Храни маленькие чанки (100–200 токенов) для поиска (точный retrieval).
+- При нахождении → отдавай модели расширенный контекст вокруг чанка (parent document).
+- Эффект: точность поиска + глубина ответа.
+
+**Это новый подход к FI-009**, стоит изучить.
+
+#### 2. Chain-of-Thought (CoT) в system prompt
+
+```
+Сначала проанализируй контекст внутри <thinking>,
+затем давай ответ пользователю.
+```
+
+Повышает качество сложных технических ответов — модель "думает" перед ответом.
+
+#### 3. HyDE (Hypothetical Document Embeddings)
+
+Для коротких/расплывчатых вопросов:
+- Генерируй гипотетический ответ через GPT.
+- Ищи чанки не по вопросу, а по этому гипотетическому ответу.
+- Эффект: лучший retrieval когда вопрос слишком короткий ("лимиты API?").
+
+**Новая фича:** FI-036 — HyDE для коротких вопросов.
+
+#### 4. Semantic caching (RedisVL)
+
+Не просто кэш по точному запросу, а семантический:
+- Два похожих вопроса с разными формулировками → один кэшированный ответ.
+- Снижает latency и стоимость для популярных тем.
+
+**Усиливает идею caching**, добавить в P3.
+
+#### 5. Intent classifier (guardrails)
+
+Классификатор намерений перед RAG:
+- Вопрос про цены → сразу ссылка на прайс.
+- Вопрос про лимиты → сразу контакт менеджера.
+- Не пытаться "вытащить" из старого чанка то, что меняется часто.
+
+**Усиливает FI-031** (org config layer).
+
+#### 6. Citations в ответах
+
+В system prompt: "Всегда указывай источник. Пример: [Документация: API Auth]."
+- Пользователь видит откуда информация.
+- Доверие к ответам растёт.
+
+**Добавить в FI-007** (system prompt).
+
+#### 7. Auto-invalidation в CI/CD
+
+При обновлении документации:
+- DELETE старых эмбеддингов по `source_id`.
+- Загрузить новые.
+
+**Усиливает FI-029** (document versioning).
+
+---
+
 ## Сравнение источников
 
-| Тема | Perplexity | ChatGPT | DeepSeek | Вывод |
-|------|-----------|---------|----------|-------|
-| Overlap | 60–80 | 50–100 | 50–75 | ~60–80 ✅ делать |
-| Hybrid search | BM25 + pgvector | BM25 + embeddings | BM25 + vector + RRF | ✅ консенсус |
-| Reranking | Cross-encoder + Cohere | Cross-encoder | ms-marco локально | ✅ консенсус |
-| Graceful degradation | 3 уровня + org config | 3 уровня + tool layer | 3 уровня + fallback фразы | ✅ FI-031 |
-| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | multilingual-e5-large | Исследовать, P3 |
-| Query rewriting | Не упомянул | 🔥 Рекомендует | Не упомянул | FI-033, P2 |
-| LLM validation | Не упомянул | 🔥 Рекомендует | Косвенно | FI-034, P2 |
-| Prompt injection | Не упомянул | Не упомянул | 🔥 Упомянул | FI-035, P2 |
-| Cost per query | Не упомянул | Не упомянул | 🔥 Упомянул | В метрики |
-| HNSW index | Не упомянул | Не упомянул | 🔥 Упомянул | Добавить при FI-019 |
-| Caching | Не упомянул | Рекомендует | Redis + in-memory | P3 |
-| Observability | Важно | Очень важно | Prometheus + Grafana | Расширить /chat/debug |
+| Тема | Perplexity | ChatGPT | DeepSeek | Gemini | Вывод |
+|------|-----------|---------|----------|--------|-------|
+| Overlap | 60–80 | 50–100 | 50–75 | 50–75 | ~60–80 ✅ делать |
+| Hybrid search | ✅ | ✅ | ✅ RRF | ✅ RRF | Консенсус всех четырёх |
+| Reranking | Cohere | Cross-encoder | ms-marco | Cohere/BGE | Консенсус всех четырёх |
+| Graceful degradation | ✅ | ✅ | ✅ | ✅ Intent classifier | FI-031 |
+| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | multilingual-e5-large | Cohere Embed v3 | P3, исследовать |
+| Query rewriting | — | 🔥 | — | Query Translation | FI-033, P2 |
+| LLM validation | — | 🔥 | Косвенно | CoT в промпте | FI-034, P2 |
+| HyDE | — | — | — | 🔥 Уникально | FI-036, P2 |
+| Small-to-Big | — | — | — | 🔥 Уникально | В FI-009 |
+| Citations | — | — | — | 🔥 Уникально | В FI-007 |
+| Semantic cache | — | — | Redis | RedisVL | P3 |
+| Prompt injection | — | — | 🔥 | — | FI-035, P2 |
+| HNSW index | — | — | 🔥 | — | При FI-019 |
+| Cost per query | — | — | 🔥 | — | В метрики |
+| CI/CD для доков | — | — | — | 🔥 Auto-invalidation | В FI-029 |
+| Observability | Важно | Очень важно | Prometheus | — | Расширить /chat/debug |
 
 ---
 
@@ -290,5 +369,8 @@ rewrite → retrieve → rerank → validate → answer
 | FI-034 | LLM-based answer validation (post-generation) | ChatGPT | P2 |
 | FI-029 | Document versioning & recency scoring | Perplexity + DeepSeek | P2 |
 | FI-035 | Security: prompt injection protection | DeepSeek | P2 |
-| FI-028 update | Cross-lingual: Voyage-multilingual-2 / e5-large | Все три | P3 |
-| FI-030 | RAG metrics dashboard (RAGAS + cost per query) | Все три | P3 |
+| FI-036 | HyDE для коротких/расплывчатых вопросов | Gemini | P2 |
+| FI-009 update | Small-to-Big Retrieval + citations | Gemini | P1 |
+| FI-007 update | CoT + citations в system prompt | Gemini | P1 |
+| FI-028 update | Cross-lingual: Cohere/Voyage/e5-large | Все четыре | P3 |
+| FI-030 | RAG metrics (RAGAS/TruLens + cost per query) | Все четыре | P3 |

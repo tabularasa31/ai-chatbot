@@ -178,5 +178,22 @@ export const api = {
         }>;
       };
     },
+    async debug(question: string) {
+      const res = await authFetch(`${BASE_URL}/chat/debug`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Debug failed"));
+      return data as {
+        answer: string;
+        tokens_used: number;
+        debug: {
+          mode: "vector" | "keyword" | "none";
+          chunks: Array<{ document_id: string; score: number; preview: string }>;
+        };
+      };
+    },
   },
 };

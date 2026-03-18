@@ -45,24 +45,31 @@
 
 ## Ключевые месседжи
 
-### "Chat9 as a team member" — главная метафора
+### "Your support mate" — главная метафора и позиционирование
 
-Не "AI chatbot". Не "widget". А **новый сотрудник саппорта**.
+Не "AI chatbot". Не "widget". А **support mate** — живой, активный, рядом 24/7.
 
-- Отвечает на вопросы 24/7.
-- Отчитывается каждое утро.
-- Сам говорит где ему не хватает знаний.
+- Отвечает на вопросы пользователей круглосуточно.
+- Каждое утро присылает отчёт о том, что происходило.
+- Сам говорит, где ему не хватает знаний.
 - Учится на обратной связи.
 
-**Применение:**
-- Заголовок лендинга: "Meet your new support team member."
+**Ключевые фразы:**
+- Tagline: **"Your support mate, always on."**
+- Заголовок лендинга: **"Meet your new support mate."**
 - Hero subheadline: "Works 24/7. Sends you a daily report. Gets better every week."
-- LinkedIn пост: "I added a new member to our support team. They work 24/7, never complain, and send me a report every morning."
+- LinkedIn: "I added a new support mate to our team. They work 24/7, never complain, and send me a report every morning."
 
-**Почему работает:**
+**Почему "mate" лучше "team member":**
+- Живее, дружелюбнее, запоминается.
+- Не корпоративно.
+- Рифмуется с `getchat9.live` — live = живой, рядом.
+
+**Почему это работает как позиционирование:**
 - Снимает страх "бот заменит людей" → бот помогает людям.
 - Создаёт эмоциональную связь с продуктом.
-- Отличает нас от сухих "AI chatbot platform" конкурентов.
+- Отличает нас от сухих "AI chatbot platform" конкурентов (DocsBot, SiteGPT).
+- Daily report делает Chat9 "видимым" каждый день — даже когда клиент не заходит в дашборд.
 
 ---
 

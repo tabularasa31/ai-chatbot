@@ -220,9 +220,60 @@ RICE = (Reach × Impact × Confidence) / Effort
 
 ---
 
+### 🔴 P1 (learning loop)
+
+#### [FI-037] Approved Answers Layer (👍 → instant answers)
+
+**Идея:**
+Ответы, помеченные 👍, становятся отдельным слоем поиска. Перед RAG — ищем в проверенных ответах. Если нашли → отдаём без GPT.
+
+**Три уровня реализации:**
+
+**Уровень 1 — MVP:**
+- Таблица `approved_answers` (вопрос + ответ + tenant_id + embedding).
+- При каждом 👍 → запись в `approved_answers`.
+- Перед RAG: semantic search по `approved_answers`.
+- Если similarity > 0.85 → отдаём готовый ответ (без GPT).
+
+**Уровень 2 — Редактирование:**
+- Использовать `ideal_answer` из `Message` как эталон вместо исходного ответа.
+- Клиент редактирует ответ в `/review` → "Одобрить как эталонный".
+- Версионирование approved answers.
+
+**Уровень 3 — Fine-tuning:**
+- (вопрос + контекст + ideal_answer) → датасет для fine-tuning.
+- Бот обучается на своих лучших ответах без переобучения модели вручную.
+
+**Что это даёт:**
+- **Точность:** проверенные ответы — не галлюцинации, одобрены человеком.
+- **Скорость:** нет GPT-вызова → мгновенный ответ.
+- **Экономия:** меньше токенов на частые вопросы.
+- **Continuous improvement:** система умнеет по мере накопления 👍.
+
+**Связь с существующим:**
+- `Message.feedback = up` → источник данных.
+- `Message.ideal_answer` → эталонный текст.
+- `/review` → интерфейс для одобрения и редактирования.
+
+**Pipeline:**
+```
+Вопрос пользователя
+    ↓
+Semantic search в approved_answers (similarity > 0.85?)
+    ↓ да                           ↓ нет
+Instant answer               Обычный RAG pipeline
+(без GPT)                         ↓
+                            GPT ответ + возможность 👍
+```
+
+**Effort:** 3–4 дня (Уровень 1)
+**Приоритет:** P1 — замыкает петлю обучения системы.
+
+---
+
 ## 🧊 Идеи (не приоритизированы)
 
-- **FI-010** — Training data pipeline: 👎 → fine-tuning data
+- **FI-010** — Training data pipeline: 👎 → fine-tuning data (теперь часть FI-037 Уровень 3)
 - **FI-012** — Расширенный admin dashboard (grafana-style)
 - **FI-003/004** — Rate limiting per-user через Redis (нужен вместе с тарифами)
 - **FI-028** — Cross-lingual retrieval (вопрос на EN, документы на RU и наоборот)
@@ -261,3 +312,4 @@ RICE = (Reach × Impact × Confidence) / Effort
 | 2026-03-18 | Добавлены FI-027 (Zendesk/Intercom) и FI-011 v2 (автоFAQ) — западный рынок. |
 | 2026-03-18 | Добавлены FI-031 (org config) и FI-032 (document health check) — улучшение качества данных. |
 | 2026-03-18 | Осмыслены рекомендации Perplexity. Вывод: сначала данные и промпт, потом алгоритмы. |
+| 2026-03-18 | Добавлен FI-037 (Approved Answers Layer) — 👍 → instant answers → learning loop. |

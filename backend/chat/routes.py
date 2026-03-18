@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from backend.core.limiter import limiter
 from backend.chat.schemas import (
+    BadAnswerItem,
+    BadAnswerListResponse,
     ChatHistoryResponse,
     ChatMessageLogItem,
     ChatMessageLogResponse,
@@ -17,6 +19,8 @@ from backend.chat.schemas import (
     ChatResponse,
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
+    MessageFeedbackRequest,
+    MessageFeedbackResponse,
     MessageResponse,
 )
 from backend.chat.service import (
@@ -29,7 +33,7 @@ from backend.chat.service import (
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.auth.middleware import get_current_user
-from backend.models import User
+from backend.models import Chat, Message, MessageFeedback, MessageRole, User
 
 
 class DebugRequest(BaseModel):
@@ -214,14 +218,120 @@ def get_session_logs_route(
     return ChatMessageLogResponse(
         messages=[
             ChatMessageLogItem(
+                id=msg_id,
                 session_id=sid,
                 role=role,
                 content=content,
+                feedback=feedback,
+                ideal_answer=ideal_answer,
                 created_at=created_at,
             )
-            for sid, role, content, created_at in logs
+            for msg_id, sid, role, content, feedback, ideal_answer, created_at in logs
         ],
     )
+
+
+@chat_router.post("/messages/{message_id}/feedback", response_model=MessageFeedbackResponse)
+def set_message_feedback(
+    message_id: uuid.UUID,
+    body: MessageFeedbackRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> MessageFeedbackResponse:
+    """
+    Set feedback (up/down) and optional ideal_answer on an assistant message.
+    JWT auth required. 400 if message is not assistant, 404 if not found or not owner.
+    """
+    from sqlalchemy.orm import joinedload
+
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    message = (
+        db.query(Message)
+        .options(joinedload(Message.chat))
+        .filter(Message.id == message_id)
+        .first()
+    )
+    if not message or message.chat.client_id != client.id:
+        raise HTTPException(status_code=404, detail="Message not found")
+    if message.role != MessageRole.assistant:
+        raise HTTPException(
+            status_code=400,
+            detail="Feedback can only be set on assistant messages",
+        )
+
+    message.feedback = MessageFeedback(body.feedback.value)
+    message.ideal_answer = body.ideal_answer if body.ideal_answer else None
+    db.commit()
+    db.refresh(message)
+
+    return MessageFeedbackResponse(
+        id=message.id,
+        feedback=body.feedback,
+        ideal_answer=message.ideal_answer,
+    )
+
+
+@chat_router.get("/bad-answers", response_model=BadAnswerListResponse)
+def list_bad_answers(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: int = 50,
+    offset: int = 0,
+) -> BadAnswerListResponse:
+    """
+    List assistant messages with feedback=down for the authenticated client.
+    JWT auth required. Returns question (previous user msg), answer, ideal_answer.
+    """
+    from sqlalchemy import desc
+
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    # Find assistant messages with feedback=down, belonging to client's chats
+    bad_messages = (
+        db.query(Message)
+        .join(Chat, Message.chat_id == Chat.id)
+        .filter(
+            Message.role == MessageRole.assistant,
+            Message.feedback == MessageFeedback.down,
+            Chat.client_id == client.id,
+        )
+        .order_by(desc(Message.created_at))
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+
+    items: list[BadAnswerItem] = []
+    for msg in bad_messages:
+        # Find previous user message in same chat
+        prev_user = (
+            db.query(Message)
+            .filter(
+                Message.chat_id == msg.chat_id,
+                Message.role == MessageRole.user,
+                Message.created_at < msg.created_at,
+            )
+            .order_by(Message.created_at.desc())
+            .first()
+        )
+        question = prev_user.content if prev_user else None
+        items.append(
+            BadAnswerItem(
+                message_id=msg.id,
+                session_id=msg.chat.session_id,
+                question=question,
+                answer=msg.content,
+                ideal_answer=msg.ideal_answer,
+                created_at=msg.created_at,
+            )
+        )
+
+    return BadAnswerListResponse(items=items)
 
 
 @chat_router.get("/history/{session_id}", response_model=ChatHistoryResponse)

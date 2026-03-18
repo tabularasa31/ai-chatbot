@@ -3,10 +3,41 @@
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+
+class MessageFeedbackValue(str, Enum):
+    up = "up"
+    down = "down"
+    none = "none"
+
+
+class MessageFeedbackRequest(BaseModel):
+    feedback: MessageFeedbackValue
+    ideal_answer: Optional[str] = None
+
+
+class MessageFeedbackResponse(BaseModel):
+    id: UUID
+    feedback: MessageFeedbackValue
+    ideal_answer: Optional[str]
+
+
+class BadAnswerItem(BaseModel):
+    message_id: UUID
+    session_id: UUID
+    question: Optional[str]
+    answer: str
+    ideal_answer: Optional[str]
+    created_at: datetime
+
+
+class BadAnswerListResponse(BaseModel):
+    items: list[BadAnswerItem]
 
 
 class ChatRequest(BaseModel):
@@ -71,9 +102,12 @@ class ChatSessionListResponse(BaseModel):
 class ChatMessageLogItem(BaseModel):
     """Single message in chat logs (read-only)."""
 
+    id: UUID
     session_id: UUID
     role: Literal["user", "assistant"]
     content: str
+    feedback: Literal["none", "up", "down"]
+    ideal_answer: Optional[str]
     created_at: datetime
 
 

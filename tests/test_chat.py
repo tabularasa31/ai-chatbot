@@ -915,6 +915,314 @@ def test_get_session_logs_requires_auth(client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+# --- Feedback endpoint tests ---
+
+
+def test_set_message_feedback_success_up(
+    client: TestClient,
+    db_session,
+) -> None:
+    """Can set feedback=up on assistant message."""
+    from backend.models import Chat, Message, MessageFeedback, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "fbup@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fb Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(chat_id=chat.id, role=MessageRole.assistant, content="Answer")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "up"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feedback"] == "up"
+    assert data["ideal_answer"] is None
+    assert data["id"] == str(msg.id)
+
+
+def test_set_message_feedback_success_down(
+    client: TestClient,
+    db_session,
+) -> None:
+    """Can set feedback=down with ideal_answer on assistant message."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "fbdown@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fb Down Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(chat_id=chat.id, role=MessageRole.assistant, content="Bad answer")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "down", "ideal_answer": "This is the ideal answer."},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["feedback"] == "down"
+    assert data["ideal_answer"] == "This is the ideal answer."
+
+
+def test_set_message_feedback_rejects_user_message(
+    client: TestClient,
+    db_session,
+) -> None:
+    """400 if trying to set feedback on user message."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "fbuser@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fb User Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(chat_id=chat.id, role=MessageRole.user, content="Question")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "down"},
+    )
+    assert resp.status_code == 400
+    assert "assistant" in resp.json()["detail"].lower()
+
+
+def test_set_message_feedback_requires_auth(client: TestClient, db_session) -> None:
+    """401 without JWT."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "fbauth@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fb Auth Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(chat_id=chat.id, role=MessageRole.assistant, content="A")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        json={"feedback": "up"},
+    )
+    assert resp.status_code == 401
+
+
+def test_set_message_feedback_wrong_client(
+    client: TestClient,
+    db_session,
+) -> None:
+    """404 if trying to set feedback for message from another client."""
+    from backend.models import Chat, Message, MessageRole
+
+    reg_a = client.post(
+        "/auth/register",
+        json={"email": "fbwca@example.com", "password": "SecurePass1!"},
+    )
+    token_a = reg_a.json()["token"]
+    cl_a = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Client A"},
+    )
+    client_id_a = uuid.UUID(cl_a.json()["id"])
+    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    db_session.add(chat_a)
+    db_session.commit()
+    db_session.refresh(chat_a)
+    msg = Message(chat_id=chat_a.id, role=MessageRole.assistant, content="A")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    reg_b = client.post(
+        "/auth/register",
+        json={"email": "fbwcb@example.com", "password": "SecurePass1!"},
+    )
+    token_b = reg_b.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Client B"},
+    )
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"feedback": "down"},
+    )
+    assert resp.status_code == 404
+
+
+def test_list_bad_answers_empty(client: TestClient) -> None:
+    """Return empty items for new client."""
+    reg = client.post(
+        "/auth/register",
+        json={"email": "badempty@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Empty Client"},
+    )
+    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 0
+
+
+def test_list_bad_answers_returns_items_for_client(
+    client: TestClient,
+    db_session,
+) -> None:
+    """Create chat with user & assistant messages, mark some as down, ensure /chat/bad-answers returns them."""
+    from backend.models import Chat, Message, MessageFeedback, MessageRole
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "baditems@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bad Items Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    m1 = Message(chat_id=chat.id, role=MessageRole.user, content="What is X?")
+    m2 = Message(chat_id=chat.id, role=MessageRole.assistant, content="Wrong answer", feedback=MessageFeedback.down)
+    db_session.add_all([m1, m2])
+    db_session.commit()
+    db_session.refresh(m2)
+
+    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["message_id"] == str(m2.id)
+    assert item["session_id"] == str(chat.session_id)
+    assert item["question"] == "What is X?"
+    assert item["answer"] == "Wrong answer"
+    assert item["ideal_answer"] is None
+
+    # Set ideal_answer
+    client.post(
+        f"/chat/messages/{m2.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "down", "ideal_answer": "Correct answer."},
+    )
+    resp2 = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    assert resp2.status_code == 200
+    assert resp2.json()["items"][0]["ideal_answer"] == "Correct answer."
+
+
+def test_list_bad_answers_respects_client_isolation(
+    client: TestClient,
+    db_session,
+) -> None:
+    """Messages from other clients are not returned."""
+    from backend.models import Chat, Message, MessageFeedback, MessageRole
+
+    reg_a = client.post(
+        "/auth/register",
+        json={"email": "badisoa@example.com", "password": "SecurePass1!"},
+    )
+    token_a = reg_a.json()["token"]
+    cl_a = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Client A"},
+    )
+    client_id_a = uuid.UUID(cl_a.json()["id"])
+    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    db_session.add(chat_a)
+    db_session.commit()
+    db_session.refresh(chat_a)
+    msg_a = Message(
+        chat_id=chat_a.id,
+        role=MessageRole.assistant,
+        content="Bad A",
+        feedback=MessageFeedback.down,
+    )
+    db_session.add(msg_a)
+    db_session.commit()
+
+    reg_b = client.post(
+        "/auth/register",
+        json={"email": "badisob@example.com", "password": "SecurePass1!"},
+    )
+    token_b = reg_b.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Client B"},
+    )
+
+    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token_b}"})
+    assert resp.status_code == 200
+    assert len(resp.json()["items"]) == 0
+
+
 # --- Debug endpoint tests ---
 
 

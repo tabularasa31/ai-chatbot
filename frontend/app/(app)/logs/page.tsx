@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type ChatSessionSummary, type ChatSessionLogs } from "@/lib/api";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -16,13 +17,143 @@ function truncateSessionId(id: string): string {
   return id.slice(0, 8) + "…";
 }
 
-export default function LogsPage() {
+type LogMessage = ChatSessionLogs["messages"][number];
+
+function MessageBubble({
+  msg,
+  onFeedbackUpdate,
+}: {
+  msg: LogMessage;
+  onFeedbackUpdate: (msg: LogMessage, feedback: MessageFeedbackValue, idealAnswer?: string | null) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [showIdeal, setShowIdeal] = useState(false);
+  const [idealText, setIdealText] = useState(msg.ideal_answer ?? "");
+
+  const handleFeedback = useCallback(
+    async (fb: MessageFeedbackValue) => {
+      if (msg.role !== "assistant") return;
+      setSaving(true);
+      try {
+        await onFeedbackUpdate(msg, fb, msg.ideal_answer);
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [msg, onFeedbackUpdate]
+  );
+
+  const handleSaveIdeal = useCallback(async () => {
+    if (msg.role !== "assistant") return;
+    setSaving(true);
+    try {
+      await onFeedbackUpdate(msg, "down", idealText || null);
+      setShowIdeal(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }, [msg, idealText, onFeedbackUpdate]);
+
+  const isAssistant = msg.role === "assistant";
+
+  return (
+    <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[80%] rounded-lg px-4 py-2 ${
+          msg.role === "user"
+            ? "bg-blue-600 text-white"
+            : "bg-slate-200 text-slate-800"
+        }`}
+      >
+        <p className="text-sm font-medium opacity-90">
+          {msg.role === "user" ? "User" : "Assistant"}
+        </p>
+        <p className="whitespace-pre-wrap text-sm mt-0.5">{msg.content}</p>
+        <p className="text-xs opacity-75 mt-1">
+          {formatDateTime(msg.created_at)}
+        </p>
+        {isAssistant && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            <div className="flex gap-1">
+              <button
+                type="button"
+                onClick={() => handleFeedback("up")}
+                disabled={saving}
+                className={`p-1 rounded text-sm ${
+                  msg.feedback === "up"
+                    ? "bg-green-600 text-white"
+                    : "bg-slate-300 hover:bg-slate-400 text-slate-700"
+                }`}
+                title="Good answer"
+              >
+                👍
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFeedback("down")}
+                disabled={saving}
+                className={`p-1 rounded text-sm ${
+                  msg.feedback === "down"
+                    ? "bg-red-600 text-white"
+                    : "bg-slate-300 hover:bg-slate-400 text-slate-700"
+                }`}
+                title="Bad answer"
+              >
+                👎
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowIdeal(!showIdeal)}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              {showIdeal ? "Cancel" : "Edit ideal answer"}
+            </button>
+            {saved && <span className="text-xs text-green-600">Saved</span>}
+            {showIdeal && (
+              <div className="w-full mt-2">
+                <textarea
+                  value={idealText}
+                  onChange={(e) => setIdealText(e.target.value)}
+                  placeholder="Ideal answer for training..."
+                  className="w-full text-sm border border-slate-300 rounded px-2 py-1 text-slate-800"
+                  rows={3}
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveIdeal}
+                  disabled={saving}
+                  className="mt-1 text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                >
+                  Save ideal answer
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LogsPageContent() {
+  const searchParams = useSearchParams();
+  const sessionFromUrl = searchParams.get("session");
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(sessionFromUrl);
   const [logs, setLogs] = useState<ChatSessionLogs | null>(null);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
+  }, [sessionFromUrl]);
 
   useEffect(() => {
     async function load() {
@@ -140,27 +271,16 @@ export default function LogsPage() {
                   <p className="text-slate-500 text-sm">No messages in this session.</p>
                 ) : (
                   <div className="space-y-4">
-                    {logs?.messages.map((msg, i) => (
-                      <div
-                        key={i}
-                        className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                      >
-                        <div
-                          className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                            msg.role === "user"
-                              ? "bg-blue-600 text-white"
-                              : "bg-slate-200 text-slate-800"
-                          }`}
-                        >
-                          <p className="text-sm font-medium opacity-90">
-                            {msg.role === "user" ? "User" : "Assistant"}
-                          </p>
-                          <p className="whitespace-pre-wrap text-sm mt-0.5">{msg.content}</p>
-                          <p className="text-xs opacity-75 mt-1">
-                            {formatDateTime(msg.created_at)}
-                          </p>
-                        </div>
-                      </div>
+                    {logs?.messages.map((msg) => (
+                      <MessageBubble
+                        key={msg.id}
+                        msg={msg}
+                        onFeedbackUpdate={async (m, feedback, idealAnswer) => {
+                          await api.chat.setFeedback(m.id, feedback, idealAnswer);
+                          const data = await api.chat.getSessionLogs(selectedSessionId!);
+                          setLogs(data);
+                        }}
+                      />
                     ))}
                   </div>
                 )}
@@ -170,5 +290,13 @@ export default function LogsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LogsPage() {
+  return (
+    <Suspense fallback={<div className="text-slate-500">Loading…</div>}>
+      <LogsPageContent />
+    </Suspense>
   );
 }

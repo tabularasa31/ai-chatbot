@@ -358,7 +358,7 @@ def get_session_logs(
     session_id: uuid.UUID,
     client_id: uuid.UUID,
     db: Session,
-) -> Optional[list[tuple[uuid.UUID, str, str, datetime]]]:
+) -> Optional[list[tuple[uuid.UUID, uuid.UUID, str, str, str, str | None, datetime]]]:
     """
     Get all messages for a session (ownership enforced).
 
@@ -368,7 +368,8 @@ def get_session_logs(
         db: Database session.
 
     Returns:
-        List of (session_id, role, content, created_at) or None if not found.
+        List of (message_id, session_id, role, content, feedback, ideal_answer, created_at)
+        or None if not found.
     """
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
@@ -384,6 +385,6 @@ def get_session_logs(
         .all()
     )
     return [
-        (chat.session_id, m.role.value, m.content, m.created_at)
+        (m.id, chat.session_id, m.role.value, m.content, m.feedback.value, m.ideal_answer, m.created_at)
         for m in messages
     ]

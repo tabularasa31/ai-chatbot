@@ -57,8 +57,8 @@ class MessageRole(str, enum.Enum):
 
 class MessageFeedback(str, enum.Enum):
     none = "none"
-    positive = "positive"
-    negative = "negative"
+    up = "up"
+    down = "down"
 
 
 class User(Base):
@@ -267,6 +267,7 @@ class Message(Base):
         nullable=False,
         default=MessageFeedback.none,
     )
+    ideal_answer = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

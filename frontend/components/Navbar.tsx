@@ -29,6 +29,9 @@ export function Navbar() {
             <Link href="/logs" className="text-slate-600 hover:text-slate-800 text-sm">
               Logs
             </Link>
+            <Link href="/review" className="text-slate-600 hover:text-slate-800 text-sm">
+              Review
+            </Link>
             <Link href="/debug" className="text-slate-600 hover:text-slate-800 text-sm">
               Debug
             </Link>

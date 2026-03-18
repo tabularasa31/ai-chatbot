@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_verified_user
 from backend.clients.schemas import (
     ClientMeResponse,
     ClientResponse,
@@ -44,7 +44,7 @@ def _client_to_response(client) -> ClientResponse:
 @clients_router.post("", response_model=ClientResponse, status_code=201)
 def create_client_route(
     body: CreateClientRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClientResponse:
     """

@@ -7,7 +7,9 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import cosine_similarity, keyword_search_chunks
 
 
@@ -53,15 +55,11 @@ def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
 # --- API tests (all mock OpenAI) ---
 
 
-def test_search_no_embeddings(mock_openai_client: Mock, client: TestClient) -> None:
+def test_search_no_embeddings(
+    mock_openai_client: Mock, client: TestClient, db_session: Session
+) -> None:
     """Given no embeddings in DB, POST /search → returns empty results list."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "noemb@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="noemb@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -84,18 +82,13 @@ def test_search_no_embeddings(mock_openai_client: Mock, client: TestClient) -> N
 def test_search_single_embedding_match(
     mock_openai_client: Mock,
     client: TestClient,
+    db_session: Session,
 ) -> None:
     """Create user, client, document, embedding; mock embed_query to return similar vector."""
-    from tests.conftest import set_client_openai_key
-
     vec = [0.1] * 1536
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "single@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="single@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -130,17 +123,12 @@ def test_search_single_embedding_match(
 def test_search_multiple_results_sorted(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """3 embeddings with different similarity scores; results sorted DESC by similarity."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "multi@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="multi@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -195,17 +183,12 @@ def test_search_multiple_results_sorted(
 def test_search_respects_top_k(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Have > top_k embeddings, request top_k=2, only 2 results returned."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "topk@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="topk@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -250,17 +233,12 @@ def test_search_respects_top_k(
 def test_search_other_client_isolated(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Create embeddings for client A and B; search as user A → only A's results."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "isol_a@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="isol_a@example.com")
     cl_a_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -269,11 +247,7 @@ def test_search_other_client_isolated(
     set_client_openai_key(client, token_a)
     client_a_id = uuid.UUID(cl_a_resp.json()["id"])
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "isol_b@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="isol_b@example.com")
     cl_b_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -339,13 +313,9 @@ def test_search_requires_auth(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_search_requires_client(client: TestClient) -> None:
+def test_search_requires_client(client: TestClient, db_session: Session) -> None:
     """Auth user without a client → 404."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "noclient@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="noclient@example.com")
     # Do NOT create a client
 
     response = client.post(
@@ -356,15 +326,9 @@ def test_search_requires_client(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_search_invalid_top_k(client: TestClient) -> None:
+def test_search_invalid_top_k(client: TestClient, db_session: Session) -> None:
     """top_k <= 0 → 422."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "invalid@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="invalid@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -380,15 +344,11 @@ def test_search_invalid_top_k(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_search_empty_query_rejected(client: TestClient) -> None:
+def test_search_empty_query_rejected(
+    client: TestClient, db_session: Session
+) -> None:
     """Empty query → 422."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "emptyq@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="emptyq@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -404,15 +364,11 @@ def test_search_empty_query_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_search_default_top_k(mock_openai_client: Mock, client: TestClient) -> None:
+def test_search_default_top_k(
+    mock_openai_client: Mock, client: TestClient, db_session: Session
+) -> None:
     """Omit top_k → defaults to 3."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "default@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="default@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -469,17 +425,12 @@ def test_keyword_search_chunks_finds_match(db_session) -> None:
 def test_search_keyword_fallback_when_vector_low(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Short/vague query with low vector similarity → keyword fallback finds CORS chunk."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "fallback@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="fallback@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},

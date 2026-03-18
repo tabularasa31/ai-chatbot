@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_verified_user
 from backend.core.limiter import limiter
 from backend.clients.service import get_client_by_user
 from backend.documents.schemas import (
@@ -46,7 +46,7 @@ def _detect_file_type(filename: str) -> Optional[str]:
 def upload_document_route(
     request: Request,
     file: UploadFile,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentResponse:
     """

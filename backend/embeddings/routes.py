@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.documents.service import get_document
@@ -36,7 +36,7 @@ def _chunk_preview(text: str, max_len: int = 100) -> str:
 )
 def create_embeddings_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """

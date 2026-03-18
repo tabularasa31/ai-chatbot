@@ -72,13 +72,13 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as { id: number; name: string; api_key: string; created_at: string };
+      return data as { id: string; name: string; api_key: string; created_at: string };
     },
     async getMe() {
       const res = await authFetch(`${BASE_URL}/clients/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
-      return data as { id: number; name: string; api_key: string; created_at: string };
+      return data as { id: string; name: string; api_key: string; created_at: string };
     },
   },
   documents: {

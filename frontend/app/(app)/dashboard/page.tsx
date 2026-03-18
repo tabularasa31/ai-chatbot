@@ -53,8 +53,12 @@ export default function DashboardPage() {
   }
 
   function copyEmbedCode() {
-    const code = `<script src="${API_URL}/embed.js"></script>
-<div id="ai-chat-widget" data-api-key="${apiKey}"></div>`;
+    const code =
+      "<script src=\"" +
+      API_URL +
+      "/embed.js\"></script>\n<div id=\"ai-chat-widget\" data-api-key=\"" +
+      apiKey +
+      "\"></div>";
     navigator.clipboard.writeText(code);
     setCopiedEmbed(true);
     setTimeout(() => setCopiedEmbed(false), 2000);
@@ -102,8 +106,7 @@ export default function DashboardPage() {
           Add this to your website to embed the AI chat widget:
         </p>
         <pre className="bg-slate-100 p-4 rounded-md text-sm text-slate-800 overflow-x-auto mb-4">
-          {`<script src="${API_URL}/embed.js"></script>
-<div id="ai-chat-widget" data-api-key="${apiKey}"></div>`}
+          {"<script src=\"" + API_URL + "/embed.js\"></script>\n<div id=\"ai-chat-widget\" data-api-key=\"" + apiKey + "\"></div>"}
         </pre>
         <button
           onClick={copyEmbedCode}

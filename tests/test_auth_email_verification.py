@@ -3,28 +3,35 @@
 from __future__ import annotations
 
 import datetime as dt
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.auth import routes as auth_routes
 from backend.models import User
 
 
-@patch("backend.auth.routes.send_email")
 def test_signup_sets_verification_token(
-    mock_send_email: object,
     client: TestClient,
     db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Register creates user with is_verified=False and verification token."""
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_send_email(to: str, subject: str, body: str) -> None:
+        calls.append((to, subject, body))
+
+    monkeypatch.setattr(auth_routes, "send_email", fake_send_email)
+
     response = client.post(
         "/auth/register",
         json={"email": "verify@example.com", "password": "SecurePass1!"},
     )
     assert response.status_code == 200
-    mock_send_email.assert_called_once()
+    assert len(calls) == 1
+    assert calls[0][0] == "verify@example.com"
 
     user = db_session.query(User).filter(User.email == "verify@example.com").first()
     assert user is not None
@@ -34,9 +41,7 @@ def test_signup_sets_verification_token(
     assert user.verification_expires_at > dt.datetime.utcnow()
 
 
-@patch("backend.auth.routes.send_email")
 def test_verify_email_success(
-    mock_send_email: object,
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -78,9 +83,7 @@ def test_verify_email_invalid_token(client: TestClient) -> None:
     assert "invalid" in response.json()["detail"].lower() or "expired" in response.json()["detail"].lower()
 
 
-@patch("backend.auth.routes.send_email")
 def test_verify_email_expired_token(
-    mock_send_email: object,
     client: TestClient,
     db_session: Session,
 ) -> None:

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.auth.routes import auth_router
 from backend.clients.routes import clients_router
 from backend.documents.routes import documents_router
+from backend.embeddings.routes import embeddings_router
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0")
 
@@ -20,6 +21,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/auth")
 app.include_router(clients_router, prefix="/clients")
 app.include_router(documents_router, prefix="/documents")
+app.include_router(embeddings_router, prefix="/embeddings")
 
 
 @app.get("/health")

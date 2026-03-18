@@ -39,16 +39,28 @@
 
 ---
 
-### [FI-026] GitHub Actions CI (pytest + coverage)
+### [FI-026] GitHub Actions CI (pytest + coverage + linters)
 
 **Проблема:**
-- 108 тестов без автозапуска на PR — тесты фактически не защищают от регрессий.
+- 108+ тестов без автозапуска на PR — тесты фактически не защищают от регрессий.
+- Нет автоматической проверки стиля кода.
 
 **Решение:**
 - Добавить `.github/workflows/ci.yml`:
   - Триггер: `push`/`pull_request` на `main`.
-  - Шаги: `pip install`, `alembic upgrade head` (SQLite или testdb), `pytest --cov`.
+  - Шаги:
+    - `pip install` + `pytest --cov` (backend).
+    - `ruff` или `flake8` (Python linter).
+    - `eslint` (TypeScript/frontend).
   - Coverage report опционально.
+
+**Дополнительно: тесты на критические пути:**
+- Валидация API-ключей (`GET /clients/validate/{api_key}`):
+  - тест на несуществующий ключ → 404,
+  - тест на верный ключ → 200 с данными клиента.
+- Логика контекста в RAG-промпте:
+  - тест на `build_rag_prompt()` с пустым контекстом (→ fallback),
+  - тест с непустыми чанками (→ контекст включён в промпт).
 
 ---
 

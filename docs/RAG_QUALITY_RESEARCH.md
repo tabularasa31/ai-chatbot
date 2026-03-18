@@ -1,7 +1,7 @@
 # RAG Quality Research
 
 Результаты опроса других AI-моделей по улучшению качества RAG.
-Источник: Perplexity, 2026-03-18.
+Источники: Perplexity + ChatGPT, 2026-03-18.
 
 ---
 
@@ -149,14 +149,100 @@
 
 ---
 
+---
+
+## Источник 2: ChatGPT
+
+### Что совпадает с Perplexity
+- Overlap 50–100 токенов — оба согласны.
+- Hybrid search BM25 + vector — оба согласны.
+- Reranking через cross-encoder или Cohere — оба согласны.
+- Graceful degradation с 3 уровнями — оба согласны.
+- Метрики: Faithfulness, Recall@k, product thumbs up/down — оба согласны.
+
+### Что добавил ChatGPT (новое)
+
+#### 1. LLM-based answer validation
+После генерации ответа — спросить модель:
+> "Есть ли в контексте явный ответ на вопрос пользователя?"
+
+Если нет → fallback. Это дополнительный слой поверх similarity threshold.
+
+#### 2. Query rewriting слой
+Перед retrieval — нормализовать и улучшить вопрос:
+- исправление формулировки,
+- нормализация терминов,
+- добавление контекста.
+
+Эффект: одна и та же суть вопроса с разными формулировками → одинаково хорошие ответы.
+
+**Это решает нашу проблему №4** (качество зависит от формулировки).
+
+#### 3. Multi-step RAG pipeline
+
+Не: `retrieve → answer`
+
+А:
+```
+rewrite → retrieve → rerank → validate → answer
+```
+
+#### 4. Tool layer для structured knowledge
+
+Вопросы типа "email поддержки", "есть ли trial" — это не RAG, это структурированные данные.
+Нужен отдельный слой: structured lookup перед RAG.
+
+**Это подтверждает FI-031 (org config layer)** — только теперь это называется "tool layer".
+
+#### 5. Caching
+- Популярные вопросы кэшировать (ответы).
+- Embeddings для частых запросов — тоже.
+- Снижает latency и стоимость.
+
+#### 6. Observability
+Логировать каждый запрос:
+- query,
+- retrieved chunks (с similarity scores),
+- final answer,
+- confidence score.
+
+**Это уже частично есть** (наш `/chat/debug`), но нужно расширить.
+
+### TOP-5 по ChatGPT (приоритеты)
+1. Overlap + нормальный chunking
+2. Reranking (must-have)
+3. Hybrid search
+4. Confidence + fallback UX
+5. Query rewriting
+
+---
+
+## Сравнение источников
+
+| Тема | Perplexity | ChatGPT | Консенсус |
+|------|-----------|---------|-----------|
+| Overlap | 60–80 токенов | 50–100 токенов | ~60–80 ✅ |
+| Hybrid search | BM25 + pgvector | BM25 + embeddings | ✅ делать |
+| Reranking | Cross-encoder + Cohere | Cross-encoder + Cohere | ✅ делать |
+| Graceful degradation | 3 уровня + org config | 3 уровня + tool layer | ✅ FI-031 |
+| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | Исследовать |
+| Query rewriting | Не упомянул | 🔥 Рекомендует | FI-033 добавить |
+| LLM validation | Не упомянул | 🔥 Рекомендует | FI-034 добавить |
+| Caching | Не упомянул | Рекомендует | P3 |
+| Observability | Не упомянул явно | Очень важно | У нас есть `/chat/debug`, расширить |
+
+---
+
 ## Новые FI из этого исследования
 
-| FI | Что | Приоритет |
-|----|-----|-----------|
-| FI-009 update | Chunking: overlap 60–80 токенов + структурный | P1 |
-| FI-007 update | System prompt: все 5 критических элементов | P1 |
-| FI-019 update | Hybrid search: BM25 + vector + optional rerank | P1 |
-| FI-029 | Document versioning & recency scoring | P2 |
-| FI-028 update | Cross-lingual: Voyage-multilingual-2 | P3 |
-| FI-030 | RAG metrics dashboard (RAGAS/Giskard) | P3 |
-| FI-031 | Org config layer (support_email и др. вне RAG) | P1 |
+| FI | Что | Источник | Приоритет |
+|----|-----|----------|-----------|
+| FI-009 update | Chunking: overlap 60–80 токенов + структурный | Оба | P1 |
+| FI-007 update | System prompt: все 5 критических элементов | Оба | P1 |
+| FI-019 update | Hybrid search: BM25 + vector + optional rerank | Оба | P1 |
+| FI-031 | Org config / tool layer (support_email вне RAG) | Оба | P1 |
+| FI-033 | Query rewriting перед retrieval | ChatGPT | P2 |
+| FI-034 | LLM-based answer validation (post-generation) | ChatGPT | P2 |
+| FI-029 | Document versioning & recency scoring | Perplexity | P2 |
+| FI-028 update | Cross-lingual: Voyage-multilingual-2 | Perplexity | P3 |
+| FI-030 | RAG metrics dashboard (RAGAS/Giskard) | Оба | P3 |

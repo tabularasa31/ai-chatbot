@@ -20,6 +20,30 @@ RICE-приоритизация — в `PRODUCT_BACKLOG.md`.
 
 ---
 
+## 🔴 P1 — Быстрые wins
+
+### [FI-038] "Powered by Chat9" в подвале виджета
+**Идея:** В нижней части каждого виджета — небольшая строка "Powered by Chat9" со ссылкой на getchat9.live.
+
+**Почему это важно:**
+- Каждый встроенный виджет = реклама Chat9 на сайте клиента.
+- Работает как "Sent from iPhone" — пассивный вирусный маркетинг.
+- Бесплатно для нас, минимальная стоимость для клиента.
+
+**Реализация:**
+- Добавить в `backend/widget/static/embed.js` строку в низу chat window:
+  ```html
+  <div style="...">
+    Powered by <a href="https://getchat9.live" target="_blank">Chat9</a>
+  </div>
+  ```
+- Стиль: мелкий серый текст, не отвлекает от чата.
+- В будущем Premium можно убирать ("Remove branding").
+
+**Effort:** 30 минут.
+
+---
+
 ## 🟠 P2 — Следующий спринт
 
 ### [FI-009] Improved chunking + metadata (RICE: 420)

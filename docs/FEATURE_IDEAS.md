@@ -151,6 +151,7 @@
 - [FI-003] Per-user rate limiting
 - [FI-004] Redis-backed sliding window rate limiting
 - [FI-011] FAQ layer above RAG (ручные Q&A для самых частых вопросов)
+- [FI-013] Chat sessions performance (N+1 and pagination)
 
 ## ❌ Отклонено
 _(пусто)_

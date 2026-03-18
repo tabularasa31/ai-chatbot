@@ -22,18 +22,29 @@ def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
     Returns:
         Formatted prompt string for GPT.
     """
+    system_rules = (
+        "You are a helpful assistant and a technical support agent for the client's product (SaaS, API, docs).\n"
+        "Rules:\n"
+        "- Answer based ONLY on the provided context.\n"
+        "- If the question is about \"which setting\" / \"какая настройка\" or similar:\n"
+        "  - name the exact setting/field as it appears in the docs,\n"
+        "  - mention where it is located (section / page / menu path) if the context contains this.\n"
+        "- Answer in the SAME LANGUAGE as the question (Russian if the question is in Russian).\n"
+        "- If the answer is not in the context, reply exactly:\n"
+        "  - In English: \"I don't have information about this.\"\n"
+        "  - In Russian: \"Я не нашёл ответа на этот вопрос в документации.\"\n"
+        "(Choose based on the question language.)"
+    )
     if not context_chunks:
         return (
-            "You are a helpful assistant. Answer based ONLY on the provided context.\n"
-            "If the answer is not in the context, say 'I don't have information about this.'\n\n"
+            f"{system_rules}\n\n"
             "Context:\n(none)\n\n"
             f"Question: {question}\n\n"
             "Answer:"
         )
     context_block = "\n\n---\n\n".join(context_chunks)
     return (
-        "You are a helpful assistant. Answer based ONLY on the provided context.\n"
-        "If the answer is not in the context, say 'I don't have information about this.'\n\n"
+        f"{system_rules}\n\n"
         f"Context:\n{context_block}\n\n"
         f"Question: {question}\n\n"
         "Answer:"
@@ -94,7 +105,7 @@ def process_chat_message(
         Tuple of (answer, document_ids, tokens_used).
     """
     # 1. Search similar chunks
-    results = search_similar_chunks(client_id, question, top_k=3, db=db, api_key=api_key)
+    results = search_similar_chunks(client_id, question, top_k=5, db=db, api_key=api_key)
 
     # 2. Extract chunk_text and document_ids
     chunk_texts = [r[0].chunk_text for r in results]

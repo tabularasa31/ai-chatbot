@@ -437,6 +437,49 @@ tokens_used: 230 ✅
   - fallback: keyword search over chunk_text when max similarity < 0.3
 - Debug tooling:
   - `/chat/debug` endpoint with full retrieval debug (mode + chunks)
+  - Dashboard "Debug" page
+
+### Chat Logs & Feedback (2026-03-18) ✅
+
+- Inbox-style `/logs` page: sessions list + full message view
+- 👍/👎 feedback on assistant messages + `ideal_answer` field
+- `/review` page with retrieval debug per bad answer
+- `GET /chat/sessions`, `GET /chat/logs/session/{id}`, `GET /chat/bad-answers`
+- `POST /chat/messages/{id}/feedback`
+
+### Admin & Auth (2026-03-18) ✅
+
+- FI-014: Admin metrics dashboard (`/admin/metrics`) — summary + per-client table
+- FI-015: Email verification via link (Brevo HTTP API)
+- FI-016: Enforce email verification on mutating endpoints (403 for unverified)
+- FI-017: Brevo HTTP API for email (replaces broken SMTP on Railway)
+- FI-018: Token tracking per chat session (`Chat.tokens_used` → admin metrics)
+- Domain: `getchat9.live` → Vercel frontend
+
+### Research & Planning (2026-03-18) ✅
+
+- Manual QA by tester → 18 issues logged → split into: missing docs, outdated data, prompt behavior
+- RAG quality research from 5 models (Perplexity, ChatGPT, DeepSeek, Gemini, Claude):
+  - Consensus: overlap chunking, hybrid search (BM25+vector+RRF), reranking, graceful degradation
+  - Unique: HyDE (FI-036), Knowledge Tiers table (FI-031), Prompt versioning in DB, Query expansion, Sentence-window retrieval
+- Product backlog RICE-prioritized
+- New FIs created: FI-019 to FI-037
+
+### Tomorrow's Plan (2026-03-19) 🎯
+
+**Order of work:**
+1. `gpt-4o-mini` upgrade (2 min)
+2. FI-031 — Org config layer (support_email, trial_period, etc. always in system prompt)
+3. FI-007 — Per-client system prompt (with 5 elements from research)
+4. FI-005 — Greeting message in widget
+5. Request updated docs from CDN2 (email ready)
+6. FI-009 — Chunking with overlap + structure-aware (after new docs arrive)
+
+**Cursor prompts ready:**
+- `cursor_prompts/FI-015_auth_email_verification.txt`
+- `cursor_prompts/FI-016_enforce_email_verification.txt`
+- `cursor_prompts/FI-017_brevo_http_email.txt`
+- `cursor_prompts/FI-018_tokens_tracking.txt`
   - Dashboard "Debug" page: question → answer + retrieval debug (vector/keyword/none, previews)
 
 **Next candidates (see FEATURE_IDEAS_BACKLOG.md):**

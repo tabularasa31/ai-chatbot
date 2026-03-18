@@ -145,6 +145,7 @@
 
 - [FI-001] Telegram интеграция
 - [FI-005] Приветственное сообщение от бота
+- [FI-012] Admin dashboard (operator view across clients)
 
 ### Приоритет P3 (масштабирование и тарифы)
 

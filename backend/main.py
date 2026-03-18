@@ -5,7 +5,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
+from backend.core.limiter import limiter
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
 from backend.clients.routes import clients_router
@@ -15,6 +18,9 @@ from backend.search.routes import search_router
 from backend.widget.routes import widget_router
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0")
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

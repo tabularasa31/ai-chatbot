@@ -1,13 +1,12 @@
 """FastAPI auth endpoints."""
 
-from __future__ import annotations
-
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
+from backend.core.limiter import limiter
 from backend.auth.schemas import AuthResponse, LoginRequest, RegisterRequest, UserResponse
 from backend.auth.service import (
     authenticate_user,
@@ -21,7 +20,9 @@ auth_router = APIRouter(tags=["auth"])
 
 
 @auth_router.post("/register", response_model=AuthResponse)
+@limiter.limit("5/hour")
 def register(
+    request: Request,
     body: RegisterRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> AuthResponse:
@@ -45,7 +46,9 @@ def register(
 
 
 @auth_router.post("/login", response_model=AuthResponse)
+@limiter.limit("10/minute")
 def login(
+    request: Request,
     body: LoginRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> AuthResponse:

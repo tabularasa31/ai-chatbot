@@ -37,7 +37,15 @@ def upload_document(
 
     Validates file_type (pdf, markdown, swagger only) and size (max 50MB).
     Saves document with status=processing, parses, then updates to ready or error.
+    Enforces max 20 documents per client.
     """
+    existing_count = db.query(Document).filter(Document.client_id == client_id).count()
+    if existing_count >= 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Document limit reached (max 20)",
+        )
+
     if file_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=400,

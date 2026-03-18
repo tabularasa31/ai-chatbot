@@ -6,6 +6,7 @@ import sys
 
 # Set test env before any backend imports
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:?check_same_thread=False")
+os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 

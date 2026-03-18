@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
 )
@@ -237,6 +238,11 @@ class Chat(Base):
         index=True,
     )
     session_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    tokens_used = Column(
+        Integer,
+        nullable=False,
+        server_default="0",
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

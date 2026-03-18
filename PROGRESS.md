@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-18 08:32 UTC  
+**Last Updated:** 2026-03-18 09:05 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** Phase 1-9 COMPLETE ✅ | Backend + Frontend LIVE 🚀 | Phase 10 (Embed Widget) NEXT
+**Status:** Phase 1-10 COMPLETE ✅ | Full Stack LIVE 🚀 | Phase 11 (README) NEXT
 
 ---
 
@@ -243,7 +243,7 @@
 | **Alembic Migrations** | ✅ All tables created |
 | **E2E Test (real OpenAI)** | ✅ Tested — RAG pipeline works! |
 | **Frontend (Next.js)** | ✅ Live on Vercel |
-| **Embed Widget** | ⏳ Phase 10 |
+| **Embed Widget** | ✅ Live on Railway |
 
 **Live endpoints:**
 - `GET /health` → `{"status": "ok"}`
@@ -372,17 +372,28 @@ tokens_used: 230 ✅
 
 ---
 
-### Phase 10: Embed Widget (2-3 hours)
+### Phase 10: Embed Widget ✅ COMPLETE (2026-03-18)
 
-**What to implement:**
-- Vanilla JS widget script (~50KB)
-- Chat UI (input, messages, bubble)
-- Serve from Railway backend as `/embed.js`
-- Test on external HTML page
+**What was done:**
+- Vanilla JS widget (~6KB) served from Railway at `/embed.js`
+- Floating blue chat button (fixed, bottom-right)
+- Toggle chat window (380×500px)
+- User/assistant message bubbles
+- Loading indicator ("...")
+- Session continuity (stores session_id)
+- All styles inline — no external CSS
+- DOMContentLoaded fix — works regardless of script tag position
+- CORS updated to allow_origins=["*"] for third-party embedding
+
+**Usage:**
+
+    <div id="ai-chat-widget" data-api-key="YOUR_API_KEY"></div>
+    <script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
 
 **Files:**
 - `backend/widget/static/embed.js`
-- `backend/widget/routes.py` (serve static file)
+- `backend/widget/routes.py`
+- `backend/widget/__init__.py`
 
 ---
 
@@ -439,8 +450,8 @@ pytest tests/ -v --cov=backend --cov-min-percentage=80
 
 | Metric | Value |
 |--------|-------|
-| **Phases Complete** | 9/11 |
-| **Phases Remaining** | 2 |
+| **Phases Complete** | 10/11 |
+| **Phases Remaining** | 1 |
 | **Total Lines (Phases 1-9)** | ~4,200 |
 | **Test Cases (Total)** | 90 |
 | **Code Coverage** | All tests passing; target ≥80% maintained |

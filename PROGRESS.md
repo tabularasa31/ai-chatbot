@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-18 09:05 UTC  
+**Last Updated:** 2026-03-18 09:44 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** Phase 1-10 COMPLETE ✅ | Full Stack LIVE 🚀 | Phase 11 (README) NEXT
+**Status:** ALL 11 PHASES COMPLETE ✅ | Full Stack LIVE + Secured 🔐🚀
 
 ---
 
@@ -397,13 +397,26 @@ tokens_used: 230 ✅
 
 ---
 
-### Phase 11: Final Deploy + Testing (2-3 hours)
+### Phase 11: Final Deploy + Testing ✅ COMPLETE (2026-03-18)
 
-**What to implement:**
-- Deploy frontend to Vercel
-- Update Railway CORS to allow Vercel URL
-- Live E2E testing (register → upload → chat → widget)
-- Documentation (README.md)
+**What was done:**
+- README.md with full documentation
+- .env.example template
+- Railway + Vercel auto-deploy connected to GitHub main
+- E2E tested: register → upload → embed → chat → widget
+
+### Security Sprint ✅ COMPLETE (2026-03-18)
+
+**What was done:**
+- JWT_SECRET rotated to strong 64-char random key
+- Rate limiting via slowapi (IP-based):
+  - POST /auth/register → 5/hour
+  - POST /auth/login → 10/minute
+  - POST /chat → 30/minute
+  - POST /documents → 20/hour
+- Document limit: max 20 per client
+- CORS: allow_origins=["*"] for widget embedding
+- 94 tests all passing (rate limiting disabled in test env)
 
 ---
 
@@ -450,16 +463,16 @@ pytest tests/ -v --cov=backend --cov-min-percentage=80
 
 | Metric | Value |
 |--------|-------|
-| **Phases Complete** | 10/11 |
-| **Phases Remaining** | 1 |
-| **Total Lines (Phases 1-9)** | ~4,200 |
-| **Test Cases (Total)** | 90 |
-| **Code Coverage** | All tests passing; target ≥80% maintained |
-| **Time Spent** | ~12 hours total |
-| **Estimated Remaining** | 4–5 hours |
-| **Timeline** | Ahead of schedule! 🚀 |
+| **Phases Complete** | 11/11 + Security Sprint ✅ |
+| **Phases Remaining** | 0 |
+| **Total Lines** | ~4,500 |
+| **Test Cases (Total)** | 94 |
+| **Code Coverage** | All tests passing ✅ |
+| **Time Spent** | ~14 hours total |
+| **Timeline** | MVP DONE in 2 days! 🚀 |
 | **Backend URL** | https://ai-chatbot-production-6531.up.railway.app |
 | **Frontend URL** | https://ai-chatbot-three-lovat-32.vercel.app |
+| **Widget** | https://ai-chatbot-production-6531.up.railway.app/embed.js |
 
 ---
 

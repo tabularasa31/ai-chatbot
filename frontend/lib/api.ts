@@ -1,5 +1,23 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
+export type ChatSessionSummary = {
+  session_id: string;
+  message_count: number;
+  last_question: string | null;
+  last_answer_preview: string | null;
+  last_activity: string;
+};
+
+export type ChatSessionLogs = {
+  session_id: string;
+  messages: {
+    session_id: string;
+    role: "user" | "assistant";
+    content: string;
+    created_at: string;
+  }[];
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -143,6 +161,20 @@ export const api = {
     },
   },
   chat: {
+    async listSessions(): Promise<ChatSessionSummary[]> {
+      const res = await authFetch(`${BASE_URL}/chat/sessions`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list sessions"));
+      const list = data as { sessions: ChatSessionSummary[] };
+      return list.sessions;
+    },
+    async getSessionLogs(sessionId: string): Promise<ChatSessionLogs> {
+      const res = await authFetch(`${BASE_URL}/chat/logs/session/${sessionId}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get session logs"));
+      const log = data as { messages: ChatSessionLogs["messages"] };
+      return { session_id: sessionId, messages: log.messages };
+    },
     async send(question: string, apiKey: string, sessionId?: string) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",

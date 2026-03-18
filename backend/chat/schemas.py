@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -47,3 +47,37 @@ class ChatHistoryResponse(BaseModel):
 
     session_id: UUID
     messages: list[MessageResponse]
+
+
+# --- Inbox / logs DTOs ---
+
+
+class ChatSessionSummaryResponse(BaseModel):
+    """Summary of a chat session for inbox list."""
+
+    session_id: UUID
+    message_count: int
+    last_question: Optional[str] = None
+    last_answer_preview: Optional[str] = None
+    last_activity: datetime
+
+
+class ChatSessionListResponse(BaseModel):
+    """List of chat sessions for a client."""
+
+    sessions: list[ChatSessionSummaryResponse]
+
+
+class ChatMessageLogItem(BaseModel):
+    """Single message in chat logs (read-only)."""
+
+    session_id: UUID
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+
+
+class ChatMessageLogResponse(BaseModel):
+    """Full message log for a session."""
+
+    messages: list[ChatMessageLogItem]

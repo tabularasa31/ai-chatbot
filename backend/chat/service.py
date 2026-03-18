@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Literal, Optional
 
 from sqlalchemy.orm import Session
+
+PREVIEW_MAX_LEN = 120
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Chat, Document, Embedding, Message, MessageRole
@@ -272,3 +276,114 @@ def get_chat_history(
         .all()
     )
     return list(messages)
+
+
+@dataclass
+class SessionSummary:
+    """Summary of a chat session for inbox list."""
+
+    session_id: uuid.UUID
+    message_count: int
+    last_question: Optional[str]
+    last_answer_preview: Optional[str]
+    last_activity: datetime
+
+
+def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary]:
+    """
+    List all chat sessions for a client, sorted by last_activity DESC.
+
+    Args:
+        client_id: Client ID for tenant isolation.
+        db: Database session.
+
+    Returns:
+        List of SessionSummary, sorted by last_activity descending.
+    """
+    chats = (
+        db.query(Chat)
+        .filter(Chat.client_id == client_id)
+        .all()
+    )
+    result: list[SessionSummary] = []
+    for chat in chats:
+        messages = (
+            db.query(Message)
+            .filter(Message.chat_id == chat.id)
+            .order_by(Message.created_at.asc())
+            .all()
+        )
+        msg_count = len(messages)
+        last_activity = datetime.min
+        last_question: str | None = None
+        last_answer_preview: str | None = None
+
+        for m in messages:
+            if m.created_at and m.created_at > last_activity:
+                last_activity = m.created_at
+            if m.role == MessageRole.user:
+                last_question = m.content
+            elif m.role == MessageRole.assistant:
+                preview = m.content
+                if len(preview) > PREVIEW_MAX_LEN:
+                    preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."
+                last_answer_preview = preview
+
+        if msg_count > 0:
+            result.append(
+                SessionSummary(
+                    session_id=chat.session_id,
+                    message_count=msg_count,
+                    last_question=last_question,
+                    last_answer_preview=last_answer_preview,
+                    last_activity=last_activity,
+                )
+            )
+        else:
+            result.append(
+                SessionSummary(
+                    session_id=chat.session_id,
+                    message_count=0,
+                    last_question=None,
+                    last_answer_preview=None,
+                    last_activity=chat.created_at or datetime.min,
+                )
+            )
+
+    result.sort(key=lambda s: s.last_activity, reverse=True)
+    return result
+
+
+def get_session_logs(
+    session_id: uuid.UUID,
+    client_id: uuid.UUID,
+    db: Session,
+) -> Optional[list[tuple[uuid.UUID, str, str, datetime]]]:
+    """
+    Get all messages for a session (ownership enforced).
+
+    Args:
+        session_id: Chat session ID.
+        client_id: Client ID for ownership check.
+        db: Database session.
+
+    Returns:
+        List of (session_id, role, content, created_at) or None if not found.
+    """
+    chat = db.query(Chat).filter(
+        Chat.session_id == session_id,
+        Chat.client_id == client_id,
+    ).first()
+    if not chat:
+        return None
+
+    messages = (
+        db.query(Message)
+        .filter(Message.chat_id == chat.id)
+        .order_by(Message.created_at.asc())
+        .all()
+    )
+    return [
+        (chat.session_id, m.role.value, m.content, m.created_at)
+        for m in messages
+    ]

@@ -111,9 +111,6 @@ def client(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
     core_db.engine = engine
     core_db.SessionLocal = TestingSessionLocal
 
-    import backend.auth.middleware as auth_middleware
-    auth_middleware.SessionLocal = TestingSessionLocal
-
     try:
         with TestClient(app) as c:
             yield c

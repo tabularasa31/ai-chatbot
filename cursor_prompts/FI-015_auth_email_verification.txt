@@ -1,0 +1,346 @@
+SETUP:
+cd ~/Projects/ai-chatbot
+git checkout main
+git pull origin main
+git checkout -b feature/auth-email-verification
+
+FEATURE:
+Add email verification via link after signup.
+
+GOAL:
+When a user registers:
+- we create an account with is_verified = False;
+- send them an email with a verification link;
+- when they click the link, the backend marks them as verified;
+- the frontend shows a “verification success / failure” page and can reflect is_verified in the UI.
+
+We’ll use a simple SMTP-based sender (env-configured); in dev it can just log to console if SMTP is not configured.
+
+======================================================================
+BACKEND
+======================================================================
+
+Scope:
+- backend/models.py
+- backend/auth/schemas.py
+- backend/auth/routes.py
+- backend/auth/service.py or backend/email/service.py (new, for sending mail)
+- backend/core/config.py (if exists, for env vars)
+- tests/test_auth_email_verification.py (new)
+
+Do NOT:
+- break existing login/register flows for already working users.
+- change JWT format.
+
+----------------------------------------------------------------------
+1) Extend User model for verification
+----------------------------------------------------------------------
+
+In `backend/models.py` (User):
+
+- Add fields:
+
+  ```python
+  from datetime import datetime
+  import uuid
+  from sqlalchemy import Boolean, DateTime, String
+
+  class User(Base):
+      ...
+      is_verified: Mapped[bool] = mapped_column(
+          Boolean,
+          nullable=False,
+          server_default="false",
+      )
+      verification_token: Mapped[str | None] = mapped_column(
+          String(128),
+          nullable=True,
+          unique=True,
+      )
+      verification_expires_at: Mapped[datetime | None] = mapped_column(
+          DateTime,
+          nullable=True,
+      )
+  ```
+
+- Create Alembic migration:
+  - add columns `is_verified` (default false), `verification_token` (nullable), `verification_expires_at` (nullable) to the users table.
+  - existing rows: `is_verified=false`, tokens null.
+
+----------------------------------------------------------------------
+2) Config for email sending
+----------------------------------------------------------------------
+
+If there’s a config module (e.g. `backend/core/config.py`), add:
+
+- Env vars:
+
+  - `EMAIL_FROM` (e.g. no-reply@yourdomain.com)
+  - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` (optional)
+  - `FRONTEND_URL` (used to construct verification link, e.g. https://ai-chatbot-three-lovat-32.vercel.app)
+
+Example:
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    ...
+    EMAIL_FROM: str | None = None
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int | None = None
+    SMTP_USER: str | None = None
+    SMTP_PASSWORD: str | None = None
+    FRONTEND_URL: str = "http://localhost:3000"
+```
+
+----------------------------------------------------------------------
+3) Email sending helper
+----------------------------------------------------------------------
+
+Create `backend/email/service.py`:
+
+```python
+from __future__ import annotations
+
+import smtplib
+from email.message import EmailMessage
+
+from backend.core.config import settings
+
+
+def send_email(to: str, subject: str, body: str) -> None:
+    """
+    Simple SMTP email sender.
+
+    - If SMTP_HOST is not configured, log the email to console (for dev).
+    """
+    if not settings.SMTP_HOST or not settings.EMAIL_FROM:
+        # Dev fallback: just log the message
+        print("=== EMAIL (DEV MODE) ===")
+        print("To:", to)
+        print("Subject:", subject)
+        print("Body:\n", body)
+        print("========================")
+        return
+
+    msg = EmailMessage()
+    msg["From"] = settings.EMAIL_FROM
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT or 587) as server:
+        server.starttls()
+        if settings.SMTP_USER and settings.SMTP_PASSWORD:
+            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+        server.send_message(msg)
+```
+
+----------------------------------------------------------------------
+4) Signup: generate verification token and send email
+----------------------------------------------------------------------
+
+In `backend/auth/schemas.py`:
+
+- Extend the signup response (if there is `SignupResponse` or reused `TokenResponse`), or add a dedicated field in the existing response to indicate that verification email was sent (optional, not required).
+
+In `backend/auth/routes.py` (or equivalent signup handler):
+
+- After creating a new user:
+
+  - Generate token and expiry:
+
+    ```python
+    import uuid
+    from datetime import datetime, timedelta
+
+    token = uuid.uuid4().hex
+    user.verification_token = token
+    user.verification_expires_at = datetime.utcnow() + timedelta(days=2)
+    user.is_verified = False
+    ```
+
+  - Commit user.
+
+  - Build verification link:
+
+    ```python
+    from backend.core.config import settings
+
+    verify_url = f"{settings.FRONTEND_URL}/verify?token={token}"
+    ```
+
+  - Send email:
+
+    ```python
+    from backend.email.service import send_email
+
+    subject = "Verify your email"
+    body = (
+        "Hi,\n\n"
+        "Please verify your email by clicking the link below:\n\n"
+        f"{verify_url}\n\n"
+        "If you did not sign up, you can ignore this email.\n"
+    )
+    send_email(to=user.email, subject=subject, body=body)
+    ```
+
+- Behavior: do NOT block signup if email fails to send in dev; log error and still return success.
+
+For now, keep login as is (we’ll only show verification state in the frontend). Later we can enforce verification for some actions.
+
+----------------------------------------------------------------------
+5) Verification endpoint
+----------------------------------------------------------------------
+
+Add new endpoint in `backend/auth/routes.py`:
+
+```python
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
+
+from backend.models import User
+
+@auth_router.post("/verify-email")
+def verify_email(token: str, db: Annotated[Session, Depends(get_db)]) -> dict:
+    """Verify user's email using a one-time token."""
+    now = datetime.utcnow()
+    user = (
+        db.query(User)
+        .filter(
+            User.verification_token == token,
+            User.verification_expires_at >= now,
+        )
+        .first()
+    )
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token.",
+        )
+
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_expires_at = None
+    db.commit()
+
+    return {"status": "ok"}
+```
+
+(Use POST with JSON body `{ "token": "..." }` or adjust to your preferred style.)
+
+----------------------------------------------------------------------
+6) Expose is_verified in /clients/me
+----------------------------------------------------------------------
+
+Extend `ClientMeResponse` in `backend/clients/schemas.py` to include:
+
+```python
+is_verified: bool
+```
+
+In `backend/clients/routes.py`, set this field from `current_user.is_verified`.
+
+----------------------------------------------------------------------
+7) Tests
+----------------------------------------------------------------------
+
+Create `tests/test_auth_email_verification.py`:
+
+- `test_signup_sets_verification_token`:
+  - register a user,
+  - assert new user in DB has `is_verified=False`, non-null `verification_token` and `verification_expires_at`.
+
+- `test_verify_email_success`:
+  - create user manually with token and future expiry,
+  - call `/auth/verify-email` with correct token,
+  - assert `is_verified=True` and token fields cleared.
+
+- `test_verify_email_invalid_token`:
+  - call `/auth/verify-email` with non-existent token → 400.
+
+- `test_verify_email_expired_token`:
+  - user with `verification_expires_at` in the past → 400.
+
+For email sending, monkeypatch `send_email` so tests don't hit real SMTP.
+
+======================================================================
+FRONTEND
+======================================================================
+
+Scope:
+- frontend/lib/api.ts
+- frontend/app/(auth)/signup/page.tsx
+- frontend/app/(auth)/verify/page.tsx (new)
+- optionally: banner in app layout if not verified
+
+----------------------------------------------------------------------
+8) API client: verifyEmail
+----------------------------------------------------------------------
+
+In `frontend/lib/api.ts`:
+
+```ts
+async function verifyEmail(token: string): Promise<{ status: string }> {
+  const res = await fetch(`${API_URL}/auth/verify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail ?? "Failed to verify email");
+  }
+  return res.json();
+}
+```
+
+Export it as `api.auth.verifyEmail`.
+
+----------------------------------------------------------------------
+9) Signup page: show verification info
+----------------------------------------------------------------------
+
+In `frontend/app/(auth)/signup/page.tsx`:
+
+- After successful signup, show message like "We sent a verification link to your email" (inline or via redirect with query param).
+
+----------------------------------------------------------------------
+10) Verify page
+----------------------------------------------------------------------
+
+Create `frontend/app/(auth)/verify/page.tsx`:
+
+- Read `token` from `searchParams`.
+- If no token: show error.
+- If token:
+  - call `api.auth.verifyEmail(token)` on mount.
+  - Show Loading / Success / Error states.
+  - On success: button to go to login or dashboard.
+
+----------------------------------------------------------------------
+11) Optional: banner for not verified users
+----------------------------------------------------------------------
+
+In app layout or Navbar, after fetching `/clients/me`:
+
+- If `is_verified === false`, show small banner:
+  - "Your email is not verified. Check your inbox for a verification link."
+
+----------------------------------------------------------------------
+12) Checks
+----------------------------------------------------------------------
+
+Backend:
+- alembic upgrade head
+- pytest tests/test_auth_email_verification.py -v
+
+Frontend:
+- npm run lint
+- npm run build
+
+Manual:
+- Register a new user.
+- Confirm verification email in dev logs or real inbox.
+- Open /verify?token=... and ensure status is updated.

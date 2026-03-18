@@ -1,17 +1,19 @@
 (function() {
   "use strict";
 
-  var container = document.getElementById("ai-chat-widget");
-  if (!container) return;
-
-  var apiKey = container.getAttribute("data-api-key");
-  if (!apiKey) return;
-
   var scriptEl = document.currentScript;
   var apiBase = scriptEl ? new URL(scriptEl.src).origin : "https://ai-chatbot-production-6531.up.railway.app";
-  var sessionId = null;
 
-  var styles = document.createElement("style");
+  function init() {
+    var container = document.getElementById("ai-chat-widget");
+    if (!container) return;
+
+    var apiKey = container.getAttribute("data-api-key");
+    if (!apiKey) return;
+
+    var sessionId = null;
+
+    var styles = document.createElement("style");
   styles.textContent = [
     "#ai-chat-widget-btn{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:#2563eb;border:none;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:9999;display:flex;align-items:center;justify-content:center;transition:transform 0.2s}",
     "#ai-chat-widget-btn:hover{transform:scale(1.05)}",
@@ -142,4 +144,11 @@
   input.addEventListener("keydown", function(e) {
     if (e.key === "Enter") sendMessage();
   });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();

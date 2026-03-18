@@ -1,4 +1,4 @@
-"""OpenAI client factory — uses per-client API key."""
+"""OpenAI client factory — uses per-client API key (encrypted in DB)."""
 
 from __future__ import annotations
 
@@ -7,16 +7,30 @@ from typing import Optional
 from fastapi import HTTPException
 from openai import OpenAI
 
+from backend.core.crypto import decrypt_value
 
-def get_openai_client(api_key: Optional[str]) -> OpenAI:
-    """
-    Create OpenAI client with given API key.
 
-    Raises HTTPException 400 if key is not configured.
+def get_openai_client(encrypted_key: Optional[str]) -> OpenAI:
     """
-    if not api_key:
+    Create OpenAI client with decrypted API key.
+
+    Args:
+        encrypted_key: Encrypted value from client.openai_api_key (DB).
+
+    Raises:
+        HTTPException 400: Key not configured.
+        HTTPException 500: Decryption failed.
+    """
+    if not encrypted_key:
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail="OpenAI API key not configured. Add your key in dashboard.",
         )
-    return OpenAI(api_key=api_key)
+    try:
+        decrypted_key = decrypt_value(encrypted_key)
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to decrypt OpenAI API key.",
+        ) from None
+    return OpenAI(api_key=decrypted_key)

@@ -3,12 +3,15 @@ from __future__ import annotations
 from typing import Generator
 import os
 import sys
+from unittest.mock import Mock, patch
 
 # Set test env before any backend imports
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:?check_same_thread=False")
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+# Valid Fernet key for tests (generate with Fernet.generate_key())
+os.environ.setdefault("ENCRYPTION_KEY", "7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=")
 
 # Patch create_engine for SQLite (pool_size/max_overflow not supported)
 import sqlalchemy as _sa
@@ -119,4 +122,30 @@ def client(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
         core_db.engine = original_engine
         core_db.SessionLocal = original_session_local
         app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_openai_client():
+    """Mock get_openai_client for all tests — no real API calls."""
+    mock_client = Mock()
+    mock_client.embeddings.create.return_value = Mock(data=[Mock(embedding=[0.1] * 1536)])
+    mock_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content="AI response"))],
+        usage=Mock(total_tokens=100),
+    )
+    # Patch where get_openai_client is used (not where defined) so imports see the mock
+    with patch("backend.embeddings.service.get_openai_client", return_value=mock_client), \
+         patch("backend.search.service.get_openai_client", return_value=mock_client), \
+         patch("backend.chat.service.get_openai_client", return_value=mock_client):
+        yield mock_client
+
+
+def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-test") -> None:
+    """Set OpenAI API key for current user's client. Call after creating client."""
+    r = test_client.patch(
+        "/clients/me",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"openai_api_key": key},
+    )
+    assert r.status_code == 200, f"Failed to set OpenAI key: {r.json()}"
 

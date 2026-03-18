@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.core.crypto import encrypt_value
 from backend.models import Client
 
 
@@ -79,7 +80,11 @@ def update_client(
     if "name" in kwargs:
         client.name = kwargs["name"]
     if "openai_api_key" in kwargs:
-        client.openai_api_key = kwargs["openai_api_key"] or None
+        raw_key = kwargs["openai_api_key"]
+        if not raw_key or (isinstance(raw_key, str) and not raw_key.strip()):
+            client.openai_api_key = None
+        else:
+            client.openai_api_key = encrypt_value(raw_key.strip())
     db.commit()
     db.refresh(client)
     return client

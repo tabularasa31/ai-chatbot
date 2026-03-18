@@ -37,6 +37,17 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def decode_access_token(token: str) -> str | None:
+    """Decode JWT token and return user_id (sub claim), or None if invalid/expired."""
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        return payload.get("sub")
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.PyJWTError:
+        return None
+
+
 def create_access_token(data: Dict[str, Any]) -> str:
     """Создаёт JWT-токен с payload и сроком жизни 24 часа."""
     to_encode = data.copy()

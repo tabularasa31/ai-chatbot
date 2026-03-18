@@ -8,6 +8,7 @@ from backend.clients.routes import clients_router
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.search.routes import search_router
+from backend.chat.routes import chat_router
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0")
 
@@ -24,6 +25,7 @@ app.include_router(clients_router, prefix="/clients")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")
 app.include_router(search_router, prefix="/search")
+app.include_router(chat_router, prefix="/chat")
 
 
 @app.get("/health")

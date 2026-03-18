@@ -5,13 +5,10 @@ from __future__ import annotations
 import uuid
 
 from fastapi import HTTPException
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from backend.core.config import settings
+from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentStatus, Embedding
-
-openai_client = OpenAI(api_key=settings.openai_api_key)
 
 
 def chunk_text(
@@ -46,6 +43,8 @@ def chunk_text(
 def create_embeddings_for_document(
     document_id: uuid.UUID,
     db: Session,
+    *,
+    api_key: str,
 ) -> list[Embedding]:
     """
     Create embeddings for a document's parsed text.
@@ -80,6 +79,7 @@ def create_embeddings_for_document(
     if not chunks:
         return []
 
+    openai_client = get_openai_client(api_key)
     try:
         response = openai_client.embeddings.create(
             model="text-embedding-3-small",

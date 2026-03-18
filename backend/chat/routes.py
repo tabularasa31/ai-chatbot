@@ -43,6 +43,11 @@ def chat(
     client = get_client_by_api_key(x_api_key, db)
     if not client:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    if not client.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        )
 
     session_id = body.session_id or uuid.uuid4()
 
@@ -52,6 +57,7 @@ def chat(
             question=body.question,
             session_id=session_id,
             db=db,
+            api_key=client.openai_api_key,
         )
     except APIError:
         raise HTTPException(

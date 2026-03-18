@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import uuid
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -58,6 +59,30 @@ def get_client_by_id(
 def get_client_by_api_key(api_key: str, db: Session) -> Client | None:
     """Get client by API key. Used by widget/chat to validate API key."""
     return db.query(Client).filter(Client.api_key == api_key).first()
+
+
+def update_client(
+    user_id: uuid.UUID,
+    db: Session,
+    **kwargs: Any,
+) -> Client:
+    """
+    Update current user's client.
+
+    Only updates fields present in kwargs.
+    openai_api_key=None means remove the key.
+    Raises 404 if no client for user.
+    """
+    client = get_client_by_user(user_id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    if "name" in kwargs:
+        client.name = kwargs["name"]
+    if "openai_api_key" in kwargs:
+        client.openai_api_key = kwargs["openai_api_key"] or None
+    db.commit()
+    db.refresh(client)
+    return client
 
 
 def delete_client(

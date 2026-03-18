@@ -78,13 +78,23 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as { id: string; name: string; api_key: string; created_at: string };
+      return data as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
     },
     async getMe() {
       const res = await authFetch(`${BASE_URL}/clients/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
-      return data as { id: string; name: string; api_key: string; created_at: string };
+      return data as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
+    },
+    async update(data: { name?: string; openai_api_key?: string | null }) {
+      const res = await authFetch(`${BASE_URL}/clients/me`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      const responseData = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
+      return responseData as { id: string; name: string; api_key: string; has_openai_key: boolean; created_at: string };
     },
   },
   documents: {

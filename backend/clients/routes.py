@@ -12,6 +12,7 @@ from backend.auth.middleware import get_current_user
 from backend.clients.schemas import (
     ClientResponse,
     CreateClientRequest,
+    UpdateClientRequest,
     ValidateApiKeyResponse,
 )
 from backend.clients.service import (
@@ -20,11 +21,23 @@ from backend.clients.service import (
     get_client_by_api_key,
     get_client_by_id,
     get_client_by_user,
+    update_client,
 )
 from backend.core.db import get_db
 from backend.models import User
 
 clients_router = APIRouter(tags=["clients"])
+
+
+def _client_to_response(client) -> ClientResponse:
+    return ClientResponse(
+        id=client.id,
+        name=client.name,
+        api_key=client.api_key,
+        has_openai_key=bool(client.openai_api_key),
+        created_at=client.created_at,
+        updated_at=client.updated_at,
+    )
 
 
 @clients_router.post("", response_model=ClientResponse, status_code=201)
@@ -39,13 +52,7 @@ def create_client_route(
     Returns 201 Created. Error 409 if client already exists for this user.
     """
     client = create_client(current_user.id, body.name, db)
-    return ClientResponse(
-        id=client.id,
-        name=client.name,
-        api_key=client.api_key,
-        created_at=client.created_at,
-        updated_at=client.updated_at,
-    )
+    return _client_to_response(client)
 
 
 @clients_router.get("/me", response_model=ClientResponse)
@@ -61,13 +68,35 @@ def get_my_client(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    return ClientResponse(
-        id=client.id,
-        name=client.name,
-        api_key=client.api_key,
-        created_at=client.created_at,
-        updated_at=client.updated_at,
-    )
+    return _client_to_response(client)
+
+
+@clients_router.patch("/me", response_model=ClientResponse)
+def update_my_client(
+    body: UpdateClientRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClientResponse:
+    """
+    Update current user's client (protected JWT).
+
+    openai_api_key: set to update, null/empty to remove. Omit to leave unchanged.
+    Validates key starts with "sk-" if provided.
+    """
+    update_kwargs: dict = {}
+    if "name" in body.model_fields_set:
+        update_kwargs["name"] = body.name
+    if "openai_api_key" in body.model_fields_set:
+        raw = body.openai_api_key
+        key_val = raw.strip() if raw else None
+        if key_val and not key_val.startswith("sk-"):
+            raise HTTPException(
+                status_code=400,
+                detail="OpenAI API key must start with 'sk-'",
+            )
+        update_kwargs["openai_api_key"] = key_val
+    client = update_client(current_user.id, db, **update_kwargs)
+    return _client_to_response(client)
 
 
 @clients_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
@@ -99,13 +128,7 @@ def get_client_by_id_route(
     Returns 404 if not found or not owner.
     """
     client = get_client_by_id(client_id, current_user.id, db)
-    return ClientResponse(
-        id=client.id,
-        name=client.name,
-        api_key=client.api_key,
-        created_at=client.created_at,
-        updated_at=client.updated_at,
-    )
+    return _client_to_response(client)
 
 
 @clients_router.delete("/{client_id}", status_code=204, response_model=None)

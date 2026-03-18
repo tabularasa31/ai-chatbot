@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import uuid
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from backend.core.config import settings
+from backend.core.openai_client import get_openai_client
 from backend.models import Chat, Message, MessageRole
 from backend.search.service import search_similar_chunks
-
-openai_client = OpenAI(api_key=settings.openai_api_key)
 
 
 def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
@@ -43,7 +40,12 @@ def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
     )
 
 
-def generate_answer(question: str, context_chunks: list[str]) -> tuple[str, int]:
+def generate_answer(
+    question: str,
+    context_chunks: list[str],
+    *,
+    api_key: str,
+) -> tuple[str, int]:
     """
     Call OpenAI GPT-3.5-turbo with RAG prompt.
 
@@ -59,6 +61,7 @@ def generate_answer(question: str, context_chunks: list[str]) -> tuple[str, int]
         return ("I don't have information about this.", 0)
 
     prompt = build_rag_prompt(question, context_chunks)
+    openai_client = get_openai_client(api_key)
     response = openai_client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": prompt}],
@@ -75,6 +78,8 @@ def process_chat_message(
     question: str,
     session_id: uuid.UUID,
     db: Session,
+    *,
+    api_key: str,
 ) -> tuple[str, list[uuid.UUID], int]:
     """
     Full RAG pipeline: search → prompt → generate → save → return.
@@ -89,7 +94,7 @@ def process_chat_message(
         Tuple of (answer, document_ids, tokens_used).
     """
     # 1. Search similar chunks
-    results = search_similar_chunks(client_id, question, top_k=3, db=db)
+    results = search_similar_chunks(client_id, question, top_k=3, db=db, api_key=api_key)
 
     # 2. Extract chunk_text and document_ids
     chunk_texts = [r[0].chunk_text for r in results]
@@ -99,7 +104,7 @@ def process_chat_message(
     prompt = build_rag_prompt(question, chunk_texts)
 
     # 4. Generate answer
-    answer, tokens_used = generate_answer(question, chunk_texts)
+    answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
 
     # 5. Find or create Chat
     chat = db.query(Chat).filter(

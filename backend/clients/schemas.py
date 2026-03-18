@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -32,8 +33,16 @@ class ClientResponse(BaseModel):
     id: uuid.UUID
     name: str
     api_key: str
+    has_openai_key: bool
     created_at: datetime
     updated_at: datetime
+
+
+class UpdateClientRequest(BaseModel):
+    """Request body for updating a client."""
+
+    name: Optional[str] = None
+    openai_api_key: Optional[str] = None  # None = remove key
 
 
 class ClientListResponse(BaseModel):

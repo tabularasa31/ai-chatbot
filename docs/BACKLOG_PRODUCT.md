@@ -86,6 +86,16 @@ RICE-приоритизация — в `PRODUCT_BACKLOG.md`.
 
 ---
 
+## 🧊 Дальний бэклог (P3+, когда придёт момент)
+
+- **Conversation summaries** — GPT-резюме каждой сессии в логах. Полезно когда сессий 50+/день.
+- **Analytics charts** — графики трендов по вопросам, темам, resolution rate.
+- **MCP server** — подключить Chat9 как источник данных для Claude/Cursor через Model Context Protocol.
+- **Multi-user / team** — несколько членов команды в одном аккаунте.
+- **Custom widget design** — кастомные цвета, шрифты, логотип в виджете.
+
+---
+
 ## ✅ Реализовано
 
 | FI | Что | PR |

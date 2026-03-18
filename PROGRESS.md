@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-18 06:45 UTC  
+**Last Updated:** 2026-03-18 07:30 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** Phase 1-7 COMPLETE ✅ | Backend LIVE on Railway 🚀 | Phase 8-9 (Frontend) NEXT
+**Status:** Phase 1-7 COMPLETE ✅ | Backend LIVE + E2E Tested 🚀 | Phase 9 (Frontend) IN PROGRESS
 
 ---
 
@@ -241,7 +241,8 @@
 | **FastAPI Backend** | ✅ Online (Railway) |
 | **PostgreSQL 15 + pgvector** | ✅ Online (Railway) |
 | **Alembic Migrations** | ✅ All tables created |
-| **Frontend (Next.js)** | ⏳ Phase 9 |
+| **E2E Test (real OpenAI)** | ✅ Tested — RAG pipeline works! |
+| **Frontend (Next.js)** | 🔄 In Progress (Phase 9) |
 | **Embed Widget** | ⏳ Phase 10 |
 
 **Live endpoints:**
@@ -259,6 +260,35 @@
 - Start Command: `alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
 - Python: 3.11.15
 - Auto-deploy: git push → Railway rebuilds automatically
+
+---
+
+## 🧪 E2E Production Test (2026-03-18)
+
+**Tested live on Railway with real OpenAI API:**
+
+```bash
+# 1. Health check
+GET /health → {"status": "ok"} ✅
+
+# 2. Register + login
+POST /auth/register → JWT token ✅
+
+# 3. Create client → got 32-char API key ✅
+
+# 4. Upload document (test.md with FAQ content) → status: ready ✅
+
+# 5. Create embeddings → chunks_created: 2 ✅
+
+# 6. Chat (RAG)
+POST /chat
+Question: "How to reset password?"
+Answer: "Go to Settings -> Security -> Click Reset Password -> Check your email."
+source_documents: ["6500a72c-..."] ✅
+tokens_used: 230 ✅
+```
+
+**RAG pipeline confirmed working end-to-end in production!** 🎉
 
 ---
 
@@ -306,32 +336,39 @@
 
 ---
 
-## 📋 Remaining Phases (4 phases, ~1.5 weeks)
+## 📋 Remaining Phases (3 phases, ~1 week)
 
-### Phase 8: Dashboard Backend (2-3 hours)
-
-**What to implement:**
-- `GET /api/documents` — List documents for client
-- `GET /api/chats` — List chat sessions
-- `GET /api/messages?chat_id={id}` — Get chat history
-- All endpoints protected (JWT + client ownership)
-
-**Files:**
-- Likely merged into existing route files
-- Add new response schemas
+### Phase 8: Dashboard Backend
+**Status:** ⏭️ SKIPPED — existing endpoints are sufficient for frontend MVP
+- `GET /documents`, `GET /clients/me`, `GET /chat/history/{session_id}` already cover dashboard needs
+- Can add dedicated dashboard endpoints later if needed
 
 ---
 
-### Phase 9: Frontend Dashboard (Next.js) (4-6 hours)
+### Phase 9: Frontend Dashboard (Next.js) 🔄 IN PROGRESS
+
+**Branch:** feature/frontend
 
 **What to implement:**
 - Login/signup pages
-- Dashboard (show API key, copy buttons)
-- Document manager (upload, list, delete)
-- Chat logs viewer
+- Dashboard (API key, embed code, stats)
+- Document manager (upload + auto-embed, list, delete, status badges)
+- Chat logs viewer (by session_id)
 - Responsive TailwindCSS styling
 
-**Stack:** Next.js 14, React, TypeScript, TailwindCSS
+**Stack:** Next.js 14 (App Router), TypeScript, TailwindCSS  
+**Env:** `NEXT_PUBLIC_API_URL=https://ai-chatbot-production-6531.up.railway.app`
+
+**Files:**
+- `frontend/lib/api.ts` (API client with JWT + localStorage)
+- `frontend/app/page.tsx` (redirect logic)
+- `frontend/app/(auth)/login/page.tsx`
+- `frontend/app/(auth)/signup/page.tsx`
+- `frontend/app/(app)/dashboard/page.tsx`
+- `frontend/app/(app)/documents/page.tsx`
+- `frontend/app/(app)/logs/page.tsx`
+- `frontend/components/Navbar.tsx`
+- `frontend/middleware.ts` (auth redirect)
 
 ---
 
@@ -340,24 +377,22 @@
 **What to implement:**
 - Vanilla JS widget script (~50KB)
 - Chat UI (input, messages, bubble)
-- postMessage communication with iframe
-- Serve from backend CDN
+- Serve from Railway backend as `/embed.js`
+- Test on external HTML page
 
 **Files:**
-- `public/embed.js`
-- `app/widget/page.tsx` (Next.js widget UI)
-- `backend/widget/routes.py`
+- `backend/widget/static/embed.js`
+- `backend/widget/routes.py` (serve static file)
 
 ---
 
-### Phase 11: Deployment & Testing (2-3 hours)
+### Phase 11: Final Deploy + Testing (2-3 hours)
 
 **What to implement:**
-- Deploy backend to Railway
 - Deploy frontend to Vercel
-- Serve widget from CDN
-- Live E2E testing
-- Documentation
+- Update Railway CORS to allow Vercel URL
+- Live E2E testing (register → upload → chat → widget)
+- Documentation (README.md)
 
 ---
 

@@ -1,0 +1,237 @@
+SETUP:
+cd ~/Projects/ai-chatbot
+git checkout main
+git pull origin main
+git checkout -b feature/enforce-email-verification
+
+FEATURE:
+FI-016 Enforce email verification for mutating actions
+
+GOAL:
+If a user has not verified their email (`is_verified = False`), they should NOT be able to:
+- create a client (`POST /clients`),
+- upload documents (`POST /documents`),
+- create embeddings (`POST /embeddings/documents/{id}`),
+(and easily extendable to other mutating endpoints later).
+
+Read-only endpoints (e.g. `/clients/me`, `/documents` GET, `/chat/history/...`, `/search`, `/admin` for your own account) can stay accessible for now.
+
+We already have:
+- `User.is_verified` in the DB,
+- email verification flow via `/auth/verify-email`,
+- `is_verified` exposed in `/clients/me` and shown in the UI.
+
+Now we enforce it on the backend.
+
+======================================================================
+BACKEND
+======================================================================
+
+Scope:
+- backend/auth/middleware.py (or similar place where `get_current_user` lives)
+- backend/clients/routes.py
+- backend/documents/routes.py
+- backend/embeddings/routes.py (if exists)
+- tests/test_verification_enforcement.py (new)
+
+Do NOT:
+- change the email verification flow itself.
+- block login — users can still log in and see the app, but cannot perform specific actions.
+
+----------------------------------------------------------------------
+1) Add a dependency to require verified user
+----------------------------------------------------------------------
+
+In `backend/auth/middleware.py` (or wherever `get_current_user` is defined), add a helper dependency:
+
+```python
+from fastapi import HTTPException, status
+from backend.models import User
+
+
+async def require_verified_user(current_user: User = Depends(get_current_user)) -> User:
+    """Ensure that the current user has verified their email.
+
+    Raises 403 if `is_verified` is False.
+    """
+    if not current_user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified.",
+        )
+    return current_user
+```
+
+Adjust imports as needed (sync vs async, typing, etc.) to match the existing style of `get_current_user`.
+
+----------------------------------------------------------------------
+2) Enforce verification on mutating routes
+----------------------------------------------------------------------
+
+### 2.1 POST /clients
+
+File: `backend/clients/routes.py`
+
+Find the route that creates a client, e.g.:
+
+```python
+@clients_router.post("/clients", response_model=ClientResponse)
+@limiter.limit("...")
+def create_client(
+    body: ClientCreateRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClientResponse:
+    ...
+```
+
+Change the dependency to use `require_verified_user` instead of `get_current_user`:
+
+```python
+from backend.auth.middleware import get_current_user, require_verified_user
+
+
+@clients_router.post("/clients", response_model=ClientResponse)
+@limiter.limit("...")
+def create_client(
+    body: ClientCreateRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ClientResponse:
+    ...
+```
+
+So that if `is_verified` is False, the route returns `403 Email not verified.`.
+
+### 2.2 POST /documents
+
+File: `backend/documents/routes.py`
+
+Find the upload endpoint, e.g.:
+
+```python
+@documents_router.post("/documents", response_model=DocumentResponse)
+@limiter.limit("...")
+def upload_document(
+    ...,  # file, metadata
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentResponse:
+    ...
+```
+
+Change to:
+
+```python
+from backend.auth.middleware import require_verified_user
+
+
+@documents_router.post("/documents", response_model=DocumentResponse)
+@limiter.limit("...")
+def upload_document(
+    ...,  # file, metadata
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentResponse:
+    ...
+```
+
+### 2.3 POST /embeddings/documents/{id}
+
+File: `backend/documents/routes.py` or `backend/embeddings/routes.py` (depending on project structure).
+
+Locate the endpoint, e.g.:
+
+```python
+@documents_router.post("/embeddings/documents/{document_id}")
+@limiter.limit("...")
+def create_embeddings_for_document(
+    document_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> EmbeddingResponse:
+    ...
+```
+
+Change dependency to `require_verified_user` in the same way.
+
+### 2.4 Other mutating routes (optional)
+
+For now, only enforce on:
+- `POST /clients`
+- `POST /documents`
+- `POST /embeddings/documents/{id}`
+
+Later it will be easy to extend to other POST/PUT/DELETE endpoints if needed.
+
+----------------------------------------------------------------------
+3) Tests
+----------------------------------------------------------------------
+
+Create `tests/test_verification_enforcement.py` to cover new behavior.
+
+Setup:
+- A helper to create:
+  - unverified user (is_verified=False), with valid JWT.
+  - verified user (is_verified=True), with valid JWT.
+- For each tested endpoint, use the existing test client and helper functions.
+
+Tests to add:
+
+1) `test_create_client_forbidden_for_unverified_user`
+   - Arrange: user with `is_verified=False`, get JWT.
+   - Call `POST /clients` with valid payload and Authorization header.
+   - Assert:
+     - status_code == 403
+     - response.json()["detail"] == "Email not verified."
+
+2) `test_create_client_allowed_for_verified_user`
+   - Same as above, but with `is_verified=True`.
+   - Assert 200 and client is created.
+
+3) `test_upload_document_forbidden_for_unverified_user`
+   - For a user with `is_verified=False` (and existing client if required):
+   - Call `POST /documents` (multipart upload) with JWT.
+   - Assert 403 + "Email not verified.".
+
+4) `test_upload_document_allowed_for_verified_user`
+   - Same as above with `is_verified=True`.
+
+5) `test_create_embeddings_forbidden_for_unverified_user`
+   - Prepare: document belongs to a client; user is owner, but `is_verified=False`.
+   - Call `POST /embeddings/documents/{id}` with JWT.
+   - Assert 403.
+
+6) `test_create_embeddings_allowed_for_verified_user`
+   - Same with `is_verified=True`; embeddings are created as before.
+
+Use existing fixtures/factories from other tests where possible (e.g. user/client/document factories).
+
+----------------------------------------------------------------------
+4) No frontend changes in this feature
+----------------------------------------------------------------------
+
+Frontend already:
+- knows `is_verified` via `/clients/me`,
+- shows banners.
+
+We do NOT change frontend behavior in this feature. The new enforcement is purely on backend.
+
+======================================================================
+CHECKS
+======================================================================
+
+- Backend:
+  - `alembic upgrade head` (no new migrations expected here)
+  - `pytest tests/test_verification_enforcement.py -v`
+  - full test suite if not too slow.
+
+- Manual:
+  - Register a new user, do NOT click verification link.
+  - Log in and try to:
+    - create client,
+    - upload document,
+    - create embeddings.
+    → all should return 403 with `"Email not verified."`.
+  - Verify email via link.
+  - Retry the same actions → now they should work.

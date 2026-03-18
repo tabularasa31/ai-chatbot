@@ -334,26 +334,133 @@ rewrite → retrieve → rerank → validate → answer
 
 ---
 
+---
+
+## Источник 5: Claude Sonnet 4.6
+
+### Что совпадает со всеми
+- Overlap 50–75 токенов.
+- Hybrid search BM25 + vector + RRF.
+- Reranking.
+- Graceful degradation + Knowledge Tiers.
+- Метрики: RAGAS, faithfulness, context recall, fallback rate.
+- Tenant isolation.
+- Async ingestion.
+
+### Что добавил Sonnet (уникальное)
+
+#### 1. Knowledge Tiers — самый чёткий паттерн
+Три явных уровня:
+- **Tier 1:** Векторная БД (документы клиента).
+- **Tier 2:** Статичные FAQ/контакты — отдельная таблица `tenant_static_knowledge`.
+- **Tier 3:** Fallback-шаблоны по категориям.
+
+Это самое чёткое описание того, что мы называем FI-031 (org config layer). Sonnet предлагает реализовать это как **отдельную таблицу в БД**, а не просто поле в клиенте:
+
+```sql
+CREATE TABLE tenant_static_knowledge (
+  tenant_id TEXT,
+  category TEXT, -- 'contacts', 'trial', 'billing', 'escalation'
+  question_pattern TEXT,
+  answer TEXT,
+  escalation_contact TEXT
+);
+```
+
+#### 2. Question routing/classifier
+
+Keyword-based pre-routing перед RAG:
+- `contact`, `trial`, `pricing` → сразу Tier 2/3, без RAG.
+- `technical` → RAG pipeline.
+
+```python
+QUESTION_CATEGORIES = {
+    "contact": ["email", "телефон", "связаться"],
+    "trial": ["тест", "trial", "пробный"],
+    "pricing": ["цена", "тариф", "стоимость"],
+    "technical": ["api", "интеграция", "endpoint"]
+}
+```
+
+Это **усиливает FI-031** и частично делает FI-036 (HyDE) более управляемым.
+
+#### 3. Sentence-window retrieval
+
+Уточнённый вариант Small-to-Big:
+- Храни чанки по ~3 предложения.
+- При retrieval возвращай ±2 предложения вокруг найденного.
+- "Лучше, чем большой чанк с overlap" — по словам Sonnet.
+
+#### 4. Query expansion (несколько перефразировок)
+
+```python
+async def expand_query(question: str) -> list[str]:
+    # Генерируй 2-3 альтернативные формулировки
+    # Retrieval по всем, объединяй через RRF
+```
+
+Это решает проблему #4 (зависимость от формулировки). Похоже на FI-033 (query rewriting), но шире — не одна нормализация, а несколько параллельных запросов.
+
+#### 5. Версионирование промптов в БД
+
+Хранить system prompt в таблице с `version` и `tenant_id`:
+- Смена промпта без деплоя.
+- Быстрые A/B эксперименты.
+- Разные промпты для разных клиентов (FI-007).
+
+**Это архитектурное решение, которое делает FI-007 намного мощнее.**
+
+#### 6. TTL для нестабильного контента
+
+Отдельный тип чанков с коротким TTL + предупреждение:
+```python
+if any(chunk.metadata["content_type"] == "versioned" for chunk in context):
+    prompt += "\n⚠️ Часть информации может быть устаревшей."
+```
+
+#### 7. Конкретный system prompt шаблон
+
+Самый подробный из всех четырёх:
+
+```
+ROLE: Ты — специалист технической поддержки [Название].
+
+ПРАВИЛА:
+1. Точный ответ → давай конкретно
+2. Частично релевантно → ответь на часть + укажи пробел
+3. Нет ответа → не "не содержится", скажи что уточнишь через [канал]
+4. Шаги → нумерованный список
+5. Код → всегда code block
+6. Не додумывай порты, endpoints, параметры
+7. Безопасность/данные → "уточните у менеджера"
+
+ТОНАЛЬНОСТЬ: Профессионально, кратко. 
+Не используй "К сожалению" и извинительные обороты.
+```
+
+---
+
 ## Сравнение источников
 
-| Тема | Perplexity | ChatGPT | DeepSeek | Gemini | Вывод |
-|------|-----------|---------|----------|--------|-------|
-| Overlap | 60–80 | 50–100 | 50–75 | 50–75 | ~60–80 ✅ делать |
-| Hybrid search | ✅ | ✅ | ✅ RRF | ✅ RRF | Консенсус всех четырёх |
-| Reranking | Cohere | Cross-encoder | ms-marco | Cohere/BGE | Консенсус всех четырёх |
-| Graceful degradation | ✅ | ✅ | ✅ | ✅ Intent classifier | FI-031 |
-| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | multilingual-e5-large | Cohere Embed v3 | P3, исследовать |
-| Query rewriting | — | 🔥 | — | Query Translation | FI-033, P2 |
-| LLM validation | — | 🔥 | Косвенно | CoT в промпте | FI-034, P2 |
-| HyDE | — | — | — | 🔥 Уникально | FI-036, P2 |
-| Small-to-Big | — | — | — | 🔥 Уникально | В FI-009 |
-| Citations | — | — | — | 🔥 Уникально | В FI-007 |
-| Semantic cache | — | — | Redis | RedisVL | P3 |
-| Prompt injection | — | — | 🔥 | — | FI-035, P2 |
-| HNSW index | — | — | 🔥 | — | При FI-019 |
-| Cost per query | — | — | 🔥 | — | В метрики |
-| CI/CD для доков | — | — | — | 🔥 Auto-invalidation | В FI-029 |
-| Observability | Важно | Очень важно | Prometheus | — | Расширить /chat/debug |
+| Тема | Perplexity | ChatGPT | DeepSeek | Gemini | Sonnet | Вывод |
+|------|-----------|---------|----------|--------|--------|-------|
+| Overlap | 60–80 | 50–100 | 50–75 | 50–75 | 50–75 | ~60–80 ✅ делать |
+| Hybrid search | ✅ | ✅ | ✅ RRF | ✅ RRF | ✅ RRF | Консенсус всех пяти |
+| Reranking | Cohere | Cross-encoder | ms-marco | Cohere/BGE | ms-marco | Консенсус всех пяти |
+| Graceful degradation | ✅ | ✅ | ✅ | ✅ | ✅ Knowledge Tiers | Консенсус, FI-031 |
+| Knowledge Tiers (таблица) | — | — | — | — | 🔥 Уникально | FI-031 расширить |
+| Prompt versioning в БД | — | — | — | — | 🔥 Уникально | Добавить в FI-007 |
+| Question routing | — | — | — | Intent classifier | 🔥 Детально | FI-031 + |
+| Query expansion (мульти) | — | 🔥 | — | Translation | 🔥 Детально | FI-033 расширить |
+| Sentence-window | — | — | — | Small-to-Big | 🔥 Детально | В FI-009 |
+| TTL для нестабильного | — | — | — | — | 🔥 Уникально | В FI-029 |
+| HyDE | — | — | — | 🔥 | — | FI-036, P2 |
+| Citations | — | — | — | 🔥 | — | В FI-007 |
+| Semantic cache | — | — | Redis | RedisVL | Redis | P3 |
+| Prompt injection | — | — | 🔥 | — | — | FI-035, P2 |
+| HNSW index | — | — | 🔥 | — | — | При FI-019 |
+| Cost per query | — | — | 🔥 | — | ✅ Per tenant | В метрики |
+| Observability | ✅ | ✅ | Prometheus | — | ✅ Логи запросов | Расширить /chat/debug |
 
 ---
 
@@ -370,7 +477,9 @@ rewrite → retrieve → rerank → validate → answer
 | FI-029 | Document versioning & recency scoring | Perplexity + DeepSeek | P2 |
 | FI-035 | Security: prompt injection protection | DeepSeek | P2 |
 | FI-036 | HyDE для коротких/расплывчатых вопросов | Gemini | P2 |
-| FI-009 update | Small-to-Big Retrieval + citations | Gemini | P1 |
-| FI-007 update | CoT + citations в system prompt | Gemini | P1 |
-| FI-028 update | Cross-lingual: Cohere/Voyage/e5-large | Все четыре | P3 |
-| FI-030 | RAG metrics (RAGAS/TruLens + cost per query) | Все четыре | P3 |
+| FI-009 update | Small-to-Big / Sentence-window + citations | Gemini + Sonnet | P1 |
+| FI-007 update | CoT + citations + prompt versioning в БД | Gemini + Sonnet | P1 |
+| FI-031 update | Knowledge Tiers таблица + question routing | Sonnet | P1 |
+| FI-033 update | Query expansion (несколько перефразировок + RRF) | Sonnet | P2 |
+| FI-028 update | Cross-lingual: Cohere/Voyage/e5-large | Все пять | P3 |
+| FI-030 | RAG metrics (RAGAS + cost per tenant) | Все пять | P3 |

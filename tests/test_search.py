@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.search.service import cosine_similarity
+from backend.search.service import cosine_similarity, keyword_search_chunks
 
 
 # --- Unit tests for cosine_similarity ---
@@ -38,15 +38,14 @@ def test_cosine_similarity_zero_vectors() -> None:
     assert cosine_similarity(zero, zero) == 0.0
 
 
-@patch("backend.search.service.openai_client.embeddings.create")
-def test_embed_query_uses_openai_client(mock_create: Mock) -> None:
+def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     """embed_query calls OpenAI with correct model name."""
     from backend.search.service import embed_query
 
-    mock_create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    embed_query("test query")
-    mock_create.assert_called_once()
-    call_kwargs = mock_create.call_args
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    embed_query("test query", api_key="sk-test")
+    mock_openai_client.embeddings.create.assert_called_once()
+    call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("model") == "text-embedding-3-small"
     assert call_kwargs.kwargs.get("input") == "test query"
 
@@ -54,9 +53,10 @@ def test_embed_query_uses_openai_client(mock_create: Mock) -> None:
 # --- API tests (all mock OpenAI) ---
 
 
-@patch("backend.search.service.openai_client.embeddings.create")
-def test_search_no_embeddings(mock_openai: Mock, client: TestClient) -> None:
+def test_search_no_embeddings(mock_openai_client: Mock, client: TestClient) -> None:
     """Given no embeddings in DB, POST /search → returns empty results list."""
+    from tests.conftest import set_client_openai_key
+
     reg = client.post(
         "/auth/register",
         json={"email": "noemb@example.com", "password": "SecurePass1!"},
@@ -67,8 +67,9 @@ def test_search_no_embeddings(mock_openai: Mock, client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "No Emb Client"},
     )
+    set_client_openai_key(client, token)
 
-    mock_openai.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
     response = client.post(
         "/search",
@@ -80,17 +81,15 @@ def test_search_no_embeddings(mock_openai: Mock, client: TestClient) -> None:
     assert data["results"] == []
 
 
-@patch("backend.embeddings.service.openai_client.embeddings.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_search_single_embedding_match(
-    mock_search_openai: Mock,
-    mock_emb_openai: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
 ) -> None:
     """Create user, client, document, embedding; mock embed_query to return similar vector."""
+    from tests.conftest import set_client_openai_key
+
     vec = [0.1] * 1536
-    mock_emb_openai.return_value.data = [Mock(embedding=vec)]
-    mock_search_openai.return_value.data = [Mock(embedding=vec)]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
     reg = client.post(
         "/auth/register",
@@ -102,6 +101,7 @@ def test_search_single_embedding_match(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Single Client"},
     )
+    set_client_openai_key(client, token)
     md_content = b"# Doc\n\nRelevant content here."
     upload_resp = client.post(
         "/documents",
@@ -127,15 +127,13 @@ def test_search_single_embedding_match(
     assert "Relevant content" in data["results"][0]["chunk_text"]
 
 
-@patch("backend.embeddings.service.openai_client.embeddings.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_search_multiple_results_sorted(
-    mock_search_openai: Mock,
-    mock_emb_openai: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """3 embeddings with different similarity scores; results sorted DESC by similarity."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -148,6 +146,7 @@ def test_search_multiple_results_sorted(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Multi Client"},
     )
+    set_client_openai_key(client, token)
     client_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
@@ -178,7 +177,7 @@ def test_search_multiple_results_sorted(
         db_session.add(emb)
     db_session.commit()
 
-    mock_search_openai.return_value.data = [Mock(embedding=query_vec)]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
     response = client.post(
         "/search",
@@ -193,15 +192,13 @@ def test_search_multiple_results_sorted(
     assert sims[0] > sims[1] > sims[2]
 
 
-@patch("backend.embeddings.service.openai_client.embeddings.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_search_respects_top_k(
-    mock_search_openai: Mock,
-    mock_emb_openai: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Have > top_k embeddings, request top_k=2, only 2 results returned."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -214,6 +211,7 @@ def test_search_respects_top_k(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "TopK Client"},
     )
+    set_client_openai_key(client, token)
     client_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
@@ -238,7 +236,7 @@ def test_search_respects_top_k(
         db_session.add(emb)
     db_session.commit()
 
-    mock_search_openai.return_value.data = [Mock(embedding=vec)]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
     response = client.post(
         "/search",
@@ -249,15 +247,13 @@ def test_search_respects_top_k(
     assert len(response.json()["results"]) == 2
 
 
-@patch("backend.embeddings.service.openai_client.embeddings.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_search_other_client_isolated(
-    mock_search_openai: Mock,
-    mock_emb_openai: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Create embeddings for client A and B; search as user A → only A's results."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg_a = client.post(
@@ -270,6 +266,7 @@ def test_search_other_client_isolated(
         headers={"Authorization": f"Bearer {token_a}"},
         json={"name": "Client A"},
     )
+    set_client_openai_key(client, token_a)
     client_a_id = uuid.UUID(cl_a_resp.json()["id"])
 
     reg_b = client.post(
@@ -319,7 +316,7 @@ def test_search_other_client_isolated(
     db_session.add_all([emb_a, emb_b])
     db_session.commit()
 
-    mock_search_openai.return_value.data = [Mock(embedding=vec)]
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
     response = client.post(
         "/search",
@@ -361,6 +358,8 @@ def test_search_requires_client(client: TestClient) -> None:
 
 def test_search_invalid_top_k(client: TestClient) -> None:
     """top_k <= 0 → 422."""
+    from tests.conftest import set_client_openai_key
+
     reg = client.post(
         "/auth/register",
         json={"email": "invalid@example.com", "password": "SecurePass1!"},
@@ -371,6 +370,7 @@ def test_search_invalid_top_k(client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Invalid Client"},
     )
+    set_client_openai_key(client, token)
 
     response = client.post(
         "/search",
@@ -382,6 +382,8 @@ def test_search_invalid_top_k(client: TestClient) -> None:
 
 def test_search_empty_query_rejected(client: TestClient) -> None:
     """Empty query → 422."""
+    from tests.conftest import set_client_openai_key
+
     reg = client.post(
         "/auth/register",
         json={"email": "emptyq@example.com", "password": "SecurePass1!"},
@@ -392,6 +394,7 @@ def test_search_empty_query_rejected(client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Empty Client"},
     )
+    set_client_openai_key(client, token)
 
     response = client.post(
         "/search",
@@ -401,9 +404,10 @@ def test_search_empty_query_rejected(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-@patch("backend.search.service.openai_client.embeddings.create")
-def test_search_default_top_k(mock_openai: Mock, client: TestClient) -> None:
+def test_search_default_top_k(mock_openai_client: Mock, client: TestClient) -> None:
     """Omit top_k → defaults to 3."""
+    from tests.conftest import set_client_openai_key
+
     reg = client.post(
         "/auth/register",
         json={"email": "default@example.com", "password": "SecurePass1!"},
@@ -414,7 +418,8 @@ def test_search_default_top_k(mock_openai: Mock, client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Default Client"},
     )
-    mock_openai.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    set_client_openai_key(client, token)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
     response = client.post(
         "/search",
@@ -423,3 +428,99 @@ def test_search_default_top_k(mock_openai: Mock, client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert "results" in response.json()
+
+
+# --- Keyword search unit tests ---
+
+
+def test_keyword_search_chunks_finds_match(db_session) -> None:
+    """keyword_search_chunks returns chunks containing query keywords."""
+    from tests.test_models import _create_client, _create_user
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    user = _create_user(db_session, email="kw@example.com")
+    cl = _create_client(db_session, user, name="KW Client")
+    doc = Document(
+        client_id=cl.id,
+        filename="cors.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="CORS configuration",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="CORS settings: allow_origins, allow_methods",
+        vector=None,
+        metadata_json={"chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    results = keyword_search_chunks(cl.id, "cors настройка", top_k=5, db=db_session)
+    assert len(results) == 1
+    assert results[0][0].chunk_text == "CORS settings: allow_origins, allow_methods"
+    assert results[0][1] >= 1.0  # at least "cors" matched
+
+
+def test_search_keyword_fallback_when_vector_low(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """Short/vague query with low vector similarity → keyword fallback finds CORS chunk."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "fallback@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fallback Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="cors.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="CORS configuration docs",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    # Orthogonal vector: cosine sim with [1,0,0,...] will be 0
+    low_vec = [0.0, 1.0] + [0.0] * 1534
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="CORS settings: allow_origins controls cross-origin requests",
+        vector=None,
+        metadata_json={"chunk_index": 0, "vector": low_vec},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    # Query vector orthogonal to stored → vector sim = 0 → fallback to keyword
+    query_vec = [1.0] + [0.0] * 1535
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
+
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "cors", "top_k": 3},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["results"]) == 1
+    assert "CORS" in data["results"][0]["chunk_text"]
+    assert data["results"][0]["document_id"] == str(doc.id)

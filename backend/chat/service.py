@@ -209,6 +209,10 @@ def process_chat_message(
         source_documents=source_docs,
     )
     db.add(assistant_msg)
+
+    # 7. Save tokens_used on Chat (per message exchange)
+    chat.tokens_used = tokens_used
+    db.add(chat)
     db.commit()
 
     return (answer, document_ids, tokens_used)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.admin.schemas import (
@@ -47,7 +48,7 @@ def get_metrics_summary(
     total_messages_assistant = db.query(Message).filter(
         Message.role == MessageRole.assistant
     ).count()
-    total_tokens_chat = 0  # TODO: replace when tokens field exists
+    total_tokens_chat = db.query(func.sum(Chat.tokens_used)).scalar() or 0
 
     doc_client_ids = {row[0] for row in db.query(Document.client_id).distinct()}
     chat_client_ids = {row[0] for row in db.query(Chat.client_id).distinct()}
@@ -99,7 +100,11 @@ def get_client_metrics(
             .filter(Chat.client_id == c.id, Message.role == MessageRole.assistant)
             .count()
         )
-        tokens_used_chat = 0  # TODO: replace when tokens field exists
+        tokens_used_chat = (
+            db.query(func.sum(Chat.tokens_used))
+            .filter(Chat.client_id == c.id)
+            .scalar()
+        ) or 0
         has_openai_key = bool(c.openai_api_key)
 
         items.append(

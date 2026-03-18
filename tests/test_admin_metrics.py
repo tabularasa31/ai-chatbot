@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from backend.models import Chat, Client, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, User
 
+from tests.conftest import register_and_verify_user
+
 
 def test_admin_metrics_summary_requires_admin(client: TestClient, db_session: Session) -> None:
     """Non-admin JWT → 403. Admin JWT → 200."""
@@ -75,11 +77,7 @@ def test_admin_metrics_clients_requires_admin(client: TestClient, db_session: Se
 
 def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -> None:
     """Summary counts match created fixtures."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "admin@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="admin@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -117,6 +115,9 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     db_session.commit()
     db_session.refresh(chat)
 
+    chat.tokens_used = 250
+    db_session.commit()
+
     msg1 = Message(chat_id=chat.id, role=MessageRole.user, content="Hi")
     msg2 = Message(chat_id=chat.id, role=MessageRole.assistant, content="Hello")
     db_session.add_all([msg1, msg2])
@@ -135,16 +136,12 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     assert data["total_chat_sessions"] >= 1
     assert data["total_messages_user"] >= 1
     assert data["total_messages_assistant"] >= 1
-    assert data["total_tokens_chat"] == 0
+    assert data["total_tokens_chat"] == 250
 
 
 def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -> None:
     """Per-client row reflects correct counts."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "admin2@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="admin2@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -182,6 +179,9 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     db_session.commit()
     db_session.refresh(chat)
 
+    chat.tokens_used = 180
+    db_session.commit()
+
     msg1 = Message(chat_id=chat.id, role=MessageRole.user, content="Q")
     msg2 = Message(chat_id=chat.id, role=MessageRole.assistant, content="A")
     db_session.add_all([msg1, msg2])
@@ -203,18 +203,14 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     assert our["chat_sessions_count"] >= 1
     assert our["messages_user_count"] >= 1
     assert our["messages_assistant_count"] >= 1
-    assert our["tokens_used_chat"] == 0
+    assert our["tokens_used_chat"] == 180
 
 
 def test_admin_metrics_clients_users_count_by_client_id(
     client: TestClient, db_session: Session
 ) -> None:
     """users_count reflects users with client_id, not just owner (user_id)."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "admin3@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="admin3@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -251,11 +247,7 @@ def test_admin_metrics_clients_users_count_by_client_id(
 
 def test_clients_me_includes_is_admin(client: TestClient, db_session: Session) -> None:
     """GET /clients/me returns is_admin from user."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "meadmin@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="meadmin@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},

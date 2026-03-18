@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-17 19:20 UTC  
+**Last Updated:** 2026-03-18 05:50 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** Phase 1-2 COMPLETE ✅ | Phase 3 READY 🚀
+**Status:** Phase 1-5 COMPLETE ✅ | Phase 6 READY 🚀
 
 ---
 
@@ -85,8 +85,9 @@
     - Return current user info (id, email, created_at)
 
 - JWT Infrastructure:
-  - `JWTMiddleware` for token verification
-  - `get_current_user()` dependency for route protection
+  - Initially: custom JWTMiddleware + dependency
+  - After refactor (Phase 4): pure FastAPI dependency injection only
+  - `get_current_user()` now the single source of truth for authn
   - Token format: HS256 with SECRET from .env
   - Expiration: 24 hours
 
@@ -98,16 +99,16 @@
 
 - Testing:
   - 13 test cases (all passing)
-  - 94% code coverage
+  - ~94% code coverage
   - Tests: registration, login, password validation, JWT protection, edge cases
 
 **Files:**
 - `backend/auth/__init__.py`
 - `backend/auth/schemas.py` (Pydantic models: RegisterRequest, LoginRequest, AuthResponse, etc.)
-- `backend/auth/service.py` (Business logic: register_user, authenticate_user, get_current_user_from_token)
+- `backend/auth/service.py` (Business logic: register_user, authenticate_user)
 - `backend/auth/routes.py` (FastAPI endpoints: /auth/register, /auth/login, /auth/me)
-- `backend/auth/middleware.py` (JWTMiddleware, get_current_user dependency)
-- `backend/main.py` (FastAPI app with CORS, middleware, auth router, /health endpoint)
+- `backend/auth/middleware.py` (FROZEN: get_current_user dependency only)
+- `backend/main.py` (FastAPI app with CORS, routers, /health endpoint)
 - `tests/test_auth.py` (13 test cases)
 
 **PR:** #2 — Merged ✅  
@@ -115,78 +116,123 @@
 
 ---
 
-## 📋 Remaining Phases (9 phases, ~2.5 weeks)
+### Phase 3: Client Management API (2026-03-18)
 
-### Phase 3: Client Management API (READY 🚀)
+**Status:** ✅ MERGED to main
 
-**Time estimate:** 2-3 hours  
-**Branch:** feature/clients
+**What was done:**
+- Client management endpoints:
+  - `POST /clients` — create a client for the current user
+    - Exactly one client per user (409 if duplicate)
+    - Auto-generate 32-char API key (`secrets.token_hex(16)`)
+  - `GET /clients/me` — fetch own client
+  - `GET /clients/{id}` — fetch specific client (ownership enforced)
+  - `DELETE /clients/{id}` — delete client (cascade to documents via FK)
+  - `GET /clients/validate/{api_key}` — public endpoint to validate API key
 
-**What to implement:**
-- `POST /clients` — Create client for logged-in user
-  - Auto-generate 32-char random API key
-  - Return client_id, api_key, name, created_at
-- `GET /clients/me` — Get own client info (protected)
-- `GET /clients/{id}` — Get specific client (protected, ownership check)
-- `DELETE /clients/{id}` — Delete client (cascade to documents)
-- Tests: 10+ cases (creation, retrieval, authorization, cascade delete)
+- Security:
+  - All non-public routes protected via `Depends(get_current_user)`
+  - Strict ownership checks: users see only their own clients
 
-**Files to create:**
+- Testing:
+  - 12 test cases (all passing)
+  - Scenarios: creation, duplicate prevention, unauthorized access, ownership, validation
+
+**Files:**
 - `backend/clients/__init__.py`
-- `backend/clients/schemas.py` (ClientRequest, ClientResponse, etc.)
-- `backend/clients/service.py` (create_client, get_client, delete_client)
-- `backend/clients/routes.py` (3-4 endpoints)
-- `tests/test_clients.py` (10+ test cases)
+- `backend/clients/schemas.py`
+- `backend/clients/service.py`
+- `backend/clients/routes.py`
+- `tests/test_clients.py`
 
-**Files to modify:**
-- `backend/main.py` (add: from .clients import clients_router)
+**PR:** #3 — Merged ✅  
+**Commit:** `feat(clients): add client management API`
 
 ---
 
-### Phase 4: Document Upload & Parsing (2-3 hours)
+### Phase 4: Document Upload & Parsing (2026-03-18)
 
-**What to implement:**
-- `POST /documents` (multipart) — Upload document
-  - File type validation (pdf, markdown, swagger)
-  - File size limit (50MB)
-  - Parse content (PyPDF2 for PDF, regex for markdown, yaml for swagger)
-  - Status: processing → ready | error
-- `GET /documents` — List documents for client
-- `DELETE /documents/{id}` — Delete document (cascade to embeddings)
+**Status:** ✅ MERGED to main
 
-**Files to create:**
+**What was done:**
+- Document endpoints:
+  - `POST /documents` — upload document (multipart/form-data)
+    - Supported types: PDF (`.pdf`), Markdown (`.md`), Swagger/OpenAPI (`.json`, `.yaml`, `.yml`)
+    - Max file size: 50MB
+    - Status: `processing` → `ready` or `error`
+  - `GET /documents` — list documents for current client's workspace
+  - `GET /documents/{id}` — get single document + parsed_text preview
+  - `DELETE /documents/{id}` — delete document (cascade deletes embeddings)
+
+- Parsing layer (`backend/documents/parsers.py`):
+  - `parse_pdf` — uses PyPDF2 to extract text from all pages
+  - `parse_markdown` — decodes bytes to UTF-8 and returns markdown text
+  - `parse_swagger` — parses JSON/YAML and renders human-readable API summary
+
+- Auth refactor (part of this phase):
+  - Replaced JWTMiddleware with pure dependency-based `get_current_user`
+  - `decode_access_token()` added to `core/security.py`
+  - `backend/auth/middleware.py` now FROZEN and stable
+
+- Testing:
+  - 12+ test cases in `tests/test_documents.py`
+  - Scenarios: valid uploads, unsupported types, oversize files, no-client cases, ownership
+
+**Files:**
 - `backend/documents/__init__.py`
 - `backend/documents/schemas.py`
+- `backend/documents/parsers.py`
 - `backend/documents/service.py`
-- `backend/documents/parsers.py` (PDF, markdown, swagger parsing)
 - `backend/documents/routes.py`
-- `tests/test_documents.py` (12+ test cases)
+- `tests/test_documents.py`
+
+**PR:** #4 — Merged ✅  
+**Commit:** `feat(documents): add document upload and parsing`
 
 ---
 
-### Phase 5: Embedding Creation (Async Job) (3-4 hours)
+### Phase 5: Embedding Creation (2026-03-18)
 
-**What to implement:**
-- After document upload → async job
-- Split text into chunks (500 chars, 100 char overlap)
-- For each chunk:
-  - Call OpenAI `text-embedding-3-small` API
-  - Store vector (1536-dim) + chunk text
-  - Save to `embeddings` table
-- Error handling + retry (max 3 retries)
-- Document status: processing → ready | error
+**Status:** ✅ MERGED to main
 
-**Files to create:**
+**What was done:**
+- Embedding endpoints:
+  - `POST /embeddings/documents/{document_id}` — create embeddings for a document
+  - `GET /embeddings/documents/{document_id}` — list embeddings for a document
+  - `DELETE /embeddings/documents/{document_id}` — delete all embeddings for a document
+
+- Embedding pipeline (`backend/embeddings/service.py`):
+  - `chunk_text(text, chunk_size=500, overlap=100)` — splits parsed_text into overlapping chunks
+  - `create_embeddings_for_document(document_id, db)`:
+    - Validates document exists, belongs to client, and is `ready`
+    - Deletes existing embeddings (idempotent re-embed)
+    - For each chunk:
+      - Calls OpenAI `text-embedding-3-small` via `openai_client`
+      - Stores vector (1536-dim) as JSON in metadata (pgvector later in Phase 6)
+  - `get_embeddings_for_document` and `delete_embeddings_for_document` helpers
+
+- OpenAI Integration:
+  - `OPENAI_API_KEY` read from `.env` (real key needed in production)
+  - Tests fully mock OpenAI client (no real API calls)
+
+- Testing:
+  - 12 new tests in `tests/test_embeddings.py`
+  - Scenarios: chunking behavior, happy path embedding creation, invalid status, not found, ownership, OpenAI failure handling, re-embedding
+  - Total test count now: **64** (all passing)
+
+**Files:**
 - `backend/embeddings/__init__.py`
-- `backend/embeddings/service.py` (chunking, OpenAI API call)
-- `backend/embeddings/worker.py` (async task queue or Celery)
-- `tests/test_embeddings.py` (10+ test cases)
+- `backend/embeddings/schemas.py`
+- `backend/embeddings/service.py`
+- `backend/embeddings/routes.py`
+- `tests/test_embeddings.py`
 
-**Dependencies:**
-- OpenAI API key (NEEDED from Elle)
-- PyPDF2, python-docx for parsing
+**PR:** #5 — Merged ✅  
+**Commit:** `feat(embeddings): add embedding creation with OpenAI text-embedding-3-small`
 
 ---
+
+## 📋 Remaining Phases (6 phases, ~2 weeks)
 
 ### Phase 6: Vector Search (2-3 hours)
 
@@ -326,13 +372,13 @@ pytest tests/ -v --cov=backend --cov-min-percentage=80
 
 | Metric | Value |
 |--------|-------|
-| **Phases Complete** | 2/11 |
-| **Phases Remaining** | 9 |
-| **Total Lines (Phases 1-2)** | ~900 |
-| **Test Cases (Phases 1-2)** | 28 |
-| **Code Coverage (Phases 1-2)** | 87% |
-| **Time Spent** | ~6 hours |
-| **Estimated Total Time** | 20-25 hours |
+| **Phases Complete** | 5/11 |
+| **Phases Remaining** | 6 |
+| **Total Lines (Phases 1-5)** | ~2,600 |
+| **Test Cases (Total)** | 64 |
+| **Code Coverage** | All tests passing; target ≥80% maintained |
+| **Time Spent** | ~8–10 hours (coding + setup) |
+| **Estimated Total Time** | 20–25 hours |
 | **Timeline** | 4 weeks (MVP) |
 
 ---
@@ -454,8 +500,10 @@ tests/test_auth.py (13 tests for auth)
 
 - ✅ Phase 1: DB isolation, cascade deletes
 - ✅ Phase 2: JWT validation, bcrypt hashing, password strength
-- ⏳ Phase 3: API key validation, client ownership checks
-- ⏳ Phase 4+: Always filter by `client_id` in queries (multi-tenancy)
+- ✅ Phase 3: API key validation, client ownership checks
+- ✅ Phase 4: Per-client document isolation, file type/size validation
+- ✅ Phase 5: Ownership-enforced embedding generation, OpenAI calls mocked in tests
+- ⏳ Phase 6+: Always filter by `client_id` in queries (multi-tenancy) and enforce tenant isolation in search/chat
 
 ---
 

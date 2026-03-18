@@ -32,8 +32,10 @@ class JWTMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if request.url.path in PUBLIC_PATHS or request.url.path.startswith("/docs") or request.url.path.startswith("/redoc"):
             return await call_next(request)
+        if request.url.path.startswith("/clients/validate/"):
+            return await call_next(request)
 
-        if request.url.path == "/auth/me":
+        if request.url.path == "/auth/me" or request.url.path.startswith("/clients"):
             token = _extract_bearer_token(request)
             if not token:
                 return JSONResponse(

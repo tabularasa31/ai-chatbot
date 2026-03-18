@@ -146,6 +146,7 @@
 - [FI-001] Telegram интеграция
 - [FI-005] Приветственное сообщение от бота
 - [FI-012] Admin dashboard (operator view across clients)
+- [FI-014] Admin product metrics (MVP)
 
 ### Приоритет P3 (масштабирование и тарифы)
 

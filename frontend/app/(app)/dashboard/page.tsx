@@ -8,6 +8,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export default function DashboardPage() {
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [docCount, setDocCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -17,7 +18,13 @@ export default function DashboardPage() {
   useEffect(() => {
     async function load() {
       try {
-        let client = await api.clients.getMe().catch(() => null);
+        const [user, clientOrNull] = await Promise.all([
+          api.auth.getMe(),
+          api.clients.getMe().catch(() => null),
+        ]);
+        setUserEmail(user.email);
+
+        let client = clientOrNull;
         if (!client) {
           try {
             client = await api.clients.create("My Workspace");
@@ -82,10 +89,17 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
+        {userEmail && (
+          <p className="text-slate-600 text-sm mt-1">{userEmail}</p>
+        )}
+      </div>
 
       <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-medium text-slate-800 mb-2">Welcome!</h2>
+        <h2 className="text-lg font-medium text-slate-800 mb-2">
+          Welcome{userEmail ? ", " + userEmail : ""}!
+        </h2>
         <p className="text-slate-600 mb-4">Your API Key:</p>
         <div className="flex items-center gap-2 flex-wrap">
           <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-md text-sm text-slate-800 break-all">

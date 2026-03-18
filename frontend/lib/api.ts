@@ -62,6 +62,12 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
       return data as { token: string; expires_in: number; user: { id: number; email: string } };
     },
+    async getMe() {
+      const res = await authFetch(`${BASE_URL}/auth/me`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
+      return data as { id: string; email: string; created_at: string };
+    },
   },
   clients: {
     async create(name: string) {

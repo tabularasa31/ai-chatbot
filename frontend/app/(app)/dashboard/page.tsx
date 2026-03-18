@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { api, type ClientResponse } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
-export default function DashboardPage() {
+function DashboardContent() {
+  const searchParams = useSearchParams();
+  const showVerificationBanner = searchParams.get("verification_sent") === "1";
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -126,6 +129,11 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
+      {showVerificationBanner && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg">
+          We sent a verification link to your email. Please check your inbox and click the link to verify your account.
+        </div>
+      )}
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
         {userEmail && (
@@ -247,5 +255,17 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-16">
+        <div className="animate-pulse text-slate-600">Loading...</div>
+      </div>
+    }>
+      <DashboardContent />
+    </Suspense>
   );
 }

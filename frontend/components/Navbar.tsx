@@ -8,12 +8,19 @@ import { api, removeToken } from "@/lib/api";
 export function Navbar() {
   const router = useRouter();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isVerified, setIsVerified] = useState<boolean | null>(null);
 
   useEffect(() => {
     api.clients
       .getMe()
-      .then((c) => setIsAdmin(c.is_admin))
-      .catch(() => setIsAdmin(false));
+      .then((c) => {
+        setIsAdmin(c.is_admin);
+        setIsVerified(c.is_verified);
+      })
+      .catch(() => {
+        setIsAdmin(false);
+        setIsVerified(null);
+      });
   }, []);
 
   function handleLogout() {
@@ -23,6 +30,11 @@ export function Navbar() {
 
   return (
     <nav className="bg-white border-b border-slate-200 shadow-sm">
+      {isVerified === false && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-800 px-4 py-2 text-center text-sm">
+          Your email is not verified. Check your inbox for a verification link.
+        </div>
+      )}
       <div className="max-w-4xl mx-auto px-4">
         <div className="flex items-center justify-between h-14">
           <div className="flex items-center gap-6">

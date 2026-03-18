@@ -56,6 +56,7 @@ export type ClientResponse = {
 
 export type ClientMeResponse = ClientResponse & {
   is_admin: boolean;
+  is_verified: boolean;
 };
 
 export type AdminMetricsSummary = {
@@ -149,6 +150,20 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
       return data as { id: string; email: string; created_at: string };
+    },
+    async verifyEmail(token: string): Promise<{ status: string }> {
+      const res = await fetch(`${BASE_URL}/auth/verify-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { detail?: string }).detail ?? "Failed to verify email"
+        );
+      }
+      return res.json();
     },
   },
   clients: {

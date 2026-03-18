@@ -90,6 +90,28 @@
 
 ---
 
+### [FI-006] ENCRYPTION_KEY rotation / recovery flow
+**Idea:** Provide a safe way to recover from losing the master ENCRYPTION_KEY (or rotate it) without silently breaking all clients.
+
+**How it could work:**
+- Admin-only endpoint/UI to:
+  - put the app into "maintenance" mode for key rotation;
+  - temporarily block new chat/embedding requests;
+  - require each client to re-enter their OpenAI API key after a key loss/rotation;
+- Optional: support key rotation flow where old keys are decrypted with old key and re-encrypted with new one (requires storing old key temporarily).
+
+**Value:**
+- Clear, explicit behavior when ENCRYPTION_KEY is lost or changed;
+- No silent 500 errors for end-users; instead, a clear message: "Please re-connect your OpenAI key".
+
+**Complexity:** Medium–High (depends on whether we support true rotation or just "reset all").
+
+**Depends on:**
+- Admin/auth story (how we manage operator access to the platform)
+- Observability (to detect errors and guide recovery)
+
+---
+
 ## ✅ Принято в разработку
 _(пусто — идеи ещё не валидированы)_
 

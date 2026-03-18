@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from tests.conftest import register_and_verify_user
 
 
-def test_create_client_success(client: TestClient) -> None:
+def test_create_client_success(client: TestClient, db_session: Session) -> None:
     """Create client returns 201 and 32-char api_key."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "user@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="user@example.com")
     response = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -28,13 +27,9 @@ def test_create_client_success(client: TestClient) -> None:
     assert "updated_at" in data
 
 
-def test_create_client_duplicate(client: TestClient) -> None:
+def test_create_client_duplicate(client: TestClient, db_session: Session) -> None:
     """Same user tries to create second client → 409."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "dup@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="dup@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -58,13 +53,9 @@ def test_create_client_unauthenticated(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_get_my_client_success(client: TestClient) -> None:
+def test_get_my_client_success(client: TestClient, db_session: Session) -> None:
     """Get own client after creation."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "me@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="me@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -82,13 +73,9 @@ def test_get_my_client_success(client: TestClient) -> None:
     assert "api_key" in data
 
 
-def test_get_my_client_not_found(client: TestClient) -> None:
+def test_get_my_client_not_found(client: TestClient, db_session: Session) -> None:
     """Get client before creating one → 404."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "noclient@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="noclient@example.com")
     response = client.get(
         "/clients/me",
         headers={"Authorization": f"Bearer {token}"},
@@ -96,13 +83,9 @@ def test_get_my_client_not_found(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_get_client_by_id_success(client: TestClient) -> None:
+def test_get_client_by_id_success(client: TestClient, db_session: Session) -> None:
     """Get client by UUID."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "byid@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="byid@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -118,13 +101,9 @@ def test_get_client_by_id_success(client: TestClient) -> None:
     assert response.json()["name"] == "Test Client"
 
 
-def test_get_client_by_id_wrong_user(client: TestClient) -> None:
+def test_get_client_by_id_wrong_user(client: TestClient, db_session: Session) -> None:
     """User B tries to get user A's client → 404."""
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "userA@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="userA@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -132,11 +111,7 @@ def test_get_client_by_id_wrong_user(client: TestClient) -> None:
     )
     client_id = create_resp.json()["id"]
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "userB@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="userB@example.com")
 
     response = client.get(
         f"/clients/{client_id}",
@@ -145,13 +120,9 @@ def test_get_client_by_id_wrong_user(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_delete_client_success(client: TestClient) -> None:
+def test_delete_client_success(client: TestClient, db_session: Session) -> None:
     """Delete client → 204, verify gone."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "del@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="del@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -172,13 +143,9 @@ def test_delete_client_success(client: TestClient) -> None:
     assert get_resp.status_code == 404
 
 
-def test_delete_client_wrong_user(client: TestClient) -> None:
+def test_delete_client_wrong_user(client: TestClient, db_session: Session) -> None:
     """User B tries to delete user A's client → 404."""
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "delA@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="delA@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -186,11 +153,7 @@ def test_delete_client_wrong_user(client: TestClient) -> None:
     )
     client_id = create_resp.json()["id"]
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "delB@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="delB@example.com")
 
     response = client.delete(
         f"/clients/{client_id}",
@@ -199,13 +162,9 @@ def test_delete_client_wrong_user(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_validate_api_key_valid(client: TestClient) -> None:
+def test_validate_api_key_valid(client: TestClient, db_session: Session) -> None:
     """Valid api_key → returns client_id and name."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "val@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="val@example.com")
     create_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -227,13 +186,9 @@ def test_validate_api_key_invalid(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_api_key_is_32_chars(client: TestClient) -> None:
+def test_api_key_is_32_chars(client: TestClient, db_session: Session) -> None:
     """Verify api_key length is 32 characters."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "len@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="len@example.com")
     response = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},

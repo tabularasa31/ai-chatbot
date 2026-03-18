@@ -7,7 +7,9 @@ from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import build_rag_prompt, generate_answer
 
 
@@ -66,17 +68,12 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
 def test_chat_success(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Valid api_key + question → get answer back."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "chat@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="chat@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -127,17 +124,12 @@ def test_chat_success(
 def test_chat_creates_messages_in_db(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """After chat, messages saved to DB."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "msg@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="msg@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -209,13 +201,9 @@ def test_chat_missing_api_key(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_chat_without_openai_key(client: TestClient) -> None:
+def test_chat_without_openai_key(client: TestClient, db_session: Session) -> None:
     """400 if client has no OpenAI API key configured."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "nokey@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="nokey@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -231,15 +219,9 @@ def test_chat_without_openai_key(client: TestClient) -> None:
     assert "OpenAI API key" in response.json()["detail"]
 
 
-def test_chat_empty_question(client: TestClient) -> None:
+def test_chat_empty_question(client: TestClient, db_session: Session) -> None:
     """Empty string question → 422."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "empty@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="empty@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -256,17 +238,13 @@ def test_chat_empty_question(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-def test_chat_no_embeddings(mock_openai_client: Mock, client: TestClient) -> None:
+def test_chat_no_embeddings(
+    mock_openai_client: Mock, client: TestClient, db_session: Session
+) -> None:
     """No docs uploaded → answer is 'I don't have information'."""
-    from tests.conftest import set_client_openai_key
-
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "noemb@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="noemb@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -288,17 +266,12 @@ def test_chat_no_embeddings(mock_openai_client: Mock, client: TestClient) -> Non
 def test_chat_uses_context(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Mock search returns chunk, verify it's in prompt."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "ctx@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="ctx@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -353,17 +326,12 @@ def test_chat_uses_context(
 def test_chat_session_continuity(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Two messages with same session_id → same chat in DB."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "cont@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="cont@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -427,17 +395,12 @@ def test_chat_session_continuity(
 def test_chat_new_session_auto_generated(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """No session_id → auto-generated UUID returned."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "auto@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="auto@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -485,17 +448,12 @@ def test_chat_new_session_auto_generated(
 def test_get_history_success(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Get chat history after conversation."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "hist@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="hist@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -554,17 +512,12 @@ def test_get_history_success(
 def test_get_history_wrong_user(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """User B tries to get user A's session → 404."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "userA@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="userA@example.com")
     cl_a = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -606,11 +559,7 @@ def test_get_history_wrong_user(
         json={"question": "Hi", "session_id": session_id},
     )
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "userB@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="userB@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -637,17 +586,14 @@ def test_get_history_unauthenticated(client: TestClient) -> None:
 def test_get_sessions_returns_only_own_client_sessions(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """GET /chat/sessions returns only sessions for the authenticated client."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Message, MessageRole
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "sessions_a@example.com", "password": "SecurePass1!"},
+    token_a = register_and_verify_user(
+        client, db_session, email="sessions_a@example.com"
     )
-    token_a = reg_a.json()["token"]
     cl_a = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -667,11 +613,9 @@ def test_get_sessions_returns_only_own_client_sessions(
     db_session.commit()
 
     # Create user B and client B with their own session
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "sessions_b@example.com", "password": "SecurePass1!"},
+    token_b = register_and_verify_user(
+        client, db_session, email="sessions_b@example.com"
     )
-    token_b = reg_b.json()["token"]
     cl_b = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -696,17 +640,15 @@ def test_get_sessions_returns_only_own_client_sessions(
 def test_get_sessions_sorted_by_last_activity_desc(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """GET /chat/sessions returns sessions sorted by last_activity DESC."""
     from datetime import datetime, timedelta
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "sessions_sort@example.com", "password": "SecurePass1!"},
+    token = register_and_verify_user(
+        client, db_session, email="sessions_sort@example.com"
     )
-    token = reg.json()["token"]
     cl = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -754,16 +696,14 @@ def test_get_sessions_sorted_by_last_activity_desc(
 def test_get_sessions_last_answer_preview_truncated(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """last_answer_preview is truncated to ~120 chars with ... if longer."""
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "sessions_preview@example.com", "password": "SecurePass1!"},
+    token = register_and_verify_user(
+        client, db_session, email="sessions_preview@example.com"
     )
-    token = reg.json()["token"]
     cl = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -794,17 +734,12 @@ def test_get_sessions_last_answer_preview_truncated(
 def test_get_session_logs_success(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """GET /chat/logs/session/{id} returns full message list for valid session."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "logs@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="logs@example.com")
     cl = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -841,16 +776,12 @@ def test_get_session_logs_success(
 def test_get_session_logs_404_wrong_client(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """GET /chat/logs/session/{id} returns 404 if session belongs to another client."""
     from backend.models import Chat, Message, MessageRole
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "logsa@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="logsa@example.com")
     cl_a = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -865,11 +796,7 @@ def test_get_session_logs_404_wrong_client(
     db_session.add(m)
     db_session.commit()
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "logsb@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="logsb@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -883,13 +810,11 @@ def test_get_session_logs_404_wrong_client(
     assert resp.status_code == 404
 
 
-def test_get_session_logs_404_nonexistent(client: TestClient) -> None:
+def test_get_session_logs_404_nonexistent(
+    client: TestClient, db_session: Session
+) -> None:
     """GET /chat/logs/session/{id} returns 404 for nonexistent session."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "logs404@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="logs404@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -920,16 +845,12 @@ def test_get_session_logs_requires_auth(client: TestClient) -> None:
 
 def test_set_message_feedback_success_up(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Can set feedback=up on assistant message."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "fbup@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="fbup@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -959,16 +880,12 @@ def test_set_message_feedback_success_up(
 
 def test_set_message_feedback_success_down(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Can set feedback=down with ideal_answer on assistant message."""
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "fbdown@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="fbdown@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -997,16 +914,12 @@ def test_set_message_feedback_success_down(
 
 def test_set_message_feedback_rejects_user_message(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """400 if trying to set feedback on user message."""
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "fbuser@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="fbuser@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1031,15 +944,13 @@ def test_set_message_feedback_rejects_user_message(
     assert "assistant" in resp.json()["detail"].lower()
 
 
-def test_set_message_feedback_requires_auth(client: TestClient, db_session) -> None:
+def test_set_message_feedback_requires_auth(
+    client: TestClient, db_session: Session
+) -> None:
     """401 without JWT."""
     from backend.models import Chat, Message, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "fbauth@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="fbauth@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1064,16 +975,12 @@ def test_set_message_feedback_requires_auth(client: TestClient, db_session) -> N
 
 def test_set_message_feedback_wrong_client(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """404 if trying to set feedback for message from another client."""
     from backend.models import Chat, Message, MessageRole
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "fbwca@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="fbwca@example.com")
     cl_a = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -1089,11 +996,7 @@ def test_set_message_feedback_wrong_client(
     db_session.commit()
     db_session.refresh(msg)
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "fbwcb@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="fbwcb@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -1108,13 +1011,11 @@ def test_set_message_feedback_wrong_client(
     assert resp.status_code == 404
 
 
-def test_list_bad_answers_empty(client: TestClient) -> None:
+def test_list_bad_answers_empty(
+    client: TestClient, db_session: Session
+) -> None:
     """Return empty items for new client."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "badempty@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="badempty@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1128,16 +1029,12 @@ def test_list_bad_answers_empty(client: TestClient) -> None:
 
 def test_list_bad_answers_returns_items_for_client(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Create chat with user & assistant messages, mark some as down, ensure /chat/bad-answers returns them."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "baditems@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="baditems@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1178,16 +1075,12 @@ def test_list_bad_answers_returns_items_for_client(
 
 def test_list_bad_answers_respects_client_isolation(
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Messages from other clients are not returned."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "badisoa@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="badisoa@example.com")
     cl_a = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -1207,11 +1100,7 @@ def test_list_bad_answers_respects_client_isolation(
     db_session.add(msg_a)
     db_session.commit()
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "badisob@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="badisob@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_b}"},
@@ -1229,17 +1118,12 @@ def test_list_bad_answers_respects_client_isolation(
 def test_debug_with_embeddings_vector_mode(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Debug endpoint: embeddings with high similarity → mode vector, chunks returned."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "debugvec@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="debugvec@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1297,17 +1181,12 @@ def test_debug_with_embeddings_vector_mode(
 def test_debug_with_embeddings_keyword_mode(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Debug endpoint: low vector confidence → keyword fallback, mode keyword."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "debugkw@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="debugkw@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1365,19 +1244,14 @@ def test_debug_with_embeddings_keyword_mode(
 def test_debug_no_embeddings(
     mock_openai_client: Mock,
     client: TestClient,
+    db_session: Session,
 ) -> None:
     """Debug endpoint: no embeddings → mode none, chunks empty."""
-    from tests.conftest import set_client_openai_key
-
     mock_openai_client.embeddings.create.return_value.data = [
         Mock(embedding=[0.1] * 1536)
     ]
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "debugnone@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="debugnone@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1401,17 +1275,12 @@ def test_debug_no_embeddings(
 def test_debug_does_not_persist_chat(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """Debug runs do NOT create Chat/Message records."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "debugnopersist@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="debugnopersist@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1470,15 +1339,9 @@ def test_debug_requires_auth(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_debug_empty_question(client: TestClient) -> None:
+def test_debug_empty_question(client: TestClient, db_session: Session) -> None:
     """Debug with empty question → 422."""
-    from tests.conftest import set_client_openai_key
-
-    reg = client.post(
-        "/auth/register",
-        json={"email": "debugempty@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="debugempty@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -1497,19 +1360,14 @@ def test_debug_empty_question(client: TestClient) -> None:
 def test_chat_openai_unavailable_503(
     mock_openai_client: Mock,
     client: TestClient,
-    db_session,
+    db_session: Session,
 ) -> None:
     """OpenAI API error → 503."""
-    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     from openai import APIError
 
-    reg = client.post(
-        "/auth/register",
-        json={"email": "err@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="err@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},

@@ -149,3 +149,23 @@ def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-te
     )
     assert r.status_code == 200, f"Failed to set OpenAI key: {r.json()}"
 
+
+def register_and_verify_user(
+    test_client: TestClient,
+    db_session: Session,
+    email: str = "verified@example.com",
+    password: str = "SecurePass1!",
+) -> str:
+    """Register user, verify email, return JWT. Use for tests that need mutating actions."""
+    with patch("backend.auth.routes.send_email"):
+        resp = test_client.post("/auth/register", json={"email": email, "password": password})
+    assert resp.status_code == 200, resp.json()
+    token = resp.json()["token"]
+    from backend.models import User
+
+    user = db_session.query(User).filter(User.email == email).first()
+    assert user is not None
+    verify_resp = test_client.post("/auth/verify-email", json={"token": user.verification_token})
+    assert verify_resp.status_code == 200
+    return token
+

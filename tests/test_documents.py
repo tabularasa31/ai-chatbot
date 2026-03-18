@@ -7,6 +7,9 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 from PyPDF2 import PdfWriter
+from sqlalchemy.orm import Session
+
+from tests.conftest import register_and_verify_user
 
 
 def _make_minimal_pdf() -> bytes:
@@ -18,13 +21,9 @@ def _make_minimal_pdf() -> bytes:
     return buf.getvalue()
 
 
-def test_upload_pdf_success(client: TestClient) -> None:
+def test_upload_pdf_success(client: TestClient, db_session: Session) -> None:
     """Upload a small PDF, get DocumentResponse back, status=ready."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "pdf@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="pdf@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -46,13 +45,9 @@ def test_upload_pdf_success(client: TestClient) -> None:
     assert "updated_at" in data
 
 
-def test_upload_markdown_success(client: TestClient) -> None:
+def test_upload_markdown_success(client: TestClient, db_session: Session) -> None:
     """Upload .md file, status=ready."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "md@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="md@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -71,13 +66,9 @@ def test_upload_markdown_success(client: TestClient) -> None:
     assert data["status"] == "ready"
 
 
-def test_upload_swagger_success(client: TestClient) -> None:
+def test_upload_swagger_success(client: TestClient, db_session: Session) -> None:
     """Upload valid OpenAPI JSON, status=ready."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "swagger@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="swagger@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -96,13 +87,9 @@ def test_upload_swagger_success(client: TestClient) -> None:
     assert data["status"] == "ready"
 
 
-def test_upload_unsupported_type(client: TestClient) -> None:
+def test_upload_unsupported_type(client: TestClient, db_session: Session) -> None:
     """Upload .exe → 400."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "exe@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="exe@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -117,13 +104,9 @@ def test_upload_unsupported_type(client: TestClient) -> None:
     assert "unsupported" in response.json()["detail"].lower()
 
 
-def test_upload_too_large(client: TestClient) -> None:
+def test_upload_too_large(client: TestClient, db_session: Session) -> None:
     """Upload >50MB file → 400."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "large@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="large@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -140,13 +123,9 @@ def test_upload_too_large(client: TestClient) -> None:
     assert "too large" in response.json()["detail"].lower()
 
 
-def test_upload_no_client(client: TestClient) -> None:
+def test_upload_no_client(client: TestClient, db_session: Session) -> None:
     """Upload without creating client first → 404."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "noclient@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="noclient@example.com")
     md_content = b"# Test"
     response = client.post(
         "/documents",
@@ -167,13 +146,9 @@ def test_upload_unauthenticated(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_list_documents_empty(client: TestClient) -> None:
+def test_list_documents_empty(client: TestClient, db_session: Session) -> None:
     """Get documents when none uploaded → empty list."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "empty@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="empty@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -189,13 +164,9 @@ def test_list_documents_empty(client: TestClient) -> None:
     assert data["documents"] == []
 
 
-def test_list_documents(client: TestClient) -> None:
+def test_list_documents(client: TestClient, db_session: Session) -> None:
     """Upload 2 docs, get list → 2 items."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "list@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="list@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -224,13 +195,9 @@ def test_list_documents(client: TestClient) -> None:
     assert filenames == {"doc1.md", "doc2.md"}
 
 
-def test_get_document_detail(client: TestClient) -> None:
+def test_get_document_detail(client: TestClient, db_session: Session) -> None:
     """Get single document, verify parsed_text preview."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "detail@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="detail@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -256,13 +223,9 @@ def test_get_document_detail(client: TestClient) -> None:
     assert "test document" in (data["parsed_text"] or "")
 
 
-def test_get_document_wrong_user(client: TestClient) -> None:
+def test_get_document_wrong_user(client: TestClient, db_session: Session) -> None:
     """User B tries to get user A's document → 404."""
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "userA@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="userA@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -276,11 +239,7 @@ def test_get_document_wrong_user(client: TestClient) -> None:
     )
     doc_id = upload_resp.json()["id"]
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "userB@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="userB@example.com")
 
     response = client.get(
         f"/documents/{doc_id}",
@@ -289,13 +248,9 @@ def test_get_document_wrong_user(client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_delete_document_success(client: TestClient) -> None:
+def test_delete_document_success(client: TestClient, db_session: Session) -> None:
     """Delete document → 204, verify gone."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "del@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    token = register_and_verify_user(client, db_session, email="del@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -322,13 +277,9 @@ def test_delete_document_success(client: TestClient) -> None:
     assert get_resp.status_code == 404
 
 
-def test_delete_document_wrong_user(client: TestClient) -> None:
+def test_delete_document_wrong_user(client: TestClient, db_session: Session) -> None:
     """User B tries to delete user A's document → 404."""
-    reg_a = client.post(
-        "/auth/register",
-        json={"email": "delA@example.com", "password": "SecurePass1!"},
-    )
-    token_a = reg_a.json()["token"]
+    token_a = register_and_verify_user(client, db_session, email="delA@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -342,11 +293,7 @@ def test_delete_document_wrong_user(client: TestClient) -> None:
     )
     doc_id = upload_resp.json()["id"]
 
-    reg_b = client.post(
-        "/auth/register",
-        json={"email": "delB@example.com", "password": "SecurePass1!"},
-    )
-    token_b = reg_b.json()["token"]
+    token_b = register_and_verify_user(client, db_session, email="delB@example.com")
 
     response = client.delete(
         f"/documents/{doc_id}",

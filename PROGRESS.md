@@ -1,8 +1,8 @@
 # AI Chatbot Platform — Development Progress
 
-**Last Updated:** 2026-03-18 05:50 UTC  
+**Last Updated:** 2026-03-18 06:45 UTC  
 **Timeline:** Week 1 of 4 (MVP Sprint)  
-**Status:** Phase 1-5 COMPLETE ✅ | Phase 6 READY 🚀
+**Status:** Phase 1-7 COMPLETE ✅ | Backend LIVE on Railway 🚀 | Phase 8-9 (Frontend) NEXT
 
 ---
 
@@ -232,49 +232,81 @@
 
 ---
 
-## 📋 Remaining Phases (6 phases, ~2 weeks)
+## 🌍 Production Deployment
 
-### Phase 6: Vector Search (2-3 hours)
+**Backend URL:** https://ai-chatbot-production-6531.up.railway.app
 
-**What to implement:**
-- `POST /search` endpoint
-- Input: query string + client_id
-- Logic:
-  1. Embed query using OpenAI
-  2. Vector search in embeddings table (pgvector similarity)
-  3. Filter by client_id (SECURITY: always!)
-  4. Return top 3 chunks with similarity scores
+| Service | Status |
+|---------|--------|
+| **FastAPI Backend** | ✅ Online (Railway) |
+| **PostgreSQL 15 + pgvector** | ✅ Online (Railway) |
+| **Alembic Migrations** | ✅ All tables created |
+| **Frontend (Next.js)** | ⏳ Phase 9 |
+| **Embed Widget** | ⏳ Phase 10 |
 
-**Files to create:**
-- `backend/search/__init__.py`
-- `backend/search/schemas.py`
-- `backend/search/service.py`
-- `backend/search/routes.py`
-- `tests/test_search.py` (10+ test cases)
+**Live endpoints:**
+- `GET /health` → `{"status": "ok"}`
+- `POST /auth/register` — регистрация
+- `POST /auth/login` — логин
+- `POST /clients` — создать клиента
+- `POST /documents` — загрузить документ
+- `POST /embeddings/documents/{id}` — векторизовать
+- `POST /search` — семантический поиск
+- `POST /chat` — RAG чат (X-API-Key)
+- `GET /chat/history/{session_id}` — история чата
+
+**Deployment config:**
+- Start Command: `alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+- Python: 3.11.15
+- Auto-deploy: git push → Railway rebuilds automatically
+
+---
+
+## ✅ Completed Phases (7/11)
+
+### Phase 6: Vector Search (2026-03-18)
+
+**Status:** ✅ MERGED to main
+
+**What was done:**
+- `POST /search` — semantic search over client's embeddings
+- Cosine similarity in Python (pgvector optimization later)
+- `embed_query()` via OpenAI text-embedding-3-small
+- `cosine_similarity()` with zero-vector safety
+- `search_similar_chunks()` — always filtered by client_id
+- `top_k` parameter (default 3)
+- Empty query → 422, top_k=0 → 422
+
+**Tests:** 12 new, 76 total passing ✅  
+**PR:** #6 — Merged ✅
 
 ---
 
-### Phase 7: Chat API (RAG) (3-4 hours)
+### Phase 7: Chat API — RAG Pipeline (2026-03-18)
 
-**What to implement:**
-- `POST /chat` endpoint
-- Input: question + client_id
-- Logic:
-  1. Search relevant documents (Phase 6)
-  2. Build prompt with top 3 chunks
-  3. Call OpenAI GPT-3.5-turbo
-  4. Save message to DB
-  5. Return answer + source documents
-- Error handling (no docs, API failure)
+**Status:** ✅ MERGED to main
 
-**Files to create:**
-- `backend/chat/__init__.py`
-- `backend/chat/schemas.py`
-- `backend/chat/service.py` (RAG pipeline)
-- `backend/chat/routes.py`
-- `tests/test_chat.py` (10+ test cases)
+**What was done:**
+- `POST /chat` — PUBLIC endpoint, auth via `X-API-Key` header
+  - Full RAG pipeline: search → build prompt → GPT-3.5-turbo → save → return
+  - `build_rag_prompt()` with context chunks + separator
+  - `generate_answer()` — OpenAI gpt-3.5-turbo, temp=0.2, max_tokens=500
+  - Fallback: "I don't have information about this." if no context
+  - Session continuity (same session_id = same conversation)
+  - Auto-generated session_id if not provided
+  - `source_documents` returned (doc UUIDs used in answer)
+  - OpenAI `APIError` → 503
+
+- `GET /chat/history/{session_id}` — JWT protected, ownership enforced
+
+**Note:** `source_documents` stored as None in SQLite tests; real UUIDs in PostgreSQL production.
+
+**Tests:** 14 new, 90 total passing ✅  
+**PR:** #7 — Merged ✅
 
 ---
+
+## 📋 Remaining Phases (4 phases, ~1.5 weeks)
 
 ### Phase 8: Dashboard Backend (2-3 hours)
 
@@ -372,14 +404,15 @@ pytest tests/ -v --cov=backend --cov-min-percentage=80
 
 | Metric | Value |
 |--------|-------|
-| **Phases Complete** | 5/11 |
-| **Phases Remaining** | 6 |
-| **Total Lines (Phases 1-5)** | ~2,600 |
-| **Test Cases (Total)** | 64 |
+| **Phases Complete** | 7/11 |
+| **Phases Remaining** | 4 |
+| **Total Lines (Phases 1-7)** | ~3,500 |
+| **Test Cases (Total)** | 90 |
 | **Code Coverage** | All tests passing; target ≥80% maintained |
-| **Time Spent** | ~8–10 hours (coding + setup) |
-| **Estimated Total Time** | 20–25 hours |
-| **Timeline** | 4 weeks (MVP) |
+| **Time Spent** | ~10 hours (coding + setup + deploy) |
+| **Estimated Remaining** | 8–10 hours |
+| **Timeline** | On track! Week 1 nearly done 🚀 |
+| **Production URL** | https://ai-chatbot-production-6531.up.railway.app |
 
 ---
 

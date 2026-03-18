@@ -1,14 +1,13 @@
 """FastAPI document management endpoints."""
 
-from __future__ import annotations
-
 import uuid
-from typing import Annotated
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user
+from backend.core.limiter import limiter
 from backend.clients.service import get_client_by_user
 from backend.documents.schemas import (
     DocumentDetailResponse,
@@ -36,14 +35,16 @@ EXT_TO_TYPE = {
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-def _detect_file_type(filename: str) -> str | None:
+def _detect_file_type(filename: str) -> Optional[str]:
     """Detect file_type from extension. Returns None if unsupported."""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return EXT_TO_TYPE.get(ext)
 
 
 @documents_router.post("", response_model=DocumentResponse, status_code=201)
+@limiter.limit("20/hour")
 def upload_document_route(
+    request: Request,
     file: UploadFile,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],

@@ -1,14 +1,13 @@
 """FastAPI chat endpoints."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from openai import APIError
 from sqlalchemy.orm import Session
 
+from backend.core.limiter import limiter
 from backend.chat.schemas import (
     ChatHistoryResponse,
     ChatRequest,
@@ -25,7 +24,9 @@ chat_router = APIRouter(tags=["chat"])
 
 
 @chat_router.post("", response_model=ChatResponse)
+@limiter.limit("30/minute")
 def chat(
+    request: Request,
     body: ChatRequest,
     db: Annotated[Session, Depends(get_db)],
     x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,

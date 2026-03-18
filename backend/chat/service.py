@@ -3,12 +3,73 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
-from backend.models import Chat, Message, MessageRole
-from backend.search.service import search_similar_chunks
+from backend.models import Chat, Document, Embedding, Message, MessageRole
+from backend.search.service import (
+    VECTOR_CONFIDENCE_THRESHOLD,
+    cosine_similarity,
+    embed_query,
+    keyword_search_chunks,
+)
+
+
+def retrieve_context(
+    client_id: uuid.UUID,
+    question: str,
+    db: Session,
+    api_key: str,
+    top_k: int = 5,
+) -> tuple[list[str], list[uuid.UUID], list[float], Literal["vector", "keyword", "none"]]:
+    """
+    Retrieve context chunks for RAG (reuses search logic, returns mode for debug).
+
+    Returns:
+        chunk_texts: List of chunk text strings.
+        document_ids: List of document UUIDs (order matches chunk_texts).
+        scores: List of scores (similarity for vector, match count for keyword).
+        mode: "vector" | "keyword" | "none".
+    """
+    query_vector = embed_query(question, api_key=api_key)
+
+    embeddings = (
+        db.query(Embedding)
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.client_id == client_id)
+        .all()
+    )
+
+    scored: list[tuple[Embedding, float]] = []
+    for emb in embeddings:
+        meta = emb.metadata_json or {}
+        vector = meta.get("vector")
+        if not vector or not isinstance(vector, list):
+            continue
+        sim = cosine_similarity(query_vector, vector)
+        scored.append((emb, sim))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    if scored and scored[0][1] >= VECTOR_CONFIDENCE_THRESHOLD:
+        results = scored[:top_k]
+        mode: Literal["vector", "keyword", "none"] = "vector"
+    else:
+        keyword_results = keyword_search_chunks(client_id, question, top_k, db)
+        if keyword_results:
+            results = keyword_results
+            mode = "keyword"
+        else:
+            results = []
+            mode = "none"
+
+    chunk_texts = [r[0].chunk_text or "" for r in results]
+    document_ids = [r[0].document_id for r in results]
+    scores = [r[1] for r in results]
+
+    return (chunk_texts, document_ids, scores, mode)
 
 
 def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
@@ -104,20 +165,19 @@ def process_chat_message(
     Returns:
         Tuple of (answer, document_ids, tokens_used).
     """
-    # 1. Search similar chunks
-    results = search_similar_chunks(client_id, question, top_k=5, db=db, api_key=api_key)
+    # 1. Retrieve context (chunks + document_ids)
+    chunk_texts, doc_ids, _scores, _mode = retrieve_context(
+        client_id, question, db, api_key, top_k=5
+    )
+    document_ids = list(dict.fromkeys(doc_ids))
 
-    # 2. Extract chunk_text and document_ids
-    chunk_texts = [r[0].chunk_text for r in results]
-    document_ids = list(dict.fromkeys(r[0].document_id for r in results))
-
-    # 3. Build RAG prompt
+    # 2. Build RAG prompt
     prompt = build_rag_prompt(question, chunk_texts)
 
-    # 4. Generate answer
+    # 3. Generate answer
     answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
 
-    # 5. Find or create Chat
+    # 4. Find or create Chat
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
         Chat.client_id == client_id,
@@ -128,7 +188,7 @@ def process_chat_message(
         db.commit()
         db.refresh(chat)
 
-    # 6. Save user message
+    # 5. Save user message
     user_msg = Message(
         chat_id=chat.id,
         role=MessageRole.user,
@@ -136,7 +196,7 @@ def process_chat_message(
     )
     db.add(user_msg)
 
-    # 7. Save assistant message
+    # 6. Save assistant message
     # SQLite doesn't support ARRAY bind; use None for tests, document_ids for PostgreSQL
     source_docs = document_ids if "postgresql" in str(db.bind.url) else None
     assistant_msg = Message(
@@ -149,6 +209,38 @@ def process_chat_message(
     db.commit()
 
     return (answer, document_ids, tokens_used)
+
+
+def run_debug(
+    client_id: uuid.UUID,
+    question: str,
+    db: Session,
+    *,
+    api_key: str,
+) -> tuple[str, int, dict]:
+    """
+    Run RAG pipeline for debug: retrieval + answer, no DB persistence.
+
+    Returns:
+        Tuple of (answer, tokens_used, debug_dict).
+        debug_dict: {"mode": str, "chunks": [{"document_id": str, "score": float, "preview": str}]}
+    """
+    chunk_texts, document_ids, scores, mode = retrieve_context(
+        client_id, question, db, api_key, top_k=5
+    )
+    answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
+
+    chunks_debug = [
+        {
+            "document_id": str(doc_id),
+            "score": score,
+            "preview": (text[:200] + "..." if len(text) > 200 else text),
+        }
+        for doc_id, score, text in zip(document_ids, scores, chunk_texts)
+    ]
+
+    debug = {"mode": mode, "chunks": chunks_debug}
+    return (answer, tokens_used, debug)
 
 
 def get_chat_history(

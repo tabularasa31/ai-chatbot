@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,26 +35,26 @@ def test_build_rag_prompt_empty_chunks() -> None:
     assert "(none)" in result
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-def test_generate_answer_no_context(mock_chat: Mock) -> None:
+def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
     """Empty chunks → fallback message, no OpenAI call."""
-    answer, tokens = generate_answer("question", [])
+    answer, tokens = generate_answer("question", [], api_key="sk-test")
     assert answer == "I don't have information about this."
     assert tokens == 0
-    mock_chat.assert_not_called()
+    mock_openai_client.chat.completions.create.assert_not_called()
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-def test_generate_answer_with_context(mock_chat: Mock) -> None:
+def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     """With chunks, calls OpenAI and returns answer + tokens."""
-    mock_chat.return_value.choices = [Mock(message=Mock(content="The answer is 42"))]
-    mock_chat.return_value.usage = Mock(total_tokens=100)
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
 
-    answer, tokens = generate_answer("What?", ["chunk1"])
+    answer, tokens = generate_answer("What?", ["chunk1"], api_key="sk-test")
     assert answer == "The answer is 42"
     assert tokens == 100
-    mock_chat.assert_called_once()
-    call_kwargs = mock_chat.call_args.kwargs
+    mock_openai_client.chat.completions.create.assert_called_once()
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-3.5-turbo"
     assert call_kwargs["temperature"] == 0.2
     assert call_kwargs["max_tokens"] == 500
@@ -63,15 +63,13 @@ def test_generate_answer_with_context(mock_chat: Mock) -> None:
 # --- API tests ---
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_chat_success(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Valid api_key + question → get answer back."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -84,6 +82,7 @@ def test_chat_success(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Chat Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
 
@@ -106,9 +105,11 @@ def test_chat_success(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="The answer is 42"))]
-    mock_chat.return_value.usage = Mock(total_tokens=50)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=50)
 
     response = client.post(
         "/chat",
@@ -123,15 +124,13 @@ def test_chat_success(
     assert data["tokens_used"] == 50
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_chat_creates_messages_in_db(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """After chat, messages saved to DB."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
     reg = client.post(
@@ -144,6 +143,7 @@ def test_chat_creates_messages_in_db(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Msg Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
 
@@ -166,9 +166,11 @@ def test_chat_creates_messages_in_db(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="Reply"))]
-    mock_chat.return_value.usage = Mock(total_tokens=10)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
 
     response = client.post(
         "/chat",
@@ -207,8 +209,32 @@ def test_chat_missing_api_key(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_chat_without_openai_key(client: TestClient) -> None:
+    """400 if client has no OpenAI API key configured."""
+    reg = client.post(
+        "/auth/register",
+        json={"email": "nokey@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "No Key Client"},
+    )
+    api_key = cl_resp.json()["api_key"]
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello"},
+    )
+    assert response.status_code == 400
+    assert "OpenAI API key" in response.json()["detail"]
+
+
 def test_chat_empty_question(client: TestClient) -> None:
     """Empty string question → 422."""
+    from tests.conftest import set_client_openai_key
+
     reg = client.post(
         "/auth/register",
         json={"email": "empty@example.com", "password": "SecurePass1!"},
@@ -219,6 +245,7 @@ def test_chat_empty_question(client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Empty Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
 
     response = client.post(
@@ -229,10 +256,11 @@ def test_chat_empty_question(client: TestClient) -> None:
     assert response.status_code == 422
 
 
-@patch("backend.search.service.openai_client.embeddings.create")
-def test_chat_no_embeddings(mock_embed: Mock, client: TestClient) -> None:
+def test_chat_no_embeddings(mock_openai_client: Mock, client: TestClient) -> None:
     """No docs uploaded → answer is 'I don't have information'."""
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    from tests.conftest import set_client_openai_key
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
     reg = client.post(
         "/auth/register",
@@ -244,6 +272,7 @@ def test_chat_no_embeddings(mock_embed: Mock, client: TestClient) -> None:
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "No Emb Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
 
     response = client.post(
@@ -256,15 +285,13 @@ def test_chat_no_embeddings(mock_embed: Mock, client: TestClient) -> None:
     assert response.json()["tokens_used"] == 0
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_chat_uses_context(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Mock search returns chunk, verify it's in prompt."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -277,6 +304,7 @@ def test_chat_uses_context(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Ctx Client"},
     )
+    set_client_openai_key(client, token)
     client_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
@@ -300,9 +328,13 @@ def test_chat_uses_context(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.9] + [0.0] * 1535)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="99"))]
-    mock_chat.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.9] + [0.0] * 1535)
+    ]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="99"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     response = client.post(
         "/chat",
@@ -312,21 +344,19 @@ def test_chat_uses_context(
     assert response.status_code == 200
     assert "99" in response.json()["answer"]
     # Verify the chunk was passed to chat (via build_rag_prompt)
-    call_args = mock_chat.call_args
+    call_args = mock_openai_client.chat.completions.create.call_args
     messages = call_args.kwargs["messages"]
     assert len(messages) == 1
     assert "The secret number is 99" in messages[0]["content"]
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_chat_session_continuity(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Two messages with same session_id → same chat in DB."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
     reg = client.post(
@@ -339,6 +369,7 @@ def test_chat_session_continuity(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Cont Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
     session_id = str(uuid.uuid4())
@@ -362,9 +393,11 @@ def test_chat_session_continuity(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="A1"))]
-    mock_chat.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="A1"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     r1 = client.post(
         "/chat",
@@ -373,7 +406,9 @@ def test_chat_session_continuity(
     )
     assert r1.status_code == 200
 
-    mock_chat.return_value.choices = [Mock(message=Mock(content="A2"))]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="A2"))
+    ]
     r2 = client.post(
         "/chat",
         headers={"X-API-Key": api_key},
@@ -389,15 +424,13 @@ def test_chat_session_continuity(
     assert len(messages) == 4  # Q1, A1, Q2, A2
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_chat_new_session_auto_generated(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """No session_id → auto-generated UUID returned."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -410,6 +443,7 @@ def test_chat_new_session_auto_generated(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Auto Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
 
@@ -432,9 +466,11 @@ def test_chat_new_session_auto_generated(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="Hi"))]
-    mock_chat.return_value.usage = Mock(total_tokens=3)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Hi"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
 
     response = client.post(
         "/chat",
@@ -446,15 +482,13 @@ def test_chat_new_session_auto_generated(
     uuid.UUID(session_id)  # valid UUID
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_get_history_success(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """Get chat history after conversation."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg = client.post(
@@ -467,6 +501,7 @@ def test_get_history_success(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Hist Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
 
@@ -489,9 +524,11 @@ def test_get_history_success(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="Reply"))]
-    mock_chat.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     chat_resp = client.post(
         "/chat",
@@ -514,15 +551,13 @@ def test_get_history_success(
     assert data["messages"][1]["content"] == "Reply"
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
 def test_get_history_wrong_user(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """User B tries to get user A's session → 404."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     reg_a = client.post(
@@ -535,6 +570,7 @@ def test_get_history_wrong_user(
         headers={"Authorization": f"Bearer {token_a}"},
         json={"name": "Client A"},
     )
+    set_client_openai_key(client, token_a)
     api_key_a = cl_a.json()["api_key"]
     client_id_a = uuid.UUID(cl_a.json()["id"])
     session_id = str(uuid.uuid4())
@@ -558,9 +594,11 @@ def test_get_history_wrong_user(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.return_value.choices = [Mock(message=Mock(content="A"))]
-    mock_chat.return_value.usage = Mock(total_tokens=1)
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="A"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=1)
 
     client.post(
         "/chat",
@@ -593,15 +631,284 @@ def test_get_history_unauthenticated(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-@patch("backend.chat.service.openai_client.chat.completions.create")
-@patch("backend.search.service.openai_client.embeddings.create")
+# --- Debug endpoint tests ---
+
+
+def test_debug_with_embeddings_vector_mode(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """Debug endpoint: embeddings with high similarity → mode vector, chunks returned."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "debugvec@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debug Vec Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="debug.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="The answer is 42 from vector search",
+        vector=None,
+        metadata_json={"vector": [0.9] + [0.0] * 1535, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.9] + [0.0] * 1535)
+    ]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "What is the answer?"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "42"
+    assert data["tokens_used"] == 10
+    assert data["debug"]["mode"] == "vector"
+    assert len(data["debug"]["chunks"]) >= 1
+    chunk = data["debug"]["chunks"][0]
+    assert chunk["document_id"] == str(doc.id)
+    assert "score" in chunk
+    assert chunk["score"] >= 0.3
+    assert "preview" in chunk
+    assert "42" in chunk["preview"] or "answer" in chunk["preview"].lower()
+
+
+def test_debug_with_embeddings_keyword_mode(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """Debug endpoint: low vector confidence → keyword fallback, mode keyword."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "debugkw@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debug Kw Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="debugkw.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    # Chunk with keyword "secret" - use orthogonal vectors so cosine < 0.3
+    chunk_vec = [0.0, 1.0] + [0.0] * 1534
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="The secret number is 99. Very secret.",
+        vector=None,
+        metadata_json={"vector": chunk_vec, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    # Query vector orthogonal to chunk → cosine = 0 → fallback to keyword
+    query_vec = [1.0] + [0.0] * 1535
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=query_vec)
+    ]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="99"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "secret number"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["debug"]["mode"] == "keyword"
+    assert len(data["debug"]["chunks"]) >= 1
+    chunk = data["debug"]["chunks"][0]
+    assert chunk["document_id"] == str(doc.id)
+    assert chunk["score"] >= 1  # keyword returns match count
+    assert "secret" in chunk["preview"].lower()
+
+
+def test_debug_no_embeddings(
+    mock_openai_client: Mock,
+    client: TestClient,
+) -> None:
+    """Debug endpoint: no embeddings → mode none, chunks empty."""
+    from tests.conftest import set_client_openai_key
+
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 1536)
+    ]
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "debugnone@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debug None Client"},
+    )
+    set_client_openai_key(client, token)
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "Anything"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "I don't have information about this."
+    assert data["tokens_used"] == 0
+    assert data["debug"]["mode"] == "none"
+    assert data["debug"]["chunks"] == []
+
+
+def test_debug_does_not_persist_chat(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session,
+) -> None:
+    """Debug runs do NOT create Chat/Message records."""
+    from tests.conftest import set_client_openai_key
+    from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "debugnopersist@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "No Persist Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="debugnp.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="chunk",
+        vector=None,
+        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 1536)
+    ]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "Hello"},
+    )
+    assert response.status_code == 200
+
+    # No Chat/Message should have been created
+    chats = db_session.query(Chat).filter(Chat.client_id == client_id).all()
+    assert len(chats) == 0
+    messages = db_session.query(Message).all()
+    assert len(messages) == 0
+
+
+def test_debug_requires_auth(client: TestClient) -> None:
+    """Debug endpoint requires JWT."""
+    response = client.post(
+        "/chat/debug",
+        json={"question": "Hello"},
+    )
+    assert response.status_code == 401
+
+
+def test_debug_empty_question(client: TestClient) -> None:
+    """Debug with empty question → 422."""
+    from tests.conftest import set_client_openai_key
+
+    reg = client.post(
+        "/auth/register",
+        json={"email": "debugempty@example.com", "password": "SecurePass1!"},
+    )
+    token = reg.json()["token"]
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Empty Client"},
+    )
+    set_client_openai_key(client, token)
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": ""},
+    )
+    assert response.status_code == 422
+
+
 def test_chat_openai_unavailable_503(
-    mock_embed: Mock,
-    mock_chat: Mock,
+    mock_openai_client: Mock,
     client: TestClient,
     db_session,
 ) -> None:
     """OpenAI API error → 503."""
+    from tests.conftest import set_client_openai_key
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     from openai import APIError
@@ -616,6 +923,7 @@ def test_chat_openai_unavailable_503(
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Err Client"},
     )
+    set_client_openai_key(client, token)
     api_key = cl_resp.json()["api_key"]
     client_id = uuid.UUID(cl_resp.json()["id"])
 
@@ -638,8 +946,8 @@ def test_chat_openai_unavailable_503(
     db_session.add(emb)
     db_session.commit()
 
-    mock_embed.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_chat.side_effect = APIError(
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.side_effect = APIError(
         "Service unavailable",
         request=Mock(),
         body=None,

@@ -8,14 +8,28 @@ export type ChatSessionSummary = {
   last_activity: string;
 };
 
+export type MessageFeedbackValue = "up" | "down" | "none";
+
 export type ChatSessionLogs = {
   session_id: string;
   messages: {
+    id: string;
     session_id: string;
     role: "user" | "assistant";
     content: string;
+    feedback: "none" | "up" | "down";
+    ideal_answer: string | null;
     created_at: string;
   }[];
+};
+
+export type BadAnswerItem = {
+  message_id: string;
+  session_id: string;
+  question: string | null;
+  answer: string;
+  ideal_answer: string | null;
+  created_at: string;
 };
 
 function getErrorMessage(data: unknown, fallback: string): string {
@@ -174,6 +188,29 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get session logs"));
       const log = data as { messages: ChatSessionLogs["messages"] };
       return { session_id: sessionId, messages: log.messages };
+    },
+    async setFeedback(
+      messageId: string,
+      feedback: MessageFeedbackValue,
+      idealAnswer?: string | null
+    ) {
+      const res = await authFetch(`${BASE_URL}/chat/messages/${messageId}/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback, ideal_answer: idealAnswer ?? null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to set feedback"));
+      return data as { id: string; feedback: string; ideal_answer: string | null };
+    },
+    async listBadAnswers(limit = 50, offset = 0): Promise<BadAnswerItem[]> {
+      const res = await authFetch(
+        `${BASE_URL}/chat/bad-answers?limit=${limit}&offset=${offset}`
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list bad answers"));
+      const list = data as { items: BadAnswerItem[] };
+      return list.items;
     },
     async send(question: string, apiKey: string, sessionId?: string) {
       const headers: Record<string, string> = {

@@ -1,36 +1,49 @@
-"""Simple SMTP email sender for verification emails."""
+"""Email sender via Brevo HTTP API."""
 
 from __future__ import annotations
 
-import smtplib
-from email.message import EmailMessage
+import logging
+
+import httpx
 
 from backend.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 def send_email(to: str, subject: str, body: str) -> None:
-    """
-    Simple SMTP email sender.
+    """Send email via Brevo HTTP API.
 
-    - If SMTP_HOST is not configured, log the email to console (for dev).
+    - If BREVO_API_KEY or EMAIL_FROM is not configured, log email in dev mode.
+    - Network/API errors are logged but do NOT raise (to avoid breaking signup).
     """
-    if not settings.SMTP_HOST or not settings.EMAIL_FROM:
-        # Dev fallback: just log the message
-        print("=== EMAIL (DEV MODE) ===")
-        print("To:", to)
-        print("Subject:", subject)
-        print("Body:\n", body)
-        print("========================")
+    if not settings.BREVO_API_KEY or not settings.EMAIL_FROM:
+        # Dev fallback: log email instead of sending
+        logger.info("EMAIL DEV MODE: to=%s subject=%s body=%s", to, subject, body)
         return
 
-    msg = EmailMessage()
-    msg["From"] = settings.EMAIL_FROM
-    msg["To"] = to
-    msg["Subject"] = subject
-    msg.set_content(body)
+    payload = {
+        "sender": {"email": settings.EMAIL_FROM},
+        "to": [{"email": to}],
+        "subject": subject,
+        "textContent": body,
+    }
 
-    with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT or 587) as server:
-        server.starttls()
-        if settings.SMTP_USER and settings.SMTP_PASSWORD:
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-        server.send_message(msg)
+    try:
+        resp = httpx.post(
+            "https://api.brevo.com/v3/smtp/email",
+            headers={
+                "api-key": settings.BREVO_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=10.0,
+        )
+        if resp.status_code >= 400:
+            logger.warning(
+                "Brevo email send failed: status=%s body=%s",
+                resp.status_code,
+                resp.text,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Failed to send email via Brevo: %s", e)

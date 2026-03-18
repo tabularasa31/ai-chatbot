@@ -17,11 +17,12 @@ class Settings(BaseSettings):
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")
-    SMTP_HOST: Optional[str] = Field(None, alias="SMTP_HOST")
+    SMTP_HOST: Optional[str] = Field(None, alias="SMTP_HOST")  # kept for backwards compat, not used by Brevo HTTP
     SMTP_PORT: Optional[int] = Field(None, alias="SMTP_PORT")
     SMTP_USER: Optional[str] = Field(None, alias="SMTP_USER")
     SMTP_PASSWORD: Optional[str] = Field(None, alias="SMTP_PASSWORD")
     FRONTEND_URL: str = Field("http://localhost:3000", alias="FRONTEND_URL")
+    BREVO_API_KEY: Optional[str] = Field(None, alias="BREVO_API_KEY")
 
     class Config:
         env_file = ".env"

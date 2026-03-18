@@ -98,14 +98,12 @@ export default function DashboardPage() {
     }
   }
 
+  function getEmbedSnippet() {
+    return `<div id="ai-chat-widget" data-api-key="${apiKey ?? ""}"></div>\n<script src="${API_URL}/embed.js"></script>`;
+  }
+
   function copyEmbedCode() {
-    const code =
-      "<script src=\"" +
-      API_URL +
-      "/embed.js\"></script>\n<div id=\"ai-chat-widget\" data-api-key=\"" +
-      apiKey +
-      "\"></div>";
-    navigator.clipboard.writeText(code);
+    navigator.clipboard.writeText(getEmbedSnippet());
     setCopiedEmbed(true);
     setTimeout(() => setCopiedEmbed(false), 2000);
   }
@@ -213,12 +211,16 @@ export default function DashboardPage() {
 
       <div className="bg-white rounded-lg shadow-md p-6">
         <h2 className="text-lg font-medium text-slate-800 mb-2">Embed code</h2>
-        <p className="text-slate-600 mb-4 text-sm">
-          Add this to your website to embed the AI chat widget:
+        <p className="text-slate-600 mb-2 text-sm">
+          Add this snippet to your website HTML, right before{" "}
+          <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code>:
         </p>
-        <pre className="bg-slate-100 p-4 rounded-md text-sm text-slate-800 overflow-x-auto mb-4">
-          {"<script src=\"" + API_URL + "/embed.js\"></script>\n<div id=\"ai-chat-widget\" data-api-key=\"" + apiKey + "\"></div>"}
+        <pre className="bg-slate-100 p-4 rounded-md text-sm text-slate-800 overflow-x-auto mb-2">
+          {getEmbedSnippet()}
         </pre>
+        <p className="text-slate-500 text-xs mb-4">
+          This snippet is already prefilled with your API key — you don&apos;t need to copy it separately.
+        </p>
         <button
           onClick={copyEmbedCode}
           className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"

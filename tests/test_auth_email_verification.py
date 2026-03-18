@@ -44,12 +44,9 @@ def test_signup_sets_verification_token(
 def test_verify_email_success(
     client: TestClient,
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify email with valid token sets is_verified and clears token."""
     from backend.core.security import hash_password
-
-    monkeypatch.setattr(auth_routes, "send_email", lambda *a, **k: None)
 
     token = "abc123validtoken"
     user = User(
@@ -89,12 +86,9 @@ def test_verify_email_invalid_token(client: TestClient) -> None:
 def test_verify_email_expired_token(
     client: TestClient,
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify email with expired token returns 400."""
     from backend.core.security import hash_password
-
-    monkeypatch.setattr(auth_routes, "send_email", lambda *a, **k: None)
 
     token = "expiredtoken123"
     user = User(

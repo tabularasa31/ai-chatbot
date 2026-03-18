@@ -1,0 +1,189 @@
+SETUP:
+cd ~/Projects/ai-chatbot
+git checkout main
+git pull origin main
+git checkout -b feature/landing-page
+
+FEATURE:
+Build a landing page for Chat9 (getchat9.live).
+
+GOAL:
+Create a clean, modern landing page that converts visitors into signups.
+- Tone: laconic, technical, no fluff
+- Language: English
+- CTA: "Start for free" → existing signup page (/signup)
+- Live demo widget embedded on the page
+
+======================================================================
+CODE DISCIPLINE
+======================================================================
+
+Scope (you MAY modify):
+- frontend/app/page.tsx (replace current redirect with landing page)
+- frontend/app/(landing)/ (or keep in root, your choice)
+- frontend/components/landing/ (new landing-specific components)
+- frontend/public/ (any static assets if needed)
+
+Do NOT touch:
+- frontend/app/(app)/* (dashboard)
+- frontend/app/(auth)/* (login/signup)
+- frontend/lib/api.ts
+- backend/*
+- Any existing auth or dashboard logic
+
+If the current frontend/app/page.tsx just redirects to /dashboard or /login,
+replace it with the landing page. Keep the redirect logic only for
+authenticated users (if already logged in → go to /dashboard).
+
+======================================================================
+PAGE STRUCTURE
+======================================================================
+
+----------------------------------------------------------------------
+1. Navigation bar (sticky, minimal)
+----------------------------------------------------------------------
+
+Left: Logo "Chat9" (text or simple SVG)
+Right:
+- "Log in" link → /login
+- "Start for free" button → /signup (primary, small)
+
+----------------------------------------------------------------------
+2. Hero section
+----------------------------------------------------------------------
+
+Headline (large, bold):
+  Stop answering the same questions twice.
+
+Subheadline (gray, smaller):
+  Train an AI bot on your docs. Embed it anywhere.
+  Your customers get instant answers — 24/7.
+
+CTA button:
+  [Start for free →]
+  Below: "No credit card needed."
+
+Visual (right side or below on mobile):
+  - Screenshot of the chat widget on a website
+  - OR a short looping video/animation:
+    "Upload doc → bot answers" concept
+  - If no asset available: a simple mockup with CSS (chat bubble UI)
+
+----------------------------------------------------------------------
+3. How it works (3 steps)
+----------------------------------------------------------------------
+
+Section title: "From docs to chatbot in minutes"
+
+Steps (horizontal on desktop, vertical on mobile):
+
+  1. Upload your docs
+     PDF, Markdown, Swagger, plain text
+
+  2. Get your widget
+     Copy 2 lines of code
+
+  3. Embed anywhere
+     Any website, in seconds
+
+Use simple icons (Lucide or similar, already in the project).
+
+----------------------------------------------------------------------
+4. Live demo
+----------------------------------------------------------------------
+
+Section title: "See it in action"
+Subtitle: "Ask anything about Chat9 — powered by Chat9 itself."
+
+Embed the actual chat widget here:
+- Use the existing embed.js from Railway
+- Use a dedicated API key for the demo (hardcode a demo key)
+- The widget should be pre-loaded with Chat9's own documentation
+
+The embed code:
+<div id="ai-chat-widget" data-api-key="DEMO_API_KEY"></div>
+<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
+
+Note: Replace DEMO_API_KEY with the actual demo key after setup.
+For now, use a placeholder or leave a TODO comment.
+
+----------------------------------------------------------------------
+5. Why Chat9 (4 feature tiles)
+----------------------------------------------------------------------
+
+2x2 grid (or 4 in a row on desktop):
+
+  ⚡ Instant answers
+  RAG pipeline trained on your exact documentation.
+  No hallucinations about products you don't sell.
+
+  📊 Full conversation logs
+  See every question your customers ask.
+  Spot gaps in your docs. Improve over time.
+
+  🔑 Your OpenAI key
+  You control your AI costs directly.
+  No markup, no black box billing.
+
+  🌐 Works in any language
+  Ask in English, answer from Russian docs.
+  Responds in the user's language automatically.
+
+----------------------------------------------------------------------
+6. Final CTA section
+----------------------------------------------------------------------
+
+Headline: "Ready to stop repeating yourself?"
+
+Button: [Start for free →]
+Below: "No credit card needed. Set up in 5 minutes."
+
+----------------------------------------------------------------------
+7. Footer (minimal)
+----------------------------------------------------------------------
+
+Left: © 2026 Chat9
+Right: "Built with ❤️" or just empty
+
+======================================================================
+DESIGN GUIDELINES
+======================================================================
+
+Style:
+- Clean, minimal, lots of white space
+- No shadows or very subtle ones
+- No gradients (or very subtle)
+- Modern sans-serif font (already in project: Inter or similar)
+
+Colors (use Tailwind):
+- Background: white (#ffffff) or very light gray (#fafafa)
+- Primary text: gray-900
+- Secondary text: gray-500
+- CTA button: black bg + white text (or dark primary color)
+- Accent: keep minimal
+
+Layout:
+- Max width: max-w-6xl centered
+- Sections: py-20 or py-24
+- Mobile responsive (Tailwind responsive prefixes)
+
+----------------------------------------------------------------------
+Technical notes
+----------------------------------------------------------------------
+
+- Use Next.js App Router (already in project).
+- Use Tailwind CSS (already in project).
+- Use Lucide icons if available (check package.json).
+- Keep the page as a Server Component where possible (no "use client"
+  unless needed for interactivity).
+- The live demo widget section needs "use client" or a client wrapper
+  since it loads an external script.
+
+======================================================================
+CHECKS
+======================================================================
+
+- npm run lint — OK
+- npm run build — OK
+- Manual: open getchat9.live, check mobile, check CTA links
+  (/login and /signup should work).

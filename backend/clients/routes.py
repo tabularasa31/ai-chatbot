@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user
 from backend.clients.schemas import (
+    ClientMeResponse,
     ClientResponse,
     CreateClientRequest,
     UpdateClientRequest,
@@ -55,11 +56,11 @@ def create_client_route(
     return _client_to_response(client)
 
 
-@clients_router.get("/me", response_model=ClientResponse)
+@clients_router.get("/me", response_model=ClientMeResponse)
 def get_my_client(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> ClientResponse:
+) -> ClientMeResponse:
     """
     Get current user's client (protected JWT).
 
@@ -68,7 +69,11 @@ def get_my_client(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
-    return _client_to_response(client)
+    base = _client_to_response(client)
+    return ClientMeResponse(
+        **base.model_dump(),
+        is_admin=current_user.is_admin,
+    )
 
 
 @clients_router.patch("/me", response_model=ClientResponse)

@@ -38,6 +38,12 @@ class ClientResponse(BaseModel):
     updated_at: datetime
 
 
+class ClientMeResponse(ClientResponse):
+    """Extended client response for /clients/me with user context."""
+
+    is_admin: bool
+
+
 class UpdateClientRequest(BaseModel):
     """Request body for updating a client."""
 

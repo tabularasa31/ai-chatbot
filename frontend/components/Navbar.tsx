@@ -2,10 +2,19 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { removeToken } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { api, removeToken } from "@/lib/api";
 
 export function Navbar() {
   const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    api.clients
+      .getMe()
+      .then((c) => setIsAdmin(c.is_admin))
+      .catch(() => setIsAdmin(false));
+  }, []);
 
   function handleLogout() {
     removeToken();
@@ -23,6 +32,14 @@ export function Navbar() {
             <Link href="/dashboard" className="text-slate-600 hover:text-slate-800 text-sm">
               Dashboard
             </Link>
+            {isAdmin && (
+              <Link
+                href="/admin/metrics"
+                className="text-slate-600 hover:text-slate-800 text-sm"
+              >
+                Admin
+              </Link>
+            )}
             <Link href="/documents" className="text-slate-600 hover:text-slate-800 text-sm">
               Documents
             </Link>

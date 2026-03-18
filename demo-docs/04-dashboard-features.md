@@ -6,7 +6,7 @@ Upload and manage your knowledge base documents.
 
 - **Supported formats:** PDF, Markdown, plain text, Swagger/OpenAPI JSON/YAML.
 - **Maximum documents:** 20 per account.
-- **Embedding:** After uploading, click "Create embeddings" to process the document for AI search.
+- **Embedding:** After uploading, the document is processed automatically for AI search.
 - **Status badges:** Each document shows its status: Uploaded, Embedded, or Error.
 - **Delete:** Remove a document at any time. This also removes its embeddings.
 

@@ -176,6 +176,7 @@ RICE = (Reach × Impact × Confidence) / Effort
 - **FI-010** — Training data pipeline: 👎 → fine-tuning data
 - **FI-012** — Расширенный admin dashboard (grafana-style)
 - **FI-003/004** — Rate limiting per-user через Redis (нужен вместе с тарифами)
+- **FI-028** — Cross-lingual retrieval (вопрос на EN, документы на RU и наоборот)
 
 ---
 

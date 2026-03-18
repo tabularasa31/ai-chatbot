@@ -39,8 +39,7 @@
 ## Architecture
 
 ```
-User → Vercel (Next.js) → Railway (FastAPI) → PostgreSQL + pgvector
-                                               → OpenAI API
+User → Vercel (Next.js) → Railway (FastAPI) → PostgreSQL + pgvector → OpenAI API
 ```
 
 ---

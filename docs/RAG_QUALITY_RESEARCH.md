@@ -217,19 +217,64 @@ rewrite → retrieve → rerank → validate → answer
 
 ---
 
+---
+
+## Источник 3: DeepSeek
+
+### Что совпадает с Perplexity + ChatGPT
+- Overlap 50–75 токенов (чуть консервативнее, но в том же диапазоне).
+- Hybrid search BM25 + vector с RRF или взвешенной суммой.
+- Reranking cross-encoder (ms-marco-MiniLM-L-6-v2 как локальная альтернатива Cohere).
+- Graceful degradation: 3 уровня + fallback фразы.
+- Метрики: Precision@k, Answer Relevance, Fallback Rate, User Feedback.
+
+### Что добавил DeepSeek (новое или уточнённое)
+
+#### 1. Prompt injection защита
+Явно упомянул санитизацию ввода и защиту от prompt injection — проверять входящие сообщения на попытки сменить роль бота.
+
+**Новая задача:** FI-035 — Security: prompt injection protection.
+
+#### 2. Cost per query метрика
+Мониторинг расходов на OpenAI API на запрос. Важно для ценообразования тарифов.
+
+#### 3. A/B тестирование компонентов
+Возможность быстро переключать модели chunking, retrieval, промпты для сравнения качества. Нужна инфраструктура.
+
+#### 4. CI/CD для базы знаний
+Автоматический пайплайн при обновлении документации: загрузка → chunking → embeddings → деплой.
+
+#### 5. HNSW индекс в pgvector
+Явно указал использовать HNSW индекс для ускорения поиска при масштабировании.
+
+#### 6. Читаемые fallback-фразы
+Конкретные шаблоны для system prompt:
+> "К сожалению, в нашей документации нет информации по этому вопросу. Рекомендую обратиться в службу поддержки по адресу support@company.com — наши специалисты помогут вам."
+
+#### 7. Метаданные в контексте промпта
+Передавать версию и дату документа прямо в промпт, чтобы LLM оценивала актуальность.
+
+#### 8. Локальные эмбеддинги для снижения затрат
+`intfloat/multilingual-e5-small` как дешёвая альтернатива OpenAI для эмбеддингов при масштабировании.
+
+---
+
 ## Сравнение источников
 
-| Тема | Perplexity | ChatGPT | Консенсус |
-|------|-----------|---------|-----------|
-| Overlap | 60–80 токенов | 50–100 токенов | ~60–80 ✅ |
-| Hybrid search | BM25 + pgvector | BM25 + embeddings | ✅ делать |
-| Reranking | Cross-encoder + Cohere | Cross-encoder + Cohere | ✅ делать |
-| Graceful degradation | 3 уровня + org config | 3 уровня + tool layer | ✅ FI-031 |
-| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | Исследовать |
-| Query rewriting | Не упомянул | 🔥 Рекомендует | FI-033 добавить |
-| LLM validation | Не упомянул | 🔥 Рекомендует | FI-034 добавить |
-| Caching | Не упомянул | Рекомендует | P3 |
-| Observability | Не упомянул явно | Очень важно | У нас есть `/chat/debug`, расширить |
+| Тема | Perplexity | ChatGPT | DeepSeek | Вывод |
+|------|-----------|---------|----------|-------|
+| Overlap | 60–80 | 50–100 | 50–75 | ~60–80 ✅ делать |
+| Hybrid search | BM25 + pgvector | BM25 + embeddings | BM25 + vector + RRF | ✅ консенсус |
+| Reranking | Cross-encoder + Cohere | Cross-encoder | ms-marco локально | ✅ консенсус |
+| Graceful degradation | 3 уровня + org config | 3 уровня + tool layer | 3 уровня + fallback фразы | ✅ FI-031 |
+| Cross-lingual | Voyage-multilingual-2 | text-embedding-3-large | multilingual-e5-large | Исследовать, P3 |
+| Query rewriting | Не упомянул | 🔥 Рекомендует | Не упомянул | FI-033, P2 |
+| LLM validation | Не упомянул | 🔥 Рекомендует | Косвенно | FI-034, P2 |
+| Prompt injection | Не упомянул | Не упомянул | 🔥 Упомянул | FI-035, P2 |
+| Cost per query | Не упомянул | Не упомянул | 🔥 Упомянул | В метрики |
+| HNSW index | Не упомянул | Не упомянул | 🔥 Упомянул | Добавить при FI-019 |
+| Caching | Не упомянул | Рекомендует | Redis + in-memory | P3 |
+| Observability | Важно | Очень важно | Prometheus + Grafana | Расширить /chat/debug |
 
 ---
 
@@ -237,12 +282,13 @@ rewrite → retrieve → rerank → validate → answer
 
 | FI | Что | Источник | Приоритет |
 |----|-----|----------|-----------|
-| FI-009 update | Chunking: overlap 60–80 токенов + структурный | Оба | P1 |
-| FI-007 update | System prompt: все 5 критических элементов | Оба | P1 |
-| FI-019 update | Hybrid search: BM25 + vector + optional rerank | Оба | P1 |
-| FI-031 | Org config / tool layer (support_email вне RAG) | Оба | P1 |
+| FI-009 update | Chunking: overlap 60–80 токенов + структурный | Все три | P1 |
+| FI-007 update | System prompt: 5 элементов + fallback-фразы | Все три | P1 |
+| FI-019 update | Hybrid search: BM25 + vector + rerank + HNSW | Все три | P1 |
+| FI-031 | Org config / tool layer (support_email вне RAG) | Все три | P1 |
 | FI-033 | Query rewriting перед retrieval | ChatGPT | P2 |
 | FI-034 | LLM-based answer validation (post-generation) | ChatGPT | P2 |
-| FI-029 | Document versioning & recency scoring | Perplexity | P2 |
-| FI-028 update | Cross-lingual: Voyage-multilingual-2 | Perplexity | P3 |
-| FI-030 | RAG metrics dashboard (RAGAS/Giskard) | Оба | P3 |
+| FI-029 | Document versioning & recency scoring | Perplexity + DeepSeek | P2 |
+| FI-035 | Security: prompt injection protection | DeepSeek | P2 |
+| FI-028 update | Cross-lingual: Voyage-multilingual-2 / e5-large | Все три | P3 |
+| FI-030 | RAG metrics dashboard (RAGAS + cost per query) | Все три | P3 |

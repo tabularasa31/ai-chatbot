@@ -71,11 +71,13 @@ def get_client_metrics(
     db: Annotated[Session, Depends(get_db)],
 ) -> AdminClientMetricsList:
     """Per-client metrics table."""
+    # NOTE: This is N+1 per client (users/docs/chats/messages). For current scale it's fine,
+    # but if number of clients grows, we should replace this with aggregated GROUP BY queries.
     clients = db.query(Client).all()
     items = []
 
     for c in clients:
-        users_count = db.query(User).filter(User.id == c.user_id).count()
+        users_count = db.query(User).filter(User.client_id == c.id).count()
         documents_count = db.query(Document).filter(Document.client_id == c.id).count()
         embedded_documents_count = (
             db.query(Document)

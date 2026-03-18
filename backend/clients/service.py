@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
-from backend.models import Client
+from backend.models import Client, User
 
 
 def create_client(user_id: uuid.UUID, name: str, db: Session) -> Client:
@@ -34,6 +34,12 @@ def create_client(user_id: uuid.UUID, name: str, db: Session) -> Client:
     db.add(client)
     db.commit()
     db.refresh(client)
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.client_id = client.id
+        db.commit()
+
     return client
 
 

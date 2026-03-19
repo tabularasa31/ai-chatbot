@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import Link from 'next/link';
 import { useScrollAnimation } from '../hooks/useScrollAnimation';
 
 export function CTABanner() {
@@ -16,9 +17,12 @@ export function CTABanner() {
         <h2 className="text-[#FAF5FF] text-4xl md:text-5xl lg:text-6xl mb-8">
           Ready to meet your support mate?
         </h2>
-        <button className="bg-[#E879F9] text-[#0A0A0F] px-12 py-4 rounded-lg text-lg hover:bg-[#f099fb] hover:scale-105 transition-all">
+        <Link
+          href="/signup"
+          className="bg-[#E879F9] text-[#0A0A0F] px-12 py-4 rounded-lg text-lg hover:bg-[#f099fb] hover:scale-105 transition-all inline-block"
+        >
           Try for free
-        </button>
+        </Link>
       </motion.div>
     </section>
   );

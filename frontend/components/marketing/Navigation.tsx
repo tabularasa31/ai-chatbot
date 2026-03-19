@@ -1,17 +1,10 @@
 import { useState } from 'react';
+import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const scrollToSection = (id: string) => {
-    const element = document.getElementById(id);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
-      setMobileMenuOpen(false);
-    }
-  };
 
   return (
     <nav className="sticky top-0 z-50 bg-[#0A0A0F]/90 backdrop-blur-md border-b border-[#1E1E2E]">
@@ -22,14 +15,14 @@ export function Navigation() {
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center gap-8">
-            <button
-              onClick={() => scrollToSection('features')}
+            <Link
+              href="/docs"
               className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
             >
               Docs
-            </button>
+            </Link>
             <a
-              href="https://github.com"
+              href="https://github.com/tabularasa31/ai-chatbot"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
@@ -39,9 +32,12 @@ export function Navigation() {
           </div>
 
           {/* CTA Button - Desktop */}
-          <button className="hidden md:block bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all">
+          <Link
+            href="/signup"
+            className="hidden md:block bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all"
+          >
             Try for free
-          </button>
+          </Link>
 
           {/* Hamburger - Mobile */}
           <button
@@ -63,23 +59,26 @@ export function Navigation() {
               className="md:hidden overflow-hidden"
             >
               <div className="flex flex-col gap-4 py-6">
-                <button
-                  onClick={() => scrollToSection('features')}
+                <Link
+                  href="/docs"
                   className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors text-left"
                 >
                   Docs
-                </button>
+                </Link>
                 <a
-                  href="https://github.com"
+                  href="https://github.com/tabularasa31/ai-chatbot"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
                 >
                   GitHub
                 </a>
-                <button className="bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] transition-colors">
+                <Link
+                  href="/signup"
+                  className="bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] transition-colors inline-block text-center"
+                >
                   Try for free
-                </button>
+                </Link>
               </div>
             </motion.div>
           )}

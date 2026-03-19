@@ -130,7 +130,7 @@ npm run dev
 | POST | `/documents` | Upload document (JWT, verified only) |
 | GET | `/documents` | List documents (JWT) |
 | DELETE | `/documents/{id}` | Delete document (JWT) |
-| POST | `/embeddings/documents/{id}` | Trigger embeddings generation (JWT, verified only) |
+| POST | `/embeddings/documents/{id}` | Re-trigger embeddings generation (force re-index, JWT) |
 
 ### Chat
 | Method | Path | Description |

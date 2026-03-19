@@ -28,7 +28,7 @@
   - Industry standard
   
 - **LLM Integration:** OpenAI API
-  - GPT-3.5-turbo for chat (fast + cheap)
+  - gpt-4o-mini for chat (fast + cheap)
   - text-embedding-3-small for vectors (1536-dim)
   
 - **Document Parsing:**
@@ -126,7 +126,7 @@
 │    2. Embed question (OpenAI)                            │
 │    3. Search embeddings (pgvector)                       │
 │    4. Build prompt with top 3 chunks                     │
-│    5. Call OpenAI GPT-3.5-turbo                          │
+│    5. Call OpenAI gpt-4o-mini                            │
 │    6. Save to messages table                             │
 │    7. Return {answer, sources}                           │
 │                                                           │
@@ -180,7 +180,7 @@
    "Based on:\n{chunk1}\n{chunk2}\n{chunk3}\n\nAnswer: {question}"
    ↓
 7. OpenAI API: Chat completion
-   GPT-3.5-turbo (temperature=0.2, max_tokens=500)
+   gpt-4o-mini (temperature=0.2, max_tokens=500)
    ↓
 8. Save to DB: INSERT INTO messages (role, content, sources...)
    ↓

@@ -53,7 +53,7 @@
 1. Website visitor asks question in chat
 2. Question is embedded
 3. Similar document chunks found (vector search)
-4. Top 3 chunks + question sent to OpenAI GPT-3.5-turbo
+4. Top 3 chunks + question sent to OpenAI gpt-4o-mini
 5. LLM generates answer based on client's documentation
 6. Answer appears in chat (~2 seconds)
 
@@ -144,7 +144,7 @@
 
 - **Backend:** FastAPI (Python) + PostgreSQL with pgvector
 - **Frontend:** Next.js (React/TypeScript) + TailwindCSS
-- **LLM:** OpenAI GPT-3.5-turbo for chat + text-embedding-3-small for vectors
+- **LLM:** OpenAI gpt-4o-mini for chat + text-embedding-3-small for vectors
 - **Embedding:** RAG (Retrieval Augmented Generation) pattern
 - **Deployment:** Railway (backend) + Vercel (frontend)
 - **Security:** Multi-tenant isolation by client_id on every query

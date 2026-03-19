@@ -166,6 +166,26 @@ export const api = {
       }
       return res.json();
     },
+    async forgotPassword(email: string): Promise<{ message: string }> {
+      const res = await fetch(`${BASE_URL}/auth/forgot-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send reset link"));
+      return data as { message: string };
+    },
+    async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+      const res = await fetch(`${BASE_URL}/auth/reset-password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, new_password: newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));
+      return data as { message: string };
+    },
   },
   clients: {
     async create(name: string) {

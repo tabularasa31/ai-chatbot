@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import jwt
 from sqlalchemy.orm import Session
@@ -88,3 +89,45 @@ def create_token_for_user(user: User) -> tuple[str, int]:
     """Create JWT token for user. Returns (token, expires_in_seconds)."""
     token = create_access_token(data={"sub": str(user.id)})
     return token, ACCESS_TOKEN_EXPIRE_SECONDS
+
+
+def create_reset_token(email: str, db: Session) -> str | None:
+    """
+    Generate reset token for user. Returns token or None if email not found.
+
+    Always returns generic message (don't reveal if email exists).
+    """
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        return None  # Silently fail (security: don't reveal if email exists)
+
+    token = uuid.uuid4().hex
+    user.reset_password_token = token
+    user.reset_password_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    db.commit()
+    return token
+
+
+def reset_password(token: str, new_password: str, db: Session) -> bool:
+    """
+    Validate reset token and update password.
+
+    Returns True if successful, False if token invalid/expired.
+    """
+    now = datetime.now(timezone.utc)
+    user = (
+        db.query(User)
+        .filter(
+            User.reset_password_token == token,
+            User.reset_password_expires_at >= now,
+        )
+        .first()
+    )
+    if not user:
+        return False
+
+    user.password_hash = hash_password(new_password)
+    user.reset_password_token = None
+    user.reset_password_expires_at = None
+    db.commit()
+    return True

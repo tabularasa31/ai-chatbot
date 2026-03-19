@@ -36,7 +36,7 @@ def compile_array_sqlite(type_, compiler, **kw) -> str:  # type: ignore[override
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.utcnow()
+    return dt.datetime.now(dt.timezone.utc)
 
 
 class DocumentType(str, enum.Enum):

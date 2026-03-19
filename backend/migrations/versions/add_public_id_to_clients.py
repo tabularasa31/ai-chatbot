@@ -19,7 +19,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("clients", sa.Column("public_id", sa.String(20), nullable=True))
+    op.add_column("clients", sa.Column("public_id", sa.String(32), nullable=True))
 
     conn = op.get_bind()
     from backend.core.utils import generate_public_id
@@ -41,7 +41,7 @@ def upgrade() -> None:
     op.alter_column(
         "clients",
         "public_id",
-        existing_type=sa.String(20),
+        existing_type=sa.String(32),
         nullable=False,
     )
     op.create_unique_constraint("uq_clients_public_id", "clients", ["public_id"])

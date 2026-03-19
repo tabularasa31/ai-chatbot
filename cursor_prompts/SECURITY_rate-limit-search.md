@@ -65,8 +65,8 @@ def search_route(
 
 **After:**
 ```python
+@limiter.limit("30/minute")  # Add this line (above route decorator)
 @search_router.post("", response_model=SearchResponse)
-@limiter.limit("30/minute")  # Add this line
 def search_route(
     request: Request,  # Add this parameter
     body: SearchRequest,
@@ -99,7 +99,7 @@ curl -X POST http://localhost:8000/search \
   -H "Content-Type: application/json" \
   -d '{"query": "test"}'
 
-# After 30 requests from same token, should get 429:
+# After 30 requests from same IP, should get 429:
 # {"detail":"429: Too Many Requests"}
 ```
 

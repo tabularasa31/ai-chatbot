@@ -1,5 +1,58 @@
 # FI-033: Upgrade to gpt-4o-mini (from gpt-3.5-turbo)
 
+## Setup Instructions (Before You Start)
+
+### 1. Open the Project
+```bash
+# Clone or open the repository
+git clone https://github.com/tabularasa31/ai-chatbot.git
+cd ai-chatbot
+
+# Create a working branch
+git checkout -b fi-033-gpt4o-mini
+```
+
+### 2. Project Structure (Reference)
+```
+ai-chatbot/
+├── backend/
+│   ├── config/
+│   │   └── settings.py          ← Update OPENAI_MODEL here
+│   ├── chat/
+│   │   ├── service.py           ← Update model names in API calls
+│   │   ├── prompts.py           ← Optimize RAG prompt
+│   │   └── routes.py            ← Chat endpoint (check only)
+│   └── utils/
+│       └── token_counter.py     ← Verify tokenization works
+├── frontend/                     ← NO CHANGES
+├── docs/
+│   └── (various specs)
+├── cursor_prompts/              ← You are here
+└── README.md                     ← Update docs section
+```
+
+### 3. Environment Check
+Make sure you have:
+- Python 3.11+ with venv activated
+- `requirements.txt` installed (`pip install -r requirements.txt`)
+- OpenAI API key available
+- PostgreSQL running (if needed for local testing)
+
+### 4. Files to Edit
+Copy these paths into your editor to jump directly:
+1. `backend/config/settings.py` — Find `OPENAI_MODEL`
+2. `backend/chat/service.py` — Find `openai.ChatCompletion.create(model=...)`
+3. `backend/chat/prompts.py` — Find RAG system prompt
+4. `README.md` — Find "RAG pipeline" section
+
+### 5. Before You Code
+- [ ] Read this entire prompt
+- [ ] Open the 4 files listed above (just to review)
+- [ ] Check git status: `git status` (should be clean)
+- [ ] Create branch: `git checkout -b fi-033-gpt4o-mini`
+
+---
+
 ## Objective
 Replace gpt-3.5-turbo with gpt-4o-mini across the Chat9 RAG pipeline.
 Better quality, same/lower cost, same API compatibility.

@@ -1,33 +1,33 @@
 # Security Backlog
 
-Безопасность, изоляция, защита от злоупотреблений.
+Security, isolation, abuse protection.
 
 ---
 
 ## 🟠 P2
 
-### [FI-022] CORS — разделить по роутам
-- `allow_origins=["*"]` только для `/chat` и `/embed.js`.
-- Остальное — ограничить `FRONTEND_URL`.
+### [FI-022] CORS — split by routes
+- `allow_origins=["*"]` only for `/chat` and `/embed.js`.
+- Rest — restrict to `FRONTEND_URL`.
 
-### [FI-022 ext] CORS с белым списком доменов клиента
-- Клиент указывает `allowed_origins` в дашборде.
-- Backend проверяет `Origin` против `Client.allowed_origins` при `/chat`.
-- Защита от использования API-ключа на чужих сайтах.
-- **Effort:** 2 дня.
+### [FI-022 ext] CORS with client domain whitelist
+- Client specifies `allowed_origins` in dashboard.
+- Backend checks `Origin` against `Client.allowed_origins` on `/chat`.
+- Protection against API key use on third-party sites.
+- **Effort:** 2 days.
 
-### [FI-023] Rate limit на `GET /clients/validate/{api_key}`
-- Публичный эндпоинт без rate limit → возможен brute-force.
-- Добавить `@limiter.limit("20/minute")`.
+### [FI-023] Rate limit on `GET /clients/validate/{api_key}`
+- Public endpoint without rate limit → brute-force possible.
+- Add `@limiter.limit("20/minute")`.
 
 ### [FI-035] Prompt injection protection
-- Санитизация входящих сообщений.
-- Проверка на попытки сменить роль бота ("ignore previous instructions...").
+- Sanitize incoming messages.
+- Check for role-switch attempts ("ignore previous instructions...").
 
 ---
 
 ## 🟡 P3
 
 ### [FI-006] ENCRYPTION_KEY rotation
-- Безопасное обновление мастер-ключа шифрования OpenAI keys.
-- Процедура: decrypt old → encrypt new → без потери данных.
+- Secure update of OpenAI keys encryption master key.
+- Procedure: decrypt old → encrypt new → no data loss.

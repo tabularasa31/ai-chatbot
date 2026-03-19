@@ -247,14 +247,14 @@
 
 **Live endpoints:**
 - `GET /health` → `{"status": "ok"}`
-- `POST /auth/register` — регистрация
-- `POST /auth/login` — логин
-- `POST /clients` — создать клиента
-- `POST /documents` — загрузить документ
-- `POST /embeddings/documents/{id}` — векторизовать
-- `POST /search` — семантический поиск
-- `POST /chat` — RAG чат (X-API-Key)
-- `GET /chat/history/{session_id}` — история чата
+- `POST /auth/register` — register
+- `POST /auth/login` — login
+- `POST /clients` — create client
+- `POST /documents` — upload document
+- `POST /embeddings/documents/{id}` — generate embeddings
+- `POST /search` — semantic search
+- `POST /chat` — RAG chat (X-API-Key)
+- `GET /chat/history/{session_id}` — chat history
 
 **Deployment config:**
 - Start Command: `alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
@@ -341,9 +341,9 @@ tokens_used: 230 ✅
 **Status:** ✅ Merged (FI-033)
 
 **What was done:**
-- **Было:** gpt-3.5-turbo
-- **Стало:** gpt-4o-mini
-- **Причина:** лучше качество, примерно равная стоимость, лучше работает с многоязычностью
+- **Was:** gpt-3.5-turbo
+- **Now:** gpt-4o-mini
+- **Reason:** better quality, similar cost, better multilingual support
 
 **Files:** `backend/chat/service.py`, `tests/test_chat.py`, docs (tech-stack, overview, phase-breakdown)
 
@@ -445,7 +445,7 @@ tokens_used: 230 ✅
 - RAG prompt tuned for support-style answers:
   - assistant acts as technical support agent for client product (SaaS, API, docs)
   - answers in the same language as the question (RU/EN)
-  - for "which setting / какая настройка" questions names the exact setting and UI path when present in context
+  - for "which setting" type questions names the exact setting and UI path when present in context
   - avoids false "I don't know" when relevant context exists
 - Hybrid retrieval:
   - primary: vector search (text-embedding-3-small + cosine similarity)

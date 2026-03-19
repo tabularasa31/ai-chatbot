@@ -50,7 +50,7 @@
 | `FI-EMBED-MVP_public-widget-implementation.md` | Zero-config widget embedding (CORS fix) | 🔴 P1 |
 | `REFACTOR_pgvector-native-search.md` | Replace Python cosine with DB-level search | 🔴 P1 |
 | ~~`REFACTOR_datetime-cors-exceptions.md`~~ | ✅ Fix datetime.utcnow(), broad exceptions — **DONE** | 🟡 P2 |
-| `REFACTOR_fix-n1-queries.md` | Fix N+1 queries in list_sessions, bad_answers | 🟡 P2 |
+| ~~`REFACTOR_fix-n1-queries.md`~~ | ✅ Fix N+1 queries in list_sessions, bad_answers — **DONE** | 🟡 P2 |
 
 ---
 
@@ -107,7 +107,7 @@ User → getchat9.live (Vercel, Next.js)
 
 ### Medium Priority
 - ~~`datetime.utcnow()` deprecated~~ ✅ Fixed (datetime.now(timezone.utc))
-- N+1 queries in list_sessions, list_bad_answers → Cursor prompt ready
+- ~~N+1 queries in list_sessions, list_bad_answers~~ ✅ Fixed
 - Python cosine similarity (slow at scale) → Cursor prompt ready
 
 ### Low Priority

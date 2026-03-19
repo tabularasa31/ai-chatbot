@@ -1,11 +1,9 @@
 """FastAPI client management endpoints."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user, require_verified_user
@@ -25,6 +23,7 @@ from backend.clients.service import (
     update_client,
 )
 from backend.core.db import get_db
+from backend.core.limiter import limiter
 from backend.models import User
 
 clients_router = APIRouter(tags=["clients"])
@@ -106,7 +105,9 @@ def update_my_client(
 
 
 @clients_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
+@limiter.limit("20/minute")
 def validate_api_key(
+    request: Request,
     api_key: str,
     db: Annotated[Session, Depends(get_db)],
 ) -> ValidateApiKeyResponse:

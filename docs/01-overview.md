@@ -1,29 +1,29 @@
-# AI Chatbot Platform — Architecture Overview
+# Chat9 — Architecture Overview
 
-**Status:** MVP Planning  
-**Timeline:** 4-5 weeks  
+**Status:** MVP  
 **Owner:** Elina
 
 ---
 
-## What is this platform?
+## What is Chat9?
 
-**AI Business Chat** — A SaaS platform where companies upload their documentation, and customers get an AI chatbot trained on that documentation.
+**Chat9** — "Your support mate, always on." A SaaS platform where companies upload their documentation and get an AI chatbot that answers customer questions 24/7.
+
+Clients bring their own OpenAI key — full cost transparency, no platform markup.
 
 ### Multi-Tenant Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│           AI Business Chat Platform                  │
-│  (One application, Multiple clients)                │
+│                  Chat9 Platform                      │
+│       (One application, Multiple clients)           │
 └─────────────────────────────────────────────────────┘
            ↓
     ┌──────────────┬──────────────┬──────────────┐
     ↓              ↓              ↓              ↓
  Client A       Client B      Client C      Client N
-(Company 1)    (Company 2)    (Company 3)
     ├─ Docs       ├─ Docs       ├─ Docs       ├─ Docs
-    ├─ API key    ├─ API key    ├─ API key    ├─ API key
+    ├─ OpenAI key ├─ OpenAI key ├─ OpenAI key ├─ OpenAI key
     ├─ Widget     ├─ Widget     ├─ Widget     ├─ Widget
     └─ Users      └─ Users      └─ Users      └─ Users
 ```
@@ -33,56 +33,40 @@
 ## How It Works
 
 ### 1. Client Onboarding
-- Client registers → gets unique API key + dashboard
+- Client registers → adds their own OpenAI API key → gets unique API key + dashboard
+- All AI calls use the client's own key — transparent costs, no platform markup
 - Can embed chat widget on their website
 
 ### 2. Document Upload
-- Client uploads: PDF, Markdown, Google Docs, Swagger/OpenAPI
-- Documents are parsed and processed
+- Client uploads: PDF, Markdown, Swagger/OpenAPI
+- Documents are parsed, chunked, and embedded automatically
 
 ### 3. Indexing
 - Documents split into chunks (500 chars with 100 char overlap)
-- Each chunk vectorized using OpenAI embeddings
+- Each chunk vectorized using OpenAI `text-embedding-3-small`
 - Vectors stored in PostgreSQL with pgvector
 
 ### 4. Website Widget
 - Client embeds simple `<script>` tag on their website
 - Chat bubble appears on their pages
 
-### 5. RAG Pipeline (Retrieval Augmented Generation)
+### 5. RAG Pipeline
 1. Website visitor asks question in chat
 2. Question is embedded
 3. Similar document chunks found (vector search)
-4. Top 3 chunks + question sent to OpenAI gpt-4o-mini
+4. Top 3 chunks + question sent to OpenAI `gpt-4o-mini`
 5. LLM generates answer based on client's documentation
 6. Answer appears in chat (~2 seconds)
 
-### 6. Logging & Analytics
+### 6. Feedback & Improvement
 - Client sees all conversations in dashboard
-- Can approve/edit/reject answers
-- Provides feedback for improvement
+- 👍/👎 feedback + optional ideal answer
+- Feedback loop improves answers over time
 
----
-
-## Business Model (MVP - Free)
-
-### For Clients (Companies)
-
-**Free MVP includes:**
-- ✅ Unlimited documents upload
-- ✅ Unlimited questions
-- ✅ API key + dashboard
-- ✅ Basic embed code
-- ✅ Chat log history
-- ✅ Basic customization (none in MVP)
-
-**Future (v2 features - paid tiers):**
-- Advanced customization (colors, tone, personality)
-- Team collaboration
-- Advanced analytics
-- Slack/Email notifications
-- Webhooks
-- Custom LLM fine-tuning
+### 7. Logging & Analytics
+- Full chat history with session tracking
+- Token usage per client
+- Debug mode: see which document chunks were used
 
 ---
 
@@ -91,76 +75,50 @@
 ### Client (Company Admin)
 
 #### Day 1: Onboarding
-```
-1. Visit app → Sign up (email + password)
-2. After login → Dashboard shows:
-   ├─ Unique API Key (copy button)
-   ├─ Embed code (HTML snippet)
-   ├─ "Upload Documents" button
-   └─ "Chat Logs" link
-3. Copy code and integrate on website
-```
+1. Sign up → Dashboard
+2. Add your OpenAI API key (used for all AI calls)
+3. Copy API key + embed code → paste `<script>` tag on website
 
-#### Day 2: Document Upload
-```
-1. Dashboard → "Documents" section
-2. Upload documents (drag & drop):
-   - PDF files
-   - Markdown files
-   - Google Docs (exported)
-   - Swagger/OpenAPI specs
-3. Wait for processing (status: Processing → Ready)
-4. See parsed content preview
-5. Widget becomes active on website
-```
+#### Day 2: Upload Documents
+1. Upload PDFs, Markdown, Swagger files
+2. Processing happens automatically (status: Processing → Ready)
+3. Widget becomes active
 
-#### Day 3+: Monitor Conversations
-```
-1. Dashboard → "Chat Logs"
-2. View all conversations:
-   ├─ Visitor question
-   ├─ AI answer
-   ├─ Source documents used
-   ├─ Timestamp
-   └─ Feedback (approve/edit/reject)
-3. Optional: Analytics (top questions, success rate)
-```
+#### Day 3+: Monitor & Improve
+1. Dashboard → Chat Logs
+2. View questions + AI answers + source docs used
+3. Leave 👍/👎 feedback or provide ideal answers
 
 ### End User (Website Visitor)
-
-```
-1. Visit Client A's website
-2. See chat bubble in bottom-right corner 💬
-3. Click → Chat opens
-4. Type question: "How do I reset my password?"
-5. AI responds: "Go to Settings → Password → Click 'Reset'..."
-6. Conversation continues naturally
-7. Close chat
-```
+1. Visit client's website → see chat bubble 💬
+2. Ask question → AI answers from client's docs
+3. Conversation logged for client review
 
 ---
 
-## Technical Vision
+## Technical Stack
 
-- **Backend:** FastAPI (Python) + PostgreSQL with pgvector
-- **Frontend:** Next.js (React/TypeScript) + TailwindCSS
-- **LLM:** OpenAI gpt-4o-mini for chat + text-embedding-3-small for vectors
-- **Embedding:** RAG (Retrieval Augmented Generation) pattern
+- **Backend:** FastAPI (Python 3.11) + PostgreSQL + pgvector
+- **Frontend:** Next.js 14 (React/TypeScript) + TailwindCSS
+- **LLM:** OpenAI `gpt-4o-mini` + `text-embedding-3-small` (via client's own API key)
+- **Email:** Brevo HTTP API
 - **Deployment:** Railway (backend) + Vercel (frontend)
-- **Security:** Multi-tenant isolation by client_id on every query
+- **Security:** Multi-tenant isolation by `client_id` on every query
 
 ---
 
 ## Key Features (MVP)
 
-✅ User authentication (email/password + JWT)
-✅ Multi-tenant client management (API keys)
-✅ Document upload (PDF, MD, Swagger)
-✅ Automatic embedding + vector search
-✅ RAG-powered chat API
-✅ Dashboard (documents, chat logs)
-✅ Embeddable widget
-✅ Chat history & logging
+✅ User authentication (email/password + JWT)  
+✅ Multi-tenant client management (API keys)  
+✅ Document upload (PDF, Markdown, Swagger)  
+✅ RAG-powered chat API  
+✅ Embeddable widget  
+✅ Chat history & session logging  
+✅ Feedback system (👍/👎 + ideal answer)  
+✅ Token usage tracking  
+✅ Debug mode  
+✅ Admin metrics  
 
 ---
 

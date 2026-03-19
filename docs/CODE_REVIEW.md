@@ -1,241 +1,241 @@
 # Ревью кода ai-chatbot
 
-## 1. Middleware — незащищённый маршрут `/review`
+## Критичные и важные проблемы
 
-```4:5:frontend/middleware.ts
-const PROTECTED_PATHS = ["/dashboard", "/documents", "/logs", "/debug", "/admin"];
-const AUTH_PATHS = ["/login", "/signup"];
+### 1. Публичный эндпоинт `/clients/validate/{api_key}` без rate limiting
+
+```109:124:backend/clients/routes.py
+@clients_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
+def validate_api_key(
+    api_key: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> ValidateApiKeyResponse:
 ```
 
-`/review` не входит в `PROTECTED_PATHS` и не указан в `matcher`. Middleware для `/review` не выполняется, страница доступна без авторизации. API вернёт 401, но страница отрисуется.
-
-**Рекомендация:** добавить `/review` в `PROTECTED_PATHS` и в `matcher`.
+Эндпоинт публичный и позволяет проверять валидность API-ключей. Без ограничения частоты запросов возможен перебор ключей (32 hex-символа). Нужен rate limit (например, 10–20 запросов в минуту с IP).
 
 ---
 
-## 2. Неиспользуемые UI-компоненты
+### 2. `/search` без rate limiting
 
-- **`Button`** и **`Card`** (`frontend/components/ui/`) нигде не импортируются. В Hero, CTABanner, Navigation, DemoBlock и т.д. используются обычные `<button>`.
-- **`use-mobile.ts`** не используется в проекте.
-
-Компоненты и хук остаются мёртвым кодом.
-
----
-
-## 3. Дублирование логики проверки токена
-
-В `login/page.tsx` и `signup/page.tsx`:
-
-```15:20:frontend/app/(auth)/login/page.tsx
-  useEffect(() => {
-    const token = getToken();
-    if (token) {
-      saveToken(token);
-      router.replace("/dashboard");
-    }
-  }, [router]);
+```20:25:backend/search/routes.py
+@search_router.post("", response_model=SearchResponse)
+def search_route(
+    body: SearchRequest,
+    ...
 ```
 
-`saveToken(token)` при уже существующем токене ничего не меняет. Логика повторяется в нескольких местах.
+Эндпоинт защищён JWT, но не ограничен по частоте. Каждый запрос вызывает OpenAI embeddings. Рекомендуется добавить лимит (например, 30/min, как у `/chat`).
 
 ---
 
-## 4. Landing page — лишняя проверка токена
+### 3. `list_bad_answers`: нет валидации `limit` и `offset`
 
-```18:25:frontend/app/(marketing)/page.tsx
-  useEffect(() => {
-    const token = getToken();
-    if (token) {
-      saveToken(token);
-      router.replace('/dashboard');
-    } else {
-      setChecked(true);
-    }
-  }, [router]);
+```277:283:backend/chat/routes.py
+@chat_router.get("/bad-answers", response_model=BadAnswerListResponse)
+def list_bad_answers(
+    ...
+    limit: int = 50,
+    offset: int = 0,
+) -> BadAnswerListResponse:
 ```
 
-`saveToken(token)` при редиректе не нужен — токен уже в `localStorage`. Достаточно проверки и редиректа.
+`limit` и `offset` не проверяются. Возможны:
+- `limit=999999` — большая нагрузка на БД;
+- `offset=-1` — ошибка в SQL.
+
+Рекомендуется: `limit` в диапазоне 1–100, `offset >= 0`.
 
 ---
 
-## 5. Backend — устаревший `datetime.utcnow()`
+### 4. Устаревший `datetime.utcnow()`
 
-```44:45:backend/auth/routes.py
-    user.verification_expires_at = datetime.utcnow() + timedelta(days=2)
+Используется в:
+- `backend/auth/routes.py` (строки 44, 110)
+- `backend/core/security.py` (строка 54)
+- `backend/models.py` (`_utcnow()`)
+- тестах
+
+В Python 3.12+ `datetime.utcnow()` помечен как deprecated. Лучше использовать `datetime.now(timezone.utc)`.
+
+---
+
+### 5. Потенциальный `AttributeError` при `m.feedback`
+
+```388:390:backend/chat/service.py
+    return [
+        (m.id, chat.session_id, m.role.value, m.content, m.feedback.value, m.ideal_answer, m.created_at)
+        for m in messages
 ```
 
-`datetime.utcnow()` помечен как deprecated в Python 3.12+. Рекомендуется `datetime.now(timezone.utc)`.
+Если `m.feedback` когда-либо будет `None` (старые данные, миграции), вызов `.value` приведёт к `AttributeError`. Безопаснее: `(m.feedback or MessageFeedback.none).value`.
 
 ---
 
-## 6. CORS — `allow_credentials=False` при использовании cookies
+## Средние проблемы
 
-```26:31:backend/main.py
+### 6. CORS: `allow_credentials=False`
+
+```37:42:backend/main.py
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    ...
 )
 ```
 
-Токен передаётся через cookie. При `allow_credentials=False` браузер не отправляет cookies в cross-origin запросах. Если фронт и бэк на разных доменах, авторизация по cookie может не работать.
+Токен передаётся через cookie (`document.cookie` в `api.ts`). При `allow_credentials=False` браузер не отправляет cookies в cross-origin запросах. Если фронт и бэк на разных доменах, авторизация по cookie может не работать. Сейчас используется `Authorization: Bearer`, так что это менее критично, но стоит проверить, что cookie действительно не нужны.
 
 ---
 
-## 7. Хардкод GitHub-ссылок
+### 7. Слишком широкий `except` в `crypto.py`
 
-```31:34:frontend/components/marketing/Navigation.tsx
-            <a
-              href="https://github.com"
-              target="_blank"
-              rel="noopener noreferrer"
+```28:31:backend/core/crypto.py
+    try:
+        return f.decrypt(value.encode()).decode()
+    except (InvalidToken, Exception) as e:
+        raise RuntimeError(f"Failed to decrypt: {e}") from e
 ```
 
-Ссылка ведёт на `https://github.com` вместо репозитория проекта.
+`Exception` перехватывает всё. Лучше явно указывать ожидаемые исключения (например, `InvalidToken`, `ValueError`, `TypeError`).
 
 ---
 
-## 8. Кнопки CTA без навигации
+### 8. `HTTPException` из `from None` в `openai_client.py`
 
-В Hero, CTABanner, Navigation кнопки «Try for free» и «See demo» не имеют `onClick`/`href` и не ведут на signup или demo.
-
----
-
-## 9. `useScrollAnimation` — возможная рассинхронизация ref
-
-```9:11:frontend/components/hooks/useScrollAnimation.ts
-export function useScrollAnimation(): [
-  React.RefObject<HTMLDivElement>,
-  boolean,
-] {
-  const ref = useRef<HTMLDivElement | null>(null)
+```32:36:backend/core/openai_client.py
+    except RuntimeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to decrypt OpenAI API key.",
+        ) from None
 ```
 
-Возвращается `ref as React.RefObject<HTMLDivElement>`, хотя `ref.current` может быть `null`. Для framer-motion это обычно допустимо, но типизация может вводить в заблуждение.
+`from None` скрывает исходную причину ошибки. Для отладки лучше сохранять цепочку исключений (`from e` или без `from None`).
 
 ---
 
-## 10. `useIsMobile` — SSR и гидрация
+### 9. N+1 в `list_chat_sessions`
 
-```10:17:frontend/components/ui/use-mobile.ts
-  React.useEffect(() => {
-    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
-    const onChange = () => {
-      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    };
-    mql.addEventListener("change", onChange);
-    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
-    return () => mql.removeEventListener("change", onChange);
-  }, []);
+```310:318:backend/chat/service.py
+    for chat in chats:
+        messages = (
+            db.query(Message)
+            .filter(Message.chat_id == chat.id)
+            ...
+        )
 ```
 
-При SSR `isMobile` будет `undefined`, затем станет `true`/`false` после гидрации. Может вызвать мерцание или рассинхрон, если компонент от этого зависит.
+Для каждой сессии выполняется отдельный запрос. При большом числе сессий это даёт N+1. Лучше один запрос с `joinedload` или агрегацией.
 
 ---
 
-## 11. `api.auth.getMe` — несоответствие типов
+### 10. N+1 в `list_bad_answers`
 
-```151:152:frontend/lib/api.ts
-      return data as { id: string; email: string; created_at: string };
+```309:319:backend/chat/routes.py
+    for msg in bad_messages:
+        prev_user = (
+            db.query(Message)
+            .filter(...)
+            .first()
+        )
 ```
 
-В бэкенде `UserResponse.id` — `uuid.UUID`, сериализуется как строка. Тип `string` корректен, но `created_at` приходит как ISO-строка, а не `Date`.
+Для каждого «плохого» сообщения — отдельный запрос. Можно заменить одним запросом с подзапросом или оконной функцией.
 
 ---
 
-## 12. Документы — двойной вызов `load()`
+### 11. Дублирование проверки `client.openai_api_key`
 
-```56:59:frontend/app/(app)/documents/page.tsx
-      const doc = await api.documents.upload(file);
-      setDocuments((prev) => [doc, ...prev]);
-      await api.embeddings.create(doc.id);
-      await load();
+Проверка `if not client.openai_api_key` повторяется в:
+- `chat/routes.py` (строки 90, 135)
+- `search/routes.py` (строка 36)
+- `embeddings/routes.py` (строка 51)
+
+Имеет смысл вынести в общую зависимость/хелпер.
+
+---
+
+### 12. Загрузка файла целиком в память
+
+```67:68:backend/documents/routes.py
+    content = file.file.read()
+    if len(content) > MAX_FILE_SIZE:
 ```
 
-После `setDocuments` вызывается `load()`, который перезаписывает список. Первое обновление состояния избыточно.
+Файл до 50 MB читается в память. При множестве одновременных загрузок это может увеличить потребление памяти. Для больших файлов можно рассмотреть потоковую обработку.
 
 ---
 
-## 13. Отсутствие обработки ошибок при `navigator.clipboard`
+## Мелкие замечания
 
-```96:99:frontend/app/(app)/dashboard/page.tsx
-  function copyApiKey() {
-    if (apiKey) {
-      navigator.clipboard.writeText(apiKey);
-      setCopiedApiKey(true);
+### 13. `import logging` внутри `try` в auth
+
+```59:61:backend/auth/routes.py
+    except Exception as e:
+        # Do not block signup if email fails in dev
+        import logging
+        logging.getLogger(__name__).warning(...)
 ```
 
-`navigator.clipboard.writeText` может выбросить исключение (например, без HTTPS или при отказе пользователя). Ошибка не обрабатывается.
+`logging` лучше импортировать в начале модуля.
 
 ---
 
-## 14. `Features` — использование `index` как `key`
+### 14. Хардкод URL в embed.js
 
-```57:64:frontend/components/marketing/Features.tsx
-        {features.map((feature, index) => (
-          <FeatureCard
-            key={index}
-            icon={feature.icon}
+```5:5:backend/widget/static/embed.js
+  var apiBase = scriptEl ? new URL(scriptEl.src).origin : "https://ai-chatbot-production-6531.up.railway.app";
 ```
 
-Использование `index` как `key` нежелательно при изменяемом списке. Здесь список статичный, но лучше использовать стабильный идентификатор (например, `feature.title`).
+URL захардкожен. Лучше вынести в конфиг или переменную окружения.
 
 ---
 
-## 15. `Stats` — захардкоженные данные
+### 15. Несогласованность типов `user.id`
 
-```7:11:frontend/components/marketing/Stats.tsx
-  const stats = [
-    { value: '47', label: 'sessions' },
-    { value: '143', label: 'messages' },
-    { value: '12,450', label: 'tokens' },
-  ];
+В `api.ts`:
+```typescript
+return data as { token: string; expires_in: number; user: { id: number; email: string } };
 ```
 
-Значения статичны. Для продакшена логичнее подгружать реальную статистику.
+В бэкенде `user.id` — UUID. На фронте ожидается `number`. Нужно привести типы к одному виду (например, `string` для UUID).
 
 ---
 
-## 16. `DemoBlock` — неверный `ref`
+### 16. `documents.upload` без токена
 
-В `DemoBlock` второй `motion.div` использует `isInView` из первого `useScrollAnimation`, но у него нет своего `ref`. Анимация второго блока привязана к видимости первого, что может быть нежелательно.
-
----
-
-## 17. Landing page — несоответствие стилей загрузки
-
-```29:33:frontend/app/(marketing)/page.tsx
-  if (!checked) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="animate-pulse text-slate-600">Loading...</div>
+```205:208:frontend/lib/api.ts
+      const res = await fetch(`${BASE_URL}/documents`, {
+        method: "POST",
+        ...
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
 ```
 
-Состояние загрузки использует `bg-slate-50`, тогда как основная страница — `bg-[#0A0A0F]`. При переключении возможен визуальный скачок.
+При отсутствии токена запрос уйдёт без заголовка. Эндпоинт защищён `require_verified_user`, так что вернётся 401. Логичнее всегда использовать `authFetch`, чтобы не дублировать логику авторизации.
 
 ---
 
-## 18. Embed URL в dashboard
+## Что сделано хорошо
 
-```104:104:frontend/app/(app)/dashboard/page.tsx
-    return `<div id="ai-chat-widget" data-api-key="${apiKey ?? ""}"></div>\n<script src="${API_URL}/embed.js"></script>`;
-```
-
-`API_URL` — это `NEXT_PUBLIC_API_URL`. Для embed-скрипта нужен URL бэкенда. Если фронт и бэк на разных доменах, `API_URL` должен указывать на бэкенд.
+- Разделение JWT и API key для разных эндпоинтов
+- Шифрование OpenAI API key (Fernet)
+- Проверка владельца для документов, сессий, сообщений
+- `require_verified_user` для критичных операций
+- Rate limiting на auth и chat
+- Валидация паролей и email
+- CORS с явным списком `ALLOWED_ORIGINS`
 
 ---
 
-## Резюме по приоритетам
+## Приоритеты
 
 | Приоритет | Проблема |
 |-----------|----------|
-| Высокий   | `/review` не защищён middleware |
-| Высокий   | CORS `allow_credentials=False` при использовании cookies |
-| Средний   | Устаревший `datetime.utcnow()` |
-| Средний   | CTA-кнопки без навигации |
-| Средний   | Двойной вызов `load()` при загрузке документов |
-| Низкий    | Мёртвый код (Button, Card, use-mobile) |
-| Низкий    | Хардкод GitHub, статичные Stats |
-| Низкий    | Мелкие улучшения типов и обработки ошибок |
+| Высокий | Rate limit для `/clients/validate/{api_key}` |
+| Высокий | Rate limit для `/search` |
+| Высокий | Валидация `limit`/`offset` в `list_bad_answers` |
+| Средний | Замена `datetime.utcnow()` на `datetime.now(timezone.utc)` |
+| Средний | Защита от `m.feedback is None` в `get_session_logs` |
+| Низкий | Рефакторинг N+1, вынос общих проверок, мелкие правки |

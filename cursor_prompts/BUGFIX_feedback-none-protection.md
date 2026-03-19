@@ -1,5 +1,7 @@
 # BUGFIX: Protect Against m.feedback=None in get_session_logs
 
+⚠️ **CRITICAL: Follow the SETUP commands EXACTLY in order. Do NOT skip `git pull origin main`.**
+
 ## SETUP
 
 ```bash
@@ -8,6 +10,13 @@ git checkout main
 git pull origin main
 git checkout -b feature/bugfix-feedback-none
 ```
+
+**MUST DO:**
+1. `git checkout main` — switch to main
+2. `git pull origin main` — fetch latest (do not skip!)
+3. `git checkout -b feature/bugfix-feedback-none` — create NEW branch from latest main
+
+**DO NOT reuse old branches or skip the pull step.**
 
 ---
 

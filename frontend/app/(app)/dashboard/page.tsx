@@ -6,11 +6,15 @@ import { useSearchParams } from "next/navigation";
 import { api, type ClientResponse } from "@/lib/api";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 function DashboardContent() {
   const searchParams = useSearchParams();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [publicId, setPublicId] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [docCount, setDocCount] = useState<number | null>(null);
@@ -46,6 +50,7 @@ function DashboardContent() {
           }
         }
         setApiKey(client.api_key);
+        setPublicId(client.public_id ?? null);
         setHasOpenaiKey(client.has_openai_key ?? false);
 
         const docs = await api.documents.list();
@@ -102,7 +107,11 @@ function DashboardContent() {
   }
 
   function getEmbedSnippet() {
-    return `<div id="ai-chat-widget" data-api-key="${apiKey ?? ""}"></div>\n<script src="${API_URL}/embed.js"></script>`;
+    const scriptUrl = `${API_URL}/embed.js?clientId=${encodeURIComponent(publicId ?? "")}`;
+    if (APP_URL && APP_URL !== API_URL) {
+      return `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n<script src="${scriptUrl}"></script>`;
+    }
+    return `<script src="${scriptUrl}"></script>`;
   }
 
   function copyEmbedCode() {
@@ -227,7 +236,7 @@ function DashboardContent() {
           {getEmbedSnippet()}
         </pre>
         <p className="text-slate-500 text-xs mb-4">
-          This snippet is already prefilled with your API key — you don&apos;t need to copy it separately.
+          One-line embed — works on any domain. No CORS setup needed.
         </p>
         <button
           onClick={copyEmbedCode}

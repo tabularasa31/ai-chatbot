@@ -105,24 +105,21 @@ exp = datetime.now(timezone.utc) + timedelta(hours=24)
 
 **File: backend/models.py**
 
-Search for `_utcnow()` function (should be ~line 20)
+Search for `_utcnow()` function (should be ~line 37-38). Note: models.py uses `import datetime as dt`.
 
 **Before:**
 ```python
-def _utcnow():
-    return datetime.utcnow()
+def _utcnow() -> dt.datetime:
+    return dt.datetime.utcnow()
 ```
 
 **After:**
 ```python
-def _utcnow():
-    return datetime.now(timezone.utc)
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc)
 ```
 
-**Add to imports in models.py if not present:**
-```python
-from datetime import datetime, timezone
-```
+**Add to imports in models.py if not present:** `timezone` is in `datetime` module. If using `import datetime as dt`, use `dt.timezone.utc` — no extra import needed.
 
 ---
 
@@ -146,17 +143,11 @@ try:
     return f.decrypt(value.encode()).decode()
 except InvalidToken as e:
     raise RuntimeError(f"Failed to decrypt: invalid token") from e
-except (ValueError, UnicodeDecodeError, Exception) as e:
+except (ValueError, UnicodeDecodeError) as e:
     raise RuntimeError(f"Failed to decrypt: {e}") from e
 ```
 
-Or simpler (if only InvalidToken is expected):
-```python
-try:
-    return f.decrypt(value.encode()).decode()
-except (InvalidToken, ValueError) as e:
-    raise RuntimeError(f"Failed to decrypt: {e}") from e
-```
+**Rationale:** `InvalidToken` — от Fernet.decrypt(); `UnicodeDecodeError` — от `.decode()` при невалидном UTF-8; `ValueError` — на случай edge cases. Без `Exception` — только ожидаемые исключения.
 
 ---
 
@@ -243,7 +234,7 @@ git push origin feature/refactor-datetime-cors-exceptions
 
 ## NOTES
 
-- `datetime.utcnow()` is deprecated since Python 3.10, removed in 3.12+
+- `datetime.utcnow()` is deprecated since Python 3.12 (PEP 701)
 - Use `datetime.now(timezone.utc)` for UTC-aware datetime
 - Broad `except Exception` is code smell — catch only expected exceptions
 - Preserve exception chains with `from e` for better debugging

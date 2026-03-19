@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # Password validation: min 8 chars, 1 uppercase, 1 number, 1 special char
@@ -64,6 +64,44 @@ class VerifyEmailRequest(BaseModel):
     """Request body for email verification."""
 
     token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Request body for forgot password."""
+
+    email: EmailStr
+
+
+class ForgotPasswordResponse(BaseModel):
+    """Response for forgot password (always generic for security)."""
+
+    message: str
+
+
+class ResetPasswordRequest(BaseModel):
+    """Request body for password reset."""
+
+    token: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_password_strength(cls, v: str) -> str:
+        """Validate password: min 8 chars, 1 uppercase, 1 number, 1 special char."""
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not _PASSWORD_PATTERN.match(v):
+            raise ValueError(
+                "Password must include at least one uppercase letter, "
+                "one number, and one special character"
+            )
+        return v
+
+
+class ResetPasswordResponse(BaseModel):
+    """Response for password reset."""
+
+    message: str
 
 
 class ErrorResponse(BaseModel):

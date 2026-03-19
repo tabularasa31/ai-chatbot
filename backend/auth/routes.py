@@ -10,11 +10,23 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter
-from backend.auth.schemas import AuthResponse, LoginRequest, RegisterRequest, UserResponse, VerifyEmailRequest
+from backend.auth.schemas import (
+    AuthResponse,
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
+    LoginRequest,
+    RegisterRequest,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
+    UserResponse,
+    VerifyEmailRequest,
+)
 from backend.auth.service import (
     authenticate_user,
+    create_reset_token,
     create_token_for_user,
     register_user,
+    reset_password,
 )
 from backend.auth.middleware import get_current_user
 from backend.email.service import send_email
@@ -128,6 +140,66 @@ def verify_email(
     db.commit()
 
     return {"status": "ok"}
+
+
+@auth_router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit("3/hour")
+def forgot_password(
+    request: Request,
+    body: ForgotPasswordRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ForgotPasswordResponse:
+    """
+    Request password reset email.
+
+    Always returns same message (security: don't reveal if email exists).
+    Rate limited: 3/hour to prevent email spam.
+    """
+    token = create_reset_token(body.email, db)
+
+    if token:
+        reset_url = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+        subject = "Reset your Chat9 password"
+        body_text = (
+            "Hi,\n\n"
+            "You requested a password reset. Click the link below:\n\n"
+            f"{reset_url}\n\n"
+            "This link expires in 1 hour.\n\n"
+            "If you didn't request this, you can safely ignore this email.\n"
+        )
+        try:
+            send_email(to=body.email, subject=subject, body=body_text)
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning("Failed to send reset email: %s", e)
+
+    return ForgotPasswordResponse(
+        message="If this email is registered, you'll receive a password reset link shortly."
+    )
+
+
+@auth_router.post("/reset-password", response_model=ResetPasswordResponse)
+@limiter.limit("5/hour")
+def reset_password_endpoint(
+    request: Request,
+    body: ResetPasswordRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> ResetPasswordResponse:
+    """
+    Reset password using token from email.
+
+    Errors: 400 (invalid/expired token), 422 (password validation).
+    """
+    success = reset_password(body.token, body.new_password, db)
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired reset token. Please request a new one.",
+        )
+    return ResetPasswordResponse(
+        message="Password updated successfully. You can now log in."
+    )
 
 
 @auth_router.get("/me", response_model=UserResponse)

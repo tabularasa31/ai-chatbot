@@ -94,6 +94,8 @@ class User(Base):
     )
     verification_token = Column(String(128), nullable=True, unique=True)
     verification_expires_at = Column(DateTime, nullable=True)
+    reset_password_token = Column(String(128), nullable=True, unique=True)
+    reset_password_expires_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

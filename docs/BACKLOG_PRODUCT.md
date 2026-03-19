@@ -5,6 +5,49 @@ RICE prioritization — in `PRODUCT_BACKLOG.md`.
 
 ---
 
+## 🟢 ✅ COMPLETED (2026-03-19)
+
+### [FI-033] Switch to gpt-4o-mini ✅ DONE
+- **Model updated:** gpt-3.5-turbo → gpt-4o-mini
+- **System prompt:** Optimized for new model
+- **Tests:** Updated and passing (135 tests)
+- **Documentation:** Updated (03-tech-stack, 01-overview, 04-phase-breakdown, BACKLOG_TECH_DEBT)
+- **Cost:** Same (~$0.15 per 1M input tokens)
+- **Quality:** Significantly better for reasoning & multilingual
+- **Status:** Deployed to production ✅
+
+### [FI-035] Landing Page ✅ DONE
+- **Domain:** getchat9.live/ (live & public)
+- **Design:** Dark modern, fully responsive (mobile-first)
+- **Stack:** Next.js, TailwindCSS, Figma → React
+- **Sections:** Hero, Features (4), Demo widget, Stats, CTA, Footer
+- **CTA wiring:** All "Try for free" buttons → `/signup`
+- **Features:**
+  - Demo widget with real Chat9 (needs API key config)
+  - Animated hero section
+  - Responsive navigation
+  - All animations smooth (framer-motion)
+- **Build:** 0 errors, 0 ESLint warnings
+- **Status:** Production-ready ✅
+
+### [SECURITY] Protect /review endpoint ✅ DONE
+- **Issue:** `/review` was accessible without auth (contains sensitive client data)
+- **Fix:** Added `/review` to PROTECTED_PATHS in middleware
+- **What /review shows:** Bad answers, client feedback, debug retrieval info
+- **Status:** Enforced via middleware ✅
+
+### [SECURITY] CORS Configuration ✅ DONE
+- **Was:** `allow_origins=["*"]` (insecure)
+- **Now:** Whitelist via `CORS_ALLOWED_ORIGINS` env var
+- **Implementation:** Robust parsing with `.strip()` + filtering
+- **Methods:** GET, POST, PUT, DELETE, OPTIONS (restricted)
+- **Headers:** Content-Type, Authorization (restricted)
+- **Dev config:** localhost:3000, getchat9.live
+- **Prod config:** getchat9.live (set on Railway)
+- **Status:** Production-ready ✅
+
+---
+
 ## 🔴 P1 — Doing now
 
 ### [FI-005] Greeting message in widget (RICE: 1440)

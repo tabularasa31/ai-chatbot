@@ -59,7 +59,16 @@ Add environment variable for allowed origins and use it in CORS config.
 
 ### 1. Update backend/main.py
 
-**Find the CORS middleware block (around line 25-32):**
+**Step 1: Add import at the top**
+
+Find the imports section (top of file, around lines 1-10). Add:
+```python
+import os
+```
+
+(Should be near `from pathlib import Path` and other standard library imports)
+
+**Step 2: Find the CORS middleware block (around line 25-32):**
 ```python
 app.add_middleware(
     CORSMiddleware,
@@ -70,15 +79,17 @@ app.add_middleware(
 )
 ```
 
-**Replace with:**
+**Step 3: Replace with:**
 ```python
-import os
-
-# CORS configuration
-ALLOWED_ORIGINS = os.getenv(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,https://getchat9.live"  # defaults for dev + prod
-).split(",")
+# CORS configuration - whitelist allowed origins
+ALLOWED_ORIGINS = [
+    origin.strip() 
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,https://getchat9.live"
+    ).split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
@@ -89,23 +100,35 @@ app.add_middleware(
 )
 ```
 
+**Why the .strip() and filtering?**
+- Removes leading/trailing whitespace from each origin
+- Filters out empty strings if config has trailing/leading commas
+- Makes config more robust
+
 ### 2. Update .env.example
 
-Add to `.env.example`:
+Find the section with other environment variables. Add:
 ```
 # CORS configuration (comma-separated list of allowed origins)
-# Default: http://localhost:3000,https://getchat9.live
+# No spaces around commas. Examples:
+#   Development: http://localhost:3000,https://getchat9.live
+#   Production: https://getchat9.live,https://embed.getchat9.live
 CORS_ALLOWED_ORIGINS=http://localhost:3000,https://getchat9.live
 ```
 
-### 3. Verify for production deployment
+### 3. Configure for production deployment
 
-When deploying to production (Railway), set environment variable:
+When deploying to production (Railway), set this environment variable:
+```
+CORS_ALLOWED_ORIGINS=https://getchat9.live
+```
+
+Or if widget is served from separate domain:
 ```
 CORS_ALLOWED_ORIGINS=https://getchat9.live,https://embed.getchat9.live
 ```
 
-(Include both main domain and embed domain if needed)
+**Note:** No spaces around commas (the code strips them, but it's cleaner to not have them)
 
 ---
 
@@ -162,7 +185,15 @@ Then create PR, review, and merge.
 
 ## NOTES
 
-- `allow_methods` is now restrictive (only needed methods)
-- `allow_headers` only includes what we actually use (Content-Type, Authorization)
+- `allow_methods` includes common REST methods. Add PATCH if your API uses it
+- `allow_headers` covers JWT auth + JSON. Add others if frontend sends additional headers (e.g., X-Requested-With, Accept)
+- `.strip()` and `if origin.strip()` handle whitespace and empty values robustly
 - Environment variable defaults to dev + prod URLs for convenience
-- Can be overridden per environment
+- Can be overridden per environment without code changes
+- **Widget domain:** If embed widget runs on separate domain (e.g., https://embed.getchat9.live), include it in CORS_ALLOWED_ORIGINS
+
+## References
+
+- Backend file: `backend/main.py` (CORS middleware section)
+- Env file: `.env.example` (add CORS_ALLOWED_ORIGINS)
+- FastAPI CORS docs: https://fastapi.tiangolo.com/tutorial/cors/

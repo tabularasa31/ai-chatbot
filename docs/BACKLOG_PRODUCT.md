@@ -124,6 +124,38 @@ Chat9
 
 ---
 
+### [FI-041] Status Page Integration (из спека Elины)
+**Идея:** Интегрировать real-time статус сервисов (Statuspage.io, Instatus, Freshstatus) в бота.
+
+Когда пользователь спрашивает "why is my API broken?" во время инцидента → бот мгновенно отвечает:
+```
+⚠️ There's an active incident affecting the API.
+Started: 14:23 UTC  |  Status: Investigating
+Latest: Engineers identified root cause, deploying fix. ETA 30min
+Learn more: https://status.yourproduct.com
+```
+
+**Почему важно:**
+- Дифференциатор — конкуренты не имеют real-time incident awareness
+- Reduces support tickets на 50%+ во время инцидентов
+- Viral value — люди чаще проверяют статус через бота
+- Premium feature потенциально
+
+**Технически:**
+- Polling worker каждые 60 сек (Celery / FastAPI background tasks)
+- Redis cache с TTL 90 сек
+- Query-time relevance check: показать инцидент только если он релевантен вопросу
+- Webhook support для Statuspage.io
+- Component-to-topic mapping в tenant dashboard
+
+**Effort:** 5–6 дней (polling + caching + relevance + dashboard + tests)
+
+**Приоритет:** P2 (после гpt-4o-mini и email verification)
+
+**Спека:** Смотреть `docs/FEATURE_SPECS_REVIEW.md` и исходный `status-page-spec.docx`
+
+---
+
 ## 🟠 P2 — Следующий спринт
 
 ### [FI-009] Improved chunking + metadata (RICE: 420)

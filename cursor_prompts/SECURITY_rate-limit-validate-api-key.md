@@ -29,7 +29,7 @@ git checkout -b feature/security-rate-limit-validate
 
 **Issue:** `GET /clients/validate/{api_key}` endpoint is public and allows anyone to check if an API key is valid. Without rate limiting, attacker can brute-force 32-char hex keys.
 
-**Current code (backend/clients/routes.py):**
+**Current code (backend/clients/routes.py) — before rate limiting:**
 ```python
 @clients_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
 def validate_api_key(
@@ -38,7 +38,7 @@ def validate_api_key(
 ) -> ValidateApiKeyResponse:
 ```
 
-**Solution:** Add rate limit decorator from `slowapi` (already imported in backend/main.py).
+**Solution:** Add rate limit decorator from `slowapi` via `limiter` (imported from backend.core.limiter).
 
 ---
 
@@ -94,8 +94,10 @@ Before pushing:
 
 **Test rate limit:**
 ```bash
+# Get a real API key from your test database or create one via /clients
+
 # First request (OK — valid key)
-curl http://localhost:8000/clients/validate/validkey123456789012345678901234
+curl http://localhost:8000/clients/validate/<YOUR_REAL_API_KEY>
 
 # Response: 200 + {"client_id": "...", "name": "..."}
 
@@ -106,6 +108,11 @@ curl http://localhost:8000/clients/validate/invalidkey12345678901234567890
 
 # After 20 requests/minute from same IP, should get 429:
 # Response: 429 + {"detail": "...rate limit exceeded..."}
+
+# Test per-IP rate limiting (different IPs separate counters):
+# From machine A: curl ... (counter A increments)
+# From machine B: curl ... (counter B increments, independent from A)
+# Or use -H "X-Forwarded-For: <different-ip>" if testing from localhost
 ```
 
 ---
@@ -123,8 +130,10 @@ git push origin feature/security-rate-limit-validate
 ## NOTES
 
 - Rate limit: 20/minute (prevents brute-force but allows normal usage)
-- Uses IP address for rate limit key (auto from backend/core/limiter.py's `_key_func`)
-- slowapi already configured in backend/main.py with limiter instance
-- 429 response format may vary by slowapi version — check for 429 status + detail message
+- Uses IP address for rate limit key (via `get_remote_address` in backend/core/limiter.py's `_key_func`)
+- slowapi is configured in backend/main.py with limiter instance available for all routes
+- Each IP address gets its own separate rate limit counter (independent for 127.0.0.1, 192.168.1.100, etc.)
+- 429 response format may vary by slowapi version — check for 429 status + detail message about rate limit
 - For additional security: consider logging frequent 429s for anomaly detection
 - Distributed attacks (botnet) not protected against IP-based limiting, but good first line of defense
+- For local testing with curl: use `-H "X-Forwarded-For: <ip>"` to simulate different IPs if needed

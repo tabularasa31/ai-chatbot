@@ -1,111 +1,93 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-19 12:51 UTC
+**Last updated:** 2026-03-19 16:22 UTC  
+**Overall status:** ✅ MVP ready, actively improving
 
 ---
 
-## ✅ COMPLETED (2026-03-19)
+## ✅ COMPLETED
 
 ### FI-035: Landing Page ✨
 - **Status:** LIVE at getchat9.live/
-- **What:** Marketing landing page with Chat9 positioning ("Your support mate, always on")
-- **Changes:**
-  - Integrated Figma interactive prototype (React components)
-  - Fixed ESLint errors (apostrophes, img tags)
-  - Replaced `motion/react` with `framer-motion` (consistency)
-  - Removed 44 unused shadcn/ui components
-  - Resolved Vercel route conflict (unified `/` handler)
-  - Wired CTA buttons ("Try for free") → `/signup` flow
-  - Design: dark modern aesthetic, fully responsive
-- **Commits:** 10+ PRs merged (#30-34)
-- **Status:** Production-ready ✅
+- Dark modern design, fully responsive, Figma → React
+- CTA buttons → `/signup`
+- framer-motion animations, 0 ESLint errors
 
 ### FI-033: Upgrade to gpt-4o-mini ✅
-- **Status:** Merged (PR #28)
-- **What:** Replace gpt-3.5-turbo with gpt-4o-mini in RAG pipeline
-- **Changes:**
-  - Updated backend/chat/service.py (model name)
-  - Updated system prompt (optimized for gpt-4o-mini)
-  - Updated tests/test_chat.py
-  - Updated all documentation (03-tech-stack.md, 01-overview.md, etc.)
-  - Added migration note to PROGRESS (was → became)
-- **Benefits:** Better quality, similar cost, better multilingual support
-- **Status:** Deployed ✅
+- Merged PR #28
+- gpt-3.5-turbo → gpt-4o-mini, all tests pass
 
-### SECURITY: Protect /review Endpoint 🔒
-- **Status:** Merged (PR #34)
-- **What:** Enforce authentication on `/review` (sensitive client data)
-- **Changes:**
-  - Added `/review` to PROTECTED_PATHS in middleware
-  - Added to matcher in middleware config
-- **Why:** /review shows bad answers, client feedback, debug retrieval info
-- **Status:** Production-ready ✅
+### SECURITY: CORS Whitelist 🔐
+- `CORS_ALLOWED_ORIGINS` env var, robust parsing
+- Dev defaults: `http://localhost:3000,https://getchat9.live`
 
-### SECURITY: CORS Configuration 🔐
-- **Status:** Merged
-- **What:** Replace `allow_origins=["*"]` with whitelist
-- **Changes:**
-  - Added `import os`
-  - Created ALLOWED_ORIGINS from `CORS_ALLOWED_ORIGINS` env var
-  - Robust parsing: `.strip()` + filtering empty values
-  - Restricted allow_methods: [GET, POST, PUT, DELETE, OPTIONS]
-  - Restricted allow_headers: [Content-Type, Authorization]
-- **Configuration:**
-  - Dev: `http://localhost:3000,https://getchat9.live`
-  - Prod: `https://getchat9.live` (or include embed domain)
-- **Status:** Production-ready ✅
+### SECURITY: /review Protection 🔒
+- Merged PR #34
+- `/review` protected by auth middleware
+
+### SECURITY: Rate Limiting (HIGH PRIORITY) ✅
+- `/clients/validate/{api_key}` — 20/min (PR #36)
+- `/search` — 30/min
+- `/chat` — 30/min
+
+### SECURITY: Input Validation ✅
+- `limit/offset` validation (1-100, ≥0) on bad-answers
+- `m.feedback` None protection
+
+### FI-EMBED-MVP: Public Script Widget 🚧
+- Architecture finalized (public script + iframe)
+- 3 external code reviews (Grok, DeepSeek, Claude): 9-10/10
+- Specs: `docs/FI-EMBED-MVP_public-script-widget.md`
+- Cursor prompt ready: `cursor_prompts/FI-EMBED-MVP_public-widget-implementation.md`
+- **Status:** Pending Cursor implementation (2-3 days)
 
 ---
 
-## ⏳ IN PROGRESS
+## ⏳ IN PROGRESS (Cursor Prompts Queued)
 
-None currently.
+| Prompt | Description | Priority |
+|--------|-------------|----------|
+| `FI-EMBED-MVP_public-widget-implementation.md` | Zero-config widget embedding (CORS fix) | 🔴 P1 |
+| `REFACTOR_pgvector-native-search.md` | Replace Python cosine with DB-level search | 🔴 P1 |
+| `REFACTOR_datetime-cors-exceptions.md` | Fix datetime.utcnow(), broad exceptions | 🟡 P2 |
+| `REFACTOR_fix-n1-queries.md` | Fix N+1 queries in list_sessions, bad_answers | 🟡 P2 |
 
 ---
 
-## 📋 NEXT STEPS (Order of Priority)
+## 📋 BACKLOG OVERVIEW
 
-1. **Test Landing Page fully**
-   - Verify all buttons work (signup, demo, etc.)
-   - Check performance (Lighthouse score)
-   - Mobile responsiveness test
+### Specs Created (ready to implement)
+- `docs/FI-EMBED-MVP_public-script-widget.md` — Full spec (11K lines, 3 reviews)
+- `docs/FI-EMBED_public-script-widget.md` — Extended spec with Phase 2/3
+- `docs/FI-CORS_dynamic-cors-per-client.md` — Archived (superseded by embed.js approach)
 
-2. **Configure Railway Environment Variables**
-   - Set `CORS_ALLOWED_ORIGINS=https://getchat9.live` in Railway dashboard
-   - Redeploy backend
-   - Verify CORS headers in production
-
-3. **Connect Demo API Key**
-   - Create demo client in Chat9 dashboard
-   - Set `NEXT_PUBLIC_DEMO_API_KEY` in Vercel environment
-   - Test widget demo section on landing page
-
-4. **Update Footer Links**
-   - Link docs properly
-   - Link GitHub
-   - Fix hardcoded "https://github.com" → actual repo
-
-5. **Resolve Code Review Issues** (from CODE_REVIEW.md)
-   - [ ] Static Stats (hardcoded values) → real API (low priority for MVP)
-   - [ ] Mёртвый код (unused Button, Card imports) → can delete later
-   - [ ] datetime.utcnow() → datetime.now(timezone.utc) (Python 3.12+)
+### Backlog Files
+- `BACKLOG_PRODUCT.md` — Product features (FI-xxx)
+- `BACKLOG_TECH_DEBT.md` — Tech improvements
+- `BACKLOG_SECURITY-IMPROVEMENTS.md` — Security (vectorDB filtering, rate limiting, tracing)
+- `BACKLOG_EMBED-PHASE2.md` — FI-EMBED Phase 2/3 features
+- `BACKLOG_RAG_QUALITY.md` — RAG quality improvements
+- `BACKLOG_MONETIZATION.md` — Monetization strategy
 
 ---
 
 ## 📊 FEATURES COMPLETED (MVP)
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
-- ✅ RAG pipeline (OpenAI embeddings + gpt-4o-mini)
-- ✅ Multi-tenant isolation
-- ✅ Chat widget (embeddable, 6KB)
+- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini)
+- ✅ Hybrid retrieval (vector + keyword fallback)
+- ✅ Multi-tenant isolation (client_id scoping)
+- ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Dashboard (documents, logs, feedback, analytics)
 - ✅ Email verification (Brevo)
 - ✅ Admin metrics
 - ✅ Chat logs with feedback (👍/👎)
 - ✅ Bad answers review + training
-- ✅ **Landing page** (new)
-- ✅ **CORS security** (new)
-- ✅ **/review protection** (new)
+- ✅ Landing page (getchat9.live)
+- ✅ CORS security (whitelist)
+- ✅ /review authentication
+- ✅ Rate limiting (chat, search, validate)
+- ✅ Input validation (limit/offset)
 
 ---
 
@@ -113,7 +95,7 @@ None currently.
 
 ```
 User → getchat9.live (Vercel, Next.js)
-     ↘ https://ai-chatbot-production-6531.up.railway.app/ (FastAPI)
+     ↘ ai-chatbot-production-6531.up.railway.app (FastAPI)
        ↘ PostgreSQL 15 + pgvector
        ↘ OpenAI API (embeddings + gpt-4o-mini)
        ↘ Brevo (transactional email)
@@ -121,48 +103,17 @@ User → getchat9.live (Vercel, Next.js)
 
 ---
 
-## 📚 Documentation Status
+## ⚠️ KNOWN ISSUES
 
-- ✅ 01-overview.md — Updated for gpt-4o-mini
-- ✅ 02-mvp-scope-and-db.md — Stable
-- ✅ 03-tech-stack.md — Updated for gpt-4o-mini
-- ✅ 04-phase-breakdown.md — Updated for gpt-4o-mini
-- ✅ 05-code-discipline-and-deploy.md — Stable
-- ✅ BACKLOG_PRODUCT.md — Updated with FI-041 (Status Page Integration)
-- ✅ CODE_REVIEW.md — Latest security & code review findings
-- ⏳ MARKETING_IDEAS.md — Includes Chat9 positioning ("support mate")
+### Medium Priority
+- `datetime.utcnow()` deprecated (Python 3.12) → Cursor prompt ready
+- N+1 queries in list_sessions, list_bad_answers → Cursor prompt ready
+- Python cosine similarity (slow at scale) → Cursor prompt ready
 
----
-
-## 🎯 DONE THIS SESSION (2026-03-19)
-
-- Landing page prototype → production
-- gpt-4o-mini upgrade → production
-- CORS security → production
-- /review authentication → production
-- CTA button wiring → production
-- 5 detailed Cursor prompts created
-- Code review analysis completed
-
-**Total PRs merged:** 4
-**Total commits:** 30+
-**Status:** ✨ Ready for customer launch
-
----
-
-## ⚠️ KNOWN ISSUES (from CODE_REVIEW.md)
-
-**High Priority:**
-- CORS allow_origins → ✅ FIXED
-
-**Medium Priority:**
-- CTA buttons without links → ✅ FIXED
-- Static Stats (hardcoded) → ⏳ Can be live data later
-- datetime.utcnow() deprecated → ⏳ For Python 3.12+
-
-**Low Priority:**
-- Dead code (Button, Card, use-mobile) → ⏳ Can clean up later
-- GitHub link hardcoded → ⏳ Can update in UI
+### Low Priority
+- Static Stats on landing page (hardcoded) → connect real API later
+- Footer links hardcoded → update when docs site ready
+- `source_documents` uses `None` for SQLite in prod code → tech debt
 
 ---
 
@@ -170,9 +121,44 @@ User → getchat9.live (Vercel, Next.js)
 
 - ✅ Landing page deployed (getchat9.live)
 - ✅ gpt-4o-mini in production
-- ✅ CORS configured (needs env var on Railway)
+- ✅ CORS configured (needs `CORS_ALLOWED_ORIGINS` env var on Railway)
 - ✅ /review protected
-- ⏳ Demo API key configured
-- ⏳ Footer links updated
-- ⏳ Lighthouse score >80
+- ⏳ FI-EMBED-MVP (widget + public_id) — implement
+- ⏳ pgvector native search — implement
+- ⏳ Demo API key configured (`NEXT_PUBLIC_DEMO_API_KEY` on Vercel)
+- ⏳ Railway: set `CORS_ALLOWED_ORIGINS=https://getchat9.live`
 
+---
+
+## 🔍 CODE REVIEWS RECEIVED
+
+| Reviewer | Area | Rating | Key Points |
+|----------|------|--------|------------|
+| Grok | Architecture | 8.5/10 | Strong multi-tenancy, good stack |
+| Grok | FI-EMBED spec | 9/10 | Rate limiting, versioning needed |
+| DeepSeek | FI-EMBED spec | 9/10 | CSP docs, document.currentScript |
+| Claude | FI-EMBED spec | 8/10 | Mobile, migration anti-pattern |
+| Grok | Project-wide | 8/10 | Chunking, re-ranker, tests needed |
+
+---
+
+## 📚 Session Summary (2026-03-19)
+
+**Duration:** 07:30 → 16:22 UTC (8.5 hours)
+
+**Completed this session:**
+- Code review analysis (16 issues found and triaged)
+- 4 HIGH priority security fixes (all done)
+- 2 MEDIUM priority Cursor prompts (datetime, N+1)
+- FI-EMBED complete spec (3 external reviews incorporated)
+- FI-EMBED-MVP spec + Cursor prompt
+- pgvector native search Cursor prompt
+- Lessons learned document
+- Multiple backlog updates (Security, Embed Phase 2, Grok review)
+- GROK-PROJECT-REVIEW.md added
+
+**PRs merged this session:** #33, #34, #36 (approx)
+
+---
+
+_Updated: 2026-03-19 16:22 UTC_

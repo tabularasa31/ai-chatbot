@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
-export default function ResetPasswordPage() {
+function ResetPasswordContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token");
@@ -18,16 +19,12 @@ export default function ResetPasswordPage() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-lg shadow-md p-8 text-center">
-            <p className="text-red-600 mb-4">Invalid reset link.</p>
-            <Link href="/forgot-password" className="text-blue-600 hover:underline font-medium">
-              Request a new one
-            </Link>
-          </div>
-        </div>
-      </div>
+      <AuthCardCentered>
+        <p className={`mb-4 ${authStyles.error}`}>Invalid reset link.</p>
+        <Link href="/forgot-password" className={`font-medium ${authStyles.link}`}>
+          Request a new one
+        </Link>
+      </AuthCardCentered>
     );
   }
 
@@ -59,73 +56,75 @@ export default function ResetPasswordPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-lg shadow-md p-8 text-center">
-            <h1 className="text-2xl font-semibold text-slate-800 mb-2">Password updated!</h1>
-            <p className="text-slate-600">Redirecting to sign in...</p>
-          </div>
-        </div>
-      </div>
+      <AuthCardCentered>
+        <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>Password updated!</h1>
+        <p className="text-[#FAF5FF]/80">Redirecting to sign in...</p>
+      </AuthCardCentered>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-lg shadow-md p-8">
-          <h1 className="text-2xl font-semibold text-slate-800 mb-2">Set new password</h1>
-          <p className="text-slate-600 text-sm mb-6">
-            Choose a strong password (min 8 chars, 1 uppercase, 1 number, 1 special character).
-          </p>
+    <AuthCard>
+      <h1 className={authStyles.headingSm}>Set new password</h1>
+      <p className={authStyles.subtext}>
+        Choose a strong password (min 8 chars, 1 uppercase, 1 number, 1 special character).
+      </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-slate-600 mb-1">
-                New password
-              </label>
-              <input
-                id="password"
-                type="password"
-                placeholder="Min. 8 characters"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent text-slate-800"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="confirm" className="block text-sm font-medium text-slate-600 mb-1">
-                Confirm password
-              </label>
-              <input
-                id="confirm"
-                type="password"
-                placeholder="Repeat password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                required
-                className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent text-slate-800"
-              />
-            </div>
-
-            {error && (
-              <div className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-md">
-                {error}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-2 px-4 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading ? "Updating..." : "Update password"}
-            </button>
-          </form>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="password" className={authStyles.label}>
+            New password
+          </label>
+          <input
+            id="password"
+            type="password"
+            placeholder="Min. 8 characters"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onInvalid={validationHandlers.required.onInvalid}
+            onInput={validationHandlers.required.onInput}
+            required
+            className={authStyles.input}
+          />
         </div>
-      </div>
-    </div>
+
+        <div>
+          <label htmlFor="confirm" className={authStyles.label}>
+            Confirm password
+          </label>
+          <input
+            id="confirm"
+            type="password"
+            placeholder="Repeat password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            onInvalid={validationHandlers.required.onInvalid}
+            onInput={validationHandlers.required.onInput}
+            required
+            className={authStyles.input}
+          />
+        </div>
+
+        {error && <div className={authStyles.error}>{error}</div>}
+
+        <button type="submit" disabled={loading} className={authStyles.button}>
+          {loading ? "Updating..." : "Reset password"}
+        </button>
+      </form>
+    </AuthCard>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense
+      fallback={
+        <AuthCardCentered>
+          <div className="animate-pulse text-[#FAF5FF]/60">Loading...</div>
+        </AuthCardCentered>
+      }
+    >
+      <ResetPasswordContent />
+    </Suspense>
   );
 }

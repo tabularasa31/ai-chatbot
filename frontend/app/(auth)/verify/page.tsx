@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
+import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -31,70 +32,52 @@ function VerifyContent() {
 
   if (status === "idle" || status === "loading") {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-lg shadow-md p-8 text-center">
-            <div className="animate-pulse text-slate-600">Verifying your email...</div>
-          </div>
-        </div>
-      </div>
+      <AuthCardCentered>
+        <div className="animate-pulse text-[#FAF5FF]/60">Verifying your email...</div>
+      </AuthCardCentered>
     );
   }
 
   if (status === "success") {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-lg shadow-md p-8 text-center">
-            <h1 className="text-2xl font-semibold text-green-700 mb-2">
-              Email verified successfully
-            </h1>
-            <p className="text-slate-600 mb-6">
-              Your email has been verified. You can now sign in to your account.
-            </p>
-            <Link
-              href="/login"
-              className="inline-block w-full py-2 px-4 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700"
-            >
-              Go to Sign in
-            </Link>
-          </div>
-        </div>
-      </div>
+      <AuthCardCentered>
+        <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>Email verified successfully</h1>
+        <p className="text-[#FAF5FF]/80 mb-6">
+          Your email has been verified. You can now sign in to your account.
+        </p>
+        <Link
+          href="/login"
+          className="inline-block w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all text-center"
+        >
+          Go to Sign in
+        </Link>
+      </AuthCardCentered>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-white rounded-lg shadow-md p-8 text-center">
-          <h1 className="text-2xl font-semibold text-red-700 mb-2">
-            Verification failed
-          </h1>
-          <p className="text-slate-600 mb-6">{error}</p>
-          <Link
-            href="/login"
-            className="inline-block w-full py-2 px-4 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700"
-          >
-            Go to Sign in
-          </Link>
-        </div>
-      </div>
-    </div>
+    <AuthCardCentered>
+      <h1 className={`${authStyles.headingSm} text-[#F87171]`}>Verification failed</h1>
+      <p className="text-[#FAF5FF]/80 mb-6">{error}</p>
+      <Link
+        href="/login"
+        className="inline-block w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all text-center"
+      >
+        Go to Sign in
+      </Link>
+    </AuthCardCentered>
   );
 }
 
 export default function VerifyPage() {
   return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md">
-          <div className="bg-white rounded-lg shadow-md p-8 text-center">
-            <div className="animate-pulse text-slate-600">Loading...</div>
-          </div>
-        </div>
-      </div>
-    }>
+    <Suspense
+      fallback={
+        <AuthCardCentered>
+          <div className="animate-pulse text-[#FAF5FF]/60">Loading...</div>
+        </AuthCardCentered>
+      }
+    >
       <VerifyContent />
     </Suspense>
   );

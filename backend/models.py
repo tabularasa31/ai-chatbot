@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import declarative_base, relationship
@@ -33,6 +34,11 @@ def compile_uuid_sqlite(type_, compiler, **kw) -> str:  # type: ignore[override]
 @compiles(ARRAY, "sqlite")
 def compile_array_sqlite(type_, compiler, **kw) -> str:  # type: ignore[override]
     return "TEXT"
+
+
+@compiles(Vector, "sqlite")
+def compile_vector_sqlite(type_, compiler, **kw) -> str:  # type: ignore[override]
+    return "TEXT"  # Store as text in SQLite (tests only)
 
 
 def _utcnow() -> dt.datetime:
@@ -203,9 +209,10 @@ class Embedding(Base):
         index=True,
     )
     chunk_text = Column(Text, nullable=False)
-    # В бою это должен быть pgvector(1536); для миграций/тестов тип уточняется отдельно.
+    # Vector column: 1536 dimensions for text-embedding-3-small
+    # Uses pgvector extension. Falls back to TEXT in SQLite (tests).
     vector = Column(
-        ARRAY(PG_UUID(as_uuid=False)),
+        Vector(1536),
         nullable=True,
     )
     # имя атрибута не может быть `metadata` (зарезервировано в SQLAlchemy),
@@ -300,8 +307,7 @@ class Message(Base):
     chat = relationship("Chat", back_populates="messages")
 
 
-Index(
-    "ix_embeddings_vector",
-    Embedding.vector,
-)
+# Note: pgvector HNSW index is created via migration, not here
+# CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);
+# document_id already has index=True on the column
 

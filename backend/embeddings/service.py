@@ -98,8 +98,8 @@ def create_embeddings_for_document(
         emb = Embedding(
             document_id=document_id,
             chunk_text=chunk,
-            vector=None,  # pgvector later; store in metadata for now
-            metadata_json={"chunk_index": i, "vector": vector},
+            vector=vector,
+            metadata_json={"chunk_index": i},
         )
         db.add(emb)
         embeddings.append(emb)

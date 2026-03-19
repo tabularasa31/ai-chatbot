@@ -29,11 +29,14 @@ git checkout -b feature/auth-pages-dark-theme
 ## CODE DISCIPLINE
 
 **Scope (you MAY modify):**
+- `frontend/components/auth/AuthCard.tsx` — **NEW** shared layout + form style constants (extract from login/signup)
 - `frontend/app/(auth)/login/page.tsx`
 - `frontend/app/(auth)/signup/page.tsx`
 - `frontend/app/(auth)/forgot-password/page.tsx`
 - `frontend/app/(auth)/reset-password/page.tsx`
 - `frontend/app/(auth)/verify/page.tsx`
+
+**Refactoring:** Login and signup are nearly identical — extract common layout and form styles into `AuthCard` component. All auth pages use it.
 
 **Do NOT touch:**
 - API routes or backend files
@@ -81,7 +84,9 @@ Replace the entire JSX return statement with dark theme styling:
 - Button text: `text-[#0A0A0F]`
 - Button hover: `hover:bg-[#f099fb]`
 - Links: `text-[#E879F9]` with `hover:underline`
-- Error text: `text-[#FF6B6B]` with `bg-[#FF6B6B]/10 border border-[#FF6B6B]/20`
+- **Neon Dusk palette (success/error):**
+  - Success: `text-[#4ADE80]`, bg: `bg-[#4ADE80]/10`, border: `border-[#4ADE80]/30`
+  - Error: `text-[#F87171]`, bg: `bg-[#F87171]/10`, border: `border-[#F87171]/30`
 
 **Key changes:**
 - Replace `bg-slate-50` → `bg-[#0A0A0F]`
@@ -147,7 +152,7 @@ Before pushing:
 ## GIT PUSH
 
 ```bash
-git add frontend/app/\(auth\)/*.tsx
+git add frontend/components/auth/AuthCard.tsx frontend/app/\(auth\)/*.tsx
 git commit -m "feat: dark theme for auth pages (FI-UI)"
 git push origin feature/auth-pages-dark-theme
 ```
@@ -165,7 +170,7 @@ git push origin feature/auth-pages-dark-theme
 - **Color consistency is critical:** Use exact hex values from marketing components (`#0A0A0F`, `#FAF5FF`, `#E879F9`, etc.)
 - **Opacity variants:** `text-[#FAF5FF]/80` means 80% opacity. Use `/60`, `/40` for secondary text.
 - **Hover effects:** Buttons should scale slightly on hover (`hover:scale-105`) for modern feel, matching navigation style.
-- **Error styling:** Red (`#FF6B6B`) is custom; ensure proper contrast against dark background.
+- **Neon Dusk error/success:** Error `#F87171` (red-400), success `#4ADE80` (green-400). Use `/10` bg and `/30` border for inline messages.
 - **Ring offset:** When showing focus ring, offset color must match page background (`focus:ring-offset-[#0A0A0F]`).
 
 ---
@@ -179,8 +184,9 @@ After completing the implementation, provide the Pull Request description in Eng
 Unified auth pages (login, signup, forgot password, reset password, verify) with dark theme to match landing page design system. All pages now use consistent color palette and styling for professional, cohesive user experience.
 
 ## Changes
-- `frontend/app/(auth)/login/page.tsx` — Dark theme styling, magenta accents, dark card backgrounds
-- `frontend/app/(auth)/signup/page.tsx` — Dark theme styling to match login
+- `frontend/components/auth/AuthCard.tsx` — **NEW** shared layout + form style constants (Neon Dusk)
+- `frontend/app/(auth)/login/page.tsx` — Dark theme via AuthCard, magenta accents
+- `frontend/app/(auth)/signup/page.tsx` — Dark theme via AuthCard, matches login
 - `frontend/app/(auth)/forgot-password/page.tsx` — Dark theme styling, consistent with other auth pages
 - `frontend/app/(auth)/reset-password/page.tsx` — Dark theme styling, password fields
 - `frontend/app/(auth)/verify/page.tsx` — Dark theme styling, email verification UI

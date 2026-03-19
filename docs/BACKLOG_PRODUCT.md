@@ -247,7 +247,37 @@ Learn more: https://status.yourproduct.com
 - **Analytics charts** — trend charts by questions, topics, resolution rate.
 - **MCP server** — connect Chat9 as data source for Claude/Cursor via Model Context Protocol.
 - **Multi-user / team** — multiple team members in one account.
-- **Custom widget design** — custom colors, fonts, logo in widget.
+- **Custom widget design** — custom colors, fonts, logo in widget (see BACKLOG_EMBED-PHASE2.md).
+
+---
+
+## Added from Grok Review (2026-03-19)
+
+### [FI-P2-MULTUPLOAD] Multiple file upload
+- Currently: one file at a time.
+- Add multi-select + bulk upload with progress.
+- **Effort:** 1 day | **Priority:** P2
+
+### [FI-P2-SOFTDELETE] Soft-delete for documents with restore
+- Currently: hard delete (no undo).
+- Add `deleted_at` + trash view + restore option.
+- Prevents accidental data loss.
+- **Effort:** 1 day | **Priority:** P2
+
+### [FI-P2-CONFIRM-DELETE] Delete confirmation dialog
+- Add confirmation modal before deleting docs/bots.
+- Simple UX improvement, prevents accidents.
+- **Effort:** 2 hours | **Priority:** P2
+
+### [FI-P3-WIDGET-THEME] Widget theming (data attributes)
+- `data-theme="dark|light"`, `data-position="left|right"`, `data-color="#007bff"`
+- Already tracked in BACKLOG_EMBED-PHASE2.md
+- **Priority:** P3
+
+### [FI-P3-LARGEPDF] Large PDF progress bar
+- PDFs >50 pages cause slow embedding with no feedback.
+- Add progress indicator + background task.
+- **Effort:** 1-2 days | **Priority:** P3
 
 ---
 

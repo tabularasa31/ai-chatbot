@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion } from "framer-motion";
 import { useScrollAnimation } from "../hooks/useScrollAnimation";
 import { MessageCircle, Send } from "lucide-react";
 
@@ -68,7 +68,7 @@ export function DemoBlock() {
                 </div>
                 <div className="bg-[#2D2D44] rounded-lg rounded-tl-none px-4 py-3 max-w-[80%]">
                   <p className="text-[#FAF5FF]">
-                    Hi! I'm your Chat9 support assistant. I can
+                    Hi! I&apos;m your Chat9 support assistant. I can
                     help you with questions about our
                     documentation, pricing, and features. What
                     would you like to know?
@@ -98,7 +98,7 @@ export function DemoBlock() {
                     Chat9 is always online and ready to help
                     your customers. It learns from your
                     documentation and can answer questions.
-                    instantly, any time of day or night. You'll
+                    instantly, any time of day or night. You&apos;ll
                     receive daily reports showing all
                     interactions.
                   </p>

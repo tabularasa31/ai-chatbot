@@ -1,73 +1,115 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-19 16:22 UTC  
-**Overall status:** ✅ MVP ready, actively improving
+**Last updated:** 2026-03-19 18:11 UTC  
+**Overall status:** ✅ MVP feature-complete, pending production deploy
 
 ---
 
-## ✅ COMPLETED
+## ✅ COMPLETED (2026-03-19 — Full Session)
 
-### FI-035: Landing Page ✨
-- **Status:** LIVE at getchat9.live/
-- Dark modern design, fully responsive, Figma → React
-- CTA buttons → `/signup`
-- framer-motion animations, 0 ESLint errors
+### Security & Code Quality
+- ✅ Rate limiting: `/validate` (20/min), `/search` (30/min), `/chat` (30/min)
+- ✅ Input validation: `limit/offset` (1-100, ≥0)
+- ✅ `m.feedback` None protection
+- ✅ `datetime.utcnow()` → `datetime.now(timezone.utc)` (3 files)
+- ✅ Broad exceptions → explicit (crypto.py)
+- ✅ Exception chaining: `from None` → `from e`
+- ✅ N+1 queries fixed (list_sessions, list_bad_answers)
+- ✅ pgvector native search — SQL `<=>` instead of Python cosine loop
 
-### FI-033: Upgrade to gpt-4o-mini ✅
-- Merged PR #28
-- gpt-3.5-turbo → gpt-4o-mini, all tests pass
+### Features
+- ✅ **FI-EMBED-MVP** — Zero-config widget embedding (CORS solved via iframe)
+  - `public_id` on Client model (ch_xxx format)
+  - `/embed.js` public endpoint
+  - `/widget/chat` public API (no auth, clientId-based)
+  - `/widget` iframe page + ChatWidget component
+  - Dashboard shows embed code
+  - Migration + backfill script
+- ✅ **FI-AUTH: Forgot Password** — Full reset flow
+  - `POST /auth/forgot-password` (Brevo email, rate limited 3/hour)
+  - `POST /auth/reset-password` (token validation, 1h TTL)
+  - Frontend pages: `/forgot-password`, `/reset-password`
+  - "Forgot password?" link on login page
+- ✅ **FI-UI: Sign in button** — Added to landing page navigation
+  - Secondary style (cyan outline)
+  - Desktop + mobile hamburger menu
+  - Links to `/login`
 
-### SECURITY: CORS Whitelist 🔐
-- `CORS_ALLOWED_ORIGINS` env var, robust parsing
-- Dev defaults: `http://localhost:3000,https://getchat9.live`
+### Infrastructure
+- ✅ Vercel `deploy` branch created — decouple commits from deploys
+  - `main` = development (no auto-deploy)
+  - `deploy` = production (Vercel listens here)
+- ✅ `NEXT_PUBLIC_APP_URL` set on Vercel
 
-### SECURITY: /review Protection 🔒
-- Merged PR #34
-- `/review` protected by auth middleware
-
-### SECURITY: Rate Limiting (HIGH PRIORITY) ✅
-- `/clients/validate/{api_key}` — 20/min (PR #36)
-- `/search` — 30/min
-- `/chat` — 30/min
-
-### SECURITY: Input Validation ✅
-- `limit/offset` validation (1-100, ≥0) on bad-answers
-- `m.feedback` None protection
-
-### FI-EMBED-MVP: Public Script Widget 🚧
-- Architecture finalized (public script + iframe)
-- 3 external code reviews (Grok, DeepSeek, Claude): 9-10/10
-- Specs: `docs/FI-EMBED-MVP_public-script-widget.md`
-- Cursor prompt ready: `cursor_prompts/FI-EMBED-MVP_public-widget-implementation.md`
-- **Status:** Pending Cursor implementation (2-3 days)
-
----
-
-## ⏳ IN PROGRESS (Cursor Prompts Queued)
-
-| Prompt | Description | Priority |
-|--------|-------------|----------|
-| `FI-EMBED-MVP_public-widget-implementation.md` | Zero-config widget embedding (CORS fix) | 🔴 P1 |
-| ~~`REFACTOR_pgvector-native-search.md`~~ | ✅ Replace Python cosine with DB-level search — **DONE** | 🔴 P1 |
-| ~~`REFACTOR_datetime-cors-exceptions.md`~~ | ✅ Fix datetime.utcnow(), broad exceptions — **DONE** | 🟡 P2 |
-| ~~`REFACTOR_fix-n1-queries.md`~~ | ✅ Fix N+1 queries in list_sessions, bad_answers — **DONE** | 🟡 P2 |
+### Documentation
+- ✅ `GROK-PROJECT-REVIEW.md` — comprehensive project review
+- ✅ `LESSONS_2026-03-19.md` — process errors and improvements
+- ✅ `BACKLOG_SECURITY-IMPROVEMENTS.md` — security roadmap
+- ✅ `BACKLOG_EMBED-PHASE2.md` — embed feature roadmap
+- ✅ FI-EMBED full spec (3 reviews: Grok 9/10, DeepSeek 9/10, Claude 8/10)
 
 ---
 
-## 📋 BACKLOG OVERVIEW
+## ⏳ NOT YET IN PRODUCTION
 
-### Specs Created (ready to implement)
-- `docs/FI-EMBED-MVP_public-script-widget.md` — Full spec (11K lines, 3 reviews)
-- `docs/FI-EMBED_public-script-widget.md` — Extended spec with Phase 2/3
-- `docs/FI-CORS_dynamic-cors-per-client.md` — Archived (superseded by embed.js approach)
+All these are implemented (merged to main), but NOT yet deployed to getchat9.live:
 
-### Backlog Files
-- `BACKLOG_PRODUCT.md` — Product features (FI-xxx)
-- `BACKLOG_TECH_DEBT.md` — Tech improvements
-- `BACKLOG_SECURITY-IMPROVEMENTS.md` — Security (vectorDB filtering, rate limiting, tracing)
-- `BACKLOG_EMBED-PHASE2.md` — FI-EMBED Phase 2/3 features
-- `BACKLOG_RAG_QUALITY.md` — RAG quality improvements
-- `BACKLOG_MONETIZATION.md` — Monetization strategy
+| Feature | Branch/Status | Notes |
+|---------|--------------|-------|
+| FI-EMBED-MVP (widget) | ✅ merged to main | Needs deploy + test |
+| Forgot password | ✅ merged to main | Needs deploy |
+| Sign in button | ✅ merged to main | Needs deploy |
+| pgvector native search | ✅ merged to main | Needs migration first! |
+
+### ⚠️ DEPLOY ORDER (Important!)
+
+**pgvector migration must run BEFORE code deploys:**
+
+1. Create migration PR:
+   - Add `vector Vector(1536)` column to `embeddings`
+   - Backfill: `UPDATE embeddings SET vector = (metadata_json->>'vector')::vector`
+   - HNSW index: `CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops)`
+2. Deploy migration to Railway
+3. Then merge `main` → `deploy` → Vercel deploys
+
+**Everything else (embed, forgot-password, sign in) can deploy without migration.**
+
+### How to deploy (when ready):
+
+```bash
+# Merge main into deploy branch → triggers Vercel
+git checkout deploy
+git merge main
+git push origin deploy
+git checkout main
+```
+
+---
+
+## 📋 ACTIVE CURSOR PROMPTS
+
+**None queued.** All completed today.
+
+---
+
+## 📋 NEXT UP (Tomorrow)
+
+### Immediate (before public launch):
+1. **pgvector migration PR** — prerequisite for search performance
+2. **Deploy to production** (merge main → deploy)
+3. **Test FI-EMBED-MVP** on a real domain — does widget load? CORS ok?
+4. **Test forgot password** end-to-end (email → reset link → login)
+
+### Soon (P2):
+5. **FI-EMBED Phase 2** — rate limiting for `/widget/chat`
+6. **Per-client system prompt** (each client configures their bot personality)
+7. **Multiple file upload**
+8. **Soft-delete for documents**
+
+### Medium-term (P3):
+9. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
+10. **Langfuse tracing** (LLM observability)
+11. **Daily summary email** (FI-039)
 
 ---
 
@@ -76,18 +118,20 @@
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini)
 - ✅ Hybrid retrieval (vector + keyword fallback)
+- ✅ pgvector native search (SQL cosine_distance)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
+- ✅ Zero-config widget embed (public_id + iframe)
 - ✅ Dashboard (documents, logs, feedback, analytics)
 - ✅ Email verification (Brevo)
+- ✅ Forgot password flow (Brevo)
 - ✅ Admin metrics
 - ✅ Chat logs with feedback (👍/👎)
 - ✅ Bad answers review + training
 - ✅ Landing page (getchat9.live)
+- ✅ Sign in button on landing page
 - ✅ CORS security (whitelist)
-- ✅ /review authentication
 - ✅ Rate limiting (chat, search, validate)
-- ✅ Input validation (limit/offset)
 
 ---
 
@@ -99,98 +143,47 @@ User → getchat9.live (Vercel, Next.js)
        ↘ PostgreSQL 15 + pgvector
        ↘ OpenAI API (embeddings + gpt-4o-mini)
        ↘ Brevo (transactional email)
+
+Git branches:
+  main   → development (no auto-deploy)
+  deploy → production (Vercel listens here)
 ```
 
 ---
 
-## ⚠️ KNOWN ISSUES
+## ⚠️ KNOWN ISSUES / TECH DEBT
 
-### Medium Priority
-- ~~`datetime.utcnow()` deprecated~~ ✅ Fixed (datetime.now(timezone.utc))
-- ~~N+1 queries in list_sessions, list_bad_answers~~ ✅ Fixed
-- Python cosine similarity (slow at scale) → Cursor prompt ready
-
-### Low Priority
-- Static Stats on landing page (hardcoded) → connect real API later
-- Footer links hardcoded → update when docs site ready
-- `source_documents` uses `None` for SQLite in prod code → tech debt
+| Issue | Priority | Notes |
+|-------|----------|-------|
+| pgvector migration (create vector column) | 🔴 P1 | Must do before deploying search refactor |
+| Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
+| Footer links hardcoded | 🟡 P3 | Update when docs site ready |
+| No CI/CD pipeline | 🟡 P2 | GitHub Actions needed |
 
 ---
 
-## 📈 DEPLOYMENT CHECKLIST
+## 🔍 CODE REVIEWS RECEIVED (2026-03-19)
 
-- ✅ Landing page deployed (getchat9.live)
-- ✅ gpt-4o-mini in production
-- ✅ CORS configured (needs `CORS_ALLOWED_ORIGINS` env var on Railway)
-- ✅ /review protected
-- ⏳ FI-EMBED-MVP (widget + public_id) — implement
-- ~~pgvector native search~~ ✅ Done (native SQL cosine_distance)
-- ⏳ Demo API key configured (`NEXT_PUBLIC_DEMO_API_KEY` on Vercel)
-- ⏳ Railway: set `CORS_ALLOWED_ORIGINS=https://getchat9.live`
-
----
-
-## 🔍 CODE REVIEWS RECEIVED
-
-| Reviewer | Area | Rating | Key Points |
-|----------|------|--------|------------|
-| Grok | Architecture | 8.5/10 | Strong multi-tenancy, good stack |
+| Reviewer | Area | Rating | Key Feedback |
+|----------|------|--------|-------------|
 | Grok | FI-EMBED spec | 9/10 | Rate limiting, versioning needed |
 | DeepSeek | FI-EMBED spec | 9/10 | CSP docs, document.currentScript |
 | Claude | FI-EMBED spec | 8/10 | Mobile, migration anti-pattern |
-| Grok | Project-wide | 8/10 | Chunking, re-ranker, tests needed |
+| Grok | Project-wide | 8.5/10 | Architecture solid, chunking/re-ranker needed |
 
 ---
 
-## 📚 Session Summary (2026-03-19)
+## 📚 BACKLOG FILES
 
-**Duration:** 07:30 → 16:22 UTC (8.5 hours)
-
-**Completed this session:**
-- Code review analysis (16 issues found and triaged)
-- 4 HIGH priority security fixes (all done)
-- 2 MEDIUM priority Cursor prompts (datetime, N+1)
-- FI-EMBED complete spec (3 external reviews incorporated)
-- FI-EMBED-MVP spec + Cursor prompt
-- pgvector native search Cursor prompt
-- Lessons learned document
-- Multiple backlog updates (Security, Embed Phase 2, Grok review)
-- GROK-PROJECT-REVIEW.md added
-
-**PRs merged this session:** #33, #34, #36 (approx)
+| File | Contents |
+|------|---------|
+| `BACKLOG_PRODUCT.md` | Product features (FI-xxx), RICE scored |
+| `BACKLOG_TECH_DEBT.md` | Tech improvements |
+| `BACKLOG_SECURITY-IMPROVEMENTS.md` | Security: vectorDB filter, rate limiting, tracing |
+| `BACKLOG_EMBED-PHASE2.md` | Widget improvements (rate limiting, mobile, CSP) |
+| `BACKLOG_RAG_QUALITY.md` | RAG quality: chunking, re-ranker |
+| `BACKLOG_MONETIZATION.md` | Pricing strategy |
 
 ---
 
-_Updated: 2026-03-19 16:22 UTC_
-
----
-
-## ✅ FI-EMBED-MVP: Public Script Widget (2026-03-19 17:32 UTC)
-
-**Branch:** feature/embed-mvp-public-script  
-**PR:** https://github.com/tabularasa31/ai-chatbot/pull/new/feature/embed-mvp-public-script  
-**Tests:** 135 passed ✅
-
-### Backend
-- `backend/core/utils.py` — `generate_public_id()` (ch_ + 18 chars)
-- `backend/models.py` — `public_id` column in Client
-- `backend/routes/public.py` — `GET /embed.js` (public, no auth)
-- `backend/routes/widget.py` — `POST /widget/chat` (public, clientId-based)
-- `backend/static/embed.js` — reads clientId from URL, creates iframe
-- `backend/clients/schemas.py` + `routes.py` — public_id in API responses
-- Migration — adds public_id column + backfill
-- `scripts/backfill_public_ids.py` — manual backfill script
-
-### Frontend
-- `frontend/app/widget/page.tsx` — widget page (/widget?clientId=...)
-- `frontend/app/widget/chat/route.ts` — Next.js API proxy to backend
-- `frontend/components/ChatWidget.tsx` — chat UI component
-- Dashboard — embed code updated with public_id
-
-### Key decisions
-- CORS resolved: widget iframe on our domain → requests are same-origin
-- `window.Chat9Config = { widgetUrl }` for multi-domain setups
-- `/widget/chat` reuses existing RAG pipeline
-
-### Production env
-- Set `NEXT_PUBLIC_APP_URL` if frontend URL differs from API URL
+_Updated: 2026-03-19 18:11 UTC | Session: 07:30–18:11 UTC (~10.5 hours)_

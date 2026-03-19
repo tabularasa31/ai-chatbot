@@ -13,7 +13,8 @@ export default function Home() {
       saveToken(token);
       router.replace("/dashboard");
     } else {
-      router.replace("/login");
+      // Redirect to landing page for non-authenticated users
+      router.replace("/(marketing)");
     }
   }, [router]);
 

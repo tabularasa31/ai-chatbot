@@ -162,3 +162,35 @@ User → getchat9.live (Vercel, Next.js)
 ---
 
 _Updated: 2026-03-19 16:22 UTC_
+
+---
+
+## ✅ FI-EMBED-MVP: Public Script Widget (2026-03-19 17:32 UTC)
+
+**Branch:** feature/embed-mvp-public-script  
+**PR:** https://github.com/tabularasa31/ai-chatbot/pull/new/feature/embed-mvp-public-script  
+**Tests:** 135 passed ✅
+
+### Backend
+- `backend/core/utils.py` — `generate_public_id()` (ch_ + 18 chars)
+- `backend/models.py` — `public_id` column in Client
+- `backend/routes/public.py` — `GET /embed.js` (public, no auth)
+- `backend/routes/widget.py` — `POST /widget/chat` (public, clientId-based)
+- `backend/static/embed.js` — reads clientId from URL, creates iframe
+- `backend/clients/schemas.py` + `routes.py` — public_id in API responses
+- Migration — adds public_id column + backfill
+- `scripts/backfill_public_ids.py` — manual backfill script
+
+### Frontend
+- `frontend/app/widget/page.tsx` — widget page (/widget?clientId=...)
+- `frontend/app/widget/chat/route.ts` — Next.js API proxy to backend
+- `frontend/components/ChatWidget.tsx` — chat UI component
+- Dashboard — embed code updated with public_id
+
+### Key decisions
+- CORS resolved: widget iframe on our domain → requests are same-origin
+- `window.Chat9Config = { widgetUrl }` for multi-domain setups
+- `/widget/chat` reuses existing RAG pipeline
+
+### Production env
+- Set `NEXT_PUBLIC_APP_URL` if frontend URL differs from API URL

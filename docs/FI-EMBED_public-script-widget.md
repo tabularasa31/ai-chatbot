@@ -254,15 +254,18 @@ def downgrade():
 
 import secrets
 import string
+import base64
 
-def generate_public_id(prefix: str = "ch_") -> str:
+def generate_public_id(prefix: str = "ch_", length: int = 14) -> str:
     """
     Generate public client ID.
-    Format: ch_<18-char random alphanumeric>
-    Example: ch_a1b2c3d4e5f6g7h8i9
+    Format: ch_<14-char base62 random>
+    Example: ch_a1b2c3d4e5f6g7
+    
+    14 chars base62 ≈ 2.3 trillion combinations (more than enough).
     """
-    chars = string.ascii_lowercase + string.digits
-    random_part = ''.join(secrets.choice(chars) for _ in range(18))
+    chars = string.ascii_lowercase + string.ascii_uppercase + string.digits
+    random_part = ''.join(secrets.choice(chars) for _ in range(length))
     return f"{prefix}{random_part}"
 ```
 
@@ -522,19 +525,94 @@ export function EmbedSettings({ clientId }: { clientId: string }) {
 
 ## Security Considerations
 
-### 1. Public ID Design
+### 1. Public ID Design & Abuse Prevention
 
 - **Public:** `client_id` (ch_abc123xyz) is intentionally visible
 - **Private:** `api_key` (sk_live_xyz) stays secret, never sent to browser
 - **Principle:** clientId identifies which bot, not permission level
+- **Size:** 14 chars base62 = ~2.3 trillion combinations (sufficient for unbounded scaling)
 
-### 2. Rate Limiting
+### 1.5. Rate Limiting & Abuse Prevention (CRITICAL)
+
+**Must implement in Phase 1:**
 
 ```python
-# Rate limit per clientId (not origin)
-@limiter.limit("100/minute")  # per clientId
+# Rate limit per clientId (not origin or user)
+@limiter.limit("500/minute")  # Per clientId globally
 def chat(message: str, client_id: str):
     pass
+
+# Daily quota per client (configurable by plan)
+def check_daily_quota(client: Client, db: Session):
+    """
+    Check if client has exceeded daily message quota.
+    - Free tier: 100 messages/day
+    - Pro tier: 10,000 messages/day
+    - Enterprise: Unlimited
+    """
+    today = datetime.now(timezone.utc).date()
+    
+    count = db.query(Message).filter(
+        Message.client_id == client.id,
+        func.date(Message.created_at) == today
+    ).count()
+    
+    max_messages = {
+        "free": 100,
+        "pro": 10000,
+        "enterprise": None,  # Unlimited
+    }[client.plan]
+    
+    if max_messages and count >= max_messages:
+        raise HTTPException(status_code=429, detail="Daily quota exceeded")
+```
+
+**Abuse scenarios to defend against:**
+- ❌ One customer creates 100 bots and hammers /chat
+- ❌ Public widget scraped by competitors
+- ❌ DDoS via public clientId
+- ❌ Token burn attack (drain OpenAI credits)
+
+**Mitigation:**
+- Global rate limit: 500 req/min per clientId
+- Daily quota: enforced per client
+- Optional: CAPTCHA when quota exceeded (Phase 2)
+- Monitoring: alert on abnormal patterns
+
+### 2. Script Versioning & Caching
+
+```javascript
+// embed.js URL should include version/timestamp for cache-busting
+// Format: https://chat9.live/embed.js?v=1&t=1710000000
+
+// Benefits:
+// - Update script logic without breaking old installations
+// - Customers always get latest (if using v=latest)
+// - Can deprecate old versions (v=1) after notice period
+```
+
+**Implementation:**
+```python
+# backend/routes/public.py
+@public_router.get("/embed.js")
+async def get_embed_script(v: Optional[str] = Query(None)):
+    """
+    Serve embed.js with optional version parameter.
+    v=1, v=2, etc. for different versions
+    v=latest (default) always serves newest
+    """
+    version = v or "latest"
+    
+    # Load appropriate version
+    if version == "latest":
+        script_path = "embed-v2.js"  # Current version
+    else:
+        script_path = f"embed-v{version}.js"
+    
+    return FileResponse(
+        path=script_path,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 ```
 
 ### 3. CSRF Protection (Not needed)
@@ -565,7 +643,26 @@ def chat(message: str, client_id: str, db: Session):
     ).all()
 ```
 
-### 6. Optional: Advanced CORS (Phase 2)
+### 6. Privacy & Consent (GDPR, CCPA)
+
+**Phase 1 requirements:**
+- Embed script respects `window.DO_NOT_TRACK` header
+- No cookies unless explicitly agreed
+- Privacy policy link in widget footer
+- Referrer info should be collected (which domain, utm params) but logged separately
+
+**Phase 2 (if needed for EU/CA customers):**
+- Consent mode integration (Cloudflare, Google Consent Mode)
+- Cookie banner integration
+- GDPR data export / deletion hooks
+
+**For now:** Document in privacy policy that Chat9 widget sends:
+- User messages (to backend)
+- Session ID (for continuity)
+- Client ID (which bot)
+- Referrer domain (for analytics)
+
+### 7. Optional: Domain Restrictions (Phase 2)
 
 If customer requests domain restrictions:
 
@@ -618,7 +715,7 @@ docs = db.query(Document)\
 def test_generate_public_id():
     id = generate_public_id()
     assert id.startswith('ch_')
-    assert len(id) == 23  # ch_ + 20 chars
+    assert len(id) == 17  # ch_ + 14 chars
     
 def test_public_id_uniqueness():
     ids = [generate_public_id() for _ in range(1000)]
@@ -678,10 +775,12 @@ curl -X POST https://chat9.live/chat \
 
 ## Acceptance Criteria
 
-- [ ] Client model has `public_id` column (unique, indexed)
+### Core Embedding
+- [ ] Client model has `public_id` column (unique, indexed, 14-char base62)
 - [ ] Migration runs successfully on production
 - [ ] Existing clients backfilled with public_ids
 - [ ] `/embed.js` endpoint returns JavaScript
+- [ ] `/embed.js?v=X` versioning works
 - [ ] embed.js works on multiple test domains (no CORS issues)
 - [ ] `/widget?clientId=...` page renders chat UI
 - [ ] `/chat` endpoint accepts `client_id` query param
@@ -689,9 +788,27 @@ curl -X POST https://chat9.live/chat \
 - [ ] Dashboard shows embed code for each client
 - [ ] Customers can copy & paste embed code
 - [ ] Widget works on customer domains immediately (no setup)
-- [ ] Rate limiting works per clientId
+
+### Security & Abuse Prevention
+- [ ] Rate limiting: 500 req/min per clientId (global)
+- [ ] Daily quota enforcement per client
+  - Free tier: 100 messages/day
+  - Pro tier: 10,000 messages/day
+  - Enterprise: Unlimited
+- [ ] Monitoring alerts on abnormal patterns (> 10x daily avg)
+- [ ] Referrer logging (which domain called widget)
+- [ ] Privacy: no cookies by default, respects DO_NOT_TRACK
+
+### Compatibility
 - [ ] All existing auth flows still work (for authenticated endpoints)
+- [ ] api_key (private) and public_id (public) properly separated
 - [ ] Tests pass (unit + integration + manual)
+- [ ] No regressions in existing /chat endpoint (when using api_key)
+
+### Documentation
+- [ ] Dashboard embed instructions clear and actionable
+- [ ] Privacy policy updated (what Chat9 collects)
+- [ ] Admin docs for rate limit configuration
 
 ---
 
@@ -712,6 +829,50 @@ curl -X POST https://chat9.live/chat \
 - `backend/main.py` — Register public_router (no CORS changes)
 - `frontend/app/dashboard/settings/page.tsx` — Add embed settings tab
 - `frontend/app/layout.tsx` — Include embed settings in navigation
+
+---
+
+## Grok Code Review Feedback (Incorporated)
+
+**Reviewer:** Grok (external AI)  
+**Date:** 2026-03-19  
+**Rating:** 9/10 (Production-ready, minor improvements noted)
+
+### Key Improvements Made (Based on Review)
+
+1. ✅ **Rate Limiting & Abuse Prevention** (HIGH PRIORITY)
+   - Added global rate limit: 500 req/min per clientId
+   - Added daily quota per client (100 free, 10k pro, unlimited enterprise)
+   - Documented abuse scenarios (DDoS, token burn, scraping)
+
+2. ✅ **public_id Size Optimization** (DONE)
+   - Reduced from 20 to 14 chars (base62)
+   - Still provides 2.3 trillion combinations (overkill for any scale)
+   - Saves database space, shorter URLs
+
+3. ✅ **Script Versioning** (INCLUDED)
+   - /embed.js?v=1, ?v=latest for cache-busting
+   - Allows updating logic without breaking old installations
+   - Can deprecate old versions with notice period
+
+4. ✅ **Privacy & GDPR Compliance** (ADDED)
+   - DO_NOT_TRACK respect
+   - No cookies by default
+   - Privacy policy requirements
+   - Future: Consent mode integration
+
+5. ✅ **Referrer & Analytics** (NOTED)
+   - Collect which domain widget loaded from
+   - UTM parameters support (Phase 2)
+   - Track usage per domain in dashboard
+
+### Remaining Phase 2+ Items
+
+- CAPTCHA / Turnstile on quota exceeded
+- Advanced analytics dashboard
+- Referrer / UTM tracking
+- Consent mode integration (GDPR)
+- Enterprise domain restrictions
 
 ---
 

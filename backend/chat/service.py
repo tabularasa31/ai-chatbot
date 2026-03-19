@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 PREVIEW_MAX_LEN = 120
 
@@ -301,19 +301,16 @@ def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary
     Returns:
         List of SessionSummary, sorted by last_activity descending.
     """
+    # N+1 fix: joinedload eager-loads messages in one query instead of N queries per chat
     chats = (
         db.query(Chat)
         .filter(Chat.client_id == client_id)
+        .options(joinedload(Chat.messages))
         .all()
     )
     result: list[SessionSummary] = []
     for chat in chats:
-        messages = (
-            db.query(Message)
-            .filter(Message.chat_id == chat.id)
-            .order_by(Message.created_at.asc())
-            .all()
-        )
+        messages = sorted(chat.messages, key=lambda m: m.created_at or datetime.min)
         msg_count = len(messages)
         last_activity = datetime.min
         last_question: str | None = None

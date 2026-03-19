@@ -31,13 +31,21 @@ export function Navigation() {
             </a>
           </div>
 
-          {/* CTA Button - Desktop */}
-          <Link
-            href="/signup"
-            className="hidden md:block bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all"
-          >
-            Try for free
-          </Link>
+          {/* Sign in + CTA - Desktop */}
+          <div className="hidden md:flex items-center gap-3">
+            <Link
+              href="/login"
+              className="border border-[#67E8F9] text-[#FAF5FF] px-6 py-2 rounded-lg hover:bg-[#67E8F9]/10 hover:scale-105 transition-all"
+            >
+              Sign in
+            </Link>
+            <Link
+              href="/signup"
+              className="bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all"
+            >
+              Try for free
+            </Link>
+          </div>
 
           {/* Hamburger - Mobile */}
           <button
@@ -73,6 +81,12 @@ export function Navigation() {
                 >
                   GitHub
                 </a>
+                <Link
+                  href="/login"
+                  className="border border-[#67E8F9] text-[#FAF5FF] px-6 py-2 rounded-lg hover:bg-[#67E8F9]/10 transition-all text-center"
+                >
+                  Sign in
+                </Link>
                 <Link
                   href="/signup"
                   className="bg-[#E879F9] text-[#0A0A0F] px-6 py-2 rounded-lg hover:bg-[#f099fb] transition-colors inline-block text-center"

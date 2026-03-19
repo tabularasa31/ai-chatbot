@@ -142,7 +142,7 @@
 │                OpenAI API (External)                      │
 │                                                           │
 │  - text-embedding-3-small (for vectors)                 │
-│  - gpt-3.5-turbo (for chat)                             │
+│  - gpt-4o-mini (for chat)                               │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                   Next.js Frontend                       │

@@ -33,6 +33,7 @@ class ClientResponse(BaseModel):
     id: uuid.UUID
     name: str
     api_key: str
+    public_id: str
     has_openai_key: bool
     created_at: datetime
     updated_at: datetime

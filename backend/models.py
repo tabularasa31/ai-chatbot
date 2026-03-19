@@ -21,6 +21,8 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import declarative_base, relationship
 
+from backend.core.utils import generate_public_id
+
 Base = declarative_base()
 
 
@@ -125,6 +127,13 @@ class Client(Base):
     )
     name = Column(String(255), nullable=False)
     api_key = Column(String(32), unique=True, nullable=False, index=True)
+    public_id = Column(
+        String(20),
+        unique=True,
+        nullable=False,
+        index=True,
+        default=generate_public_id,
+    )
     openai_api_key = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)

@@ -34,6 +34,7 @@ def _client_to_response(client) -> ClientResponse:
         id=client.id,
         name=client.name,
         api_key=client.api_key,
+        public_id=client.public_id,
         has_openai_key=bool(client.openai_api_key),
         created_at=client.created_at,
         updated_at=client.updated_at,

@@ -49,6 +49,7 @@ export type ClientResponse = {
   id: string;
   name: string;
   api_key: string;
+  public_id: string;
   has_openai_key: boolean;
   created_at: string;
   updated_at: string;

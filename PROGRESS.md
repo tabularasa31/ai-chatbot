@@ -318,9 +318,9 @@ tokens_used: 230 ✅
 
 **What was done:**
 - `POST /chat` — PUBLIC endpoint, auth via `X-API-Key` header
-  - Full RAG pipeline: search → build prompt → gpt-4o-mini → save → return
+  - Full RAG pipeline: search → build prompt → GPT-3.5-turbo → save → return
   - `build_rag_prompt()` with context chunks + separator
-  - `generate_answer()` — OpenAI gpt-4o-mini, temp=0.2, max_tokens=500
+  - `generate_answer()` — OpenAI gpt-3.5-turbo, temp=0.2, max_tokens=500
   - Fallback: "I don't have information about this." if no context
   - Session continuity (same session_id = same conversation)
   - Auto-generated session_id if not provided
@@ -333,6 +333,21 @@ tokens_used: 230 ✅
 
 **Tests:** 14 new, 90 total passing ✅  
 **PR:** #7 — Merged ✅
+
+---
+
+### Migration: gpt-4o-mini (2026-03-19)
+
+**Status:** ✅ Merged (FI-033)
+
+**What was done:**
+- **Было:** gpt-3.5-turbo
+- **Стало:** gpt-4o-mini
+- **Причина:** лучше качество, примерно равная стоимость, лучше работает с многоязычностью
+
+**Files:** `backend/chat/service.py`, `tests/test_chat.py`, docs (tech-stack, overview, phase-breakdown)
+
+**PR:** FI-033 — Merged ✅
 
 ---
 

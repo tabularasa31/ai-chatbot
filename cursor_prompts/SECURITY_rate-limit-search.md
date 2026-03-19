@@ -49,13 +49,12 @@ def search_route(
 
 In `backend/search/routes.py`, add to imports:
 ```python
-from fastapi import Request
 from backend.core.limiter import limiter
 ```
 
-### 2. Add rate limit decorator
+### 2. Add rate limit decorator and Request parameter
 
-Find the `search_route` function and add decorator:
+Find the `search_route` function and add decorator + parameter:
 
 **Before:**
 ```python
@@ -73,15 +72,14 @@ def search_route(
     body: SearchRequest,
 ```
 
-### 3. Verify imports
+### 3. Verify Request import
 
-Check that these are already in the file:
+Check that `Request` is imported from FastAPI. If not present, add it:
 ```python
 from fastapi import Request, Depends, APIRouter
-from typing import Annotated
 ```
 
-If not, add them.
+(If these already exist, just ensure `Request` is in the list.)
 
 ---
 
@@ -90,8 +88,8 @@ If not, add them.
 Before pushing:
 - [ ] Backend starts without errors
 - [ ] Valid search returns results
-- [ ] After 30 requests/minute, get 429 Too Many Requests
-- [ ] Different users have separate rate limit counters (per JWT token)
+- [ ] After 30 requests/minute from same IP, get 429 Too Many Requests
+- [ ] Rate limit is per IP address (all users from same IP share the counter)
 
 **Test:**
 ```bash
@@ -119,7 +117,9 @@ git push origin feature/security-rate-limit-search
 
 ## NOTES
 
-- Rate limit: 30/minute (matches /chat endpoint)
-- Uses JWT token (user_id) for rate limit key
-- slowapi already configured in backend/main.py
+- Rate limit: 30/minute (matches /chat and /chat/debug endpoints)
+- Rate limit key: IP address (via `get_remote_address` in backend/core/limiter.py)
+- All users from same IP share the rate limit counter
+- slowapi already configured in backend/main.py with limiter instance
 - This prevents abuse of expensive OpenAI embeddings API
+- Note: For per-user rate limiting, would need to modify `_key_func` in backend/core/limiter.py (out of scope for this prompt)

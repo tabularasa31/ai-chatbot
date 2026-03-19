@@ -7,20 +7,24 @@
 ### What's INCLUDED ✅
 
 **Backend:**
-- User authentication (email/password + JWT)
-- Client management (create, generate API key)
+- User authentication (email/password + JWT + email verification)
+- Client management (create, generate API key, store OpenAI API key)
 - Document upload (PDF, Markdown, Swagger/OpenAPI)
 - Document parsing & text extraction
-- Embedding creation (OpenAI API)
+- Embedding creation (OpenAI API, via client's own key)
 - Vector search (similarity search with pgvector)
 - RAG chat endpoint (Q&A generation)
-- Chat history logging
+- Chat history logging with sessions
+- Feedback system (👍/👎 + optional ideal answer)
+- Token usage tracking per client
+- Debug mode (show which chunks were used)
+- Admin metrics
 
 **Frontend:**
 - Login/signup page
-- Dashboard (show API key, settings)
+- Dashboard (API key, settings, OpenAI key setup)
 - Document manager (upload, list, delete)
-- Chat logs viewer
+- Chat logs viewer with feedback
 - Responsive design (Tailwind CSS)
 
 **Widget:**
@@ -30,20 +34,25 @@
 
 **Database:**
 - PostgreSQL with pgvector extension
-- Users, Clients, Documents, Embeddings, Messages tables
+- Users, Clients, Documents, Embeddings, Chats, Messages tables
 - Migrations (Alembic)
 
 ### What's EXCLUDED (v2) ❌
 
 - User customization (colors, logos, tone)
 - Team collaboration
-- Analytics dashboard
-- Slack/Email notifications
+- Client analytics dashboard (FI-040)
 - Webhooks
 - Fine-tuning
 - Multiple LLM options
 - Payment system
 - Advanced security (SSO, 2FA)
+
+### Coming Next 🔜
+
+- Daily summary email (FI-039) — daily reports to clients via Brevo
+- Background embedding processing (FI-021)
+- Client analytics widget (FI-040)
 
 ---
 
@@ -57,6 +66,7 @@ users
 ├─ id (PK, UUID)
 ├─ email (UNIQUE, NOT NULL)
 ├─ password_hash (NOT NULL)
+├─ is_email_verified (BOOLEAN, default=false)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 ```
@@ -65,9 +75,11 @@ users
 ```sql
 clients
 ├─ id (PK, UUID)
+├─ public_id (VARCHAR(32), UNIQUE — used in widget/embed URLs)
 ├─ user_id (FK → users, NOT NULL)
 ├─ name (VARCHAR, NOT NULL)
 ├─ api_key (UNIQUE, NOT NULL, 32-char random)
+├─ openai_api_key (VARCHAR, NOT NULL — client's own OpenAI key)
 ├─ settings (JSONB, default={})
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
@@ -129,7 +141,9 @@ messages
 ├─ role (ENUM: user, assistant)
 ├─ content (TEXT, question or answer)
 ├─ source_documents (UUID[], JSON array of doc IDs)
-├─ feedback (ENUM: approved, rejected, edited; nullable)
+├─ feedback (ENUM: positive, negative; nullable)
+├─ ideal_answer (TEXT, nullable — provided when feedback is negative)
+├─ token_count (INTEGER, nullable — tokens used for this response)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 
@@ -167,10 +181,11 @@ LIMIT 3;
 ### Unique Constraints
 - `users.email` UNIQUE
 - `clients.api_key` UNIQUE
+- `clients.public_id` UNIQUE
 
 ### Not Null Constraints
 - `users.email`, `users.password_hash`
-- `clients.user_id`, `clients.name`, `clients.api_key`
+- `clients.user_id`, `clients.name`, `clients.api_key`, `clients.openai_api_key`
 - `documents.client_id`, `documents.filename`, `documents.file_type`
 - `embeddings.document_id`, `embeddings.chunk_text`, `embeddings.vector`
 - `chats.client_id`
@@ -192,28 +207,6 @@ alembic/
 ```
 
 Each migration is atomic and reversible.
-
----
-
-## Seed Data for Testing
-
-```sql
--- Test user
-INSERT INTO users (email, password_hash)
-VALUES ('test@example.com', '$2b$12$...');
-
--- Test client
-INSERT INTO clients (user_id, name, api_key)
-VALUES (1, 'Test Company', 'abc123xyz...');
-
--- Test document
-INSERT INTO documents (client_id, filename, file_type, parsed_text, status)
-VALUES (1, 'FAQ.pdf', 'pdf', 'Q: How to reset password?\nA: Go to Settings...', 'ready');
-
--- Test embeddings (with mock vectors for testing)
-INSERT INTO embeddings (document_id, chunk_text, vector)
-VALUES (1, 'How to reset password...', '[0.1, 0.2, ..., 0.0]'::vector);
-```
 
 ---
 

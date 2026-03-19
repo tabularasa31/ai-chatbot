@@ -35,8 +35,9 @@ Missing: a "Sign in" link for existing users. They have no way to access the das
 
 Target layout:
 ```
-[Chat9 logo]    [Docs]  [GitHub]    [Sign in]  [Try for free →]
+[Chat9 logo]    [Docs]  [GitHub]    [Sign in outline]  [Try for free pink]
 ```
+Same style as "See demo" button on the landing page (cyan outline, dark bg).
 
 **Current code (Navigation.tsx):**
 ```tsx
@@ -74,7 +75,7 @@ Add "Sign in" link **before** the "Try for free" button:
 <div className="hidden md:flex items-center gap-3">
   <Link
     href="/login"
-    className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors px-4 py-2"
+    className="border border-[#67E8F9] text-[#FAF5FF] px-6 py-2 rounded-lg hover:bg-[#67E8F9]/10 hover:scale-105 transition-all"
   >
     Sign in
   </Link>
@@ -105,7 +106,7 @@ Add "Sign in" link inside the mobile menu, before the "Try for free" button:
 ```tsx
 <Link
   href="/login"
-  className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors text-left"
+  className="border border-[#67E8F9] text-[#FAF5FF] px-6 py-2 rounded-lg hover:bg-[#67E8F9]/10 transition-all text-center"
 >
   Sign in
 </Link>

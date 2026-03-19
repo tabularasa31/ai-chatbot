@@ -28,9 +28,9 @@ def get_openai_client(encrypted_key: Optional[str]) -> OpenAI:
         )
     try:
         decrypted_key = decrypt_value(encrypted_key)
-    except RuntimeError:
+    except RuntimeError as e:
         raise HTTPException(
             status_code=500,
             detail="Failed to decrypt OpenAI API key.",
-        ) from None
+        ) from e
     return OpenAI(api_key=decrypted_key)

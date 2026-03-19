@@ -1,6 +1,6 @@
 """FastAPI auth endpoints."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 import uuid
 
@@ -41,7 +41,7 @@ def register(
     # Generate verification token and send email
     token = uuid.uuid4().hex
     user.verification_token = token
-    user.verification_expires_at = datetime.utcnow() + timedelta(days=2)
+    user.verification_expires_at = datetime.now(timezone.utc) + timedelta(days=2)
     user.is_verified = False
     db.commit()
     db.refresh(user)
@@ -107,7 +107,7 @@ def verify_email(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """Verify user's email using a one-time token."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     user = (
         db.query(User)
         .filter(

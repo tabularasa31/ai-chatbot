@@ -51,7 +51,7 @@ def decode_access_token(token: str) -> str | None:
 def create_access_token(data: Dict[str, Any]) -> str:
     """Создаёт JWT-токен с payload и сроком жизни 24 часа."""
     to_encode = data.copy()
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc)
     expire = now + dt.timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     to_encode.update({"exp": expire, "iat": now})
 

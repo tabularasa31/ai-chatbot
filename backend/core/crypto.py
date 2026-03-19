@@ -26,5 +26,7 @@ def decrypt_value(value: str) -> str:
     f = get_fernet()
     try:
         return f.decrypt(value.encode()).decode()
-    except (InvalidToken, Exception) as e:
+    except InvalidToken as e:
+        raise RuntimeError("Failed to decrypt: invalid token") from e
+    except (ValueError, UnicodeDecodeError) as e:
         raise RuntimeError(f"Failed to decrypt: {e}") from e

@@ -9,13 +9,13 @@ export function Footer() {
           {/* Links */}
           <div className="flex items-center gap-8">
             <a
-              href="#features"
+              href="/docs"
               className="text-[#FAF5FF]/80 hover:text-[#38BDF8] transition-colors"
             >
               Docs
             </a>
             <a
-              href="https://github.com"
+              href="https://github.com/tabularasa31/ai-chatbot"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#38BDF8] transition-colors"

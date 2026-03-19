@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import Link from 'next/link';
 import { Send } from 'lucide-react';
 
 export function Hero() {
@@ -18,9 +19,12 @@ export function Hero() {
             Works 24/7. Sends you a daily report. Gets better every week.
           </p>
           <div className="flex flex-col sm:flex-row gap-4">
-            <button className="bg-[#E879F9] text-[#0A0A0F] px-8 py-3 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all">
+            <Link
+              href="/signup"
+              className="bg-[#E879F9] text-[#0A0A0F] px-8 py-3 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all inline-block text-center"
+            >
               Try for free
-            </button>
+            </Link>
             <button className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all">
               See demo
             </button>

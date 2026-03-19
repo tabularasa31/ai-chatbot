@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { AuthCard, AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
+import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
@@ -57,6 +57,8 @@ export default function ForgotPasswordPage() {
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onInvalid={validationHandlers.email.onInvalid}
+            onInput={validationHandlers.email.onInput}
             required
             className={authStyles.input}
           />

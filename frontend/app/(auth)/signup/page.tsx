@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, getToken, saveToken } from "@/lib/api";
-import { AuthCard, authStyles } from "@/components/auth/AuthCard";
+import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -50,6 +50,8 @@ export default function SignupPage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onInvalid={validationHandlers.email.onInvalid}
+            onInput={validationHandlers.email.onInput}
             required
             className={authStyles.input}
             placeholder="you@example.com"
@@ -64,6 +66,8 @@ export default function SignupPage() {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onInvalid={validationHandlers.required.onInvalid}
+            onInput={validationHandlers.required.onInput}
             required
             className={authStyles.input}
           />

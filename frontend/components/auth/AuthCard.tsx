@@ -1,6 +1,7 @@
 "use client";
 
 import { ReactNode } from "react";
+import { strings } from "@/lib/strings";
 
 /** Neon Dusk dark theme — shared layout and form styles for auth pages */
 export function AuthCard({ children }: { children: ReactNode }) {
@@ -27,6 +28,27 @@ export function AuthCardCentered({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+/** Validation messages use service UI language (see lib/strings.ts) */
+export const validationHandlers = {
+  email: {
+    onInvalid: (e: React.FormEvent<HTMLInputElement>) => {
+      const el = e.currentTarget;
+      if (el.validity.typeMismatch) el.setCustomValidity(strings.validation.emailInvalid);
+      else if (el.validity.valueMissing) el.setCustomValidity(strings.validation.emailRequired);
+      else el.setCustomValidity("");
+    },
+    onInput: (e: React.FormEvent<HTMLInputElement>) => e.currentTarget.setCustomValidity(""),
+  },
+  required: {
+    onInvalid: (e: React.FormEvent<HTMLInputElement>) => {
+      const el = e.currentTarget;
+      if (el.validity.valueMissing) el.setCustomValidity(strings.validation.fieldRequired);
+      else el.setCustomValidity("");
+    },
+    onInput: (e: React.FormEvent<HTMLInputElement>) => e.currentTarget.setCustomValidity(""),
+  },
+} as const;
 
 export const authStyles = {
   heading: "text-2xl font-semibold text-[#FAF5FF] mb-6",

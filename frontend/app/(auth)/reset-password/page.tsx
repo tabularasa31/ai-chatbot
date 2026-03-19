@@ -4,7 +4,7 @@ import { Suspense, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { AuthCard, AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
+import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 function ResetPasswordContent() {
   const searchParams = useSearchParams();
@@ -81,6 +81,8 @@ function ResetPasswordContent() {
             placeholder="Min. 8 characters"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onInvalid={validationHandlers.required.onInvalid}
+            onInput={validationHandlers.required.onInput}
             required
             className={authStyles.input}
           />
@@ -96,6 +98,8 @@ function ResetPasswordContent() {
             placeholder="Repeat password"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
+            onInvalid={validationHandlers.required.onInvalid}
+            onInput={validationHandlers.required.onInput}
             required
             className={authStyles.input}
           />

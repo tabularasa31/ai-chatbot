@@ -97,7 +97,7 @@ export function DemoBlock() {
                   <p className="text-[#FAF5FF]">
                     Chat9 is always online and ready to help
                     your customers. It learns from your
-                    documentation and can answer questions
+                    documentation and can answer questions.
                     instantly, any time of day or night. You'll
                     receive daily reports showing all
                     interactions.

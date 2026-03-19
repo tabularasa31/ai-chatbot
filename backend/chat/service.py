@@ -12,12 +12,10 @@ from sqlalchemy.orm import Session, joinedload
 PREVIEW_MAX_LEN = 120
 
 from backend.core.openai_client import get_openai_client
-from backend.models import Chat, Document, Embedding, Message, MessageFeedback, MessageRole
+from backend.models import Chat, Document, Message, MessageFeedback, MessageRole
 from backend.search.service import (
     VECTOR_CONFIDENCE_THRESHOLD,
-    cosine_similarity,
-    embed_query,
-    keyword_search_chunks,
+    search_similar_chunks,
 )
 
 
@@ -29,7 +27,10 @@ def retrieve_context(
     top_k: int = 5,
 ) -> tuple[list[str], list[uuid.UUID], list[float], Literal["vector", "keyword", "none"]]:
     """
-    Retrieve context chunks for RAG (reuses search logic, returns mode for debug).
+    Retrieve context chunks for RAG using pgvector native search.
+
+    Uses search_similar_chunks which handles pgvector natively (or falls back to Python for SQLite).
+    client_id filtering enforced at DB level.
 
     Returns:
         chunk_texts: List of chunk text strings.
@@ -37,37 +38,28 @@ def retrieve_context(
         scores: List of scores (similarity for vector, match count for keyword).
         mode: "vector" | "keyword" | "none".
     """
-    query_vector = embed_query(question, api_key=api_key)
-
-    embeddings = (
-        db.query(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.client_id == client_id)
-        .all()
+    results = search_similar_chunks(
+        client_id=client_id,
+        query=question,
+        top_k=top_k,
+        db=db,
+        api_key=api_key,
     )
 
-    scored: list[tuple[Embedding, float]] = []
-    for emb in embeddings:
-        meta = emb.metadata_json or {}
-        vector = meta.get("vector")
-        if not vector or not isinstance(vector, list):
-            continue
-        sim = cosine_similarity(query_vector, vector)
-        scored.append((emb, sim))
+    if not results:
+        return ([], [], [], "none")
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-
-    if scored and scored[0][1] >= VECTOR_CONFIDENCE_THRESHOLD:
-        results = scored[:top_k]
-        mode: Literal["vector", "keyword", "none"] = "vector"
+    # Determine mode from scores.
+    # Vector similarity: scores in [0.0, 1.0]. Keyword: match counts (1, 2, 3...).
+    # best_score > 1.0 → keyword (match count). 0.70 <= best_score <= 1.0 → vector.
+    # best_score < 0.70 → keyword fallback (low-confidence vector results replaced).
+    best_score = results[0][1]
+    if best_score > 1.0:
+        mode: Literal["vector", "keyword", "none"] = "keyword"
+    elif best_score >= VECTOR_CONFIDENCE_THRESHOLD:
+        mode = "vector"
     else:
-        keyword_results = keyword_search_chunks(client_id, question, top_k, db)
-        if keyword_results:
-            results = keyword_results
-            mode = "keyword"
-        else:
-            results = []
-            mode = "none"
+        mode = "keyword"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]

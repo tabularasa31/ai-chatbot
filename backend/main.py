@@ -1,5 +1,6 @@
 """FastAPI application entry point."""
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -23,12 +24,22 @@ app = FastAPI(title="AI Chatbot API", version="0.1.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# CORS configuration
+ALLOWED_ORIGINS = [
+    x.strip()
+    for x in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,https://getchat9.live",
+    ).split(",")
+    if x.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(auth_router, prefix="/auth")

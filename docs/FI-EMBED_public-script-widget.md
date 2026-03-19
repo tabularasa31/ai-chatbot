@@ -309,20 +309,32 @@ async def get_embed_script():
 
 ```javascript
 (function() {
-  // Get script parameters
-  const scripts = document.querySelectorAll('script');
-  let clientId = null;
-  let chatBaseUrl = 'https://chat9.live'; // Configurable
+  // Get current script using document.currentScript (more reliable)
+  const currentScript = document.currentScript || (() => {
+    const scripts = document.getElementsByTagName('script');
+    return scripts[scripts.length - 1]; // Fallback for older browsers
+  })();
   
-  for (let script of scripts) {
-    const src = script.src || '';
-    if (src.includes('embed.js')) {
-      const url = new URL(src);
-      clientId = url.searchParams.get('clientId');
-      const baseParam = url.searchParams.get('baseUrl');
-      if (baseParam) chatBaseUrl = baseParam; // Allow override (testing)
-      break;
-    }
+  if (!currentScript) {
+    console.error('Chat9: Unable to locate script tag');
+    return;
+  }
+  
+  // Parse script URL and data attributes
+  const scriptSrc = currentScript.src;
+  const url = new URL(scriptSrc);
+  const clientId = url.searchParams.get('clientId') || currentScript.dataset.clientId;
+  const widthParam = currentScript.dataset.width || '400';
+  const heightParam = currentScript.dataset.height || '600';
+  const positionParam = currentScript.dataset.position || 'right';
+  
+  // Base URL (only allow localhost for dev/testing)
+  let chatBaseUrl = 'https://chat9.live';
+  const baseParam = url.searchParams.get('baseUrl');
+  if (baseParam && (baseParam.includes('localhost') || baseParam.includes('127.0.0.1'))) {
+    chatBaseUrl = baseParam; // Allow override only for dev
+  } else if (baseParam && baseParam !== 'https://chat9.live') {
+    console.warn('Chat9: baseUrl override only allowed for localhost');
   }
   
   if (!clientId) {
@@ -832,7 +844,9 @@ curl -X POST https://chat9.live/chat \
 
 ---
 
-## Grok Code Review Feedback (Incorporated)
+## Code Reviews Incorporated
+
+### Grok Review (9/10)
 
 **Reviewer:** Grok (external AI)  
 **Date:** 2026-03-19  
@@ -873,6 +887,63 @@ curl -X POST https://chat9.live/chat \
 - Referrer / UTM tracking
 - Consent mode integration (GDPR)
 - Enterprise domain restrictions
+
+---
+
+### DeepSeek Review (Detailed Security & UX Analysis)
+
+**Key Recommendations Incorporated:**
+
+1. ✅ **document.currentScript for Script Detection**
+   - More reliable than querySelectorAll
+   - Works with async/defer/dynamic scripts
+   - Fallback for older browsers included
+
+2. ✅ **Data Attributes for Customization**
+   - `data-width`, `data-height`, `data-position`
+   - Phase 1: document it, phase 2: full support
+   - Avoids CSS complexity
+
+3. ✅ **baseUrl Parameter Security**
+   - Only allows localhost for dev/testing
+   - Prevents phishing attacks
+   - Logs warning if misused
+
+4. ✅ **iframe.sandbox Attribute**
+   - Added security restrictions
+   - Only allows necessary permissions (forms, popups)
+
+5. 🔔 **Content Security Policy (CSP) - Phase 2**
+   ```
+   Customers with strict CSP must add:
+   script-src: https://chat9.live
+   frame-src: https://chat9.live
+   Documentation: provide example headers
+   ```
+
+6. 🔔 **Rate Limiting Refinement - Phase 1**
+   ```
+   Two-tier approach:
+   - Per-IP limit: 20 req/min (prevent single-site spikes)
+   - Per-clientId global: 1000 req/min (prevent distributed abuse)
+   ```
+
+7. 🔔 **Session Management & Auth**
+   ```
+   Key decision:
+   - Widget uses public clientId (no auth token)
+   - Backend tracks sessionId (ephemeral, not tied to user)
+   - API endpoints (/api/*) still require api_key
+   - Chat endpoint (/chat) is public per clientId
+   ```
+
+### To-Do for Implementation
+
+- [ ] Add CSP header documentation
+- [ ] Update rate limiting (IP + clientId combo)
+- [ ] Test iframe.sandbox restrictions
+- [ ] Document baseUrl security policy
+- [ ] Clarify session vs auth token usage
 
 ---
 

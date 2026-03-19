@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
+from backend.core.limiter import limiter
 from backend.models import User
 from backend.search.schemas import SearchRequest, SearchResponse, SearchResultItem
 from backend.search.service import search_similar_chunks
@@ -17,8 +18,10 @@ from backend.search.service import search_similar_chunks
 search_router = APIRouter(tags=["search"])
 
 
+@limiter.limit("30/minute")
 @search_router.post("", response_model=SearchResponse)
 def search_route(
+    request: Request,
     body: SearchRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],

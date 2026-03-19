@@ -88,16 +88,13 @@ def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
         Formatted prompt string for GPT.
     """
     system_rules = (
-        "You are a helpful assistant and a technical support agent for the client's product (SaaS, API, docs).\n"
+        "You are a technical support agent for the client's product (SaaS, API, docs).\n"
         "Rules:\n"
-        "- Answer based ONLY on the provided context.\n"
-        "- If the context contains any information related to the question, you MUST answer based on it.\n"
-        "- Do NOT say that you don't know if the context mentions the topic.\n"
-        "- If you are uncertain, you can say that you are not completely sure, but still answer based on the context.\n"
-        "- If the question is about \"which setting\" / \"какая настройка\" or similar:\n"
-        "  - name the exact setting/field as it appears in the docs,\n"
-        "  - mention where it is located (section / page / menu path) if the context contains this.\n"
-        "- Answer in the SAME LANGUAGE as the question (Russian if the question is in Russian).\n"
+        "- Answer based ONLY on the provided context. If context mentions the topic, you MUST answer from it.\n"
+        "- Do NOT claim you don't know when the context contains relevant info.\n"
+        "- If uncertain, say so but still answer from the context.\n"
+        "- For \"which setting\" / \"какая настройка\" or similar: name the exact setting/field as in docs; cite where it is (section/page/menu) if the context contains it.\n"
+        "- Answer in the SAME LANGUAGE as the question (e.g. Russian if asked in Russian).\n"
     )
     if not context_chunks:
         return (
@@ -122,7 +119,7 @@ def generate_answer(
     api_key: str,
 ) -> tuple[str, int]:
     """
-    Call OpenAI GPT-3.5-turbo with RAG prompt.
+    Call OpenAI gpt-4o-mini with RAG prompt.
 
     Args:
         question: User question.
@@ -138,7 +135,7 @@ def generate_answer(
     prompt = build_rag_prompt(question, context_chunks)
     openai_client = get_openai_client(api_key)
     response = openai_client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=500,

@@ -119,7 +119,7 @@
 
 ---
 
-### [Quick] Обновить модель GPT-3.5-turbo → gpt-4o-mini
+### [Quick] Обновить модель GPT-3.5-turbo → gpt-4o-mini ✅ Done (FI-033)
 
 **Почему:**
 - `gpt-4o-mini` дешевле или сопоставима по цене,

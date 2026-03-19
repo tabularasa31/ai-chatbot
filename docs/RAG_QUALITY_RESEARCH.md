@@ -1,182 +1,182 @@
 # RAG Quality Research
 
-Результаты опроса других AI-моделей по улучшению качества RAG.
-Источники: Perplexity + ChatGPT, 2026-03-18.
+Results of surveying other AI models on improving RAG quality.
+Sources: Perplexity + ChatGPT, 2026-03-18.
 
 ---
 
-## 1. Chunking для техдоков
+## 1. Chunking for technical docs
 
-- Overlap **обязателен**: 256–512 токенов, overlap 10–20% (50–100 токенов для чанка 500).
-- Структурный подход для техдоков:
-  - Сначала бить по структуре (h2/h3, endpoints, таблицы параметров).
-  - Внутри больших секций — токен-базовый chunking 300–500 токенов с overlap.
-  - Не разрывать код-блоки и примеры запросов.
-- Рецепт для старта:
-  - 384–512 токенов, 60–80 токенов overlap.
-  - Меньшие чанки (200–300) для FAQ/ошибок.
+- Overlap **required**: 256–512 tokens, overlap 10–20% (50–100 tokens for 500-token chunk).
+- Structural approach for technical docs:
+  - First split by structure (h2/h3, endpoints, parameter tables).
+  - Inside large sections — token-based chunking 300–500 tokens with overlap.
+  - Don't break code blocks and request examples.
+- Starter recipe:
+  - 384–512 tokens, 60–80 tokens overlap.
+  - Smaller chunks (200–300) for FAQ/errors.
 
-**FI-009 обновить:** добавить overlap 60–80 токенов + структурный chunking.
+**FI-009 update:** add overlap 60–80 tokens + structural chunking.
 
 ---
 
-## 2. Graceful degradation (когда информации нет)
+## 2. Graceful degradation (when info is missing)
 
-Три класса ситуаций:
+Three situation classes:
 
-1. **Нет в документах, но типичный вопрос саппорта** → хранить в org config:
+1. **Not in docs, but typical support question** → store in org config:
    - support_email, support_portal_url, sales_contact, trial_length_days.
-   - Передавать в system prompt всегда (не через RAG).
+   - Always pass to system prompt (not via RAG).
 
-2. **Нет нигде** → строгий policy в system prompt:
-   - Если cosine similarity < 0.3–0.35 → бот обязан сказать, что данных нет, и предложить контакт.
-   - Порог можно делать динамическим + учитывать gap между 1-м и 2-м результатом.
+2. **Nowhere** → strict policy in system prompt:
+   - If cosine similarity < 0.3–0.35 → bot must say no data and suggest contact.
+   - Threshold can be dynamic + consider gap between 1st and 2nd result.
 
-3. **Паттерны эскалации:**
-   - RAG → low-confidence → шаблон "К сожалению, в документации нет ответа. Обратитесь на..."
-   - FAQ-слой над RAG для "очевидных" вопросов (email, тарифы верхнего уровня).
-   - System prompt: "Если информации нет — не выдумывай, направь к [контакты]."
+3. **Escalation patterns:**
+   - RAG → low-confidence → template "Unfortunately, there's no answer in the documentation. Please contact..."
+   - FAQ layer over RAG for "obvious" questions (email, top-level pricing).
+   - System prompt: "If info is missing — don't invent, direct to [contacts]."
 
 ---
 
-## 3. Reranking и hybrid search
+## 3. Reranking and hybrid search
 
-- Rerank даёт +20–30% к качеству верхнего результата.
-- Схема:
-  - Этап 1: pgvector + BM25 → топ-30/50 чанков.
-  - Этап 2: cross-encoder (MS MARCO) → переупорядочить → топ-3–5.
+- Rerank gives +20–30% to top result quality.
+- Scheme:
+  - Stage 1: pgvector + BM25 → top 30/50 chunks.
+  - Stage 2: cross-encoder (MS MARCO) → reorder → top 3–5.
 - Hybrid search (BM25 + vector):
-  - BM25 → точные совпадения (endpoints, error codes, флаги).
-  - Vector → перефразировки и семантика.
-- Рекомендация: подавать 6–10 чанков в prompt, просить ссылаться только на явно релевантные.
+  - BM25 → exact matches (endpoints, error codes, flags).
+  - Vector → paraphrases and semantics.
+- Recommendation: feed 6–10 chunks to prompt, ask to cite only clearly relevant ones.
 
-**FI-019 расширить:** добавить BM25 (Postgres full-text) + optional cross-encoder rerank.
+**FI-019 extend:** add BM25 (Postgres full-text) + optional cross-encoder rerank.
 
 ---
 
-## 4. Версионирование документов
+## 4. Document versioning
 
-- Явное версионирование: `version`, `updated_at`, `valid_from`, `valid_until`, `is_current`.
-- Метаданные тянутся в чанки.
-- Запросы фильтруют по `is_current=true`.
+- Explicit versioning: `version`, `updated_at`, `valid_from`, `valid_until`, `is_current`.
+- Metadata flows into chunks.
+- Queries filter by `is_current=true`.
 - Recency scoring: `final_score = semantic_score * (0.7 + 0.3 * recency_score)`.
-- При обновлении дока — новая версия + старая помечается `is_current=false`.
-- Для тестовых ссылок: вынести base URLs в конфиг/таблицу, не хранить в доках.
-- В документах писать "Updated: Январь 2026" — помогает LLM интерпретировать.
+- On doc update — new version + old marked `is_current=false`.
+- For test URLs: move base URLs to config/table, don't store in docs.
+- In docs write "Updated: January 2026" — helps LLM interpret.
 
-**Новая фича:** FI-029 Document versioning & recency scoring.
+**New feature:** FI-029 Document versioning & recency scoring.
 
 ---
 
-## 5. System prompt для техдоков
+## 5. System prompt for technical docs
 
-Критические элементы:
+Critical elements:
 
-1. **Политика правдивости и эскалации:**
-   - "Если информации нет в документах или конфиге — не выдумывай. Направь к: support_email, support_portal_url, account_manager."
+1. **Truthfulness and escalation policy:**
+   - "If info is not in docs or config — don't invent. Direct to: support_email, support_portal_url, account_manager."
 
-2. **Привязка к источнику:**
-   - "Отвечай только на основе переданного контекста. Если контекст противоречив — опиши это и предложи уточнить у поддержки."
+2. **Source grounding:**
+   - "Answer only from the provided context. If context is contradictory — describe it and suggest clarifying with support."
 
-3. **Язык и стиль:**
-   - Кратко, без маркетинга, с примерами API-запросов, код-блоками.
-   - "Отвечай на языке вопроса."
+3. **Language and style:**
+   - Concise, no marketing, with API request examples, code blocks.
+   - "Answer in the question's language."
 
-4. **Работа с несколькими чанками:**
-   - "Объедини информацию из нескольких фрагментов. Если есть противоречия — укажи явно."
+4. **Multi-chunk handling:**
+   - "Combine info from multiple fragments. If there are contradictions — state them explicitly."
 
-5. **Ограничение фантазии:**
-   - "Не придумывай endpoints, параметры, тарифы. Если нет — скажи, что нет, и направь к документации или поддержке."
+5. **Fantasy limit:**
+   - "Don't invent endpoints, parameters, pricing. If not found — say so and direct to documentation or support."
 
-**FI-007 уточнить:** включить все эти элементы в per-client system prompt.
+**FI-007 clarify:** include all these elements in per-client system prompt.
 
 ---
 
 ## 6. Cross-lingual retrieval
 
-- `text-embedding-3-small` ок, но для продового мультиязычного RAG лучше:
-  - **Voyage-multilingual-2** (SaaS) — сильный cross-lingual retrieval.
-  - **e5-mistral** (open-source) — современный multilingual вариант.
-- Практика:
-  - Один multilingual embedding space для всех тенантов.
-  - В system prompt явно: "Отвечай на языке пользователя, даже если контекст на другом языке."
-  - Для критичных клиентов: хранить 2 набора чанков (оригинал + машинный перевод на EN).
+- `text-embedding-3-small` is OK, but for production multilingual RAG better:
+  - **Voyage-multilingual-2** (SaaS) — strong cross-lingual retrieval.
+  - **e5-mistral** (open-source) — modern multilingual option.
+- Practice:
+  - One multilingual embedding space for all tenants.
+  - In system prompt explicitly: "Answer in user's language, even if context is in another language."
+  - For critical clients: store 2 chunk sets (original + machine translation to EN).
 
-**FI-028 обновить:** добавить Voyage-multilingual-2 как основного кандидата.
+**FI-028 update:** add Voyage-multilingual-2 as primary candidate.
 
 ---
 
-## 7. Метрики качества RAG
+## 7. RAG quality metrics
 
 **Retrieval:**
-- Contextual relevancy@k: доля запросов где среди топ-k есть правильный фрагмент.
-- Precision@k: доля релевантных чанков в топ-k.
+- Contextual relevancy@k: share of queries where top-k contains the correct fragment.
+- Precision@k: share of relevant chunks in top-k.
 
 **Generation:**
-- Answer faithfulness (RAGAS) — насколько ответ опирается на контекст, не галлюцинирует.
-- Answer relevancy — насколько ответ закрывает вопрос.
-- Baseline: ручная аннотация 100–200 реальных тикетов.
+- Answer faithfulness (RAGAS) — how much the answer relies on context, doesn't hallucinate.
+- Answer relevancy — how well the answer addresses the question.
+- Baseline: manual annotation of 100–200 real tickets.
 
-**Продуктовые:**
-- CSAT по ответам бота.
-- Escalation rate: доля диалогов переданных человеку.
-- Single-turn resolution rate: сколько вопросов решается без уточнений.
+**Product:**
+- CSAT on bot answers.
+- Escalation rate: share of conversations handed to human.
+- Single-turn resolution rate: how many questions resolved without follow-ups.
 
-**Инструменты:** RAGAS, Giskard.
+**Tools:** RAGAS, Giskard.
 
 ---
 
-## 8. Архитектурные рекомендации для B2B
+## 8. Architectural recommendations for B2B
 
-1. **Разделить слои знаний:**
-   - Org config (support email, тарифы, домены, лимиты) → всегда в system prompt.
+1. **Separate knowledge layers:**
+   - Org config (support email, pricing, domains, limits) → always in system prompt.
    - Product docs → RAG.
-   - Operational data (статусы инцидентов, лимиты аккаунта) → прямые запросы к API/БД.
+   - Operational data (incident statuses, account limits) → direct API/DB queries.
 
-2. **Retrieval стек:**
+2. **Retrieval stack:**
    - pgvector + BM25 hybrid.
-   - Optional cross-encoder rerank для сложных запросов.
-   - Жёсткая изоляция по tenant_id.
+   - Optional cross-encoder rerank for complex queries.
+   - Strict isolation by tenant_id.
 
-3. **Модели:**
+3. **Models:**
    - Multilingual embeddings (Voyage-multilingual-2 / e5-mistral).
-   - Смешанный режим генерации: gpt-4o-mini по умолчанию, более сильная модель при low-confidence.
+   - Mixed generation mode: gpt-4o-mini by default, stronger model on low-confidence.
 
-4. **Per-tenant настройки:**
-   - Язык документов и ответов.
-   - Каналы эскалации.
-   - Жёсткость политики "не выдумывать".
-
----
+4. **Per-tenant settings:**
+   - Document and answer language.
+   - Escalation channels.
+   - Strictness of "don't invent" policy.
 
 ---
 
-## Источник 2: ChatGPT
+---
 
-### Что совпадает с Perplexity
+## Source 2: ChatGPT
+
+### What matches Perplexity
 - Overlap 50–100 токенов — оба согласны.
 - Hybrid search BM25 + vector — оба согласны.
 - Reranking через cross-encoder или Cohere — оба согласны.
 - Graceful degradation с 3 уровнями — оба согласны.
 - Метрики: Faithfulness, Recall@k, product thumbs up/down — оба согласны.
 
-### Что добавил ChatGPT (новое)
+### What ChatGPT added (new)
 
 #### 1. LLM-based answer validation
-После генерации ответа — спросить модель:
-> "Есть ли в контексте явный ответ на вопрос пользователя?"
+After generating answer — ask the model:
+> "Is there an explicit answer to the user's question in the context?"
 
-Если нет → fallback. Это дополнительный слой поверх similarity threshold.
+If no → fallback. Additional layer on top of similarity threshold.
 
-#### 2. Query rewriting слой
-Перед retrieval — нормализовать и улучшить вопрос:
-- исправление формулировки,
-- нормализация терминов,
-- добавление контекста.
+#### 2. Query rewriting layer
+Before retrieval — normalize and improve the question:
+- fix phrasing,
+- normalize terms,
+- add context.
 
-Эффект: одна и та же суть вопроса с разными формулировками → одинаково хорошие ответы.
+Effect: same question essence with different phrasings → equally good answers.
 
-**Это решает нашу проблему №4** (качество зависит от формулировки).
+**This solves our problem #4** (quality depends on phrasing).
 
 #### 3. Multi-step RAG pipeline
 

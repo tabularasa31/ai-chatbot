@@ -1,129 +1,129 @@
 # RAG Quality Backlog
 
-Всё что улучшает качество ответов бота.
-Подробное исследование (6 моделей) — в `RAG_QUALITY_RESEARCH.md`.
+Everything that improves bot answer quality.
+Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 ---
 
-## 🔴 P1 — Делаем в первую очередь
+## 🔴 P1 — Do first
 
 ### [FI-031] Org config layer
-**Проблема:** Бот не знает email поддержки, тестового периода, контактов — их нет в документах.
+**Problem:** Bot doesn't know support email, trial period, contacts — they're not in documents.
 
-**Решение:**
-- Поле `org_config` (JSON) на модели Client: `support_email`, `account_manager`, `trial_period`, `support_url`.
-- UI в дашборде: форма для заполнения.
-- В `build_rag_prompt()` — вставлять org_config блоком перед контекстом.
+**Solution:**
+- `org_config` (JSON) field on Client model: `support_email`, `account_manager`, `trial_period`, `support_url`.
+- Dashboard UI: form for filling.
+- In `build_rag_prompt()` — inject org_config block before context.
 
-**Делать ДО FI-007** (system prompt без org config будет неполным).
+**Do BEFORE FI-007** (system prompt without org config will be incomplete).
 
 ---
 
 ### [FI-007] Per-client system prompt
-**5 критических элементов (консенсус всех 6 моделей):**
-1. Роль и цель: "Ты — техподдержка [Название]. Отвечай только из контекста."
-2. Политика правдивости: "Если нет — не выдумывай, направь к: support_email, account_manager."
-3. Язык: "Отвечай на языке вопроса."
-4. Работа с несколькими чанками: "Объедини, укажи противоречия явно."
-5. Ограничение фантазии: "Не придумывай endpoints, тарифы, параметры."
+**5 critical elements (consensus of all 6 models):**
+1. Role and goal: "You are support for [Name]. Answer only from context."
+2. Truthfulness policy: "If not found — don't invent, direct to: support_email, account_manager."
+3. Language: "Answer in the question's language."
+4. Multi-chunk handling: "Combine, state contradictions explicitly."
+5. Fantasy limit: "Don't invent endpoints, plans, parameters."
 
-**Дополнительно (Grok):** Структура ответа:
+**Additionally (Grok):** Answer structure:
 ```
-1. Краткий прямой ответ (1–2 предложения)
-2. Цитата [1]
-3. Доп. шаги / предупреждения
-4. Если биллинг/контракт → направить к менеджеру
+1. Brief direct answer (1–2 sentences)
+2. Quote [1]
+3. Additional steps / warnings
+4. If billing/contract → direct to manager
 ```
 
-**Хранить:** system_prompt в БД с version + tenant_id (prompt versioning, по Sonnet).
+**Store:** system_prompt in DB with version + tenant_id (prompt versioning, per Sonnet).
 
 ---
 
 ### [FI-009] Improved chunking + metadata
-**Рекомендации всех 6 моделей:**
-- `chunk_size = 450 токенов`, `chunk_overlap = 120 токенов` (по Grok — самые конкретные).
+**Recommendations from all 6 models:**
+- `chunk_size = 450 tokens`, `chunk_overlap = 120 tokens` (Grok — most specific).
 - Recursive splitter: `["\n\n", "\n", ". ", " ", ""]`.
-- Структурный chunking: бить по заголовкам (H1–H3), не разрывать код-блоки.
-- Small-to-Big / Sentence-window: маленький чанк для поиска, ±2 предложения при выдаче.
-- Metadata на каждом чанке: `section_title`, `doc_id`, `doc_date`, `content_type`, `tenant_id`.
+- Structural chunking: split by headers (H1–H3), don't break code blocks.
+- Small-to-Big / Sentence-window: small chunk for search, ±2 sentences at retrieval.
+- Metadata per chunk: `section_title`, `doc_id`, `doc_date`, `content_type`, `tenant_id`.
 
 ---
 
 ### [FI-033] Query expansion / rewriting
-**Проблема:** Качество зависит от формулировки вопроса.
+**Problem:** Quality depends on question phrasing.
 
-**Варианты:**
-- Query rewriting: нормализовать перед retrieval.
-- Query expansion: 2–3 перефразировки + RRF по всем результатам.
+**Options:**
+- Query rewriting: normalize before retrieval.
+- Query expansion: 2–3 paraphrases + RRF across all results.
 
 ---
 
 ### [FI-034] LLM-based answer validation
-**Идея:** После генерации спросить модель: "Есть ли в контексте явный ответ?"
-- Если нет → fallback.
-- Дополнительный слой поверх cosine threshold.
+**Idea:** After generation, ask model: "Is there an explicit answer in context?"
+- If no → fallback.
+- Additional layer on top of cosine threshold.
 
 ---
 
 ### [FI-032] Document health check
-**Идея:** После загрузки документа — автоматический GPT-анализ:
-- Неполные разделы (нет ответа на типичные вопросы).
-- Нерабочие / устаревшие URL.
-- Пробелы в документации.
-- Плохая структура для RAG (длинные разделы без подзаголовков).
+**Idea:** After document upload — automatic GPT analysis:
+- Incomplete sections (no answer to typical questions).
+- Broken / outdated URLs.
+- Documentation gaps.
+- Poor structure for RAG (long sections without subheadings).
 
-**UI:** таб/секция "Document health" в дашборде с предупреждениями.
-**Effort:** 3 дня.
+**UI:** "Document health" tab/section in dashboard with warnings.
+**Effort:** 3 days.
 
 ---
 
-## 🟠 P2 — Следующий спринт
+## 🟠 P2 — Next sprint
 
 ### [FI-036] HyDE (Hypothetical Document Embeddings)
-**Когда:** Вопрос типа "лимиты API?" — слишком короткий.
-- Генерировать гипотетический ответ через GPT → искать чанки по нему.
-- Помогает при коротких/расплывчатых вопросах.
+**When:** Question like "API limits?" — too short.
+- Generate hypothetical answer via GPT → search chunks by it.
+- Helps with short/vague questions.
 
 ### [FI-037] Approved Answers Layer
-**Идея:** 👍-ответы → отдельный слой поиска.
+**Idea:** 👍 answers → separate search layer.
 
 ```
-Вопрос → Semantic search в approved_answers (>0.85?) → Instant answer (без GPT)
-                                                  ↓ нет
-                                            Обычный RAG
+Question → Semantic search in approved_answers (>0.85?) → Instant answer (no GPT)
+                                                  ↓ no
+                                            Regular RAG
 ```
 
-- Уровень 1 MVP: таблица `approved_answers`, при 👍 → запись.
-- Уровень 2: ideal_answer как эталон + редактирование в /review.
-- Уровень 3: (question + context + ideal_answer) → датасет для fine-tuning.
+- Level 1 MVP: `approved_answers` table, on 👍 → insert.
+- Level 2: ideal_answer as reference + editing in /review.
+- Level 3: (question + context + ideal_answer) → dataset for fine-tuning.
 
 ### [FI-029] Document versioning & recency scoring
-- Поля: `is_current`, `version`, `valid_until`, `updated_at`.
-- Фильтр при retrieval: `WHERE is_current = true`.
+- Fields: `is_current`, `version`, `valid_until`, `updated_at`.
+- Retrieval filter: `WHERE is_current = true`.
 - Recency scoring: `final_score = semantic * 0.7 + recency * 0.3`.
-- При обновлении: новая версия + старая `is_current=false`.
+- On update: new version + old `is_current=false`.
 - Namespace per major version (api-v1, api-v2).
 
-### [FI-008] Hybrid search (уже частично есть, расширить)
-- Текущий fallback keyword < 0.3 — расширить до полноценного BM25.
-- RRF или weighted `0.7 vector + 0.3 BM25`.
-- После retrieval: cross-encoder rerank (Cohere Rerank 3.5 или flashrank).
+### [FI-008] Hybrid search (partially exists, extend)
+- Current keyword fallback < 0.3 — extend to full BM25.
+- RRF or weighted `0.7 vector + 0.3 BM25`.
+- After retrieval: cross-encoder rerank (Cohere Rerank 3.5 or flashrank).
 
 ---
 
-## 🟡 P3 — Долгосрочно
+## 🟡 P3 — Long-term
 
 ### [FI-028] Cross-lingual retrieval
-- Перейти на multilingual embeddings: **Jina v3/v4** или **Cohere Embed v3 multilingual**.
-- System prompt: "Отвечай на языке вопроса, даже если контекст на другом."
-- Для критичных клиентов: хранить чанки на оригинале + машинный перевод на EN.
+- Switch to multilingual embeddings: **Jina v3/v4** or **Cohere Embed v3 multilingual**.
+- System prompt: "Answer in question language, even if context is in another."
+- For critical clients: store chunks in original + machine translation to EN.
 
-### [FI-011] FAQ layer (автогенерация из тикетов)
-- Не ручной ввод Q&A, а автогенерация из загруженных тикетов.
-- Клиент одобряет/отклоняет предложенные пары.
+### [FI-011] FAQ layer (auto-generation from tickets)
+- Not manual Q&A input, but auto-generation from uploaded tickets.
+- Client approves/rejects suggested pairs.
 
 ---
 
-## Исследование
+## Research
 
-Полные рекомендации 6 моделей (Perplexity, ChatGPT, DeepSeek, Gemini, Sonnet, Grok) → `RAG_QUALITY_RESEARCH.md`.
+Full recommendations from 6 models (Perplexity, ChatGPT, DeepSeek, Gemini, Sonnet, Grok) → `RAG_QUALITY_RESEARCH.md`.

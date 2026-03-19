@@ -20,7 +20,7 @@ def test_build_rag_prompt() -> None:
     """build_rag_prompt produces correct format with chunks."""
     chunks = ["chunk1", "chunk2", "chunk3"]
     result = build_rag_prompt("What is X?", chunks)
-    assert "You are a helpful assistant" in result
+    assert "technical support agent" in result
     assert "Answer based ONLY on the provided context" in result
     assert "chunk1" in result
     assert "chunk2" in result
@@ -57,7 +57,7 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert tokens == 100
     mock_openai_client.chat.completions.create.assert_called_once()
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-3.5-turbo"
+    assert call_kwargs["model"] == "gpt-4o-mini"
     assert call_kwargs["temperature"] == 0.2
     assert call_kwargs["max_tokens"] == 500
 

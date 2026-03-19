@@ -298,7 +298,7 @@ POST /chat
     2. Build prompt:
        "Based on:\n{chunk1}\n{chunk2}\n{chunk3}\n\n
         Answer: {question}"
-    3. Call OpenAI GPT-3.5-turbo
+    3. Call OpenAI gpt-4o-mini
        - temperature: 0.2 (fact-based, low creativity)
        - max_tokens: 500
     4. Save to DB: INSERT INTO messages

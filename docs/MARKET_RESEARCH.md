@@ -1,100 +1,100 @@
 # Market Research: AI Support Bot / Doc-based Chatbot SaaS
 
-Исследование рынка и конкурентного ландшафта для Chat9.
-Дата: 2026-03-18.
+Market and competitive landscape research for Chat9.
+Date: 2026-03-18.
 
 ---
 
-## Рынок
+## Market
 
-### Категория
-"Doc-based AI chatbot" — чатбот, который обучается на документации клиента и отвечает на вопросы пользователей. Ближайшая родительская категория: AI Customer Support / Live Chat.
+### Category
+"Doc-based AI chatbot" — a chatbot that learns from client documentation and answers user questions. Closest parent category: AI Customer Support / Live Chat.
 
-### Размер рынка
-- Рынок AI Customer Service активно растёт на 2025–2026.
-- Крупные игроки (Intercom Fin, Tidio) уже имеют 10k+ клиентов.
-- Есть специализированная ниша "docs-trained chatbot" (Chatbase, DocsBot) — быстрорастущий сегмент.
-- ICP Chat9: малый и средний B2B SaaS, API/tech продукты — рынок огромный.
+### Market size
+- AI Customer Service market is growing actively in 2025–2026.
+- Major players (Intercom Fin, Tidio) already have 10k+ clients.
+- Specialized niche "docs-trained chatbot" (Chatbase, DocsBot) — fast-growing segment.
+- Chat9 ICP: small and mid-size B2B SaaS, API/tech products — huge market.
 
 ---
 
-## Конкурентный ландшафт
+## Competitive landscape
 
-### Сегмент 1: Enterprise AI Support Agents
+### Segment 1: Enterprise AI Support Agents
 
 **Fin by Intercom** (fin.ai)
-- Позиционирование: #1 AI Agent for customer service.
-- Цена: **$0.99 за resolved conversation**.
-- Интеграции: любой helpdesk (Zendesk, Salesforce, HubSpot).
+- Positioning: #1 AI Agent for customer service.
+- Price: **$0.99 per resolved conversation**.
+- Integrations: any helpdesk (Zendesk, Salesforce, HubSpot).
 - Resolution rate: ~65% end-to-end.
-- Целевая аудитория: средний и крупный бизнес.
-- **Vs Chat9:** несравнимо дороже, требует helpdesk, сложный onboarding.
+- Target audience: mid and large business.
+- **Vs Chat9:** incomparably more expensive, requires helpdesk, complex onboarding.
 
 **DataDome**
-- Позиционирование: Enterprise bot protection + fraud prevention.
-- Цена: $1000+/mo.
-- Целевая аудитория: крупные e-commerce и media.
-- **Vs Chat9:** другая ниша (защита от ботов, не поддержка).
+- Positioning: Enterprise bot protection + fraud prevention.
+- Price: $1000+/mo.
+- Target audience: large e-commerce and media.
+- **Vs Chat9:** different niche (bot protection, not support).
 
 ---
 
-### Сегмент 2: SMB Live Chat + AI
+### Segment 2: SMB Live Chat + AI
 
 **Tidio** (tidio.com)
-- Позиционирование: AI + human customer service platform.
-- Цены:
+- Positioning: AI + human customer service platform.
+- Prices:
   - Starter: **$24/mo** (100 conversations)
-  - Growth: **от $49/mo** (250+ conversations)
-  - Plus: **от $749/mo** (custom)
-- Фичи: live chat, tickets, AI bot (Lyro), Zendesk/Salesforce интеграция.
-- Целевая аудитория: e-commerce, SMB.
-- **Vs Chat9:** Tidio — общая live chat платформа, не RAG на доках. Дороже при масштабе.
+  - Growth: **from $49/mo** (250+ conversations)
+  - Plus: **from $749/mo** (custom)
+- Features: live chat, tickets, AI bot (Lyro), Zendesk/Salesforce integration.
+- Target audience: e-commerce, SMB.
+- **Vs Chat9:** Tidio is a general live chat platform, not RAG on docs. More expensive at scale.
 
 **Crisp** (crisp.chat)
-- Позиционирование: flat rate per workspace, всё включено.
-- Цены: не показывает публично, flat monthly.
-- Фичи: live chat, AI, мультиканал.
-- **Vs Chat9:** похоже на Tidio, общая платформа без фокуса на документацию.
+- Positioning: flat rate per workspace, all included.
+- Prices: not shown publicly, flat monthly.
+- Features: live chat, AI, multichannel.
+- **Vs Chat9:** similar to Tidio, general platform without focus on documentation.
 
 ---
 
-### Сегмент 3: Doc-based Chatbot (прямые конкуренты)
+### Segment 3: Doc-based Chatbot (direct competitors)
 
 **Chatbase** (chatbase.co)
-- Позиционирование: "Train ChatGPT on your data".
-- Цены: не показывает публично, 10,000+ клиентов.
-- Фичи: upload docs → chatbot → embed на сайт.
-- **Vs Chat9:** самый близкий конкурент. Нет conversation logs, нет feedback loop, нет "your OpenAI key" модели.
+- Positioning: "Train ChatGPT on your data".
+- Prices: not shown publicly, 10,000+ clients.
+- Features: upload docs → chatbot → embed on site.
+- **Vs Chat9:** closest competitor. No conversation logs, no feedback loop, no "your OpenAI key" model.
 
 **DocsBot AI** (docsbot.ai)
-- Позиционирование: AI chatbot trained on your documentation.
-- Цены:
-  - Free: 1 бот, 50 страниц, 100 сообщений/мес.
-  - Personal: **$19/mo** — 3 бота, 5k страниц, 5k сообщений.
-  - Standard: **$49/mo** (most popular) — 10 ботов, 15k страниц, 15k сообщений.
-  - Business: **$99/mo** — 100 ботов, 100k страниц, unbranded widget.
-- Фичи: Help Scout интеграция, analytics, conversation summaries, MCP server.
-- **Vs Chat9:** очень близкий конкурент. Сильнее по интеграциям. Слабее по RAG quality controls (нет нашего 👍/👎 pipeline, нет debug mode).
-- **Важно:** "Unbranded widget" только в Business ($99/mo) — наша FI-038 это дифференциатор.
+- Positioning: AI chatbot trained on your documentation.
+- Prices:
+  - Free: 1 bot, 50 pages, 100 messages/mo.
+  - Personal: **$19/mo** — 3 bots, 5k pages, 5k messages.
+  - Standard: **$49/mo** (most popular) — 10 bots, 15k pages, 15k messages.
+  - Business: **$99/mo** — 100 bots, 100k pages, unbranded widget.
+- Features: Help Scout integration, analytics, conversation summaries, MCP server.
+- **Vs Chat9:** very close competitor. Stronger on integrations. Weaker on RAG quality controls (no our 👍/👎 pipeline, no debug mode).
+- **Important:** "Unbranded widget" only in Business ($99/mo) — our FI-038 is a differentiator.
 
 **SiteGPT** (sitegpt.ai)
-- Позиционирование: AI customer support agent from your website/docs.
-- Цены:
+- Positioning: AI customer support agent from your website/docs.
+- Prices:
   - Starter: **$39/mo**
   - Growth: **$79/mo**
   - Scale: **$259/mo**
   - Enterprise: custom
-- Zendesk escalation поддерживается.
-- **Vs Chat9:** похожий продукт, дороже. Нет явного feedback/quality loop.
+- Zendesk escalation supported.
+- **Vs Chat9:** similar product, more expensive. No explicit feedback/quality loop.
 
 ---
 
-## Позиционирование Chat9
+## Chat9 positioning
 
-### Место на рынке
+### Market position
 
 ```
-                  ДОРОГО
+                  EXPENSIVE
                      │
 Enterprise ──── Fin ($0.99/conv) ──── DataDome ($1k+)
                      │
@@ -104,54 +104,54 @@ Enterprise ──── Fin ($0.99/conv) ──── DataDome ($1k+)
                      │
       ★ CHAT9 (free/freemium) ─── Chatbase
                      │
-                  ДЁШЕВО
+                  CHEAP
 ```
 
-### Наши дифференциаторы
+### Our differentiators
 
-1. **"Your OpenAI key"** — ты платишь OpenAI напрямую, мы не накручиваем за токены. DocsBot и SiteGPT включают AI costs в цену подписки (фактически — скрытая наценка).
+1. **"Your OpenAI key"** — you pay OpenAI directly, we don't markup tokens. DocsBot and SiteGPT include AI costs in subscription price (effectively — hidden markup).
 
-2. **Feedback loop** (👍/👎 + ideal_answer + training data) — у конкурентов этого нет в таком виде. Это путь к самообучающемуся боту.
+2. **Feedback loop** (👍/👎 + ideal_answer + training data) — competitors don't have this. Path to self-improving bot.
 
-3. **Debug mode** — видно какие чанки были использованы. Нет у прямых конкурентов.
+3. **Debug mode** — see which chunks were used. Not available to direct competitors.
 
-4. **"Powered by Chat9" / branding** — DocsBot берёт $99/mo за unbranded виджет. У нас это будет Premium фича.
+4. **"Powered by Chat9" / branding** — DocsBot charges $99/mo for unbranded widget. Ours will be a Premium feature.
 
-5. **Простота** — 5 минут до первого ответа. Нет сложных helpdesk интеграций для базового use case.
-
----
-
-## Слабые стороны Chat9 vs конкуренты
-
-| Аспект | Конкуренты | Chat9 сейчас |
-|--------|-----------|-------------|
-| Интеграции (Zendesk, HubSpot) | DocsBot, SiteGPT, Fin | ❌ Нет (FI-027 в roadmap) |
-| Multi-user / team | DocsBot, Tidio | ❌ Нет |
-| Analytics / charts | DocsBot, Tidio | ❌ Базовые метрики |
-| Custom widget design | Все | ❌ Нет |
-| Количество ботов | DocsBot: 3–100 | 1 бот = 1 аккаунт |
-| Brand awareness | Chatbase: 10k+ клиентов | 🆕 Новый игрок |
+5. **Simplicity** — 5 minutes to first answer. No complex helpdesk integrations for basic use case.
 
 ---
 
-## Вывод: где Chat9 может выиграть
+## Chat9 weaknesses vs competitors
 
-**Сейчас (до интеграций):**
-- Технические B2B команды которые хотят контроль над AI costs (свой ключ).
-- Команды которые хотят понимать качество ответов (debug + feedback loop).
-- Небольшой SaaS с одним продуктом, одним ботом.
-
-**После (с Zendesk + multi-tenant + branding):**
-- Конкурировать с DocsBot и SiteGPT напрямую по цене и функциям.
-- Позиционирование: "DocsBot but with better quality controls and transparent pricing."
+| Aspect | Competitors | Chat9 now |
+|--------|-------------|------------|
+| Integrations (Zendesk, HubSpot) | DocsBot, SiteGPT, Fin | ❌ None (FI-027 on roadmap) |
+| Multi-user / team | DocsBot, Tidio | ❌ None |
+| Analytics / charts | DocsBot, Tidio | ❌ Basic metrics |
+| Custom widget design | All | ❌ None |
+| Number of bots | DocsBot: 3–100 | 1 bot = 1 account |
+| Brand awareness | Chatbase: 10k+ clients | 🆕 New player |
 
 ---
 
-## Источники
+## Conclusion: where Chat9 can win
 
-- fin.ai (Intercom Fin) — прямой сайт, март 2026
-- tidio.com/pricing — прямой сайт, март 2026
-- docsbot.ai/pricing — прямой сайт, март 2026
-- sitegpt.ai/pricing — прямой сайт, март 2026
-- chatbase.co — прямой сайт, март 2026
-- crisp.chat/en/pricing — прямой сайт, март 2026
+**Now (before integrations):**
+- Technical B2B teams that want control over AI costs (own key).
+- Teams that want to understand answer quality (debug + feedback loop).
+- Small SaaS with one product, one bot.
+
+**Later (with Zendesk + multi-tenant + branding):**
+- Compete with DocsBot and SiteGPT directly on price and features.
+- Positioning: "DocsBot but with better quality controls and transparent pricing."
+
+---
+
+## Sources
+
+- fin.ai (Intercom Fin) — direct site, March 2026
+- tidio.com/pricing — direct site, March 2026
+- docsbot.ai/pricing — direct site, March 2026
+- sitegpt.ai/pricing — direct site, March 2026
+- chatbase.co — direct site, March 2026
+- crisp.chat/en/pricing — direct site, March 2026

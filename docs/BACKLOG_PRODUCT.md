@@ -1,133 +1,133 @@
 # Product Features Backlog
 
-Продуктовые фичи для клиентов и операторов платформы.
-RICE-приоритизация — в `PRODUCT_BACKLOG.md`.
+Product features for clients and platform operators.
+RICE prioritization — in `PRODUCT_BACKLOG.md`.
 
 ---
 
-## 🔴 P1 — Делаем сейчас
+## 🔴 P1 — Doing now
 
-### [FI-005] Greeting message в виджете (RICE: 1440)
-- Клиент задаёт `greeting_message` в настройках.
-- Виджет показывает его первым при открытии (роль assistant).
-- Если не задано → стандартный шаблон.
-- **Effort:** 1 день.
+### [FI-005] Greeting message in widget (RICE: 1440)
+- Client sets `greeting_message` in settings.
+- Widget shows it first on open (assistant role).
+- If not set → default template.
+- **Effort:** 1 day.
 
 ### [FI-007] Per-client system prompt (RICE: 1020)
-- Клиент настраивает характер бота в дашборде.
-- Разные боты для разных клиентов.
-- *(подробности в BACKLOG_RAG_QUALITY.md)*
+- Client configures bot personality in dashboard.
+- Different bots for different clients.
+- *(details in BACKLOG_RAG_QUALITY.md)*
 
 ---
 
-## 🔴 P1 — Быстрые wins
+## 🔴 P1 — Quick wins
 
-### [FI-038] "Powered by Chat9" в подвале виджета
-**Идея:** В нижней части каждого виджета — небольшая строка "Powered by Chat9" со ссылкой на getchat9.live.
+### [FI-038] "Powered by Chat9" in widget footer
+**Idea:** Small "Powered by Chat9" line with link to getchat9.live at the bottom of each widget.
 
-**Почему это важно:**
-- Каждый встроенный виджет = реклама Chat9 на сайте клиента.
-- Работает как "Sent from iPhone" — пассивный вирусный маркетинг.
-- Бесплатно для нас, минимальная стоимость для клиента.
+**Why it matters:**
+- Each embedded widget = Chat9 advertising on client's site.
+- Works like "Sent from iPhone" — passive viral marketing.
+- Free for us, minimal cost for client.
 
-**Реализация:**
-- Добавить в `backend/widget/static/embed.js` строку в низу chat window:
+**Implementation:**
+- Add to `backend/widget/static/embed.js` at bottom of chat window:
   ```html
   <div style="...">
     Powered by <a href="https://getchat9.live" target="_blank">Chat9</a>
   </div>
   ```
-- Стиль: мелкий серый текст, не отвлекает от чата.
-- В будущем Premium можно убирать ("Remove branding").
+- Style: small gray text, doesn't distract from chat.
+- Future Premium can remove ("Remove branding").
 
-**Effort:** 30 минут.
+**Effort:** 30 minutes.
 
 ---
 
 ### [FI-040] Client Analytics Dashboard
-**Идея:** Простая аналитика для клиента прямо в дашборде — не графики ради графиков, а конкретные инсайты о том, как работает бот.
+**Idea:** Simple analytics for client right in dashboard — not charts for charts' sake, but concrete insights on how the bot performs.
 
-**Концепция (компактный виджет на главной странице):**
+**Concept (compact widget on main page):**
 ```
-Эта неделя:
-📊 47 сессий  ·  143 сообщения  ·  avg 3.0 msg/сессия
-🔢 12,450 токенов  ·  ~$0.04 (gpt-4o-mini)
-🔝 Топ темы: CORS (12), Live stream (8), API limits (6)
-⚠️  3 вопроса без ответа
+This week:
+📊 47 sessions  ·  143 messages  ·  avg 3.0 msg/session
+🔢 12,450 tokens  ·  ~$0.04 (gpt-4o-mini)
+🔝 Top topics: CORS (12), Live stream (8), API limits (6)
+⚠️  3 unanswered questions
 ```
 
-**Метрики для клиента:**
-- Сессии за период (день / неделя / месяц)
-- Уникальные пользователи (по session_id)
-- Среднее сообщений на сессию
-- **Токены использовано** (sum Chat.tokens_used за период)
-- **Приблизительная стоимость** ($) — считается автоматически по известной цене gpt-4o-mini
-- Топ-5 тем (кластеризация вопросов через GPT)
-- % вопросов без ответа (fallback rate)
-- % с 👎 (плохие ответы)
+**Metrics for client:**
+- Sessions per period (day / week / month)
+- Unique users (by session_id)
+- Avg messages per session
+- **Tokens used** (sum Chat.tokens_used per period)
+- **Approximate cost** ($) — auto-calculated from known gpt-4o-mini pricing
+- Top 5 topics (question clustering via GPT)
+- % unanswered questions (fallback rate)
+- % with 👎 (bad answers)
 
-**Почему важно:**
-- Клиент видит реальную ценность бота в цифрах.
-- Подсвечивает пробелы в документации (топ без-ответных вопросов).
-- Стандарт у всех конкурентов (Tidio, DocsBot, SiteGPT).
-- Связано с Daily Summary Email (FI-039) — одни и те же данные.
+**Why it matters:**
+- Client sees real bot value in numbers.
+- Highlights documentation gaps (top unanswered questions).
+- Standard among competitors (Tidio, DocsBot, SiteGPT).
+- Tied to Daily Summary Email (FI-039) — same data.
 
-**Реализация:**
-- Backend: агрегация по `Chat` и `Message` за период, кластеризация тем через GPT.
-- Frontend: виджет на главной странице дашборда + отдельная страница `/analytics`.
+**Implementation:**
+- Backend: aggregation over `Chat` and `Message` per period, topic clustering via GPT.
+- Frontend: widget on dashboard main page + separate `/analytics` page.
 
-**Effort:** 3–4 дня.
-**Приоритет:** P2.
+**Effort:** 3–4 days.
+**Priority:** P2.
 
 ---
 
 ### [FI-039] Daily Summary Email — "Chat9 as a team member"
-**Идея:** Каждое утро владелец аккаунта получает email-отчёт от Chat9 о вчерашнем дне — как будто бот отчитывается как сотрудник саппорта.
+**Idea:** Every morning account owner gets an email report from Chat9 about yesterday — as if the bot is reporting as a support team member.
 
-**Структура письма:**
+**Email structure:**
 ```
 Chat9 Daily Report — [Client name] — [Date]
 
-Вчера я ответил на N вопросов от ваших пользователей.
-Использовано токенов: 4,230 (~$0.01)
+Yesterday I answered N questions from your users.
+Tokens used: 4,230 (~$0.01)
 
-Чаще всего спрашивали:
-- [тема 1] — X вопросов
-- [тема 2] — Y вопросов
+Most asked about:
+- [topic 1] — X questions
+- [topic 2] — Y questions
 
-Где я не справился (N вопросов):
-- "[вопрос]" — информации в документации нет
-- "[вопрос]" — нашёл частичный ответ
+Where I couldn't help (N questions):
+- "[question]" — no info in documentation
+- "[question]" — found partial answer
 
-Рекомендую добавить в документацию:
-- [тема 1]
-- [тема 2]
+Recommend adding to documentation:
+- [topic 1]
+- [topic 2]
 
-До завтра,
+See you tomorrow,
 Chat9
 ```
 
-**Почему это важно:**
-- Меняет восприятие продукта: бот → "член команды".
-- Автоматически подсвечивает пробелы в документации.
-- Клиент видит ценность каждый день — даже не заходя в дашборд.
-- Дифференциатор — у конкурентов (DocsBot, SiteGPT) этого нет.
+**Why it matters:**
+- Changes product perception: bot → "team member".
+- Automatically highlights documentation gaps.
+- Client sees value every day — even without opening dashboard.
+- Differentiator — competitors (DocsBot, SiteGPT) don't have this.
 
-**Технически:**
-- Cron job раз в день (утро по timezone клиента).
-- GPT анализирует вчерашние сессии → генерирует отчёт.
-- Отправка через Brevo (уже настроен).
-- Настройка: вкл/выкл в дашборде, выбор времени отправки.
+**Technical:**
+- Cron job once a day (morning in client timezone).
+- GPT analyzes yesterday's sessions → generates report.
+- Send via Brevo (already configured).
+- Settings: on/off in dashboard, send time.
 
-**Effort:** 2–3 дня.
-**Приоритет:** P2 — после базовых фич, но до Zendesk интеграции.
+**Effort:** 2–3 days.
+**Priority:** P2 — after basic features, but before Zendesk integration.
 
 ---
 
-### [FI-041] Status Page Integration (из спека Elины)
-**Идея:** Интегрировать real-time статус сервисов (Statuspage.io, Instatus, Freshstatus) в бота.
+### [FI-041] Status Page Integration (from Elina's spec)
+**Idea:** Integrate real-time service status (Statuspage.io, Instatus, Freshstatus) into the bot.
 
-Когда пользователь спрашивает "why is my API broken?" во время инцидента → бот мгновенно отвечает:
+When user asks "why is my API broken?" during an incident → bot instantly answers:
 ```
 ⚠️ There's an active incident affecting the API.
 Started: 14:23 UTC  |  Status: Investigating
@@ -135,82 +135,82 @@ Latest: Engineers identified root cause, deploying fix. ETA 30min
 Learn more: https://status.yourproduct.com
 ```
 
-**Почему важно:**
-- Дифференциатор — конкуренты не имеют real-time incident awareness
-- Reduces support tickets на 50%+ во время инцидентов
-- Viral value — люди чаще проверяют статус через бота
-- Premium feature потенциально
+**Why it matters:**
+- Differentiator — competitors lack real-time incident awareness
+- Reduces support tickets by 50%+ during incidents
+- Viral value — people check status more often via bot
+- Potential premium feature
 
-**Технически:**
-- Polling worker каждые 60 сек (Celery / FastAPI background tasks)
-- Redis cache с TTL 90 сек
-- Query-time relevance check: показать инцидент только если он релевантен вопросу
-- Webhook support для Statuspage.io
-- Component-to-topic mapping в tenant dashboard
+**Technical:**
+- Polling worker every 60 sec (Celery / FastAPI background tasks)
+- Redis cache with TTL 90 sec
+- Query-time relevance check: show incident only if relevant to question
+- Webhook support for Statuspage.io
+- Component-to-topic mapping in tenant dashboard
 
-**Effort:** 5–6 дней (polling + caching + relevance + dashboard + tests)
+**Effort:** 5–6 days (polling + caching + relevance + dashboard + tests)
 
-**Приоритет:** P2 (после гpt-4o-mini и email verification)
+**Priority:** P2 (after gpt-4o-mini and email verification)
 
-**Спека:** Смотреть `docs/FEATURE_SPECS_REVIEW.md` и исходный `status-page-spec.docx`
+**Spec:** See `docs/FEATURE_SPECS_REVIEW.md` and source `status-page-spec.docx`
 
 ---
 
-## 🟠 P2 — Следующий спринт
+## 🟠 P2 — Next sprint
 
 ### [FI-009] Improved chunking + metadata (RICE: 420)
-- Overlap + структурный chunking.
-- *(подробности в BACKLOG_RAG_QUALITY.md)*
+- Overlap + structural chunking.
+- *(details in BACKLOG_RAG_QUALITY.md)*
 
-### [FI-011 v2] Автоматическая генерация FAQ из тикетов (RICE: 325)
-- Не ручной ввод — автогенерация из загруженных тикетов.
-- Клиент одобряет/отклоняет предложенные Q&A пары.
-- УТП: "Загрузи тикеты → мы сделаем FAQ сами."
+### [FI-011 v2] Auto-generation of FAQ from tickets (RICE: 325)
+- Not manual input — auto-generation from uploaded tickets.
+- Client approves/rejects suggested Q&A pairs.
+- USP: "Upload tickets → we'll build FAQ for you."
 
 ### [FI-027] Ticketing systems integration (Zendesk, Intercom, Freshdesk)
-- Level 1: импорт тикетов → эмбеддинги (автосинхронизация).
-- Level 2: escalation → автосоздание тикета если бот не знает.
-- Level 3: live handoff к агенту.
-- **Ключевое для западного рынка.**
-- **Effort:** 5–8 дней (Level 1).
+- Level 1: import tickets → embeddings (auto-sync).
+- Level 2: escalation → auto-create ticket if bot doesn't know.
+- Level 3: live handoff to agent.
+- **Key for Western market.**
+- **Effort:** 5–8 days (Level 1).
 
-### [FI-014] Admin metrics (уже реализовано ✅)
-- Summary + per-client таблица.
-- Токены, сессии, документы, OpenAI key статус.
+### [FI-014] Admin metrics (already implemented ✅)
+- Summary + per-client table.
+- Tokens, sessions, documents, OpenAI key status.
 
 ### [FI-012] Admin dashboard (operator view)
-- Расширенный: глобальные логи, % bad answers по клиентам.
-- Делать после накопления данных.
+- Extended: global logs, % bad answers per client.
+- Do after data accumulates.
 
 ---
 
-## 🟡 P3 — Потом
+## 🟡 P3 — Later
 
-### [FI-001] Telegram интеграция (RICE: 120)
-- Клиент вводит Telegram Bot Token → webhook → наш `/chat`.
+### [FI-001] Telegram integration (RICE: 120)
+- Client enters Telegram Bot Token → webhook → our `/chat`.
 
 ### [FI-003/004] Rate limiting per-user
-- Нужен вместе с тарифными планами (Stripe).
+- Needed together with pricing plans (Stripe).
 
-### Stripe / тарифные планы (RICE: 206)
-- Free / Premium тарифы.
-- Лимиты по запросам, документам, токенам.
-
----
-
-## 🧊 Дальний бэклог (P3+, когда придёт момент)
-
-- **Conversation summaries** — GPT-резюме каждой сессии в логах. Полезно когда сессий 50+/день.
-- **Analytics charts** — графики трендов по вопросам, темам, resolution rate.
-- **MCP server** — подключить Chat9 как источник данных для Claude/Cursor через Model Context Protocol.
-- **Multi-user / team** — несколько членов команды в одном аккаунте.
-- **Custom widget design** — кастомные цвета, шрифты, логотип в виджете.
+### Stripe / pricing plans (RICE: 206)
+- Free / Premium tiers.
+- Limits on requests, documents, tokens.
 
 ---
 
-## ✅ Реализовано
+## 🧊 Long-term backlog (P3+, when the time comes)
 
-| FI | Что | PR |
+- **Conversation summaries** — GPT summary of each session in logs. Useful when 50+ sessions/day.
+- **Analytics charts** — trend charts by questions, topics, resolution rate.
+- **MCP server** — connect Chat9 as data source for Claude/Cursor via Model Context Protocol.
+- **Multi-user / team** — multiple team members in one account.
+- **Custom widget design** — custom colors, fonts, logo in widget.
+
+---
+
+## ✅ Implemented
+
+| FI | What | PR |
 |----|-----|-----|
 | FI-015 | Email verification | #24 |
 | FI-016 | Enforce verification | #26 |
@@ -219,4 +219,4 @@ Learn more: https://status.yourproduct.com
 | FI-014 | Admin metrics MVP | #22 |
 | FI-010 | 👍/👎 + Review bad answers | #20, #21 |
 | Chat logs | Inbox-style /logs | #19 |
-| Review debug | Retrieval debug в /review | — |
+| Review debug | Retrieval debug in /review | — |

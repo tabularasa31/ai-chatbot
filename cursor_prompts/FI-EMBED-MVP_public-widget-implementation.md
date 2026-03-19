@@ -650,3 +650,25 @@ git push origin feature/embed-mvp-public-script
 - `backend/core/utils.py` — add 1 function
 - `backend/main.py` — add 2 imports + 2 router includes
 - `frontend/app/dashboard/[clientId]/settings/page.tsx` — add 1 component
+
+---
+
+## PR DESCRIPTION
+
+After completing the implementation, provide the Pull Request description in English (Markdown format):
+
+```markdown
+## Summary
+[1-2 sentences: what was changed and why]
+
+## Changes
+- [file.py] — [what changed]
+- [file.py] — [what changed]
+
+## Testing
+- [ ] Tests pass (pytest)
+- [ ] Manual test: [specific scenario]
+
+## Notes
+[Any important context, limitations, or follow-up work]
+```

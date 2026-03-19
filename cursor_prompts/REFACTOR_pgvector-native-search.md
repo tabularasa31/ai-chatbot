@@ -695,3 +695,25 @@ Railway PostgreSQL supports pgvector out of the box.
 - Before: ~50ms per query for 100 docs (Python loop)
 - After: ~2-5ms per query for 100 docs (SQL)
 - After (with HNSW index): ~1-2ms for 10,000+ docs
+
+---
+
+## PR DESCRIPTION
+
+After completing the implementation, provide the Pull Request description in English (Markdown format):
+
+```markdown
+## Summary
+[1-2 sentences: what was changed and why]
+
+## Changes
+- [file.py] — [what changed]
+- [file.py] — [what changed]
+
+## Testing
+- [ ] Tests pass (pytest)
+- [ ] Manual test: [specific scenario]
+
+## Notes
+[Any important context, limitations, or follow-up work]
+```

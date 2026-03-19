@@ -83,3 +83,25 @@ git push origin feature/FEATURE_NAME
 - [Edge case to watch for]
 - [Security consideration if relevant]
 
+---
+
+## PR DESCRIPTION
+
+After completing the implementation, provide the Pull Request description in English (Markdown format):
+
+```markdown
+## Summary
+[1-2 sentences: what was changed and why]
+
+## Changes
+- [file.py] — [what changed]
+- [file.py] — [what changed]
+
+## Testing
+- [ ] Tests pass (pytest)
+- [ ] Manual test: [specific scenario]
+
+## Notes
+[Any important context, limitations, or follow-up work]
+```
+

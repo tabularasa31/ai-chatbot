@@ -12,7 +12,7 @@ Yes. Chat9 requires your own OpenAI API key to generate embeddings and answers. 
 Yes, Chat9 is currently free during early access. You only pay OpenAI directly for the AI usage (embeddings and chat).
 
 **What languages does Chat9 support?**
-Chat9 works in any language. The bot will respond in the same language the user writes in, even if your documentation is in a different language.
+Chat9 responds in the language the user writes in. Best results when your documentation and user questions are in the same language. Cross-lingual support (e.g. English questions against Russian docs) is in progress.
 
 ---
 

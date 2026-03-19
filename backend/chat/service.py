@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 PREVIEW_MAX_LEN = 120
 
 from backend.core.openai_client import get_openai_client
-from backend.models import Chat, Document, Embedding, Message, MessageRole
+from backend.models import Chat, Document, Embedding, Message, MessageFeedback, MessageRole
 from backend.search.service import (
     VECTOR_CONFIDENCE_THRESHOLD,
     cosine_similarity,
@@ -386,6 +386,6 @@ def get_session_logs(
         .all()
     )
     return [
-        (m.id, chat.session_id, m.role.value, m.content, m.feedback.value, m.ideal_answer, m.created_at)
+        (m.id, chat.session_id, m.role.value, m.content, (m.feedback or MessageFeedback.none).value, m.ideal_answer, m.created_at)
         for m in messages
     ]

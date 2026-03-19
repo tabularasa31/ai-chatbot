@@ -48,9 +48,10 @@ def validate_api_key(
 
 In `backend/clients/routes.py`, add to imports:
 ```python
-from slowapi.util import get_remote_address
 from backend.core.limiter import limiter
 ```
+
+(Note: `get_remote_address` is not needed — limiter already uses it via `_key_func` in backend/core/limiter.py)
 
 ### 2. Add rate limit decorator
 
@@ -86,18 +87,25 @@ from fastapi import Request
 
 Before pushing:
 - [ ] Backend starts without errors
-- [ ] Valid API key returns `{valid: true}`
-- [ ] Invalid API key returns `{valid: false}`
-- [ ] After 20 requests/minute, get 429 Too Many Requests
+- [ ] Valid API key returns `200 + {client_id, name}`
+- [ ] Invalid API key returns `404 + {"detail": "Invalid API key"}`
+- [ ] After 20 requests/minute, get `429` (Too Many Requests) with rate limit detail message
 - [ ] Different IPs have separate rate limit counters
 
 **Test rate limit:**
 ```bash
-# First request (OK)
+# First request (OK — valid key)
 curl http://localhost:8000/clients/validate/validkey123456789012345678901234
 
-# After 20 requests, should get 429:
-# {"detail":"429: Too Many Requests"}
+# Response: 200 + {"client_id": "...", "name": "..."}
+
+# Invalid key
+curl http://localhost:8000/clients/validate/invalidkey12345678901234567890
+
+# Response: 404 + {"detail": "Invalid API key"}
+
+# After 20 requests/minute from same IP, should get 429:
+# Response: 429 + {"detail": "...rate limit exceeded..."}
 ```
 
 ---
@@ -115,5 +123,8 @@ git push origin feature/security-rate-limit-validate
 ## NOTES
 
 - Rate limit: 20/minute (prevents brute-force but allows normal usage)
-- Uses IP address for rate limit key (auto from `get_remote_address`)
+- Uses IP address for rate limit key (auto from backend/core/limiter.py's `_key_func`)
 - slowapi already configured in backend/main.py with limiter instance
+- 429 response format may vary by slowapi version — check for 429 status + detail message
+- For additional security: consider logging frequent 429s for anomaly detection
+- Distributed attacks (botnet) not protected against IP-based limiting, but good first line of defense

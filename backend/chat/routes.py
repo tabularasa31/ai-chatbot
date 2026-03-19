@@ -1,9 +1,10 @@
 """FastAPI chat endpoints."""
 
 import uuid
+from collections import defaultdict
 from typing import Annotated, Literal, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -278,58 +279,57 @@ def set_message_feedback(
 def list_bad_answers(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-    limit: int = 50,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> BadAnswerListResponse:
     """
     List assistant messages with feedback=down for the authenticated client.
     JWT auth required. Returns question (previous user msg), answer, ideal_answer.
     """
-    from sqlalchemy import desc
+    from sqlalchemy.orm import joinedload
 
+    # N+1 fix: single query loads all client messages; prev user found in-memory (no per-message DB query)
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    # Find assistant messages with feedback=down, belonging to client's chats
-    bad_messages = (
+    all_messages = (
         db.query(Message)
         .join(Chat, Message.chat_id == Chat.id)
-        .filter(
-            Message.role == MessageRole.assistant,
-            Message.feedback == MessageFeedback.down,
-            Chat.client_id == client.id,
-        )
-        .order_by(desc(Message.created_at))
-        .limit(limit)
-        .offset(offset)
+        .options(joinedload(Message.chat))
+        .filter(Chat.client_id == client.id)
+        .order_by(Message.chat_id, Message.created_at)
         .all()
     )
 
-    items: list[BadAnswerItem] = []
-    for msg in bad_messages:
-        # Find previous user message in same chat
-        prev_user = (
-            db.query(Message)
-            .filter(
-                Message.chat_id == msg.chat_id,
-                Message.role == MessageRole.user,
-                Message.created_at < msg.created_at,
-            )
-            .order_by(Message.created_at.desc())
-            .first()
-        )
-        question = prev_user.content if prev_user else None
-        items.append(
-            BadAnswerItem(
-                message_id=msg.id,
-                session_id=msg.chat.session_id,
-                question=question,
-                answer=msg.content,
-                ideal_answer=msg.ideal_answer,
-                created_at=msg.created_at,
-            )
-        )
+    messages_by_chat: dict[uuid.UUID, list[Message]] = defaultdict(list)
+    for msg in all_messages:
+        messages_by_chat[msg.chat_id].append(msg)
+
+    bad_answers: list[BadAnswerItem] = []
+    for chat_id, messages in messages_by_chat.items():
+        for i, msg in enumerate(messages):
+            if msg.role == MessageRole.assistant and msg.feedback == MessageFeedback.down:
+                prev_user = None
+                for j in range(i - 1, -1, -1):
+                    if messages[j].role == MessageRole.user:
+                        prev_user = messages[j]
+                        break
+                question = prev_user.content if prev_user else None
+                chat = msg.chat
+                bad_answers.append(
+                    BadAnswerItem(
+                        message_id=msg.id,
+                        session_id=chat.session_id,
+                        question=question,
+                        answer=msg.content,
+                        ideal_answer=msg.ideal_answer,
+                        created_at=msg.created_at,
+                    )
+                )
+
+    bad_answers.sort(key=lambda x: x.created_at, reverse=True)
+    items = bad_answers[offset : offset + limit]
 
     return BadAnswerListResponse(items=items)
 

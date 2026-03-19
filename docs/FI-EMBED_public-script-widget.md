@@ -789,13 +789,14 @@ curl -X POST https://chat9.live/chat \
 
 ### Core Embedding
 - [ ] Client model has `public_id` column (unique, indexed, 14-char base62)
-- [ ] Migration runs successfully on production
+- [ ] Migration runs successfully on production (batch SQL, not loop)
 - [ ] Existing clients backfilled with public_ids
 - [ ] `/embed.js` endpoint returns JavaScript
 - [ ] `/embed.js?v=X` versioning works
 - [ ] embed.js works on multiple test domains (no CORS issues)
 - [ ] `/widget?clientId=...` page renders chat UI
-- [ ] `/chat` endpoint accepts `client_id` query param
+- [ ] `/widget/chat` endpoint created (PUBLIC, clientId-based)
+- [ ] Existing `/chat` endpoint UNCHANGED (no breaking changes)
 - [ ] Requests from embed script are handled correctly
 - [ ] Dashboard shows embed code for each client
 - [ ] Customers can copy & paste embed code
@@ -812,10 +813,14 @@ curl -X POST https://chat9.live/chat \
 - [ ] Privacy: no cookies by default, respects DO_NOT_TRACK
 
 ### Compatibility
-- [ ] All existing auth flows still work (for authenticated endpoints)
+- [ ] Existing `/chat` endpoint UNCHANGED (no breaking changes)
+- [ ] New `/widget/chat` endpoint for public widget use
 - [ ] api_key (private) and public_id (public) properly separated
 - [ ] Tests pass (unit + integration + manual)
-- [ ] No regressions in existing /chat endpoint (when using api_key)
+- [ ] No regressions in existing /chat endpoint (for authenticated users)
+- [ ] Deactivated clients return 403 with reason
+- [ ] Suspended/cancelled accounts return 403
+- [ ] Quota checks work per billing period
 
 ### Documentation
 - [ ] Dashboard embed instructions clear and actionable
@@ -937,12 +942,49 @@ curl -X POST https://chat9.live/chat \
    - Chat endpoint (/chat) is public per clientId
    ```
 
+### DeepSeek Final Recommendations
+
+**Endpoint Separation (CRITICAL):**
+- Create `/widget/chat` endpoint for PUBLIC widget use (clientId-based)
+- Keep existing `/chat` endpoint UNCHANGED for authenticated users/API
+- Prevents breaking changes to existing integrations
+- Clear audit trail & monitoring
+
+**Migration Optimization:**
+- Use batch SQL updates for >100k clients (avoid transaction locks)
+- Example: `UPDATE client SET public_id = gen_random_uuid() WHERE public_id IS NULL`
+- Create unique index AFTER backfill to avoid duplicate errors
+
+**Client Status Checks:**
+- Validate `client.is_active`
+- Validate `subscription_status` (suspended, cancelled)
+- Check usage quota per billing period (if using tiers)
+- Return 403 with specific reason (account suspended, quota exceeded, etc.)
+
+**Testing & Monitoring:**
+- Add test: deactivated client returns 403
+- Monitor metrics: embed.js loads, unique clientIds, validation errors
+- Alert on abnormal patterns (1000x normal traffic)
+
+**CSP Documentation:**
+```
+Customers with Content Security Policy must add:
+script-src: https://chat9.live
+frame-src: https://chat9.live
+connect-src: https://chat9.live
+```
+
 ### To-Do for Implementation
 
-- [ ] Add CSP header documentation
+- [ ] Create `/widget/chat` endpoint (separate from `/chat`)
+- [ ] Add CSP header documentation for customers
 - [ ] Update rate limiting (IP + clientId combo)
 - [ ] Test iframe.sandbox restrictions
 - [ ] Document baseUrl security policy
+- [ ] Use batch SQL for large migrations
+- [ ] Add subscription_status checks
+- [ ] Add deactivated client test
+- [ ] Setup monitoring metrics
 - [ ] Clarify session vs auth token usage
 
 ---

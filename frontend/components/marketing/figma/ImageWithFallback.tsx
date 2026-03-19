@@ -52,7 +52,7 @@ export function ImageWithFallback({ src, alt, className, style, ...rest }: Image
     )
   }
 
-  // For external URLs, try to use Next Image
+  // For external URLs, use Next Image (unoptimized for unknown dimensions)
   return (
     <Image 
       src={src} 
@@ -60,7 +60,9 @@ export function ImageWithFallback({ src, alt, className, style, ...rest }: Image
       className={className} 
       style={style}
       onError={handleError}
-      {...rest}
+      width={800}
+      height={600}
+      unoptimized
     />
   )
 }

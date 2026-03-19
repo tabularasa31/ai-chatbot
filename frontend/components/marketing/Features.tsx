@@ -1,5 +1,5 @@
 import { Upload, Clock, Mail, Brain } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 import { useScrollAnimation } from '../hooks/useScrollAnimation';
 
 interface FeatureCardProps {

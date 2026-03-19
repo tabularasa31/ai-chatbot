@@ -48,7 +48,7 @@
 | Prompt | Description | Priority |
 |--------|-------------|----------|
 | `FI-EMBED-MVP_public-widget-implementation.md` | Zero-config widget embedding (CORS fix) | 🔴 P1 |
-| `REFACTOR_pgvector-native-search.md` | Replace Python cosine with DB-level search | 🔴 P1 |
+| ~~`REFACTOR_pgvector-native-search.md`~~ | ✅ Replace Python cosine with DB-level search — **DONE** | 🔴 P1 |
 | ~~`REFACTOR_datetime-cors-exceptions.md`~~ | ✅ Fix datetime.utcnow(), broad exceptions — **DONE** | 🟡 P2 |
 | ~~`REFACTOR_fix-n1-queries.md`~~ | ✅ Fix N+1 queries in list_sessions, bad_answers — **DONE** | 🟡 P2 |
 
@@ -124,7 +124,7 @@ User → getchat9.live (Vercel, Next.js)
 - ✅ CORS configured (needs `CORS_ALLOWED_ORIGINS` env var on Railway)
 - ✅ /review protected
 - ⏳ FI-EMBED-MVP (widget + public_id) — implement
-- ⏳ pgvector native search — implement
+- ~~pgvector native search~~ ✅ Done (native SQL cosine_distance)
 - ⏳ Demo API key configured (`NEXT_PUBLIC_DEMO_API_KEY` on Vercel)
 - ⏳ Railway: set `CORS_ALLOWED_ORIGINS=https://getchat9.live`
 

@@ -26,12 +26,13 @@ git checkout -b feature/refactor-pgvector-native-search
 - `backend/models.py` — add proper Vector column to Embedding
 - `backend/search/service.py` — replace Python cosine with pgvector SQL query
 - `backend/chat/service.py` — update `retrieve_context()` to use new search
+- `backend/embeddings/service.py` — write vector to `vector` column (not only metadata_json)
 - `requirements.txt` (or `pyproject.toml`) — add `pgvector` package
 
 **Do NOT touch:**
 - Auth, middleware, auth routes
 - Other models (User, Client, Document, Chat, Message)
-- Alembic migrations (leave for separate PR)
+- Alembic migrations (leave for separate PR — see DEPLOYMENT ORDER below)
 - Frontend
 - Any other backend files
 
@@ -88,7 +89,8 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import func
 
 results = (
-    db.query(Embedding, Embedding.vector.cosine_distance(query_vector).label("distance"))
+    distance_expr = Embedding.vector.cosine_distance(query_vector)
+        db.query(Embedding, distance_expr.label("distance"))
     .join(Document, Embedding.document_id == Document.id)
     .filter(Document.client_id == client_id)      # ← Filter at DB level
     .filter(Embedding.vector.isnot(None))          # ← Skip null vectors
@@ -198,7 +200,37 @@ Index(
 
 ---
 
-### Step 3: Rewrite search/service.py
+### Step 3: Update embeddings/service.py — Write Vector to Column
+
+**File: `backend/embeddings/service.py`**
+
+Find where `Embedding` objects are created (look for `Embedding(...)` with `vector=None`).
+
+**Before (likely):**
+```python
+emb = Embedding(
+    document_id=document_id,
+    chunk_text=chunk,
+    vector=None,  # ← not stored in column!
+    metadata_json={"chunk_index": i, "vector": vector_list},  # ← stored in JSON
+)
+```
+
+**After:**
+```python
+emb = Embedding(
+    document_id=document_id,
+    chunk_text=chunk,
+    vector=vector_list,  # ← write to proper column
+    metadata_json={"chunk_index": i},  # ← keep chunk_index, remove vector from JSON
+)
+```
+
+**Why this matters:** Without this change, the `vector` column will always be `NULL` and pgvector search will return empty results. New embeddings must write to the `vector` column.
+
+---
+
+### Step 4: Rewrite search/service.py
 
 **File: `backend/search/service.py`**
 
@@ -328,11 +360,12 @@ def search_similar_chunks(
     # pgvector native search (PostgreSQL)
     try:
         results_with_distance = (
-            db.query(Embedding, Embedding.vector.cosine_distance(query_vector).label("distance"))
+            distance_expr = Embedding.vector.cosine_distance(query_vector)
+        db.query(Embedding, distance_expr.label("distance"))
             .join(Document, Embedding.document_id == Document.id)
             .filter(Document.client_id == client_id)  # ← Mandatory client filter
             .filter(Embedding.vector.isnot(None))      # ← Skip null vectors
-            .order_by("distance")                      # ← Ascending: smallest distance = most similar
+            .order_by(distance_expr)                       # ← Use expression not string (SQLAlchemy 2.0)
             .limit(top_k)
             .all()
         )
@@ -433,7 +466,7 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
 
 ---
 
-### Step 4: Update retrieve_context in chat/service.py
+### Step 5: Update retrieve_context in chat/service.py
 
 **File: `backend/chat/service.py`**
 
@@ -515,15 +548,17 @@ def retrieve_context(
     if not results:
         return ([], [], [], "none")
 
-    # Determine mode from scores
-    # If best score >= threshold → vector mode; otherwise keyword mode (scores = match count)
+    # Determine mode from scores.
+    # IMPORTANT: vector similarity scores are in [0.0, 1.0]
+    # keyword match scores are integers (1, 2, 3...) — count of matching keywords
+    # So: if best_score >= VECTOR_CONFIDENCE_THRESHOLD (0.70) → vector mode
+    #     if best_score is a small float < threshold → keyword fallback was used
     best_score = results[0][1]
     if best_score >= VECTOR_CONFIDENCE_THRESHOLD:
         mode: Literal["vector", "keyword", "none"] = "vector"
-    elif best_score < 1.0:  # keyword scores are usually 1, 2, 3...
-        mode = "keyword"
     else:
-        mode = "vector"
+        # Could be keyword (integer counts) or weak vector results
+        mode = "keyword"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]
@@ -620,13 +655,29 @@ git push origin feature/refactor-pgvector-native-search
 - Reason: 0.3 similarity is too low (weak signal). 0.70 is more meaningful.
 - Adjust as needed after testing with real data.
 
-### Migration needed (separate PR)
-After this PR merges, a migration is needed to:
-1. Add the `vector` column with proper type
-2. Migrate existing vectors from `metadata_json["vector"]` → `vector` column
-3. Create HNSW index: `CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);`
+### ⚠️ DEPLOYMENT ORDER (CRITICAL)
 
-**Do NOT create migration in this PR** — focus on code changes only.
+**Wrong order will break production!**
+
+**CORRECT order:**
+1. ✅ **This PR** — code changes (models, search, embeddings service)
+2. **Next PR** — Alembic migration:
+   - Add `vector Vector(1536)` column
+   - Backfill: `UPDATE embeddings SET vector = (metadata_json->>'vector')::vector`
+   - Create HNSW index: `CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops)`
+3. **Deploy migration** to production first
+4. **Deploy code** after migration completes
+
+**Why:** The code expects the `vector` column to exist. If deployed before migration, it will crash with `column does not exist`.
+
+**Do NOT create migration in this PR** — migration is a separate PR after this one.
+
+### Migration needed (separate PR)
+After this PR merges, create migration PR:
+1. Add the `vector Vector(1536)` column
+2. Backfill existing vectors from `metadata_json["vector"]` → `vector` column
+3. Create HNSW index: `CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);`
+4. Make `vector` NOT NULL after backfill
 
 ### SQLite fallback
 `_python_cosine_search` is preserved for tests that use SQLite.

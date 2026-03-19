@@ -25,9 +25,12 @@ export function Hero() {
             >
               Try for free
             </Link>
-            <button className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all">
+            <a
+              href="#demo"
+              className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all inline-block text-center"
+            >
               See demo
-            </button>
+            </a>
           </div>
         </motion.div>
 

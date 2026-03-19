@@ -6,7 +6,7 @@ export function DemoBlock() {
   const [ref, isInView] = useScrollAnimation();
 
   return (
-    <section className="max-w-7xl mx-auto px-6 py-20">
+    <section id="demo" className="max-w-7xl mx-auto px-6 py-20">
       <motion.div
         ref={ref}
         initial={{ opacity: 0, y: 20 }}

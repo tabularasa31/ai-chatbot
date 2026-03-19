@@ -7,7 +7,7 @@
 ## SETUP
 
 ```bash
-cd ~/Projects/ai-chatbot
+cd <repo-root>
 git checkout main
 git pull origin main
 git checkout -b feature/link-demo-button
@@ -29,11 +29,12 @@ git checkout -b feature/link-demo-button
 ## CODE DISCIPLINE
 
 **Scope (you MAY modify):**
-- `frontend/components/marketing/Hero.tsx` — Update the "See demo" button
+- `frontend/components/marketing/Hero.tsx` — "See demo" as in-page link to `#demo`
+- `frontend/components/marketing/DemoBlock.tsx` — add `id="demo"` on the outer `<section>`
+- `frontend/app/globals.css` — optional smooth scrolling when the user has not requested reduced motion
 
 **Do NOT touch:**
-- Other components
-- Marketing layout or structure
+- Other components or marketing layout beyond the above
 - Backend files
 - migrations
 
@@ -43,19 +44,19 @@ git checkout -b feature/link-demo-button
 
 ## CONTEXT
 
-**Problem:** The "See demo" button in the Hero section (landing page) currently does nothing. It should scroll the page down to the "See Chat9 in action" section (DemoBlock component).
+**Problem:** The "See demo" control in the Hero section (landing page) does nothing. It should scroll the page to the "See Chat9 in action" section (`DemoBlock`).
 
 **Current state:**
-- Hero.tsx has a button with text "See demo"
-- It's currently just a `<button>` tag with no href or onClick
-- DemoBlock.tsx contains the "See Chat9 in action" section we want to scroll to
+- Hero has a passive `<button>` (no action)
+- `DemoBlock` wraps the demo in an outer `<section>` without an anchor id
 
 **What we need:**
-- Make the button scroll to the DemoBlock section
-- Use smooth scroll behavior
-- Keep the button styling consistent
+- Scroll to the demo section on click
+- Smooth scroll for users who allow motion; instant jump when `prefers-reduced-motion: reduce`
+- Same visual styling as today
+- Prefer semantic in-page navigation: `<a href="#demo">` (works without JS, better for keyboard/AT than a fake button)
 
-**Why this matters:** Users should be able to quickly jump to the demo from the hero section without scrolling manually.
+**Why this matters:** Users jump to the demo from the hero without manual scrolling.
 
 ---
 
@@ -63,46 +64,40 @@ git checkout -b feature/link-demo-button
 
 ### 1. Add an `id` to DemoBlock section
 
-The DemoBlock component's outer `<section>` needs an `id` so we can anchor to it.
+In `frontend/components/marketing/DemoBlock.tsx`, on the outer `<section>`:
 
-In `frontend/components/marketing/DemoBlock.tsx`, find the line:
-```jsx
-<section className="max-w-7xl mx-auto px-6 py-20">
-```
-
-Change it to:
 ```jsx
 <section id="demo" className="max-w-7xl mx-auto px-6 py-20">
 ```
 
-### 2. Update the "See demo" button in Hero
+### 2. Replace "See demo" `<button>` with an anchor in Hero
 
-In `frontend/components/marketing/Hero.tsx`, find this button:
-```jsx
-<button className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all">
-  See demo
-</button>
-```
+In `frontend/components/marketing/Hero.tsx`:
 
-Replace it with:
 ```jsx
-<button
-  onClick={() => {
-    const demoSection = document.getElementById('demo');
-    if (demoSection) {
-      demoSection.scrollIntoView({ behavior: 'smooth' });
-    }
-  }}
-  className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all"
+<a
+  href="#demo"
+  className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all inline-block text-center"
 >
   See demo
-</button>
+</a>
 ```
 
-**What this does:**
-- `onClick` handler uses native DOM API to find the demo section
-- `scrollIntoView({ behavior: 'smooth' })` scrolls smoothly to that element
-- No external dependencies needed — uses built-in browser API
+(`inline-block text-center` matches the primary CTA `Link` treatment.)
+
+### 3. Smooth scroll via CSS (respect reduced motion)
+
+In `frontend/app/globals.css` (after `body { ... }`):
+
+```css
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+```
+
+**Why not `scrollIntoView` in JS:** Anchor + CSS keeps behavior declarative, avoids `document` in a component that might run in other contexts, and honors system motion preferences without extra logic.
 
 ---
 
@@ -110,10 +105,11 @@ Replace it with:
 
 Before pushing:
 - [ ] Landing page loads without errors
-- [ ] "See demo" button is visible in Hero section
-- [ ] Clicking "See demo" scrolls smoothly to "See Chat9 in action" section
-- [ ] Button styling is unchanged (still has cyan border, hover effect)
-- [ ] Scroll behavior is smooth (not instant)
+- [ ] "See demo" is visible in Hero
+- [ ] Click navigates to "See Chat9 in action" (URL shows `#demo`)
+- [ ] With default OS motion settings, scroll is smooth
+- [ ] With "reduce motion" enabled, scroll is immediate (no forced animation)
+- [ ] Styling matches previous button (cyan border, hover)
 - [ ] No console errors
 
 ---
@@ -121,8 +117,8 @@ Before pushing:
 ## GIT PUSH
 
 ```bash
-git add frontend/components/marketing/Hero.tsx frontend/components/marketing/DemoBlock.tsx
-git commit -m "feat: add smooth scroll to demo section from hero button (FI-UI)"
+git add frontend/components/marketing/Hero.tsx frontend/components/marketing/DemoBlock.tsx frontend/app/globals.css
+git commit -m "feat: add smooth scroll to demo section from hero (FI-UI)"
 git push origin feature/link-demo-button
 ```
 
@@ -136,10 +132,8 @@ git push origin feature/link-demo-button
 
 ## NOTES
 
-- This uses the native `scrollIntoView` API — no jQuery or external libraries needed
-- `behavior: 'smooth'` is supported in all modern browsers (Chrome, Firefox, Safari, Edge)
-- The `document.getElementById('demo')` will not throw an error even if the element doesn't exist (we check `if (demoSection)`)
-- This approach is lightweight and performant
+- In-page links use the browser’s native scroll; `scroll-behavior: smooth` is widely supported in current Chrome, Firefox, Safari, and Edge.
+- The landing page parent is already a client component; this solution does not require `'use client'` on `Hero` for the link itself.
 
 ---
 
@@ -149,19 +143,20 @@ After completing the implementation, provide the Pull Request description in Eng
 
 ```markdown
 ## Summary
-Added smooth scroll functionality to "See demo" button in Hero section. Button now scrolls users to the "See Chat9 in action" demo section below.
+Linked the Hero "See demo" control to the demo section via `#demo`, with smooth scrolling when the user allows motion.
 
 ## Changes
-- `frontend/components/marketing/Hero.tsx` — Updated "See demo" button with onClick handler that scrolls to demo section
-- `frontend/components/marketing/DemoBlock.tsx` — Added `id="demo"` to section for scroll anchoring
+- `frontend/components/marketing/Hero.tsx` — `<a href="#demo">` with unchanged visual styles
+- `frontend/components/marketing/DemoBlock.tsx` — `id="demo"` on outer section
+- `frontend/app/globals.css` — `scroll-behavior: smooth` only when `prefers-reduced-motion: no-preference`
 
 ## Testing
-- [x] Button click triggers smooth scroll to demo section
-- [x] Scroll behavior is smooth (not instant)
-- [x] Button styling unchanged
+- [x] Click scrolls to demo section; hash `#demo` in URL
+- [x] Smooth scroll with default motion preferences
+- [x] Reduced motion → instant jump
+- [x] Styling unchanged
 - [x] No console errors
-- [x] Works on desktop and mobile
 
 ## Notes
-Uses native browser `scrollIntoView` API with smooth behavior. No external dependencies needed.
+Semantic anchor navigation; no JS scroll API required.
 ```

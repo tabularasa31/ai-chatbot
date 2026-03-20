@@ -3,12 +3,13 @@
 import uuid
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from openai import APIError
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
 from backend.core.db import get_db
+from backend.core.limiter import limiter
 from backend.models import Client
 
 widget_router = APIRouter(prefix="/widget", tags=["widget"])
@@ -21,7 +22,9 @@ def widget_health() -> dict[str, str]:
 
 
 @widget_router.post("/chat")
+@limiter.limit("20/minute")
 def widget_chat(
+    request: Request,
     message: Annotated[str, Query(description="User message")],
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
     session_id: Annotated[Optional[str], Query(description="Optional session ID")] = None,

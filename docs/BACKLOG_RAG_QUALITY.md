@@ -49,12 +49,24 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 ---
 
+### [FI-008] Hybrid search: BM25 + RRF
+**Problem:** Pure cosine similarity fails on exact strings — error codes, CLI commands, SDK method names, endpoint paths.
+- Replace current keyword fallback with full BM25 (PostgreSQL `tsvector` or `rank-bm25`)
+- RRF fusion of vector + BM25 results (rank-based, no normalisation needed)
+- Cursor prompt ready: `cursor-fi-019ext-bm25-hybrid-hnsw.md`
+- Spec reference: `specs/hybrid-search-spec.docx` (FR-2, FR-3)
+
+---
+
 ### [FI-033] Query expansion / rewriting
-**Problem:** Quality depends on question phrasing.
+**Problem:** Quality depends on question phrasing. "how do I set up auth?" and "what is the authentication flow?" should return the same chunks.
 
 **Options:**
 - Query rewriting: normalize before retrieval.
-- Query expansion: 2–3 paraphrases + RRF across all results.
+- Query expansion: generate 2–3 paraphrases via LLM → search all in parallel → merge via RRF.
+
+**Note:** Adds latency + cost (extra LLM call before retrieval). Do after FI-008 is live and we have data showing this is still a bottleneck.
+Spec reference: `specs/hybrid-search-spec.docx` (FR-1)
 
 ---
 
@@ -78,6 +90,18 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 ---
 
 ## 🟠 P2 — Next sprint
+
+### [FI-042] Cross-encoder reranker
+**Problem:** Bi-encoder (embedding model) scores query and chunk independently. Cross-encoder sees them together → more accurate relevance scoring.
+
+**Plan:**
+- Run on top-20 candidates after RRF fusion → return top-5 to LLM
+- Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (local, free) or Cohere Rerank 3.5 (API)
+- Cross-encoder score → feeds Answer Reliability Score (top chunk score as proxy)
+- Adds ~200–400ms latency → run after FI-008 proves BM25+RRF insufficient
+
+**Do after:** FI-008 is live and latency budget is understood.
+Spec reference: `specs/hybrid-search-spec.docx` (FR-4)
 
 ### [FI-036] HyDE (Hypothetical Document Embeddings)
 **When:** Question like "API limits?" — too short.
@@ -103,11 +127,6 @@ Question → Semantic search in approved_answers (>0.85?) → Instant answer (no
 - Recency scoring: `final_score = semantic * 0.7 + recency * 0.3`.
 - On update: new version + old `is_current=false`.
 - Namespace per major version (api-v1, api-v2).
-
-### [FI-008] Hybrid search (partially exists, extend)
-- Current keyword fallback < 0.3 — extend to full BM25.
-- RRF or weighted `0.7 vector + 0.3 BM25`.
-- After retrieval: cross-encoder rerank (Cohere Rerank 3.5 or flashrank).
 
 ---
 

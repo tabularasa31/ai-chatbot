@@ -1,23 +1,39 @@
-# План на завтра — порядок выполнения
+# Execution Plan — Sprint Log
 
-Все промпты в папке `cursor_prompts/`
+> This file tracks completed sprints and what's next.
 
-## День 1 — Фундамент
-1. `cursor_prompts/deps-remove-pypdf2-update-openai.md`
-2. `cursor_prompts/FI-038-powered-by-chat9-footer.md`
+---
 
-## День 2 — Поиск и индексы
-4. `cursor_prompts/migration-pgvector-vector-column-hnsw.md` ← сначала, блокер!
-5. `cursor_prompts/FI-019-pgvector-cleanup.md`
-6. `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`
+## ✅ Sprint 1 — Infrastructure & Quality (2026-03-19 → 2026-03-20)
 
-## День 3 — RAG качество
-7. `cursor_prompts/FI-009-improved-chunking.md`
-8. `cursor_prompts/FI-034-llm-answer-validation.md`
+All done and deployed to production.
 
-## День 4 — Инфраструктура
-9. `cursor_prompts/widget-rate-limiting.md`
-10. `cursor_prompts/ci-cd-github-actions.md`
+| Prompt | Status |
+|--------|--------|
+| `deps-remove-pypdf2-update-openai.md` | ✅ Done |
+| `FI-038-powered-by-chat9-footer.md` | ✅ Done |
+| `migration-pgvector-vector-column-hnsw.md` | ✅ Done |
+| `FI-019-pgvector-cleanup.md` | ✅ Done |
+| Forgot password (FI-AUTH) | ✅ Done |
+| Sign in button (FI-UI) | ✅ Done |
+| FI-EMBED-MVP (zero-config widget) | ✅ Done |
+| REFACTOR: datetime, CORS, exceptions | ✅ Done |
+| REFACTOR: N+1 queries | ✅ Done |
+| **Deploy** main → deploy | ✅ Done 2026-03-20 |
 
-## Финал
-11. **Deploy** — `git checkout deploy && git merge main && git push origin deploy`
+---
+
+## 🔜 Sprint 2 — Next
+
+| Task | Priority | Notes |
+|------|----------|-------|
+| Test FI-EMBED-MVP on real domain | P1 | Waiting for domain admin |
+| FI-021 Background embeddings | P1 | Async processing |
+| FI-039 Daily Summary Email | P2 | Brevo |
+| FI-040 Client Analytics | P2 | Dashboard metrics |
+| FI-041 Status Page Integration | P2 | Incident awareness |
+| CI/CD (GitHub Actions) | P3 | pytest + ruff + eslint on PR |
+
+---
+
+_Updated: 2026-03-20_

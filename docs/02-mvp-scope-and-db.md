@@ -50,9 +50,10 @@
 
 ### Coming Next 🔜
 
+- Background embedding processing (FI-021) — async queue
 - Daily summary email (FI-039) — daily reports to clients via Brevo
-- Background embedding processing (FI-021)
 - Client analytics widget (FI-040)
+- Status page integration (FI-041) — real-time incident awareness
 
 ---
 
@@ -110,15 +111,18 @@ embeddings
 ├─ id (PK, UUID)
 ├─ document_id (FK → documents, NOT NULL)
 ├─ chunk_text (TEXT, 500-char chunk)
-├─ vector (vector(1536), pgvector from OpenAI)
+├─ vector (vector(1536), pgvector — native column, not JSON)
 ├─ metadata (JSONB: {chunk_index, offset})
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 
 Indexes:
 ├─ (document_id)
-└─ (vector) - pgvector index for similarity search
+└─ (vector) USING hnsw (vector_cosine_ops) — fast ANN search
 ```
+
+> **Note:** Migration `dd643d1a544a` added the native `vector` column and HNSW index.
+> Backfill uses `(metadata->>'vector')::vector` (text cast, not JSON cast).
 
 #### Chat Sessions
 ```sql

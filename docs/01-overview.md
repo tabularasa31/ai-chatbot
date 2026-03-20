@@ -109,16 +109,19 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 
 ## Key Features (MVP)
 
-✅ User authentication (email/password + JWT)  
+✅ User authentication (email/password + JWT + email verification)  
+✅ Forgot password flow (Brevo email + token reset)  
 ✅ Multi-tenant client management (API keys)  
-✅ Document upload (PDF, Markdown, Swagger)  
-✅ RAG-powered chat API  
-✅ Embeddable widget  
+✅ Document upload (PDF, Markdown, Swagger, Text)  
+✅ RAG-powered chat API (gpt-4o-mini)  
+✅ pgvector native search with HNSW index  
+✅ Zero-config embeddable widget (iframe, no CORS issues)  
 ✅ Chat history & session logging  
 ✅ Feedback system (👍/👎 + ideal answer)  
 ✅ Token usage tracking  
 ✅ Debug mode  
 ✅ Admin metrics  
+✅ Rate limiting (validate, search, chat)  
 
 ---
 

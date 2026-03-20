@@ -4,8 +4,7 @@
 
 ## День 1 — Фундамент
 1. `cursor_prompts/deps-remove-pypdf2-update-openai.md`
-2. `cursor_prompts/fix-cors-split-public-private.md`
-3. `cursor_prompts/FI-038-powered-by-chat9-footer.md`
+2. `cursor_prompts/FI-038-powered-by-chat9-footer.md`
 
 ## День 2 — Поиск и индексы
 4. `cursor_prompts/migration-pgvector-vector-column-hnsw.md` ← сначала, блокер!

@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, getToken, saveToken } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
+import { AuthTransition } from "@/components/AuthTransition";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -12,6 +13,11 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
+
+  const onAuthTransitionComplete = useCallback(() => {
+    router.replace("/dashboard");
+  }, [router]);
 
   useEffect(() => {
     const token = getToken();
@@ -28,7 +34,7 @@ export default function LoginPage() {
     try {
       const { token } = await api.auth.login(email, password);
       saveToken(token);
-      router.replace("/dashboard");
+      setTransitioning(true);
     } catch (err) {
       const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
       setError(typeof msg === "string" ? msg : "Login failed");
@@ -39,6 +45,7 @@ export default function LoginPage() {
 
   return (
     <AuthCard>
+      {transitioning && <AuthTransition onComplete={onAuthTransitionComplete} />}
       <h1 className={authStyles.heading}>Sign in</h1>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>

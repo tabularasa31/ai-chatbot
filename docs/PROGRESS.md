@@ -1,7 +1,30 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-19 18:11 UTC  
-**Overall status:** ✅ MVP feature-complete, pending production deploy
+**Last updated:** 2026-03-20 08:40 UTC  
+**Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-20)
+
+### Dependencies & Infrastructure
+- ✅ **PyPDF2 → pypdf** migration (branch `chore/deps-pypdf2-openai`)
+  - `requirements.txt` (root + backend): removed PyPDF2, added pypdf>=4.0.0, openai>=1.70.0
+  - `documents/parsers.py`: `from pypdf import PdfReader`
+  - `tests/test_documents.py`: updated PdfWriter to pypdf
+  - 135 tests passed
+
+### pgvector Migration
+- ✅ **Migration `dd643d1a544a`** — Fix vector column type + HNSW index
+  - Added `vector Vector(1536)` column to `embeddings` table
+  - Backfill: `(metadata->>'vector')::vector` (note: `->>`  not `->`, json→text→vector)
+  - HNSW index: `CREATE INDEX USING hnsw (vector vector_cosine_ops)`
+  - Ran successfully on Railway prod DB
+
+### Production Deploy (2026-03-20)
+- ✅ `main` → `deploy` → Vercel + Railway auto-deployed
+- ✅ Forgot password tested end-to-end (email → reset link → login)
+- ✅ All features now live at getchat9.live
 
 ---
 
@@ -24,16 +47,12 @@
   - `/widget/chat` public API (no auth, clientId-based)
   - `/widget` iframe page + ChatWidget component
   - Dashboard shows embed code
-  - Migration + backfill script
 - ✅ **FI-AUTH: Forgot Password** — Full reset flow
   - `POST /auth/forgot-password` (Brevo email, rate limited 3/hour)
   - `POST /auth/reset-password` (token validation, 1h TTL)
   - Frontend pages: `/forgot-password`, `/reset-password`
   - "Forgot password?" link on login page
 - ✅ **FI-UI: Sign in button** — Added to landing page navigation
-  - Secondary style (cyan outline)
-  - Desktop + mobile hamburger menu
-  - Links to `/login`
 
 ### Infrastructure
 - ✅ Vercel `deploy` branch created — decouple commits from deploys
@@ -41,90 +60,39 @@
   - `deploy` = production (Vercel listens here)
 - ✅ `NEXT_PUBLIC_APP_URL` set on Vercel
 
-### Documentation
-- ✅ `GROK-PROJECT-REVIEW.md` — comprehensive project review
-- ✅ `LESSONS_2026-03-19.md` — process errors and improvements
-- ✅ `BACKLOG_SECURITY-IMPROVEMENTS.md` — security roadmap
-- ✅ `BACKLOG_EMBED-PHASE2.md` — embed feature roadmap
-- ✅ FI-EMBED full spec (3 reviews: Grok 9/10, DeepSeek 9/10, Claude 8/10)
-
 ---
 
-## ⏳ NOT YET IN PRODUCTION
+## 📋 NEXT UP
 
-All these are implemented (merged to main), but NOT yet deployed to getchat9.live:
+### Widget Testing:
+1. **Test FI-EMBED-MVP on real domain** — waiting for domain admin to update embed script
 
-| Feature | Branch/Status | Notes |
-|---------|--------------|-------|
-| FI-EMBED-MVP (widget) | ✅ merged to main | Needs deploy + test |
-| Forgot password | ✅ merged to main | Needs deploy |
-| Sign in button | ✅ merged to main | Needs deploy |
-| pgvector native search | ✅ merged to main | Needs migration first! |
-
-### ⚠️ DEPLOY ORDER (Important!)
-
-**pgvector migration must run BEFORE code deploys:**
-
-1. Create migration PR:
-   - Add `vector Vector(1536)` column to `embeddings`
-   - Backfill: `UPDATE embeddings SET vector = (metadata_json->>'vector')::vector`
-   - HNSW index: `CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops)`
-2. Deploy migration to Railway
-3. Then merge `main` → `deploy` → Vercel deploys
-
-**Everything else (embed, forgot-password, sign in) can deploy without migration.**
-
-### How to deploy (when ready):
-
-```bash
-# Merge main into deploy branch → triggers Vercel
-git checkout deploy
-git merge main
-git push origin deploy
-git checkout main
-```
-
----
-
-## 📋 ACTIVE CURSOR PROMPTS
-
-**None queued.** All completed today.
-
----
-
-## 📋 NEXT UP (Tomorrow)
-
-### Immediate (before public launch):
-1. **pgvector migration PR** — prerequisite for search performance
-2. **Deploy to production** (merge main → deploy)
-3. **Test FI-EMBED-MVP** on a real domain — does widget load? CORS ok?
-4. **Test forgot password** end-to-end (email → reset link → login)
-
-### Soon (P2):
-5. **FI-EMBED Phase 2** — rate limiting for `/widget/chat`
-6. **Per-client system prompt** (each client configures their bot personality)
-7. **Multiple file upload**
-8. **Soft-delete for documents**
+### Backlog (P1–P2):
+2. **FI-021** — Background embeddings (async processing)
+3. **FI-039** — Daily summary email (Brevo)
+4. **FI-040** — Client analytics dashboard
+5. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
-9. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
-10. **Langfuse tracing** (LLM observability)
-11. **Daily summary email** (FI-039)
+6. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
+7. **Langfuse tracing** (LLM observability)
+8. **Per-client system prompt**
+9. **Multiple file upload**
 
 ---
 
-## 📊 FEATURES COMPLETED (MVP)
+## 📊 FEATURES LIVE IN PRODUCTION
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini)
 - ✅ Hybrid retrieval (vector + keyword fallback)
-- ✅ pgvector native search (SQL cosine_distance)
+- ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)
 - ✅ Dashboard (documents, logs, feedback, analytics)
 - ✅ Email verification (Brevo)
-- ✅ Forgot password flow (Brevo)
+- ✅ Forgot password flow (Brevo) — tested end-to-end
 - ✅ Admin metrics
 - ✅ Chat logs with feedback (👍/👎)
 - ✅ Bad answers review + training
@@ -146,7 +114,7 @@ User → getchat9.live (Vercel, Next.js)
 
 Git branches:
   main   → development (no auto-deploy)
-  deploy → production (Vercel listens here)
+  deploy → production (Vercel + Railway listen here)
 ```
 
 ---
@@ -155,21 +123,10 @@ Git branches:
 
 | Issue | Priority | Notes |
 |-------|----------|-------|
-| pgvector migration (create vector column) | 🔴 P1 | Must do before deploying search refactor |
+| FI-EMBED-MVP real-domain test | 🟡 P1 | Waiting for admin to update embed script |
 | Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
-| Footer links hardcoded | 🟡 P3 | Update when docs site ready |
 | No CI/CD pipeline | 🟡 P2 | GitHub Actions needed |
-
----
-
-## 🔍 CODE REVIEWS RECEIVED (2026-03-19)
-
-| Reviewer | Area | Rating | Key Feedback |
-|----------|------|--------|-------------|
-| Grok | FI-EMBED spec | 9/10 | Rate limiting, versioning needed |
-| DeepSeek | FI-EMBED spec | 9/10 | CSP docs, document.currentScript |
-| Claude | FI-EMBED spec | 8/10 | Mobile, migration anti-pattern |
-| Grok | Project-wide | 8.5/10 | Architecture solid, chunking/re-ranker needed |
+| Footer links hardcoded | 🟢 P3 | Update when docs site ready |
 
 ---
 
@@ -186,4 +143,4 @@ Git branches:
 
 ---
 
-_Updated: 2026-03-19 18:11 UTC | Session: 07:30–18:11 UTC (~10.5 hours)_
+_Updated: 2026-03-20 08:40 UTC_

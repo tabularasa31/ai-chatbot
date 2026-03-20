@@ -33,7 +33,7 @@
   - Each client brings their own key — no platform markup
   
 - **Document Parsing:**
-  - PyPDF2 (PDF extraction)
+  - pypdf>=4.0.0 (PDF extraction — replaces deprecated PyPDF2)
   - markdown (Markdown parsing)
   - yaml/json (Swagger/OpenAPI specs)
   

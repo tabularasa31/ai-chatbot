@@ -6,7 +6,7 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
-from PyPDF2 import PdfWriter
+from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user

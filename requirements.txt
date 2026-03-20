@@ -11,9 +11,8 @@ pyjwt==2.8.0
 pytest==7.4.3
 pytest-asyncio==0.21.1
 httpx==0.25.2
-openai==1.6.0
-pypdf==3.17.1
-PyPDF2==3.0.1
+openai>=1.70.0
+pypdf>=4.0.0
 PyYAML==6.0.1
 python-multipart==0.0.6
 email-validator==2.1.0

@@ -6,13 +6,13 @@ import json
 from typing import Any
 
 import yaml
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from io import BytesIO
 
 
 def parse_pdf(content: bytes) -> str:
     """
-    Extract text from PDF using PyPDF2.
+    Extract text from PDF using pypdf.
 
     Returns extracted text as single string.
     Raises ValueError if file is corrupted/unreadable.

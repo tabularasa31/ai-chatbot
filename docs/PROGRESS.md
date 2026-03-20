@@ -1,11 +1,29 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-20 08:40 UTC  
+**Last updated:** 2026-03-20 09:05 UTC  
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
 
-## ✅ COMPLETED (2026-03-20)
+## ✅ COMPLETED (2026-03-20 — continued)
+
+### UI & Widget (morning session)
+- ✅ **FI-UI: Auth transition + dark brand navbar** (`feature/ui-brand-transition`)
+  - AuthTransition: fullscreen #0A0A0F fade ~400ms after login
+  - Dark navbar h-12, logo, links, Admin badge, pink ghost Logout
+  - email from `api.auth.getMe()` (parallel, no backend changes needed)
+- ✅ **FI-UI: Auth pages dark theme** (`feature/auth-pages-dark-theme`)
+  - AuthCard/AuthCardCentered unified with AuthShell + cardShell
+  - `authStyles.ctaLink` — magenta CTA links
+  - forgot-password + verify pages updated
+  - Auto-verify by link (no code field — matches current API contract)
+- ✅ **Widget rate limiting** (`fix/widget-rate-limiting`)
+  - `POST /widget/chat` — 20/min via slowapi
+  - 135 tests passed
+
+---
+
+## ✅ COMPLETED (2026-03-20 — morning)
 
 ### Dependencies & Infrastructure
 - ✅ **PyPDF2 → pypdf** migration (branch `chore/deps-pypdf2-openai`)

@@ -33,7 +33,9 @@ function VerifyContent() {
   if (status === "idle" || status === "loading") {
     return (
       <AuthCardCentered>
-        <div className="animate-pulse text-[#FAF5FF]/60">Verifying your email...</div>
+        <h1 className={authStyles.headingSm}>Verify your email</h1>
+        <p className="text-[#FAF5FF]/80 text-sm mb-4">Confirming your link…</p>
+        <div className="animate-pulse text-[#FAF5FF]/60 text-sm">Please wait</div>
       </AuthCardCentered>
     );
   }
@@ -45,10 +47,7 @@ function VerifyContent() {
         <p className="text-[#FAF5FF]/80 mb-6">
           Your email has been verified. You can now sign in to your account.
         </p>
-        <Link
-          href="/login"
-          className="inline-block w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all text-center"
-        >
+        <Link href="/login" className={authStyles.ctaLink}>
           Go to Sign in
         </Link>
       </AuthCardCentered>
@@ -59,10 +58,7 @@ function VerifyContent() {
     <AuthCardCentered>
       <h1 className={`${authStyles.headingSm} text-[#F87171]`}>Verification failed</h1>
       <p className="text-[#FAF5FF]/80 mb-6">{error}</p>
-      <Link
-        href="/login"
-        className="inline-block w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all text-center"
-      >
+      <Link href="/login" className={authStyles.ctaLink}>
         Go to Sign in
       </Link>
     </AuthCardCentered>

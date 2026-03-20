@@ -31,9 +31,8 @@ def upgrade() -> None:
     # 4. Backfill: migrate vectors from metadata JSON → vector column
     op.execute("""
         UPDATE embeddings
-        SET vector = (metadata->'vector')::vector
-        WHERE metadata ? 'vector'
-          AND metadata->>'vector' IS NOT NULL
+        SET vector = (metadata->>'vector')::vector
+        WHERE metadata->>'vector' IS NOT NULL
           AND vector IS NULL
     """)
 

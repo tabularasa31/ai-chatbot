@@ -32,8 +32,7 @@ def upgrade() -> None:
     op.execute("""
         UPDATE embeddings
         SET vector = (metadata->'vector')::vector
-        WHERE metadata ? 'vector'
-          AND metadata->>'vector' IS NOT NULL
+        WHERE metadata->>'vector' IS NOT NULL
           AND vector IS NULL
     """)
 

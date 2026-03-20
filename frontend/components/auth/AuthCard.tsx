@@ -3,30 +3,33 @@
 import { ReactNode } from "react";
 import { strings } from "@/lib/strings";
 
-/** Neon Dusk dark theme — shared layout and form styles for auth pages */
-export function AuthCard({ children }: { children: ReactNode }) {
+const cardShell =
+  "bg-[#1E1E2E] border border-[#2E2E3E] rounded-lg shadow-md p-8";
+
+function AuthShell({
+  children,
+  centered,
+}: {
+  children: ReactNode;
+  centered?: boolean;
+}) {
   return (
     <div className="min-h-screen bg-[#0A0A0F] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
-        <div className="bg-[#1E1E2E] border border-[#2E2E3E] rounded-lg shadow-md p-8">
-          {children}
-        </div>
+        <div className={centered ? `${cardShell} text-center` : cardShell}>{children}</div>
       </div>
     </div>
   );
 }
 
+/** Neon Dusk dark theme — shared layout and form styles for auth pages */
+export function AuthCard({ children }: { children: ReactNode }) {
+  return <AuthShell>{children}</AuthShell>;
+}
+
 /** Centered card for success/error states (e.g. forgot-password success, verify) */
 export function AuthCardCentered({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-screen bg-[#0A0A0F] flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
-        <div className="bg-[#1E1E2E] border border-[#2E2E3E] rounded-lg shadow-md p-8 text-center">
-          {children}
-        </div>
-      </div>
-    </div>
-  );
+  return <AuthShell centered>{children}</AuthShell>;
 }
 
 /** Validation messages use service UI language (see lib/strings.ts) */
@@ -59,6 +62,9 @@ export const authStyles = {
     "w-full px-3 py-2 bg-[#0A0A0F] border border-[#2E2E3E] rounded-md text-[#FAF5FF] placeholder-[#FAF5FF]/40 focus:outline-none focus:ring-2 focus:ring-[#E879F9] focus:ring-offset-2 focus:ring-offset-[#0A0A0F] focus:border-transparent",
   button:
     "w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all focus:outline-none focus:ring-2 focus:ring-[#E879F9] focus:ring-offset-2 focus:ring-offset-[#0A0A0F] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100",
+  /** Same visual as `button`, for `<Link>` CTAs (verify success/error, etc.) */
+  ctaLink:
+    "inline-block w-full py-2 px-4 bg-[#E879F9] text-[#0A0A0F] font-medium rounded-md hover:bg-[#f099fb] hover:scale-105 transition-all text-center no-underline focus:outline-none focus:ring-2 focus:ring-[#E879F9] focus:ring-offset-2 focus:ring-offset-[#0A0A0F]",
   error: "text-[#F87171] text-sm bg-[#F87171]/10 border border-[#F87171]/30 px-3 py-2 rounded-md",
   success: "text-[#4ADE80] text-sm bg-[#4ADE80]/10 border border-[#4ADE80]/30 px-3 py-2 rounded-md",
   link: "text-[#E879F9] hover:underline",

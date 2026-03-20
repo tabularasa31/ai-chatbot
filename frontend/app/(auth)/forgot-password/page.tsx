@@ -34,9 +34,12 @@ export default function ForgotPasswordPage() {
         <p className="text-[#FAF5FF]/80 mb-6">
           If this email is registered, you&apos;ll receive a password reset link shortly.
         </p>
-        <Link href="/login" className={`font-medium ${authStyles.link}`}>
-          Back to sign in
-        </Link>
+        <p className={authStyles.footer}>
+          Back to{" "}
+          <Link href="/login" className={authStyles.link}>
+            sign in
+          </Link>
+        </p>
       </AuthCardCentered>
     );
   }
@@ -72,8 +75,9 @@ export default function ForgotPasswordPage() {
       </form>
 
       <p className={authStyles.footer}>
+        Back to{" "}
         <Link href="/login" className={authStyles.link}>
-          Back to sign in
+          sign in
         </Link>
       </p>
     </AuthCard>

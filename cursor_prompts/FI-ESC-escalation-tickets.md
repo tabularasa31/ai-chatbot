@@ -431,14 +431,14 @@ if chat.escalation_awaiting_ticket_id:
         db.refresh(ticket)
         out = complete_escalation_openai_turn(
             phase=EscalationPhase.handoff_email_known,
-            chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+            chat_messages=msgs, fact_json=fact_from_ticket(ticket, chat=chat),
             latest_user_text=question, api_key=api_key,
         )
         chat.escalation_followup_pending = True
         return (out.message_to_user, [], out.tokens_used)
     out = complete_escalation_openai_turn(
         phase=EscalationPhase.email_parse_failed,
-        chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+        chat_messages=msgs, fact_json=fact_from_ticket(ticket, chat=chat),
         latest_user_text=question, api_key=api_key,
     )
     return (out.message_to_user, [], out.tokens_used)
@@ -450,7 +450,7 @@ if chat.escalation_followup_pending:
         phase=EscalationPhase.followup_awaiting_yes_no,
         chat_messages=msgs,
         fact_json={
-            **fact_from_ticket(ticket),
+            **fact_from_ticket(ticket, chat=chat),
             "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
         },
         latest_user_text=question, api_key=api_key,
@@ -481,7 +481,7 @@ if detect_human_request(question):
     )
     out = complete_escalation_openai_turn(
         phase=phase, chat_messages=msgs,
-        fact_json=fact_from_ticket(ticket),
+        fact_json=fact_from_ticket(ticket, chat=chat),
         latest_user_text=question, api_key=api_key,
     )
     if not ticket.user_email:
@@ -503,7 +503,7 @@ if escalate:
             if not ticket.user_email
             else EscalationPhase.handoff_email_known
         ),
-        chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+        chat_messages=msgs, fact_json=fact_from_ticket(ticket, chat=chat),
         latest_user_text=question, api_key=api_key,
     )
     answer = answer + "\n\n" + esc.message_to_user

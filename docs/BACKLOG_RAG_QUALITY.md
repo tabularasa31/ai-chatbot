@@ -7,35 +7,13 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 ## 🔴 P1 — Do first
 
-### [FI-031] Org config layer
-**Problem:** Bot doesn't know support email, trial period, contacts — they're not in documents.
-
-**Solution:**
-- `org_config` (JSON) field on Client model: `support_email`, `account_manager`, `trial_period`, `support_url`.
-- Dashboard UI: form for filling.
-- In `build_rag_prompt()` — inject org_config block before context.
-
-**Do BEFORE FI-007** (system prompt without org config will be incomplete).
+### ~~[FI-031] Org config layer~~ — Cancelled
+**Decision (2026-03-21):** Approach scrapped. Data about the client's product will be sourced differently. Disclosure controls (FI-DISC) and escalation (FI-ESC) cover the key use cases instead.
 
 ---
 
-### [FI-007] Per-client system prompt
-**5 critical elements (consensus of all 6 models):**
-1. Role and goal: "You are support for [Name]. Answer only from context."
-2. Truthfulness policy: "If not found — don't invent, direct to: support_email, account_manager."
-3. Language: "Answer in the question's language."
-4. Multi-chunk handling: "Combine, state contradictions explicitly."
-5. Fantasy limit: "Don't invent endpoints, plans, parameters."
-
-**Additionally (Grok):** Answer structure:
-```
-1. Brief direct answer (1–2 sentences)
-2. Quote [1]
-3. Additional steps / warnings
-4. If billing/contract → direct to manager
-```
-
-**Store:** system_prompt in DB with version + tenant_id (prompt versioning, per Sonnet).
+### ~~[FI-007] Per-client system prompt~~ — Deferred indefinitely
+**Decision (2026-03-21):** Deferred. FI-031 (prerequisite) was cancelled. Re-evaluate when a clear approach to tenant product data injection is defined. Cursor prompt deleted.
 
 ---
 

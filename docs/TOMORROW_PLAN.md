@@ -1,41 +1,63 @@
-# Execution Plan — Sprint Log
+# Plan — 2026-03-22
 
-> This file tracks completed sprints and what's next.
-
----
-
-## ✅ Sprint 1 — Infrastructure & Quality (2026-03-19 → 2026-03-20)
-
-All done and deployed to production.
-
-| Prompt | Status |
-|--------|--------|
-| `deps-remove-pypdf2-update-openai.md` | ✅ Done |
-| `FI-038-powered-by-chat9-footer.md` | ✅ Done (`frontend/components/ChatWidget.tsx`) |
-| `migration-pgvector-vector-column-hnsw.md` | ✅ Done |
-| `FI-019-pgvector-cleanup.md` | ✅ Done |
-| `FI-019ext-bm25-hybrid-hnsw.md` (BM25 + RRF) | ✅ Done 2026-03-21 |
-| FI-KYC (widget identity, HMAC token) | ✅ Done 2026-03-21 |
-| Forgot password (FI-AUTH) | ✅ Done |
-| Sign in button (FI-UI) | ✅ Done |
-| FI-EMBED-MVP (zero-config widget) | ✅ Done |
-| REFACTOR: datetime, CORS, exceptions | ✅ Done |
-| REFACTOR: N+1 queries | ✅ Done |
-| **Deploy** main → deploy | ✅ Done 2026-03-20 |
+> Согласовать с Elina перед запуском. После согласования удалить этот файл и обновить PROGRESS.md.
 
 ---
 
-## 🔜 Sprint 2 — Next
+## Контекст
 
-| Task | Priority | Notes |
-|------|----------|-------|
-| Test FI-EMBED-MVP on real domain | P1 | Waiting for domain admin |
-| FI-021 Background embeddings | P1 | Async processing |
-| FI-039 Daily Summary Email | P2 | Brevo |
-| FI-040 Client Analytics | P2 | Dashboard metrics |
-| FI-041 Status Page Integration | P2 | Incident awareness |
-| CI/CD (GitHub Actions) | P3 | pytest + ruff + eslint on PR |
+**MVP feature-complete** — все switching cost moats готовы (FI-ESC, FI-DISC, FI-KYC, Gap Analyzer).
+Следующий фокус: стабильность + технический долг + начало P2 (retention + growth features).
 
 ---
 
-_Updated: 2026-03-21_
+## P1 — Технический долг (делать первым)
+
+### 1. FIX: race condition в generate_ticket_number
+- Промпт: `cursor_prompts/FIX-ticket-number-race-condition.md`
+- Время: ~1 час
+- Риск сейчас низкий, но правильно исправить до роста трафика
+
+### 2. FI-021: Background embeddings (async)
+- Промпт: нет, нужно написать (или запустить по описанию из `BACKLOG_TECH_DEBT.md`)
+- `POST /embeddings/documents/{id}` синхронный → timeout на больших файлах
+- 202 Accepted сразу, статус: `pending → embedded`
+- Зависимость для demo bots (auto-refresh каждые 48ч)
+
+### 3. FI-026: CI/CD (GitHub Actions)
+- Промпт: `cursor_prompts/ci-cd-github-actions.md` — проверить актуальность
+- pytest + ruff + eslint на каждый PR
+- 160+ тестов без автозапуска = риск
+
+---
+
+## P2 — Продуктовые фичи
+
+### 4. FI-039: Daily Summary Email
+- "Chat9 as a team member" — утреннее письмо с итогами дня
+- Brevo уже настроен
+- Ключевой дифференциатор по стратегии
+
+### 5. FI-040: Client Analytics Dashboard
+- Метрики прямо в дашборде: sessions, tokens, cost, top topics, % unanswered
+- Нужны данные для Gap Analyzer phase 2
+
+### 6. FI-DISC v2: аудиторные сегменты
+- Разные уровни детализации по `audience_tag` из KYC
+- Зависимость: стабильный audience_tag во всех каналах
+
+---
+
+## P3 — Позже
+
+- Landing page CTA: URL-first вместо кнопки
+- Demo bots (Stripe, Cloudflare) — после FI-021
+- Public roadmap
+
+---
+
+## На обсуждение
+
+**Вопрос по FI-021:** делать через FastAPI `BackgroundTasks` (просто, без зависимостей) или через Celery (надёжнее, но сложнее)? При текущем Railway-хостинге BackgroundTasks — оптимальный выбор.
+
+**Вопрос по тестированию:** проверить FI-EMBED-MVP на реальном домене (`getchat9.live`) — ждёт действия от admin.

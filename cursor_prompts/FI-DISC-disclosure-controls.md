@@ -41,20 +41,20 @@ git checkout -b feature/fi-disc-disclosure-controls
 
 Currently the bot answers any question from any user with the same level of detail.
 
-Some clients need control over what the bot reveals. Examples:
-- "Don't discuss pricing — redirect to sales"
-- "Don't mention competitor names"
-- "Don't discuss contract terms — direct to legal@company.com"
+Some clients need control over **how much** the bot reveals (tone and depth), not a different factual base.
 
 This is NOT about making the bot lie or hide problems. It's about **audience control** — the same information that's appropriate for a developer is inappropriate for an enterprise end-user.
 
 **v1 scope (this prompt):**
-- Topic blocklist: client defines topics the bot must NOT discuss
-- Per-topic redirect: configure what the bot says instead ("Please contact sales@company.com")
-- Audience-based disclosure level (from KYC audience_tag): Detailed / Standard / Corporate
+- **One disclosure level per tenant** (Detailed / Standard / Corporate) — same for every chat user and every channel (widget, X-API-Key, etc.)
 - Applies in `build_rag_prompt()` as additional system prompt instructions
-- Settings UI for managing rules
+- Settings UI: single level selector only (no topic blocklist, no simulation, no audience segments)
 - No real-time data sources in v1 (Sentry/Status Page integration = v2)
+
+**Explicitly out of v1 (do not implement):**
+- Blocked / restricted topics and per-topic redirect messages
+- Preview, simulation, or “ask a test question” flows (no `POST .../preview`)
+- Per-user or per-segment levels, `audience_tag`, KYC-based overrides, or `audience_levels` in config (future phase if needed)
 
 ---
 
@@ -68,34 +68,17 @@ Add `disclosure_config` JSON column to the `Client` model:
 disclosure_config = Column(JSON, nullable=True, default=None)
 ```
 
-Config structure:
+Config structure (single field):
 
 ```json
 {
-  "default_level": "standard",
-  "audience_levels": {
-    "developer": "detailed",
-    "end-user": "corporate",
-    "admin": "standard"
-  },
-  "blocked_topics": [
-    {
-      "topic": "pricing",
-      "redirect_message": "For pricing information, please contact sales@yourcompany.com"
-    },
-    {
-      "topic": "competitors",
-      "redirect_message": "I'm only able to help with questions about our product."
-    },
-    {
-      "topic": "legal",
-      "redirect_message": "For contract or legal questions, please reach out to legal@yourcompany.com"
-    }
-  ]
+  "level": "standard"
 }
 ```
 
-**Level values:** `"detailed"` | `"standard"` | `"corporate"`
+**`level` values:** `"detailed"` | `"standard"` | `"corporate"`
+
+(If you prefer backward-compatible naming, you may accept `default_level` as an alias when reading, but persist and document `level` only.)
 
 **Level definitions (used in prompt injection):**
 - `detailed` — full technical detail, all information available
@@ -117,7 +100,6 @@ def downgrade():
 ```
 GET  /clients/me/disclosure        → return current disclosure_config (or defaults)
 PUT  /clients/me/disclosure        → update disclosure_config
-POST /clients/me/disclosure/preview → preview: given a simulated question + context, return what the bot would say at each level
 ```
 
 In `service.py`:
@@ -125,44 +107,29 @@ In `service.py`:
 ```python
 def get_disclosure_config(client_id: UUID, db: Session) -> dict:
     """Return client's disclosure_config, or default if not set."""
-    # Default: {"default_level": "standard", "audience_levels": {}, "blocked_topics": []}
+    # Default: {"level": "standard"}
 
 def update_disclosure_config(client_id: UUID, config: dict, db: Session) -> dict:
     """Validate and store disclosure config."""
     # Validation:
-    # - default_level must be "detailed" | "standard" | "corporate"
-    # - audience_levels values must be valid levels
-    # - blocked_topics: topic is string (1-100 chars), redirect_message is string (1-500 chars)
-    # - max 20 blocked topics
+    # - `level` must be "detailed" | "standard" | "corporate"
+    # - reject extra keys or ignore them (keep stored JSON minimal)
 ```
 
 ### 4. Apply disclosure rules in chat pipeline (`backend/chat/service.py`)
 
-Update `build_rag_prompt()` to accept optional `disclosure_config: dict | None` and `audience_tag: str | None`.
+Update `build_rag_prompt()` to accept optional `disclosure_config: dict | None`. **Do not** branch on `audience_tag` or KYC — one level for the whole tenant.
 
 **Logic:**
 
-1. Determine effective disclosure level:
+1. Resolve level (tenant-wide):
    ```python
-   level = "standard"  # default
+   level = "standard"
    if disclosure_config:
-       level = disclosure_config.get("default_level", "standard")
-       if audience_tag and audience_tag in disclosure_config.get("audience_levels", {}):
-           level = disclosure_config["audience_levels"][audience_tag]
+       level = disclosure_config.get("level") or disclosure_config.get("default_level") or "standard"
    ```
 
-2. Build blocked topics instruction (if any):
-   ```python
-   blocked = disclosure_config.get("blocked_topics", []) if disclosure_config else []
-   if blocked:
-       topics_block = "\n".join([
-           f'- If asked about "{t["topic"]}": respond ONLY with: "{t["redirect_message"]}" — do not answer from context.'
-           for t in blocked
-       ])
-       blocked_instruction = f"RESTRICTED TOPICS — follow these rules exactly:\n{topics_block}"
-   ```
-
-3. Build level instruction:
+2. Build level instruction:
    ```python
    LEVEL_INSTRUCTIONS = {
        "detailed": "Answer with full technical detail. Include all relevant information.",
@@ -182,18 +149,16 @@ Update `build_rag_prompt()` to accept optional `disclosure_config: dict | None` 
    level_instruction = LEVEL_INSTRUCTIONS.get(level, LEVEL_INSTRUCTIONS["standard"])
    ```
 
-4. Inject into system prompt (before context):
+3. Inject into system prompt (before context):
    ```
    [System rules]
    ...existing rules...
    
    [Response level: {level}]
    {level_instruction}
-   
-   {blocked_instruction if blocked_topics else ""}
    ```
 
-5. Update `process_chat_message()` and `run_debug()` to load and pass `disclosure_config` from the client record.
+4. Update `process_chat_message()` and `run_debug()` to load and pass `disclosure_config` from the client record.
 
 **Hard limits (inject unconditionally — cannot be overridden):**
 - Never reveal another user's identity or data in any response
@@ -208,20 +173,9 @@ Create `frontend/app/(app)/settings/disclosure/page.tsx`
 
 **Sections:**
 
-1. **Default Detail Level** — radio buttons: Detailed / Standard / Corporate
+1. **Response detail level (tenant-wide)** — radio buttons: Detailed / Standard / Corporate
    - Each option shows a short description of what is shown/hidden
-   - "Preview" button → opens preview modal with simulated incident
-
-2. **Audience Segments** — mapping table (only shown if KYC is configured)
-   - `audience_tag` → level selector
-   - "Add segment" button
-
-3. **Restricted Topics** — list of blocked topic rules
-   - Each row: topic name + redirect message (editable)
-   - Add / delete buttons
-   - Max 20 topics, shown with count
-
-4. **Preview mode**: "Simulate a question" → shows bot response at each level side by side
+   - Copy should state clearly that this applies to **all** end-users of this tenant
 
 Add link to this page from the main settings nav as "Response Controls".
 
@@ -231,7 +185,6 @@ Add link to this page from the main settings nav as "Response Controls".
 disclosure: {
   get: () => apiRequest('GET', '/clients/me/disclosure'),
   update: (config: DisclosureConfig) => apiRequest('PUT', '/clients/me/disclosure', config),
-  preview: (question: string, context: string) => apiRequest('POST', '/clients/me/disclosure/preview', {question, context}),
 }
 ```
 
@@ -243,13 +196,9 @@ Before pushing:
 - [ ] `pytest -q` — all existing tests pass
 - [ ] New test: `get_disclosure_config()` returns default when not configured
 - [ ] New test: `update_disclosure_config()` validates level values, rejects invalid
-- [ ] New test: `update_disclosure_config()` rejects > 20 blocked topics
-- [ ] New test: `build_rag_prompt()` with "corporate" level — level instruction present in prompt
-- [ ] New test: `build_rag_prompt()` with blocked topic — redirect instruction present in prompt
-- [ ] New test: audience_tag "developer" → overrides default level to "detailed"
+- [ ] New test: `build_rag_prompt()` with `{"level": "corporate"}` — corporate level instruction present in prompt
 - [ ] New test: disclosure_config=None → defaults to standard (no change to current behavior)
 - [ ] New test: GET /clients/me/disclosure returns 200 even with no config (returns defaults)
-- [ ] Manual test: set blocked topic "pricing" → ask about pricing → bot returns redirect message
 - [ ] Manual test: set level "corporate" → ask technical question → response is plain language
 
 ---
@@ -261,7 +210,7 @@ git add backend/models.py backend/clients/ backend/chat/ \
         backend/migrations/versions/ \
         frontend/app/(app)/settings/disclosure/ frontend/lib/api.ts \
         tests/
-git commit -m "feat: add disclosure controls — topic blocklist + audience-based detail levels (FI-DISC)"
+git commit -m "feat: add disclosure controls — tenant-wide response detail level (FI-DISC)"
 git push origin feature/fi-disc-disclosure-controls
 ```
 
@@ -271,10 +220,9 @@ git push origin feature/fi-disc-disclosure-controls
 
 - **Default is Standard level** — no behavior change for clients who don't configure anything
 - **Hard limits are unconditional** — inject them before the level template, not inside it
-- **Blocked topic detection is instruction-based** (prompt injection), not keyword filtering in the pipeline. This is intentional: the LLM handles nuanced phrasings better than a keyword list.
 - **No real-time data sources in v1** — the spec mentions Sentry/Status Page integration; that's v2. For v1, disclosure controls apply only to documentation-based answers.
-- **Audience tags come from KYC (FI-KYC)** — if KYC is not configured, audience_tag is always None and default_level applies to everyone. FI-DISC works without FI-KYC.
-- Keep the `build_rag_prompt()` signature backward-compatible — new params are optional with defaults.
+- **KYC / `audience_tag` is irrelevant to v1 disclosure** — level is tenant-wide only; optional future work could add per-segment overrides.
+- Keep the `build_rag_prompt()` signature backward-compatible — `disclosure_config` is optional; omit any `audience_tag` parameter for this feature in v1.
 
 ---
 
@@ -282,22 +230,21 @@ git push origin feature/fi-disc-disclosure-controls
 
 ```markdown
 ## Summary
-Adds disclosure controls: tenants can configure which topics the bot must redirect (not answer), and set a detail level (Detailed / Standard / Corporate) for bot responses. Detail level can vary per user audience segment (from KYC). Rules are injected as system prompt instructions at chat time.
+Adds disclosure controls: each tenant sets **one** response detail level (Detailed / Standard / Corporate) for **all** users and channels. Rules are injected as system prompt instructions at chat time. No topic blocklist, no simulation/preview API, no per-audience overrides in v1.
 
 ## Changes
 - `backend/models.py` — disclosure_config JSON column on Client
 - `backend/migrations/versions/XXX` — migration
-- `backend/clients/routes.py` + `service.py` — GET/PUT disclosure config + preview
-- `backend/chat/service.py` — inject disclosure rules into system prompt
+- `backend/clients/routes.py` + `service.py` — GET/PUT disclosure config
+- `backend/chat/service.py` — inject disclosure level into system prompt
 - `frontend/app/(app)/settings/disclosure/page.tsx` — Response Controls settings page
 - `frontend/lib/api.ts` — disclosure API methods
 
 ## Testing
 - [ ] pytest passes (all existing + new tests)
-- [ ] Manual: configure blocked topic → ask about it → bot redirects correctly
 - [ ] Manual: set corporate level → technical question → plain language response
 
 ## Notes
-Works without FI-KYC (audience_tag will be None, default level applies).
+Tenant-wide level only; KYC does not affect disclosure in v1.
 v1: documentation-based answers only. Sentry/Status Page disclosure = v2.
 ```

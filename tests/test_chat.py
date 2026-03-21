@@ -25,6 +25,8 @@ def test_build_rag_prompt() -> None:
     """build_rag_prompt produces correct format with chunks."""
     chunks = ["chunk1", "chunk2", "chunk3"]
     result = build_rag_prompt("What is X?", chunks)
+    assert "Hard limits" in result
+    assert "[Response level: standard]" in result
     assert "technical support agent" in result
     assert "Answer based ONLY on the provided context" in result
     assert "chunk1" in result
@@ -40,6 +42,7 @@ def test_build_rag_prompt_empty_chunks() -> None:
     result = build_rag_prompt("Q?", [])
     assert "Question: Q?" in result
     assert "(none)" in result
+    assert "[Response level: standard]" in result
 
 
 def test_generate_answer_no_context(mock_openai_client: Mock) -> None:

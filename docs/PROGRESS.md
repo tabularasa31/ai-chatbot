@@ -7,6 +7,14 @@
 
 ## ✅ COMPLETED (2026-03-21)
 
+### Disclosure controls (FI-DISC) — tenant-wide response level
+- ✅ **FI-DISC (v1)** — один уровень детализации ответа на весь тенант (**Detailed** / **Standard** / **Corporate**) для всех каналов (виджет, `POST /chat` по X-API-Key); жёсткие лимиты + блок `[Response level: …]` в system-части RAG-промпта (`build_rag_prompt` / `generate_answer`); загрузка `Client.disclosure_config` в `process_chat_message` и `run_debug`
+- **Хранение:** `clients.disclosure_config` JSON; каноническое поле **`level`**; при чтении поддерживается алиас **`default_level`**
+- **API:** `GET` / `PUT /clients/me/disclosure` (PUT — только для подтверждённого email)
+- **UI:** `frontend/app/(app)/settings/disclosure/page.tsx`, пункт навигации **Response controls**, `api.disclosure`
+- **Миграция:** `fi_disc_v1` (`backend/migrations/versions/fi_disc_disclosure_config.py`); модуль `backend/disclosure_config.py`; тесты `tests/test_disclosure.py`
+- Промпт `cursor_prompts/FI-DISC-disclosure-controls.md` остаётся как спека; **не** в scope v1: блоклист тем, preview, сегменты/KYC по уровню
+
 ### Identity / widget (FI-KYC)
 - ✅ **FI-KYC** — идентификация пользователя виджета через **краткоживущий HMAC-токен** (не через `data-*` в embed): `POST /widget/session/init` (`api_key`, опционально `identity_token`), ответ `session_id` + `mode` (`identified` | `anonymous`); контекст в `chats.user_context` (JSON); в LLM попадают только `plan_tier`, `locale`, `audience_tag`
 - **Секрет подписи:** `POST/GET/POST` `/clients/me/kyc/secret|status|rotate` (шифрование как у OpenAI key; ротация с перекрытием старого ключа 1 ч); UI: `frontend/app/(app)/settings/widget/page.tsx`, `api.kyc`, пункт навигации **Widget API**
@@ -139,6 +147,7 @@
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)
+- ✅ **Response controls (FI-DISC v1):** tenant-wide detail level (Detailed / Standard / Corporate), dashboard **Response controls**
 - ✅ Optional **identified widget sessions** (FI-KYC): HMAC identity token + `/widget/session/init`, signing secret in dashboard
 - ✅ Widget footer «Powered by Chat9 →» (FI-038)
 - ✅ Dashboard (documents, logs, feedback, analytics)
@@ -190,10 +199,11 @@ Git branches:
 
 ---
 
-## 📚 BACKLOG FILES
+## 📚 Реестр фич vs бэклог
 
 | File | Contents |
 |------|---------|
+| **`IMPLEMENTED_FEATURES.md`** | **Implemented features registry** (English, by area, links to code/API); extend on major releases |
 | `BACKLOG_PRODUCT.md` | Product features (FI-xxx), RICE scored |
 | `BACKLOG_TECH_DEBT.md` | Tech improvements |
 | `BACKLOG_SECURITY-IMPROVEMENTS.md` | Security: vectorDB filter, rate limiting, tracing |

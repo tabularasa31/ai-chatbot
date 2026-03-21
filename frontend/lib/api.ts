@@ -72,6 +72,12 @@ export type KycSecretResponse = {
   message: string;
 };
 
+export type DisclosureLevel = "detailed" | "standard" | "corporate";
+
+export type DisclosureConfigResponse = {
+  level: DisclosureLevel;
+};
+
 export type AdminMetricsSummary = {
   total_users: number;
   total_clients: number;
@@ -262,6 +268,24 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate KYC secret"));
       return data as KycSecretResponse;
+    },
+  },
+  disclosure: {
+    async get(): Promise<DisclosureConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
+      return data as DisclosureConfigResponse;
+    },
+    async update(config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
+      return data as DisclosureConfigResponse;
     },
   },
   documents: {

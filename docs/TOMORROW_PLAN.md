@@ -42,10 +42,6 @@
 - Метрики прямо в дашборде: sessions, tokens, cost, top topics, % unanswered
 - Нужны данные для Gap Analyzer phase 2
 
-### 6. FI-DISC v2: аудиторные сегменты
-- Разные уровни детализации по `audience_tag` из KYC
-- Зависимость: стабильный audience_tag во всех каналах
-
 ---
 
 ## P3 — Позже

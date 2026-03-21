@@ -71,6 +71,7 @@ def test_widget_chat_success(
     data = r.json()
     assert data["response"] == "Widget says hi"
     assert "session_id" in data
+    assert data.get("chat_ended") is False
 
 
 def test_widget_chat_rate_limit_429_after_20_requests_same_ip(

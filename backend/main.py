@@ -17,6 +17,7 @@ from backend.embeddings.routes import embeddings_router
 from backend.routes.public import public_router
 from backend.routes.widget import widget_router
 from backend.search.routes import search_router
+from backend.escalation.routes import escalation_router
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0")
 
@@ -38,7 +39,7 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Browser-Locale"],
 )
 
 app.include_router(auth_router, prefix="/auth")
@@ -48,6 +49,7 @@ app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")
 app.include_router(search_router, prefix="/search")
 app.include_router(chat_router, prefix="/chat")
+app.include_router(escalation_router)
 app.include_router(public_router)
 app.include_router(widget_router)
 

@@ -27,8 +27,14 @@
   `;
   document.body.appendChild(container);
 
+  const browserLocale =
+    (typeof navigator !== "undefined" &&
+      (navigator.language || navigator.userLanguage)) ||
+    null;
   const iframe = document.createElement("iframe");
-  iframe.src = `${widgetBase}/widget?clientId=${encodeURIComponent(clientId)}`;
+  const widgetParams = new URLSearchParams({ clientId });
+  if (browserLocale) widgetParams.set("locale", browserLocale);
+  iframe.src = `${widgetBase}/widget?${widgetParams.toString()}`;
   iframe.id = "chat9-widget-iframe";
   iframe.style.cssText = `
     width: 400px;

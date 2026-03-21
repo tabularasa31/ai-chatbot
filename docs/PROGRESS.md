@@ -7,6 +7,13 @@
 
 ## ✅ COMPLETED (2026-03-21)
 
+### L2 escalation tickets (FI-ESC)
+- ✅ **FI-ESC (v1)** — при провале RAG, запросе «человека» или ручном действии создаётся тикет **ESC-####** (per tenant), письмо на email владельца клиента, ответ пользователю формулирует отдельный OpenAI-call с JSON; машинный маркер `[[escalation_ticket:…]]` при необходимости дописывается в коде
+- **API:** JWT `GET/POST /escalations`, `GET /escalations/{id}`, `POST /escalations/{id}/resolve`; X-API-Key `POST /chat/{session_id}/escalate`; публично `POST /widget/escalate` + `chat_ended` / `locale` на виджете (см. `backend/routes/widget.py`)
+- **UI:** `frontend/app/(app)/escalations/page.tsx`, пункт **Escalations** в навбаре; виджет: **Talk to support**, баннер тикета, блокировка ввода при закрытом чате (`ChatWidget.tsx`)
+- **Модель/миграция:** `EscalationTicket`, колонки `Chat` для state machine; `backend/migrations/versions/fi_esc_escalation_tickets.py` (`fi_esc_v1`); модуль `backend/escalation/`
+- **QA:** `docs/qa/FI-ESC-escalation-tickets-qa.md`
+
 ### Disclosure controls (FI-DISC) — tenant-wide response level
 - ✅ **FI-DISC (v1)** — один уровень детализации ответа на весь тенант (**Detailed** / **Standard** / **Corporate**) для всех каналов (виджет, `POST /chat` по X-API-Key); жёсткие лимиты + блок `[Response level: …]` в system-части RAG-промпта (`build_rag_prompt` / `generate_answer`); загрузка `Client.disclosure_config` в `process_chat_message` и `run_debug`
 - **Хранение:** `clients.disclosure_config` JSON; каноническое поле **`level`**; при чтении поддерживается алиас **`default_level`**
@@ -157,6 +164,7 @@
 - ✅ Admin metrics
 - ✅ Chat logs with feedback (👍/👎)
 - ✅ Bad answers review + training
+- ✅ **L2 escalation tickets (FI-ESC):** inbox `/escalations`, виджет Talk to support, тикеты при low-similarity / no-docs / human request / manual escalate
 - ✅ Landing page (getchat9.live)
 - ✅ Sign in button on landing page
 - ✅ CORS security (whitelist)
@@ -195,7 +203,7 @@ Git branches:
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md`; `ci-cd-github-actions.md`. Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md` (архив спеки; реализация — блок **L2 escalation (FI-ESC)** выше); `ci-cd-github-actions.md`. Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
 
 ---
 

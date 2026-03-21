@@ -78,6 +78,29 @@ export type DisclosureConfigResponse = {
   level: DisclosureLevel;
 };
 
+export type EscalationTicket = {
+  id: string;
+  ticket_number: string;
+  primary_question: string;
+  conversation_summary: string | null;
+  trigger: string;
+  best_similarity_score: number | null;
+  retrieved_chunks_preview: Array<Record<string, unknown>> | null;
+  user_id: string | null;
+  user_email: string | null;
+  user_name: string | null;
+  plan_tier: string | null;
+  user_note: string | null;
+  priority: string;
+  status: string;
+  resolution_text: string | null;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  chat_id: string | null;
+  session_id: string | null;
+};
+
 export type AdminMetricsSummary = {
   total_users: number;
   total_clients: number;
@@ -395,11 +418,19 @@ export const api = {
       const list = data as { items: BadAnswerItem[] };
       return list.items;
     },
-    async send(question: string, apiKey: string, sessionId?: string) {
+    async send(
+      question: string,
+      apiKey: string,
+      sessionId?: string,
+      options?: { browserLocale?: string | null }
+    ) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "X-API-Key": apiKey,
       };
+      if (options?.browserLocale) {
+        headers["X-Browser-Locale"] = options.browserLocale;
+      }
       const body: { question: string; session_id?: string } = { question };
       if (sessionId) body.session_id = sessionId;
       const res = await fetch(`${BASE_URL}/chat`, {
@@ -414,7 +445,28 @@ export const api = {
         session_id: string;
         source_documents?: string[];
         tokens_used?: number;
+        chat_ended?: boolean;
       };
+    },
+    async manualEscalate(
+      apiKey: string,
+      sessionId: string,
+      body?: { user_note?: string | null; trigger?: "user_request" | "answer_rejected" }
+    ) {
+      const res = await fetch(`${BASE_URL}/chat/${sessionId}/escalate`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": apiKey,
+        },
+        body: JSON.stringify({
+          user_note: body?.user_note ?? null,
+          trigger: body?.trigger ?? "user_request",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Escalation failed"));
+      return data as { message: string; ticket_number: string };
     },
     async getHistory(sessionId: string) {
       const res = await authFetch(`${BASE_URL}/chat/history/${sessionId}`);
@@ -439,6 +491,34 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Debug failed"));
       return data as ChatDebugResponse;
+    },
+  },
+  escalations: {
+    async list(params?: { status?: string }): Promise<EscalationTicket[]> {
+      const q = params?.status
+        ? `?status=${encodeURIComponent(params.status)}`
+        : "";
+      const res = await authFetch(`${BASE_URL}/escalations${q}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list tickets"));
+      const list = data as { tickets: EscalationTicket[] };
+      return list.tickets;
+    },
+    async get(id: string): Promise<EscalationTicket> {
+      const res = await authFetch(`${BASE_URL}/escalations/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load ticket"));
+      return data as EscalationTicket;
+    },
+    async resolve(id: string, resolutionText: string): Promise<EscalationTicket> {
+      const res = await authFetch(`${BASE_URL}/escalations/${id}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolution_text: resolutionText }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to resolve ticket"));
+      return data as EscalationTicket;
     },
   },
   admin: {

@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from sqlalchemy.orm import Session, joinedload
@@ -16,7 +16,31 @@ PREVIEW_MAX_LEN = 120
 from backend.chat.pii import redact
 from backend.core.openai_client import get_openai_client
 from backend.disclosure_config import resolve_level
-from backend.models import Chat, Client, Message, MessageFeedback, MessageRole
+from backend.escalation.openai_escalation import complete_escalation_openai_turn
+from backend.escalation.service import (
+    apply_collected_contact_email,
+    build_chat_messages_for_openai,
+    chunks_preview_from_results,
+    create_escalation_ticket,
+    detect_human_request,
+    fact_from_ticket,
+    get_latest_escalation_ticket_for_chat,
+    parse_contact_email,
+    should_escalate,
+    _clear_escalation_clarify_flag,
+    _set_escalation_clarify_flag,
+    _escalation_clarify_already_asked,
+)
+from backend.models import (
+    Chat,
+    Client,
+    EscalationPhase,
+    EscalationTicket,
+    EscalationTrigger,
+    Message,
+    MessageFeedback,
+    MessageRole,
+)
 from backend.search.service import search_similar_chunks
 
 logger = logging.getLogger(__name__)
@@ -266,6 +290,57 @@ def validate_answer(
         return {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}
 
 
+def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid.UUID] | None:
+    return document_ids if "postgresql" in str(db.bind.url) else None
+
+
+def _persist_turn(
+    db: Session,
+    chat: Chat,
+    user_content: str,
+    assistant_content: str,
+    document_ids: list[uuid.UUID],
+    extra_tokens: int,
+) -> None:
+    db.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content=user_content,
+        )
+    )
+    db.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content=assistant_content,
+            source_documents=_source_docs_for_db(db, document_ids),
+        )
+    )
+    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
+    db.add(chat)
+    db.commit()
+
+
+def _persist_assistant_only(
+    db: Session,
+    chat: Chat,
+    assistant_content: str,
+    extra_tokens: int,
+) -> None:
+    db.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content=assistant_content,
+            source_documents=None,
+        )
+    )
+    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
+    db.add(chat)
+    db.commit()
+
+
 def process_chat_message(
     client_id: uuid.UUID,
     question: str,
@@ -274,32 +349,55 @@ def process_chat_message(
     *,
     api_key: str,
     user_context: dict | None = None,
-) -> tuple[str, list[uuid.UUID], int]:
+    browser_locale: str | None = None,
+) -> tuple[str, list[uuid.UUID], int, bool]:
     """
-    Full RAG pipeline: search → prompt → generate → save → return.
-
-    Args:
-        client_id: Client ID for tenant isolation.
-        question: User question.
-        session_id: Chat session ID.
-        db: Database session.
+    RAG pipeline with FI-ESC escalation state machine.
 
     Returns:
-        Tuple of (answer, document_ids, tokens_used).
+        (answer, document_ids, tokens_used, chat_ended)
     """
-    # Redact PII before sending to OpenAI (embeddings, completion, validation).
     redacted_question, _was_redacted = redact(question)
 
-    existing_chat = (
+    chat = (
         db.query(Chat)
+        .options(joinedload(Chat.messages))
         .filter(Chat.session_id == session_id, Chat.client_id == client_id)
         .first()
     )
+
     effective_user_ctx: dict | None = None
-    if existing_chat and existing_chat.user_context:
-        effective_user_ctx = existing_chat.user_context
+    if chat and chat.user_context:
+        effective_user_ctx = dict(chat.user_context)
     elif user_context:
-        effective_user_ctx = user_context
+        effective_user_ctx = dict(user_context)
+
+    if not chat:
+        uc: dict | None = None
+        if effective_user_ctx:
+            uc = dict(effective_user_ctx)
+        if browser_locale:
+            uc = dict(uc or {})
+            uc.setdefault("browser_locale", browser_locale)
+        chat = Chat(
+            client_id=client_id,
+            session_id=session_id,
+            user_context=uc,
+        )
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+    elif browser_locale and not (chat.user_context or {}).get("browser_locale"):
+        ctx = dict(chat.user_context or {})
+        ctx["browser_locale"] = browser_locale
+        chat.user_context = ctx
+        db.add(chat)
+        db.commit()
+        db.refresh(chat)
+
+    if effective_user_ctx is None and chat.user_context:
+        effective_user_ctx = dict(chat.user_context)
+
     user_context_line = _user_context_prompt_line(effective_user_ctx)
 
     client_row = db.query(Client).filter(Client.id == client_id).first()
@@ -307,13 +405,136 @@ def process_chat_message(
     if client_row and isinstance(client_row.disclosure_config, dict):
         disclosure_cfg = client_row.disclosure_config
 
-    # 1. Retrieve context (chunks + document_ids)
-    chunk_texts, doc_ids, _scores, _mode = retrieve_context(
+    msgs = build_chat_messages_for_openai(chat, redacted_question)
+
+    # --- Chat closed ---
+    if chat.ended_at is not None:
+        out = complete_escalation_openai_turn(
+            phase=EscalationPhase.chat_already_closed,
+            chat_messages=msgs,
+            fact_json={},
+            latest_user_text=redacted_question,
+            api_key=api_key,
+        )
+        _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+        return (out.message_to_user, [], out.tokens_used, True)
+
+    # --- Awaiting contact email ---
+    if chat.escalation_awaiting_ticket_id:
+        ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
+        if not ticket:
+            chat.escalation_awaiting_ticket_id = None
+            db.add(chat)
+            db.commit()
+        else:
+            email = parse_contact_email(redacted_question)
+            if email:
+                apply_collected_contact_email(ticket.id, chat.id, email, db)
+                db.refresh(ticket)
+                db.refresh(chat)
+                db.expire(chat, ["messages"])
+                msgs = build_chat_messages_for_openai(chat, redacted_question)
+                out = complete_escalation_openai_turn(
+                    phase=EscalationPhase.handoff_email_known,
+                    chat_messages=msgs,
+                    fact_json=fact_from_ticket(ticket, chat=chat),
+                    latest_user_text=redacted_question,
+                    api_key=api_key,
+                )
+                chat.escalation_followup_pending = True
+                db.add(chat)
+                db.commit()
+                _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+                return (out.message_to_user, [], out.tokens_used, False)
+            out = complete_escalation_openai_turn(
+                phase=EscalationPhase.email_parse_failed,
+                chat_messages=msgs,
+                fact_json=fact_from_ticket(ticket, chat=chat),
+                latest_user_text=redacted_question,
+                api_key=api_key,
+            )
+            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            return (out.message_to_user, [], out.tokens_used, False)
+
+    # --- Follow-up yes/no ---
+    if chat.escalation_followup_pending:
+        ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
+        out = complete_escalation_openai_turn(
+            phase=EscalationPhase.followup_awaiting_yes_no,
+            chat_messages=msgs,
+            fact_json={
+                **fact_from_ticket(ticket, chat=chat),
+                "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+            },
+            latest_user_text=redacted_question,
+            api_key=api_key,
+        )
+        decision = out.followup_decision or "unclear"
+        if decision == "unclear" and _escalation_clarify_already_asked(chat):
+            decision = "yes"
+        if decision == "yes":
+            chat.escalation_followup_pending = False
+            _clear_escalation_clarify_flag(chat)
+            db.add(chat)
+            db.commit()
+            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            return (out.message_to_user, [], out.tokens_used, False)
+        if decision == "no":
+            chat.escalation_followup_pending = False
+            _clear_escalation_clarify_flag(chat)
+            chat.ended_at = datetime.now(timezone.utc)
+            db.add(chat)
+            db.commit()
+            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            return (out.message_to_user, [], out.tokens_used, True)
+        _set_escalation_clarify_flag(chat)
+        db.add(chat)
+        db.commit()
+        _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+        return (out.message_to_user, [], out.tokens_used, False)
+
+    # --- T-3: explicit human request (before RAG) ---
+    if detect_human_request(redacted_question):
+        try:
+            ticket = create_escalation_ticket(
+                client_id,
+                question,
+                EscalationTrigger.user_request,
+                db,
+                chat_id=chat.id,
+                session_id=session_id,
+                user_context=effective_user_ctx,
+            )
+            phase = (
+                EscalationPhase.handoff_ask_email
+                if not ticket.user_email
+                else EscalationPhase.handoff_email_known
+            )
+            out = complete_escalation_openai_turn(
+                phase=phase,
+                chat_messages=msgs,
+                fact_json=fact_from_ticket(ticket, chat=chat),
+                latest_user_text=redacted_question,
+                api_key=api_key,
+            )
+            if not ticket.user_email:
+                chat.escalation_awaiting_ticket_id = ticket.id
+            else:
+                chat.escalation_followup_pending = True
+            db.add(chat)
+            db.commit()
+            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            return (out.message_to_user, [], out.tokens_used, False)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
+
+    # --- Normal RAG ---
+    chunk_texts, doc_ids, scores, _mode = retrieve_context(
         client_id, redacted_question, db, api_key, top_k=5
     )
     document_ids = list(dict.fromkeys(doc_ids))
+    best_score = scores[0] if scores else None
 
-    # 2. Generate answer
     answer, tokens_used = generate_answer(
         redacted_question,
         chunk_texts,
@@ -322,7 +543,6 @@ def process_chat_message(
         disclosure_config=disclosure_cfg,
     )
 
-    # 3. Validate answer (non-blocking on LLM/JSON errors)
     validation = validate_answer(
         redacted_question, answer, chunk_texts, api_key=api_key
     )
@@ -332,46 +552,46 @@ def process_chat_message(
     ):
         answer = FALLBACK_LOW_CONFIDENCE_ANSWER
 
-    # 4. Find or create Chat
-    chat = db.query(Chat).filter(
-        Chat.session_id == session_id,
-        Chat.client_id == client_id,
-    ).first()
-    if not chat:
-        chat = Chat(
-            client_id=client_id,
-            session_id=session_id,
-            user_context=user_context,
-        )
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
+    escalate, esc_trigger = should_escalate(best_score, len(chunk_texts))
+    if escalate and esc_trigger is not None:
+        try:
+            preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
+            ticket = create_escalation_ticket(
+                client_id,
+                question,
+                esc_trigger,
+                db,
+                chat_id=chat.id,
+                session_id=session_id,
+                best_similarity_score=best_score,
+                retrieved_chunks=preview,
+                user_context=effective_user_ctx,
+            )
+            esc_phase = (
+                EscalationPhase.handoff_ask_email
+                if not ticket.user_email
+                else EscalationPhase.handoff_email_known
+            )
+            esc = complete_escalation_openai_turn(
+                phase=esc_phase,
+                chat_messages=msgs,
+                fact_json=fact_from_ticket(ticket, chat=chat),
+                latest_user_text=redacted_question,
+                api_key=api_key,
+            )
+            answer = answer + "\n\n" + esc.message_to_user
+            tokens_used = tokens_used + esc.tokens_used
+            if not ticket.user_email:
+                chat.escalation_awaiting_ticket_id = ticket.id
+            else:
+                chat.escalation_followup_pending = True
+            db.add(chat)
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
-    # 5. Save user message
-    user_msg = Message(
-        chat_id=chat.id,
-        role=MessageRole.user,
-        content=question,
-    )
-    db.add(user_msg)
-
-    # 6. Save assistant message
-    # SQLite doesn't support ARRAY bind; use None for tests, document_ids for PostgreSQL
-    source_docs = document_ids if "postgresql" in str(db.bind.url) else None
-    assistant_msg = Message(
-        chat_id=chat.id,
-        role=MessageRole.assistant,
-        content=answer,
-        source_documents=source_docs,
-    )
-    db.add(assistant_msg)
-
-    # 7. Save tokens_used on Chat (per message exchange)
-    chat.tokens_used = tokens_used
-    db.add(chat)
-    db.commit()
-
-    return (answer, document_ids, tokens_used)
+    _persist_turn(db, chat, question, answer, document_ids, tokens_used)
+    return (answer, document_ids, tokens_used, bool(chat.ended_at))
 
 
 def run_debug(

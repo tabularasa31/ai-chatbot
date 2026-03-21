@@ -12,11 +12,13 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from pgvector.sqlalchemy import Vector
 from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
@@ -70,6 +72,36 @@ class MessageFeedback(str, enum.Enum):
     none = "none"
     up = "up"
     down = "down"
+
+
+class EscalationTrigger(str, enum.Enum):
+    low_similarity = "low_similarity"
+    no_documents = "no_documents"
+    user_request = "user_request"
+    answer_rejected = "answer_rejected"
+
+
+class EscalationPriority(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class EscalationStatus(str, enum.Enum):
+    open = "open"
+    in_progress = "in_progress"
+    resolved = "resolved"
+
+
+class EscalationPhase(str, enum.Enum):
+    """OpenAI escalation UX phases (fact_json), not stored on DB."""
+
+    handoff_email_known = "handoff_email_known"
+    handoff_ask_email = "handoff_ask_email"
+    email_parse_failed = "email_parse_failed"
+    followup_awaiting_yes_no = "followup_awaiting_yes_no"
+    chat_already_closed = "chat_already_closed"
 
 
 class UserContext(BaseModel):
@@ -184,6 +216,12 @@ class Client(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    escalation_tickets = relationship(
+        "EscalationTicket",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Document(Base):
@@ -291,6 +329,19 @@ class Chat(Base):
         nullable=False,
         server_default="0",
     )
+    escalation_awaiting_ticket_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("escalation_tickets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    escalation_followup_pending = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    ended_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,
@@ -306,6 +357,78 @@ class Chat(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class EscalationTicket(Base):
+    __tablename__ = "escalation_tickets"
+    __table_args__ = (
+        UniqueConstraint("client_id", "ticket_number", name="uq_escalation_client_ticket_number"),
+    )
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    client_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ticket_number = Column(String(32), nullable=False, index=True)
+
+    primary_question = Column(Text, nullable=False)
+    conversation_summary = Column(Text, nullable=True)
+
+    trigger = Column(
+        Enum(EscalationTrigger, native_enum=False),
+        nullable=False,
+        index=True,
+    )
+    best_similarity_score = Column(Float, nullable=True)
+    retrieved_chunks_preview = Column(JSON, nullable=True)
+
+    user_id = Column(String(255), nullable=True, index=True)
+    user_email = Column(String(255), nullable=True)
+    user_name = Column(String(255), nullable=True)
+    plan_tier = Column(String(64), nullable=True)
+    user_note = Column(Text, nullable=True)
+
+    priority = Column(
+        Enum(EscalationPriority, native_enum=False),
+        nullable=False,
+        default=EscalationPriority.medium,
+        server_default="medium",
+    )
+    status = Column(
+        Enum(EscalationStatus, native_enum=False),
+        nullable=False,
+        default=EscalationStatus.open,
+        server_default="open",
+        index=True,
+    )
+    resolution_text = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+    resolved_at = Column(DateTime, nullable=True)
+
+    chat_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chats.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    session_id = Column(PG_UUID(as_uuid=True), nullable=True, index=True)
+
+    client = relationship("Client", back_populates="escalation_tickets")
+    chat = relationship("Chat", foreign_keys=[chat_id])
 
 
 class Message(Base):

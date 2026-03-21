@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Generator
+import json
 import os
 import sys
 from unittest.mock import Mock, patch
@@ -133,11 +134,31 @@ def mock_openai_client():
         choices=[Mock(message=Mock(content="AI response"))],
         usage=Mock(total_tokens=100),
     )
+    mock_esc_client = Mock()
+    mock_esc_client.chat.completions.create.return_value = Mock(
+        choices=[
+            Mock(
+                message=Mock(
+                    content=json.dumps(
+                        {
+                            "message_to_user": "A support ticket was created for you.",
+                            "followup_decision": None,
+                        }
+                    )
+                )
+            )
+        ],
+        usage=Mock(total_tokens=15),
+    )
     # Patch where get_openai_client is used (not where defined) so imports see the mock
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client), \
          patch("backend.search.service.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
-         patch("backend.documents.service.get_openai_client", return_value=mock_client):
+         patch("backend.documents.service.get_openai_client", return_value=mock_client), \
+         patch(
+             "backend.escalation.openai_escalation.get_openai_client",
+             return_value=mock_esc_client,
+         ):
         yield mock_client
 
 

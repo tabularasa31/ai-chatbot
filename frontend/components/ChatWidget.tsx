@@ -5,21 +5,47 @@ import { Button } from "@/components/ui/button";
 
 interface ChatWidgetProps {
   clientId: string;
+  locale?: string | null;
 }
 
 const CHAT9_SITE_URL =
   process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
 
-export function ChatWidget({ clientId }: ChatWidgetProps) {
+const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
+
+function parseEscalationTicket(content: string): string | null {
+  const m = content.match(ESC_TICKET_RE);
+  return m ? m[1].trim() : null;
+}
+
+function stripEscalationToken(content: string): string {
+  return content.replace(/\[\[escalation_ticket:[^\]]+\]\]\s*/g, "").trim();
+}
+
+export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
   const [messages, setMessages] = useState<
     Array<{ role: string; content: string }>
   >([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingEscalate, setLoadingEscalate] = useState(false);
+  const [chatClosed, setChatClosed] = useState(false);
+  const [activeTicket, setActiveTicket] = useState<string | null>(null);
+
+  const localeParam =
+    locale && locale.trim() ? locale.trim() : undefined;
+
+  const applyAssistantMessage = (raw: string, ended?: boolean) => {
+    const ticket = parseEscalationTicket(raw);
+    if (ticket) setActiveTicket(ticket);
+    const display = stripEscalationToken(raw) || raw;
+    setMessages((prev) => [...prev, { role: "assistant", content: display }]);
+    if (ended) setChatClosed(true);
+  };
 
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || chatClosed) return;
 
     setLoading(true);
     const userMessage = input;
@@ -31,6 +57,7 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
         message: userMessage,
       });
       if (sessionId) params.set("session_id", sessionId);
+      if (localeParam) params.set("locale", localeParam);
 
       const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
 
@@ -44,13 +71,11 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
       const data = (await res.json()) as {
         response: string;
         session_id: string;
+        chat_ended?: boolean;
       };
 
-      setMessages((prev) => [
-        ...prev,
-        { role: "user", content: userMessage },
-        { role: "assistant", content: data.response },
-      ]);
+      setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+      applyAssistantMessage(data.response, data.chat_ended === true);
       setSessionId(data.session_id);
     } catch (error) {
       console.error("Error:", error);
@@ -67,6 +92,44 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
     }
   };
 
+  const handleEscalate = async () => {
+    if (!sessionId || chatClosed || loadingEscalate) return;
+    setLoadingEscalate(true);
+    try {
+      const params = new URLSearchParams({ clientId, session_id: sessionId });
+      const res = await fetch(`/widget/escalate?${params}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trigger: "user_request", user_note: null }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { detail?: string }).detail || `API error: ${res.status}`
+        );
+      }
+      const data = (await res.json()) as { message: string; ticket_number: string };
+      const raw = data.message.includes("[[escalation_ticket:")
+        ? data.message
+        : `${data.message}\n\n[[escalation_ticket:${data.ticket_number}]]`;
+      applyAssistantMessage(raw, false);
+    } catch (error) {
+      console.error("Escalate error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "error",
+          content:
+            error instanceof Error
+              ? error.message
+              : "Could not reach support",
+        },
+      ]);
+    } finally {
+      setLoadingEscalate(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -77,6 +140,36 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
         fontFamily: "system-ui, sans-serif",
       }}
     >
+      {activeTicket && (
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            borderRadius: "8px",
+            background: "#ecfdf5",
+            border: "1px solid #6ee7b7",
+            fontSize: "13px",
+            color: "#065f46",
+          }}
+        >
+          Support ticket: <strong>{activeTicket}</strong>
+        </div>
+      )}
+      {chatClosed && (
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px 12px",
+            borderRadius: "8px",
+            background: "#f3f4f6",
+            border: "1px solid #d1d5db",
+            fontSize: "13px",
+            color: "#374151",
+          }}
+        >
+          This chat is closed. Start a new session from your site to continue.
+        </div>
+      )}
       <div
         style={{
           flex: 1,
@@ -133,8 +226,8 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder="Type a message..."
-          disabled={loading}
+          placeholder={chatClosed ? "Chat closed" : "Type a message..."}
+          disabled={loading || chatClosed}
           style={{
             flex: 1,
             padding: "10px 14px",
@@ -143,9 +236,20 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
             fontSize: "14px",
           }}
         />
-        <Button onClick={handleSend} disabled={loading}>
+        <Button onClick={handleSend} disabled={loading || chatClosed}>
           {loading ? "Sending..." : "Send"}
         </Button>
+      </div>
+
+      <div className="mt-2 text-center">
+        <button
+          type="button"
+          onClick={handleEscalate}
+          disabled={!sessionId || chatClosed || loadingEscalate || loading}
+          className="text-sm text-blue-600 hover:text-blue-800 underline disabled:text-gray-400 disabled:no-underline"
+        >
+          {loadingEscalate ? "Connecting…" : "Talk to support"}
+        </button>
       </div>
 
       <div className="mt-2.5 text-center text-[11px] leading-snug">

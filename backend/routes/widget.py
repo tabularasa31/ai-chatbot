@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
 from backend.core.db import get_db
-from backend.core.limiter import limiter
+from backend.core.limiter import limiter, widget_public_rate_limit_key
 from backend.models import Client
 
 widget_router = APIRouter(prefix="/widget", tags=["widget"])
@@ -22,7 +22,7 @@ def widget_health() -> dict[str, str]:
 
 
 @widget_router.post("/chat")
-@limiter.limit("20/minute")
+@limiter.limit("20/minute", key_func=widget_public_rate_limit_key)
 def widget_chat(
     request: Request,
     message: Annotated[str, Query(description="User message")],

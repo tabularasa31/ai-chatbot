@@ -140,6 +140,15 @@ def mock_openai_client():
         yield mock_client
 
 
+@pytest.fixture(autouse=True)
+def _reset_widget_rate_limit_key_override():
+    """Clear widget rate-limit test hook so a failed test cannot leak state."""
+    yield
+    from backend.core.limiter import set_widget_public_rate_limit_key_override
+
+    set_widget_public_rate_limit_key_override(None)
+
+
 def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-test") -> None:
     """Set OpenAI API key for current user's client. Call after creating client."""
     r = test_client.patch(

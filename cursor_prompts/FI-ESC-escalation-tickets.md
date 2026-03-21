@@ -1,4 +1,4 @@
-# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v1
+# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v2
 
 ⚠️ **CRITICAL: YOU MUST FOLLOW THE SETUP EXACTLY AS WRITTEN. NO SHORTCUTS.**
 
@@ -18,14 +18,15 @@ git checkout -b feature/fi-esc-escalation-tickets
 ## CODE DISCIPLINE
 
 **Scope (you MAY modify):**
-- `backend/models.py` — add EscalationTicket model
-- `backend/migrations/versions/` — new Alembic migration
+- `backend/models.py` — add EscalationTicket model + Chat flag columns
+- `backend/migrations/versions/` — new Alembic migrations
 - `backend/escalation/` — new module: `__init__.py`, `service.py`, `routes.py`, `schemas.py`
-- `backend/chat/service.py` — detect escalation triggers, call escalation service
-- `backend/chat/routes.py` — expose escalation endpoint
+- `backend/escalation/openai_escalation.py` — OpenAI structured completion for escalation UX
+- `backend/chat/service.py` — detect escalation triggers, chat state machine, call escalation service
+- `backend/chat/routes.py` — expose manual escalation endpoint
 - `backend/main.py` — register escalation router
 - `frontend/app/(app)/escalations/page.tsx` — new Escalations inbox page
-- `frontend/components/ChatWidget.tsx` — add "Talk to support" button + ticket confirmation flow
+- `frontend/components/ChatWidget.tsx` — add "Talk to support" button + ticket banner + closed state
 - `frontend/lib/api.ts` — add escalation API calls
 - `tests/` — add tests for escalation logic
 
@@ -48,9 +49,63 @@ This feature makes the bot recognize its own failure and act: create a structure
 **v1 scope (this prompt):**
 - Internal tickets only (stored in DB, visible in dashboard + email notification to tenant)
 - 4 escalation triggers: low similarity, no documents, manual request, answer rejection
-- User sees ticket number + expected response time in chat
+- **User-facing escalation wording is produced by OpenAI** (same stack as the main bot): the model sees full chat context and writes the reply in the user's language; the backend only orchestrates (tickets, flags, parsing) and relays the model output to the client (see Escalation UX via OpenAI below)
 - Tenant sees tickets in /escalations dashboard page
 - No external helpdesk integration in v1 (Zendesk/Intercom = v2)
+
+---
+
+## Escalation UX via OpenAI (language = user's language)
+
+**Why not static "locale tables"?** The product requirement is: the user always reads answers in their own language, including every escalation step. That wording should come from the same OpenAI model you already use for chat, so tone and language stay aligned. The backend does not author user-visible paragraphs from translation files for escalation v1.
+
+### Division of responsibility
+
+| Layer | Responsibility |
+|-------|---------------|
+| Python (orchestration) | Triggers (T-1…T-4), ticket CRUD, `parse_contact_email`, chat flags (`escalation_*`, `ended_at`), tenant email (Brevo), appending machine token `[[escalation_ticket:{ticket_number}]]` if the model omitted it |
+| OpenAI | All natural-language replies for escalation phases: handoff, ask-email, invalid-email retry, follow-up question, clarify, ack, goodbye, "chat closed" — in the language of the conversation |
+
+### Context you MUST send to the model on every escalation completion
+
+Build messages (system + developer/tool-style instruction + full recent thread as user/assistant turns) including at least:
+
+1. **Conversation history** — same window you use for normal chat (or last N turns), so the model infers language, formality (ты/вы), and domain.
+2. **Structured fact block** (developer message or JSON attachment) — non-negotiable facts only, e.g. `ticket_number`, `sla_hours`, `user_email` (if known), `trigger`, `phase` (enum below), `clarify_round` (0 or 1), whether this is after successful email capture, etc.
+3. **KYC / embed user_context** if present (plan, name, locale hint — model may use locale hint but must still follow actual user messages).
+
+### System instructions (essence, implement in English in code)
+
+- You are the same assistant as in this chat. Reply only in the same language the user has been using; match their formality.
+- You must communicate: request passed to human support; they will reply by email at `{email}` when known; ask for email when unknown; ticket id and approximate SLA — do not promise exact times.
+- End with an offer to help further in chat ("anything else?") when phase requires it.
+- Do not invent ticket numbers, emails, or SLA — use only values from the fact block.
+- Keep answers concise and calm.
+
+### Phases (`EscalationPhase` enum for the fact block)
+
+`handoff_email_known` | `handoff_ask_email` | `email_parse_failed` | `followup_awaiting_yes_no` | `chat_already_closed`
+
+(goodbye / "anything else?" / clarify да-нет live inside `message_to_user`, not separate phases)
+
+### Structured model output (required for phases that move state)
+
+Use JSON schema / structured outputs (or parse JSON reliably) so one completion returns:
+
+- `message_to_user` (string) — shown in the widget as the assistant message
+- `followup_decision` — `yes` | `no` | `unclear` | `null`
+  - Only when `phase == followup_awaiting_yes_no`: model must set yes/no/unclear from the latest user message + thread context.
+  - Python state machine: `no` → `ended_at` + relay `message_to_user` (goodbye); `yes` → clear `escalation_followup_pending` + relay `message_to_user` (no RAG on that turn); first `unclear` → relay `message_to_user` (model should politely re-ask да/нет) + set clarify flag; second `unclear` → code forces `yes`.
+
+This avoids maintaining per-locale keyword lists for да/нет/yes/no.
+
+### Relay
+
+Persist `message_to_user` as the assistant `Message` in DB and return it to the client unchanged (after ensuring the `[[escalation_ticket:{ticket_number}]]` line is present once when a ticket exists — append in code if missing).
+
+### Failures
+
+If OpenAI errors: short English fallback string is acceptable for v1 or retry once; log and never leave the user with no body. Optional tiny `FALLBACK_EN_*` constants only for outages — not the primary UX.
 
 ---
 
@@ -76,78 +131,93 @@ class EscalationStatus(str, enum.Enum):
     in_progress = "in_progress"
     resolved = "resolved"
 
+class EscalationPhase(str, enum.Enum):
+    handoff_email_known = "handoff_email_known"
+    handoff_ask_email = "handoff_ask_email"
+    email_parse_failed = "email_parse_failed"
+    followup_awaiting_yes_no = "followup_awaiting_yes_no"
+    chat_already_closed = "chat_already_closed"
+
 class EscalationTicket(Base):
     __tablename__ = "escalation_tickets"
-    
+
     id: UUID (primary key)
     client_id: UUID (FK → clients.id, index)
     ticket_number: str (unique, e.g. "ESC-0001")  # sequential per client
-    
+
     # Question & context
-    primary_question: str  # the question that triggered escalation
+    primary_question: str
     conversation_summary: str | None  # last 5 turns as text
-    
-    # Retrieval context (what the bot tried)
+
+    # Retrieval context
     trigger: EscalationTrigger
-    best_similarity_score: float | None  # best chunk score at trigger time
+    best_similarity_score: float | None
     retrieved_chunks_preview: JSON | None  # [{document_id, score, preview: first 200 chars}]
-    
+
     # User context (from KYC if available, anonymous otherwise)
-    user_id: str | None  # from KYC session
-    user_email: str | None  # for L2 agent to reply
+    user_id: str | None
+    user_email: str | None
     user_name: str | None
     plan_tier: str | None
-    user_note: str | None  # optional note added by user before submission
-    
+    user_note: str | None
+
     # Status & resolution
     priority: EscalationPriority (default: medium)
     status: EscalationStatus (default: open)
-    resolution_text: str | None  # L2 agent fills this on resolve
-    
+    resolution_text: str | None
+
     # Timestamps
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
-    
+
     # Chat reference
     chat_id: UUID | None (FK → chats.id)
     session_id: UUID | None
 ```
 
+**Extend existing `Chat` model:**
+
+```python
+# Add to Chat:
+escalation_awaiting_ticket_id: UUID | None  # FK → escalation_tickets.id, nullable, ON DELETE SET NULL, indexed
+# When non-null: next user message is the reply to ask-email prompt (no RAG); parsing in code.
+
+escalation_followup_pending: bool  # default false, server_default=false
+# When true: next user message classified via OpenAI structured output (followup_decision).
+
+ended_at: datetime | None  # nullable. When set, chat is closed.
+# Further user messages get short assistant reply (chat_already_closed phase); widget disables input.
+```
+
+**Flag check order in chat pipeline:** `ended_at` → `escalation_awaiting_ticket_id` → `escalation_followup_pending` → normal RAG.
+
 ### 2. Alembic migration
 
-Create migration for `escalation_tickets` table with indexes on `client_id`, `status`, `created_at`.
+Two migrations (or one combined):
+1. `escalation_tickets` table with indexes on `client_id`, `status`, `created_at`
+2. Add `escalation_awaiting_ticket_id`, `escalation_followup_pending`, `ended_at` to `chats`
 
 ### 3. Escalation module (`backend/escalation/`)
 
-**`service.py`** — core logic:
+**`service.py`:**
 
 ```python
-ESCALATION_THRESHOLD = 0.45  # configurable, default from spec
+ESCALATION_THRESHOLD = 0.45
 
 def should_escalate(
     best_similarity_score: float | None,
     chunk_count: int,
     trigger_override: EscalationTrigger | None = None,
 ) -> tuple[bool, EscalationTrigger | None]:
-    """
-    Evaluate escalation triggers in order (T-1 through T-4).
-    Returns (should_escalate, trigger_type).
-    
-    T-1: best_similarity_score < ESCALATION_THRESHOLD (or is None with chunks)
-    T-2: chunk_count == 0 (no documents found)
-    T-3: trigger_override == user_request
-    T-4: trigger_override == answer_rejected
-    """
+    """T-1: score < threshold. T-2: chunk_count == 0. T-3/T-4: trigger_override."""
 
 def detect_human_request(message: str) -> bool:
     """
-    Detect if the user is explicitly requesting a human agent.
-    
     Patterns (case-insensitive):
     - "talk to", "speak to", "connect me to", "get me", "I want a human/agent/person/support"
     - "поговорить с", "соедини с", "хочу с человеком"
-    - "this is useless", "not helpful" + ("human" or "support" or "agent")
+    - "this is useless"/"not helpful" + ("human" or "support" or "agent")
     """
 
 def compute_priority(
@@ -156,20 +226,15 @@ def compute_priority(
     user_context: dict | None,
 ) -> EscalationPriority:
     """
-    Priority rules:
-    - T-3 (user_request) + enterprise/pro plan → critical
-    - T-3 (user_request) → high
-    - T-1/T-2 + enterprise plan → high
-    - T-4 (answer_rejected) → medium
-    - Default → medium
+    T-3 + enterprise/pro → critical
+    T-3 → high
+    T-1/T-2 + enterprise → high
+    T-4 → medium
+    Default → medium
     """
 
 def generate_ticket_number(client_id: UUID, db: Session) -> str:
-    """
-    Sequential per client: ESC-0001, ESC-0002, etc.
-    Query max ticket_number for client → increment.
-    Thread-safe: use SELECT FOR UPDATE or handle IntegrityError.
-    """
+    """Sequential per client: ESC-0001, ESC-0002. Thread-safe."""
 
 def create_escalation_ticket(
     client_id: UUID,
@@ -185,26 +250,22 @@ def create_escalation_ticket(
     user_context: dict | None = None,
     user_note: str | None = None,
 ) -> EscalationTicket:
-    """
-    Create and store an escalation ticket.
-    Send email notification to tenant (via existing Brevo service).
-    Return the created ticket.
-    """
+    """Create ticket, send email notification to tenant, return ticket."""
 
-def format_user_message(ticket: EscalationTicket, sla_hours: int = 24) -> str:
+def parse_contact_email(message: str) -> str | None:
+    """Extract single email from user reply. Return None if unclear or multiple."""
+
+def apply_collected_contact_email(
+    ticket_id: UUID,
+    chat_id: UUID,
+    email: str,
+    db: Session,
+) -> None:
     """
-    Format the message shown to the user in chat after ticket creation.
-    
-    Template:
-    "I wasn't able to find an answer to your question. I've created a support ticket
-    so our team can help you directly.
-    
-    Ticket: #{ticket_number}
-    Expected response: within {sla_hours} hours{email_line}
-    
-    Is there anything you'd like to add for the support team? (optional — reply or skip)"
-    
-    {email_line} = "\nWe'll follow up at {user_email}" if user_email is present, else ""
+    - Set EscalationTicket.user_email = email
+    - Merge email into Chat.user_context if applicable
+    - Clear chat.escalation_awaiting_ticket_id
+    - Set chat.escalation_followup_pending = True
     """
 
 def resolve_ticket(
@@ -213,48 +274,184 @@ def resolve_ticket(
     resolution_text: str,
     db: Session,
 ) -> EscalationTicket:
-    """Mark ticket as resolved, store resolution, set resolved_at."""
+    """Mark resolved, store resolution, set resolved_at."""
+
+def get_latest_escalation_ticket_for_chat(chat_id: UUID, db: Session) -> EscalationTicket | None:
+    """Most recent escalation ticket linked to this chat."""
+
+def fact_from_ticket(ticket: EscalationTicket, sla_hours: int = 24) -> dict:
+    """Serialize ticket_number, sla_hours, user_email, trigger, etc. for the model fact block."""
+
+def build_chat_messages_for_openai(chat: Chat, current_user_text: str) -> list[dict]:
+    """Same roles/content as main chat completion; includes current user message."""
+
+def _escalation_clarify_already_asked(chat: Chat) -> bool:
+    """True if chat.user_context already has escalation_followup_clarify."""
+
+def _set_escalation_clarify_flag(chat: Chat) -> None:
+    """Merge escalation_followup_clarify: true into user_context."""
+
+def _clear_escalation_clarify_flag(chat: Chat) -> None:
+    """Remove escalation_followup_clarify from user_context."""
 ```
 
-**`routes.py`**:
+**`openai_escalation.py`:**
+
+```python
+class EscalationLlmResult(BaseModel):
+    message_to_user: str
+    followup_decision: Literal["yes", "no", "unclear"] | None = None
+    tokens_used: int = 0
+
+def complete_escalation_openai_turn(
+    *,
+    phase: EscalationPhase,
+    chat_messages: list[dict],  # role + content; same window as main chat
+    fact_json: dict,            # ticket_number, sla_hours, user_email, trigger, clarify_round, ...
+    latest_user_text: str | None,
+    api_key: str,
+    model: str | None = None,
+) -> EscalationLlmResult:
+    """
+    One OpenAI structured completion.
+    
+    System/developer text in English is fine; model output must match the user's language in chat_messages.
+    After return: ensure [[escalation_ticket:{ticket_number}]] is present when a ticket exists
+    (append in Python if missing).
+    
+    On OpenAI error: return EscalationLlmResult with short English fallback, log exception.
+    """
+
+def handoff_user_message_via_openai(
+    ticket: EscalationTicket,
+    chat: Chat,
+    *,
+    phase: EscalationPhase,
+    api_key: str,
+) -> str:
+    """Build chat_messages + fact_json from DB, call complete_escalation_openai_turn, return message_to_user."""
+```
+
+**`routes.py`:**
 
 ```
-GET  /escalations              → list all tickets for client (filter: status, priority, date range)
-GET  /escalations/{ticket_id}  → get single ticket
-POST /escalations/{ticket_id}/resolve  → resolve ticket with resolution_text
-POST /chat/{session_id}/escalate       → manual escalation trigger (user clicks "Talk to support")
+GET  /escalations                      → list tickets (filter: status, priority, date range)
+GET  /escalations/{ticket_id}          → get single ticket
+POST /escalations/{ticket_id}/resolve  → resolve with resolution_text
+POST /chat/{session_id}/escalate       → manual escalation (user clicks "Talk to support")
 ```
-
-**`schemas.py`**: Pydantic schemas for all request/response types.
 
 ### 4. Integrate into chat pipeline (`backend/chat/service.py`)
 
-In `process_chat_message()`, after step 3 (generate answer):
+Build `msgs` once per request (same message list used for main RAG):
 
 ```python
-# After retrieving chunks and before generating answer:
+msgs = build_chat_messages_for_openai(chat, current_user_text=question)
 
-# Check T-3: did user ask for human? (check before RAG)
+# --- Chat already closed ---
+if chat.ended_at is not None:
+    out = complete_escalation_openai_turn(
+        phase=EscalationPhase.chat_already_closed,
+        chat_messages=msgs, fact_json={},
+        latest_user_text=question, api_key=api_key,
+    )
+    return (out.message_to_user, [], out.tokens_used)
+
+# --- Awaiting contact email (parse in code; wording from OpenAI) ---
+if chat.escalation_awaiting_ticket_id:
+    email = parse_contact_email(question)
+    ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
+    if email:
+        apply_collected_contact_email(ticket.id, chat.id, email, db)
+        db.refresh(ticket)
+        out = complete_escalation_openai_turn(
+            phase=EscalationPhase.handoff_email_known,
+            chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+            latest_user_text=question, api_key=api_key,
+        )
+        chat.escalation_followup_pending = True
+        return (out.message_to_user, [], out.tokens_used)
+    out = complete_escalation_openai_turn(
+        phase=EscalationPhase.email_parse_failed,
+        chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+        latest_user_text=question, api_key=api_key,
+    )
+    return (out.message_to_user, [], out.tokens_used)
+
+# --- Awaiting follow-up (yes/no) ---
+if chat.escalation_followup_pending:
+    ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
+    out = complete_escalation_openai_turn(
+        phase=EscalationPhase.followup_awaiting_yes_no,
+        chat_messages=msgs,
+        fact_json={
+            **fact_from_ticket(ticket),
+            "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+        },
+        latest_user_text=question, api_key=api_key,
+    )
+    decision = out.followup_decision or "unclear"
+    if decision == "unclear" and _escalation_clarify_already_asked(chat):
+        decision = "yes"  # second unclear → continue chat
+    if decision == "yes":
+        chat.escalation_followup_pending = False
+        _clear_escalation_clarify_flag(chat)
+        return (out.message_to_user, [], out.tokens_used)
+    if decision == "no":
+        chat.escalation_followup_pending = False
+        _clear_escalation_clarify_flag(chat)
+        chat.ended_at = utcnow()
+        return (out.message_to_user, [], out.tokens_used)
+    # first "unclear": model re-asks да/нет; set flag
+    _set_escalation_clarify_flag(chat)
+    return (out.message_to_user, [], out.tokens_used)
+
+# --- T-3: user asked for human (before RAG) ---
 if detect_human_request(question):
     ticket = create_escalation_ticket(..., trigger=EscalationTrigger.user_request, ...)
-    return (format_user_message(ticket), [], 0)
+    phase = (
+        EscalationPhase.handoff_ask_email
+        if not ticket.user_email
+        else EscalationPhase.handoff_email_known
+    )
+    out = complete_escalation_openai_turn(
+        phase=phase, chat_messages=msgs,
+        fact_json=fact_from_ticket(ticket),
+        latest_user_text=question, api_key=api_key,
+    )
+    if not ticket.user_email:
+        chat.escalation_awaiting_ticket_id = ticket.id
+    else:
+        chat.escalation_followup_pending = True
+    return (out.message_to_user, [], out.tokens_used)
 
-# After retrieval:
+# --- Normal RAG + T-1/T-2 escalation ---
+# ... retrieval happens here ...
+
 escalate, trigger = should_escalate(best_score, len(chunk_texts))
 if escalate:
-    # Still generate a best-effort answer (for T-1) but also create ticket
     answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
     ticket = create_escalation_ticket(..., trigger=trigger, ...)
-    # Append escalation notice to answer
-    answer = answer + "\n\n" + format_user_message(ticket)
-    return (answer, document_ids, tokens_used)
+    esc = complete_escalation_openai_turn(
+        phase=(
+            EscalationPhase.handoff_ask_email
+            if not ticket.user_email
+            else EscalationPhase.handoff_email_known
+        ),
+        chat_messages=msgs, fact_json=fact_from_ticket(ticket),
+        latest_user_text=question, api_key=api_key,
+    )
+    answer = answer + "\n\n" + esc.message_to_user
+    if not ticket.user_email:
+        chat.escalation_awaiting_ticket_id = ticket.id
+    else:
+        chat.escalation_followup_pending = True
+    return (answer, document_ids, tokens_used + esc.tokens_used)
 ```
 
-Note: T-4 (answer rejection) is handled via a separate endpoint (`POST /chat/{session_id}/escalate`) called when the user thumbs-down. Not in-band in the chat pipeline.
+Note: T-4 (answer rejection) handled via `POST /chat/{session_id}/escalate`. Same flags + same OpenAI escalation path.
 
 ### 5. Email notification to tenant
-
-When a ticket is created, send an email to the tenant's registered email using the existing Brevo service:
 
 ```
 Subject: [Chat9] New support ticket #{ticket_number} — {primary_question[:60]}
@@ -272,24 +469,20 @@ View in dashboard: https://getchat9.live/escalations/{ticket_id}
 
 ### 6. Frontend: Escalations page (`frontend/app/(app)/escalations/page.tsx`)
 
-Show a table of tickets:
+Table of tickets:
 - Columns: Ticket #, Question (truncated), Priority, Status, User (email if available), Created, Actions
 - Filter by status (open / in_progress / resolved)
-- Click on row → expand to show full context:
-  - Primary question
-  - Conversation summary
-  - Retrieved chunks preview (document name + score)
-  - User note (if any)
+- Click on row → expand:
+  - Primary question, conversation summary, retrieved chunks preview, user note
   - Resolution text field + "Mark as resolved" button
 
 ### 7. Widget: "Talk to support" button
 
-In `frontend/components/ChatWidget.tsx`, add a small "Talk to support" link below the message input (always visible).
-
-On click → send a message "I'd like to talk to a human agent" which triggers T-3 in the backend.
-
-When a ticket confirmation message arrives from the bot (contains "Ticket: #ESC-"):
-- Show a persistent banner in the widget: "Ticket #ESC-XXXX created — our team will follow up"
+In `frontend/components/ChatWidget.tsx`:
+- Add link below message input (always visible). Button label is a UI string only.
+- On click → `POST /chat/{session_id}/escalate` (no fake user message). Backend returns model's handoff text.
+- Parse `[[escalation_ticket:ESC-####]]` from assistant body (strip from display if desired). Show banner with ticket id.
+- After `chat.ended_at`: disable input/send, show closed state (copy from last assistant message).
 
 ### 8. API client (`frontend/lib/api.ts`)
 
@@ -312,16 +505,22 @@ Before pushing:
 - [ ] `pytest -q` — all existing tests pass
 - [ ] New test: `should_escalate()` — T-1 fires when score < 0.45
 - [ ] New test: `should_escalate()` — T-2 fires when chunk_count == 0
-- [ ] New test: `detect_human_request()` — detects "talk to a human", "connect me to support"
+- [ ] New test: `detect_human_request()` — detects "talk to a human", "connect me to support", "хочу с человеком"
 - [ ] New test: `compute_priority()` — T-3 + pro plan → critical
-- [ ] New test: ticket creation stores correct fields
-- [ ] New test: `generate_ticket_number()` — sequential, unique per client
-- [ ] New test: chat pipeline creates ticket when similarity < threshold
-- [ ] New test: chat pipeline detects human request, returns ticket message without RAG
-- [ ] New test: GET /escalations — returns only tickets for authenticated client (tenant isolation)
+- [ ] New test: `parse_contact_email()` — valid email extracted, None on garbage
+- [ ] New test: ticket creation stores correct fields, sequential ticket_number
+- [ ] New test: chat pipeline — `ended_at` set → returns closed message (no RAG)
+- [ ] New test: chat pipeline — `escalation_awaiting_ticket_id` set + valid email → `apply_collected_contact_email` called
+- [ ] New test: chat pipeline — `escalation_awaiting_ticket_id` set + invalid email → `email_parse_failed` phase
+- [ ] New test: chat pipeline — `escalation_followup_pending` + "yes" → followup cleared, no ended_at
+- [ ] New test: chat pipeline — `escalation_followup_pending` + "no" → `ended_at` set
+- [ ] New test: `followup_decision == "unclear"` twice → second unclear treated as "yes"
+- [ ] New test: GET /escalations — tenant isolation (only own tickets)
 - [ ] New test: resolve endpoint sets status=resolved, resolved_at != null
-- [ ] Manual test: ask unanswerable question → ticket appears in /escalations
-- [ ] Manual test: click "Talk to support" → ticket created immediately
+- [ ] New test: `complete_escalation_openai_turn()` — OpenAI error → fallback string returned, no exception raised
+- [ ] Manual test: ask unanswerable → ticket appears in /escalations + email received
+- [ ] Manual test: click "Talk to support" → ask-email phase → enter email → confirmed → follow-up question
+- [ ] Manual test: say "no" to follow-up → chat closed, input disabled
 
 ---
 
@@ -332,7 +531,7 @@ git add backend/models.py backend/escalation/ backend/chat/ backend/main.py \
         backend/migrations/versions/ \
         frontend/app/(app)/escalations/ frontend/components/ChatWidget.tsx \
         frontend/lib/api.ts tests/
-git commit -m "feat: add L2 escalation tickets — auto-trigger + dashboard inbox (FI-ESC)"
+git commit -m "feat: add L2 escalation tickets — OpenAI-generated UX, chat state machine (FI-ESC)"
 git push origin feature/fi-esc-escalation-tickets
 ```
 
@@ -340,13 +539,14 @@ git push origin feature/fi-esc-escalation-tickets
 
 ## NOTES
 
-- **v1 is internal only** — tickets stored in DB, visible in dashboard, email notification. No Zendesk/Intercom (v2).
-- **T-4 (answer rejection)** — implement via separate endpoint, not in main chat pipeline. Called when user thumbs-down.
-- **Don't break existing chat flow** — escalation logic wraps around the existing pipeline. If escalation service fails, chat still returns an answer (wrap create_escalation_ticket in try/except).
-- **Ticket number format**: `ESC-{padded_sequential}` e.g. ESC-0001. Use DB-level sequence or row count per client.
-- **Email notification** is best-effort — if Brevo fails, ticket is still created. Log the email failure.
-- **SLA**: hardcode 24 hours for v1. Configurable per tenant is a v2 feature.
-- Dependency: FI-KYC should be done first so tickets can include user email. But FI-ESC works without KYC — user_email will just be null (anonymous).
+- **Language is emergent, not configured.** Model sees full chat history → writes in user's language automatically. No locale tables, no Accept-Language parsing.
+- **v1 is internal only** — tickets in DB, email notification. Zendesk/Intercom = v2.
+- **T-4 (answer rejection)** — separate endpoint, not in main chat pipeline.
+- **Never raise in `complete_escalation_openai_turn()`** — fallback string on error, log exception.
+- **Ticket number**: `ESC-{zero-padded}` per client. Use `SELECT FOR UPDATE` or handle `IntegrityError`.
+- **Email notification**: best-effort — ticket created even if Brevo fails. Log failure.
+- **`[[escalation_ticket:ESC-####]]`** machine token: append in Python if model omitted it, strip in widget display.
+- Works without FI-KYC — `user_email` will be null for anonymous sessions (triggers `handoff_ask_email` phase).
 
 ---
 
@@ -354,24 +554,25 @@ git push origin feature/fi-esc-escalation-tickets
 
 ```markdown
 ## Summary
-Adds automatic L2 escalation tickets. When the bot can't answer (low similarity, no docs, user request, answer rejection), it creates a structured ticket, notifies the user with a ticket number and SLA, and surfaces the ticket in a new /escalations dashboard page. Tenants receive an email notification per ticket.
+Adds automatic L2 escalation tickets with a stateful chat flow. When the bot can't answer (low similarity, no docs, user request, answer rejection), it creates a structured ticket and enters an OpenAI-driven multi-turn escalation flow: collect user email if unknown, confirm ticket, offer to continue or close chat. All user-facing wording is generated by OpenAI in the user's language from the full chat context — no locale tables.
 
 ## Changes
-- `backend/models.py` — EscalationTicket model with trigger, priority, status, user context
-- `backend/migrations/versions/XXX` — escalation_tickets table
-- `backend/escalation/` — new module: service + routes + schemas
-- `backend/chat/service.py` — T-1/T-2/T-3 trigger detection in chat pipeline
+- `backend/models.py` — EscalationTicket + EscalationPhase + Chat flag columns (escalation_awaiting_ticket_id, escalation_followup_pending, ended_at)
+- `backend/migrations/versions/XXX` — escalation_tickets table + chat flag columns
+- `backend/escalation/service.py` — triggers, ticket CRUD, email parsing, state helpers
+- `backend/escalation/openai_escalation.py` — structured OpenAI completion for escalation UX
+- `backend/escalation/routes.py` + `schemas.py` — escalations API
+- `backend/chat/service.py` — chat state machine (closed → await_email → followup → RAG)
 - `backend/main.py` — register escalation router
 - `frontend/app/(app)/escalations/page.tsx` — escalations inbox with resolve workflow
-- `frontend/components/ChatWidget.tsx` — "Talk to support" button + ticket banner
+- `frontend/components/ChatWidget.tsx` — "Talk to support" + ticket banner + closed state
 - `frontend/lib/api.ts` — escalation API methods
 
 ## Testing
 - [ ] pytest passes (all existing + new tests)
-- [ ] Manual: unanswerable question → ticket in /escalations + email received
-- [ ] Manual: "Talk to support" button → ticket created immediately
+- [ ] Manual: unanswerable → ticket → email collected → confirmed → follow-up → "no" → chat closed
+- [ ] Manual: "Talk to support" → immediate ticket + handoff message
 
 ## Notes
-v1: internal tickets only (DB + email). Zendesk/Intercom delivery in v2.
-Works standalone — does not require FI-KYC (user_email will be null for anonymous sessions).
+Language is emergent from chat context, not configured. Works without FI-KYC (email collected inline).
 ```

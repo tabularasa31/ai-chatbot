@@ -30,6 +30,7 @@
 - **LLM Integration:** OpenAI API (via client's own API key)
   - gpt-4o-mini for chat (fast + cheap)
   - Optional second gpt-4o-mini call per chat turn for answer validation (FI-034): groundedness check; failures do not block the user-facing reply
+  - **PII redaction (FI-043):** before embedding search, chat completion, and validation completion, the user question is passed through regex redaction (`backend/chat/pii.py`); placeholders `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]` are sent to OpenAI; the original text is stored in `messages.content` for dashboard/logs
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
   
@@ -127,13 +128,15 @@
 │  POST /widget/chat (public clientId) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve client → client_id + openai_api_key        │
-│    2. Embed question (OpenAI, client's key)              │
-│    3. Search embeddings (pgvector)                       │
-│    4. Build prompt with top 3 chunks                     │
-│    5. Call OpenAI gpt-4o-mini (client's key)             │
-│    6. Track token usage                                  │
-│    7. Save to messages table                             │
-│    8. Return {answer, sources, tokens_used}              │
+│    2. Redact PII in question (regex, FI-043)             │
+│    3. Embed redacted question (OpenAI, client's key)      │
+│    4. Search embeddings (pgvector)                       │
+│    5. Build prompt with top chunks + redacted question   │
+│    6. Call OpenAI gpt-4o-mini (client's key); optional     │
+│       validation call (FI-034) also uses redacted text   │
+│    7. Track token usage                                  │
+│    8. Save original question + answer to messages          │
+│    9. Return {answer, sources, tokens_used}              │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
@@ -176,25 +179,29 @@
    ↓
 3. Backend validates API key → gets client_id + client's openai_api_key
    ↓
-4. OpenAI API: Embed question → vector(1536)  [client's key]
+4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
-5. PostgreSQL pgvector: Search similar chunks
+5. OpenAI API: Embed redacted question → vector(1536)  [client's key]
+   ↓
+6. PostgreSQL pgvector: Search similar chunks
    SELECT chunk_text FROM embeddings
    WHERE client_id = X
    ORDER BY vector <-> question_vector
    LIMIT 3
    ↓
-6. Build prompt:
-   "Based on:\n{chunk1}\n{chunk2}\n{chunk3}\n\nAnswer: {question}"
+7. Build prompt:
+   "Based on:\n{chunk1}\n{chunk2}\n{chunk3}\n\nAnswer: {redacted_question}"
    ↓
-7. OpenAI API: Chat completion  [client's key]
+8. OpenAI API: Chat completion  [client's key]
    gpt-4o-mini (temperature=0.2, max_tokens=500)
    ↓
-8. Track tokens used → save to messages table
+9. Optional: second gpt-4o-mini call for validation (FI-034) using same redacted question
    ↓
-9. Return: {answer, source_docs, tokens_used}
+10. Track tokens used → save **original** question + answer to messages table
    ↓
-10. Widget displays answer
+11. Return: {answer, source_docs, tokens_used}
+   ↓
+12. Widget displays answer
 ```
 
 ---
@@ -211,6 +218,10 @@
 - Each client's OpenAI key is stored encrypted per client
 - Costs go directly to the client's OpenAI account
 - Chat9 never marks up or proxies OpenAI costs
+
+### User message privacy (FI-043)
+- Regex redaction on the user question before any OpenAI call (embedding, chat, validation)
+- Dashboard and `Message.content` keep the **original** wording for support context; Stage 2 (NER, FI-044) is backlog for names/addresses
 
 ### Multi-Tenant Isolation
 - Every query includes `WHERE client_id = $1`

@@ -25,6 +25,7 @@
   - Промпт `cursor_prompts/FI-009-improved-chunking.md` удалён после внедрения; описание в `BACKLOG_PRODUCT.md` / `BACKLOG_RAG_QUALITY.md`
 - ✅ **FI-032 (phase 1)** — document health check: `health_status`, `run_document_health_check`, QA-чеклист `docs/qa/FI-032-document-health-check.md`; промпт `cursor_prompts/FI-032-document-health-check.md` удалён.
 - ✅ **FI-034** — LLM-based answer validation (`feature/fi-034-answer-validation`): после `generate_answer()` вызывается `validate_answer()` (gpt-4o-mini, `temperature=0`); при `is_valid=false` и `confidence < 0.4` ответ заменяется на fallback; ошибки валидации не блокируют ответ (`validation_skipped`). Результат в `POST /chat/debug` → `debug.validation`. Промпт `cursor_prompts/FI-034-llm-answer-validation.md` удалён после внедрения.
+- ✅ **FI-043** — PII redaction Stage 1 (regex): модуль `backend/chat/pii.py` (`redact` / `redact_text`); в `process_chat_message()` и `run_debug()` перед вызовами OpenAI текст вопроса маскируется (email, телефоны, типичные API-ключи, номера карт → `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]`). В `Message.content` сохраняется **оригинал**. Те же регулярки применяются к вопросу в `validate_answer()` (второй вызов LLM). Тесты: `tests/chat/test_pii.py`. После merge в `main` промпт `cursor_prompts/FI-043-pii-redaction-regex.md` удалить по дисциплине репозитория.
 
 ---
 
@@ -126,7 +127,7 @@
 ## 📊 FEATURES LIVE IN PRODUCTION
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
-- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; post-generation answer validation FI-034)
+- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)

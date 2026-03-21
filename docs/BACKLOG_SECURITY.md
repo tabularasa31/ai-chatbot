@@ -4,27 +4,26 @@ Security, isolation, abuse protection.
 
 ---
 
+## ✅ Shipped (security-relevant)
+
+### ~~[FI-043] PII Redaction — Stage 1 (Regex)~~ ✅ Done (2026-03-21)
+**Problem (was):** User messages went directly to OpenAI (embeddings + completion + validation) with potential PII.
+
+**Implemented:**
+- `backend/chat/pii.py` — pure-regex redaction: `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]` (Tier 1A).
+- `backend/chat/service.py` — `redact()` before `retrieve_context()`, `generate_answer()`, and `validate_answer()` in `process_chat_message()` and `run_debug()`.
+- Original question remains in `Message.content` for tenant admin context; redacted text only crosses the OpenAI boundary.
+- Tests: `tests/chat/test_pii.py`.
+
+**Still out of scope (v2 / FI-044):** Presidio NER, tenant toggles, ingestion scanning, GDPR deletion flows — see FI-044 below.
+
+**Spec reference:** `specs/pii-redaction-spec.docx` (FR-1, FR-2 Tier 1, FR-3.1 Stage 1 only, FR-4)
+
+---
+
 ## 🔴 P1
 
-### [FI-043] PII Redaction — Stage 1 (Regex)
-**Problem:** User messages go directly to OpenAI (embeddings + completion) with potential PII — emails, phones, API keys. This is a GDPR risk and a blocker for EU B2B clients.
-
-**Solution (MVP — regex only, no NER):**
-- Intercept every user message before any external API call
-- Replace Tier 1 entities with typed placeholders: `[EMAIL]`, `[PHONE]`, `[API_KEY]`
-- Store original text in DB; only redacted text goes to OpenAI
-- Regex patterns: email (RFC-compatible), phone (RU + international formats), API key patterns (Bearer tokens, sk-*, hex strings 32+ chars)
-
-**Where to intercept:** In `backend/chat/service.py` — before `retrieve_context()`, before `generate_answer()`, and before `validate_answer()` (FI-034 adds a second completion call on user question + chunks + draft answer).
-
-**What NOT to do (save for v2):**
-- No Presidio / spaCy NER — too heavy for MVP
-- No tenant config UI — redaction is always on
-- No audit log UI — just a simple DB log table
-- No document ingestion scanning (FR-7)
-
-**Effort:** 1 day
-**Spec reference:** `specs/pii-redaction-spec.docx` (FR-1, FR-2 Tier 1, FR-3.1 Stage 1 only, FR-4)
+*(нет открытых P1 в этом файле; следующий шаг по PII — FI-044 при требовании enterprise/EU.)*
 
 ---
 

@@ -112,9 +112,8 @@ Per strategy: "A bot that cannot control what it reveals is not production-ready
 
 ---
 
-### [FI-043] PII Redaction (Regex)
-Cursor prompt ready: `cursor_prompts/FI-043-pii-redaction-regex.md`
-See BACKLOG_SECURITY.md
+### ~~[FI-043] PII Redaction (Regex)~~ ✅ Done (2026-03-21)
+Реализация: `backend/chat/pii.py`, `backend/chat/service.py` (`process_chat_message`, `run_debug`), `tests/chat/test_pii.py`. Подробности и Stage 2: `docs/BACKLOG_SECURITY.md` (FI-044). Промпт удалить после merge в `main`.
 
 ---
 

@@ -29,7 +29,7 @@ backend/
 ├─ documents/              # upload, parsing, status
 ├─ embeddings/             # chunking, embeddings (sync indexing; no separate worker.py)
 ├─ search/                 # chunk retrieval
-├─ chat/                   # RAG chat (per-route auth: JWT, X-API-Key, etc.)
+├─ chat/                   # RAG chat: service, routes, pii.py (FI-043 redaction), …
 ├─ email/                  # transactional email (Brevo)
 │
 ├─ routes/                 # cross-cutting public HTTP
@@ -47,6 +47,8 @@ backend/
 requirements.txt           # repo root — primary for local setup (see README)
 tests/
 ├─ conftest.py
+├─ chat/
+│  └─ test_pii.py          # FI-043 redaction unit tests
 ├─ test_auth.py
 ├─ test_chat.py
 ├─ test_clients.py

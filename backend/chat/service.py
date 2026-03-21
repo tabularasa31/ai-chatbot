@@ -13,10 +13,10 @@ PREVIEW_MAX_LEN = 120
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Chat, Document, Message, MessageFeedback, MessageRole
-from backend.search.service import (
-    VECTOR_CONFIDENCE_THRESHOLD,
-    search_similar_chunks,
-)
+from backend.search.service import search_similar_chunks
+
+# SQLite tests: cosine-only path; used to label debug mode (not RRF scores).
+RETRIEVAL_VECTOR_CONFIDENCE = 0.70
 
 
 def retrieve_context(
@@ -25,18 +25,18 @@ def retrieve_context(
     db: Session,
     api_key: str,
     top_k: int = 5,
-) -> tuple[list[str], list[uuid.UUID], list[float], Literal["vector", "keyword", "none"]]:
+) -> tuple[list[str], list[uuid.UUID], list[float], Literal["vector", "keyword", "hybrid", "none"]]:
     """
-    Retrieve context chunks for RAG using pgvector native search.
+    Retrieve context chunks for RAG (pgvector + BM25 + RRF on PostgreSQL; Python cosine on SQLite tests).
 
-    Uses search_similar_chunks which handles pgvector natively (or falls back to Python for SQLite).
+    Uses search_similar_chunks for tenant-scoped retrieval.
     client_id filtering enforced at DB level.
 
     Returns:
         chunk_texts: List of chunk text strings.
         document_ids: List of document UUIDs (order matches chunk_texts).
-        scores: List of scores (similarity for vector, match count for keyword).
-        mode: "vector" | "keyword" | "none".
+        scores: Cosine similarity (SQLite) or RRF fusion scores (PostgreSQL hybrid).
+        mode: "vector" | "keyword" | "hybrid" | "none".
     """
     results = search_similar_chunks(
         client_id=client_id,
@@ -49,17 +49,16 @@ def retrieve_context(
     if not results:
         return ([], [], [], "none")
 
-    # Determine mode from scores.
-    # Vector similarity: scores in [0.0, 1.0]. Keyword: match counts (1, 2, 3...).
-    # best_score > 1.0 → keyword (match count). 0.70 <= best_score <= 1.0 → vector.
-    # best_score < 0.70 → keyword fallback (low-confidence vector results replaced).
     best_score = results[0][1]
-    if best_score > 1.0:
-        mode: Literal["vector", "keyword", "none"] = "keyword"
-    elif best_score >= VECTOR_CONFIDENCE_THRESHOLD:
-        mode = "vector"
+    db_url = str(db.bind.url if db.bind else "")
+    if "sqlite" in db_url:
+        # Tests: Python cosine only; same thresholds as before keyword→BM25 swap.
+        if best_score >= RETRIEVAL_VECTOR_CONFIDENCE:
+            mode: Literal["vector", "keyword", "hybrid", "none"] = "vector"
+        else:
+            mode = "keyword"
     else:
-        mode = "keyword"
+        mode = "hybrid"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]

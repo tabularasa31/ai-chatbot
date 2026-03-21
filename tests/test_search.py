@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.search.service import cosine_similarity, keyword_search_chunks
+from backend.search.service import bm25_search_chunks, cosine_similarity
 
 
 # --- Unit tests for cosine_similarity ---
@@ -386,11 +386,11 @@ def test_search_default_top_k(
     assert "results" in response.json()
 
 
-# --- Keyword search unit tests ---
+# --- BM25 search unit tests ---
 
 
-def test_keyword_search_chunks_finds_match(db_session) -> None:
-    """keyword_search_chunks returns chunks containing query keywords."""
+def test_bm25_search_chunks_finds_match(db_session) -> None:
+    """bm25_search_chunks returns chunks relevant to query tokens."""
     from tests.test_models import _create_client, _create_user
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
@@ -416,18 +416,18 @@ def test_keyword_search_chunks_finds_match(db_session) -> None:
     db_session.add(emb)
     db_session.commit()
 
-    results = keyword_search_chunks(cl.id, "cors настройка", top_k=5, db=db_session)
+    results = bm25_search_chunks(cl.id, "cors настройка", top_k=5, db=db_session)
     assert len(results) == 1
     assert results[0][0].chunk_text == "CORS settings: allow_origins, allow_methods"
-    assert results[0][1] >= 1.0  # at least "cors" matched
+    assert 0 < results[0][1] <= 1.0
 
 
-def test_search_keyword_fallback_when_vector_low(
+def test_search_low_vector_similarity_still_returns_chunk(
     mock_openai_client: Mock,
     client: TestClient,
     db_session: Session,
 ) -> None:
-    """Short/vague query with low vector similarity → keyword fallback finds CORS chunk."""
+    """SQLite cosine path: orthogonal query/chunk vectors still returns chunk with score 0."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     token = register_and_verify_user(client, db_session, email="fallback@example.com")

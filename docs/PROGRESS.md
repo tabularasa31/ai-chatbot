@@ -7,6 +7,13 @@
 
 ## ✅ COMPLETED (2026-03-21)
 
+### Search / retrieval
+- ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`, `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`)
+  - PostgreSQL: `_pgvector_search` (top `2×top_k`) + `bm25_search_chunks` по `chunk_text` → `reciprocal_rank_fusion` (k=60)
+  - SQLite (тесты): только Python cosine, без BM25 (как в спеке промпта)
+  - Debug API: режим **`hybrid`** на Postgres; на SQLite по-прежнему **vector / keyword** по порогу косинуса
+  - Зависимость: `backend/requirements.txt` → `rank-bm25>=0.2.2`
+
 ### RAG / embeddings
 - ✅ **FI-009** — Sentence-aware chunking + метаданные эмбеддингов (`feature/fi-009-improved-chunking`)
   - `chunk_text()`: границы по предложениям, ~500 символов мягкий лимит, `overlap_sentences`
@@ -115,7 +122,7 @@
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata)
-- ✅ Hybrid retrieval (vector + keyword fallback)
+- ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)

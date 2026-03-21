@@ -31,7 +31,7 @@
 - **Multi-tenant** — one platform, many clients, full data isolation
 - **Document upload** — PDF, Markdown, Swagger (JSON/YAML), plain text
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
-- **Hybrid retrieval** — vector search + keyword fallback
+- **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only
 - **Embeddable JS widget** — chat bubble on any site (~6KB, no dependencies)
 - **Dashboard** — Next.js: docs manager, chat logs, feedback, admin metrics
 - **Chat logs** — inbox-style view of all conversations

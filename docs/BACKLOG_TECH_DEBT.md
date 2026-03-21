@@ -21,15 +21,12 @@ Key recommendations added to this backlog:
 
 ## 🔴 P1 — Critical (before scale)
 
-### [FI-019] pgvector `<=>` instead of Python cosine similarity
-- We load ALL client embeddings into Python and compute cosine — O(n) per request.
-- Switch to native SQL: `ORDER BY vector <=> '[...]'::vector LIMIT 5`.
-- Add `pgvector` Python package, HNSW index.
+### ~~[FI-019] pgvector `<=>` instead of Python cosine similarity~~ ✅ Done
+- Production uses native cosine distance + HNSW (see migration `dd643d1a544a`, `PROGRESS.md`).
 
-### [FI-019 ext] BM25 hybrid search + HNSW index
-- Add BM25 (Postgres full-text) to pgvector retrieval.
-- RRF or weighted sum `0.7 vector + 0.3 BM25`.
-- HNSW index for scaling.
+### ~~[FI-019 ext] BM25 hybrid search + HNSW index~~ ✅ Done (2026-03-21)
+- HNSW: индекс в миграции (раньше).
+- BM25: `rank-bm25` в процессе запроса по чанкам клиента + RRF с векторным ранжированием (`backend/search/service.py`). Postgres full-text (`tsvector`) не используется — при росте корпуса см. кэширование / FTS в бэклоге.
 
 ### [FI-021] Embeddings generation → BackgroundTasks
 - `POST /embeddings/documents/{id}` is synchronous → timeout with 20+ chunks.
@@ -89,9 +86,9 @@ Key recommendations added to this backlog:
 - **Effort:** 0.5 days
 
 ### [TD-032] Latency & Retrieval Quality Metrics
-- Log to DB per request: `latency_ms`, `retrieved_chunks_count`, `best_score`, `mode` (vector/keyword/none).
+- Log to DB per request: `latency_ms`, `retrieved_chunks_count`, `best_score`, `mode` (vector / keyword / hybrid / none).
 - Helps detect RAG quality degradation over time.
-- Dashboard chart: avg latency per day, % vector hits vs keyword hits.
+- Dashboard chart: avg latency per day, retrieval mode mix (в т.ч. `hybrid` на Postgres).
 - **Effort:** 1 day
 
 ### [TD-033] Chunking Strategy Configuration

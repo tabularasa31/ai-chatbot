@@ -51,12 +51,15 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 ---
 
-### [FI-008] Hybrid search: BM25 + RRF
-**Problem:** Pure cosine similarity fails on exact strings — error codes, CLI commands, SDK method names, endpoint paths.
-- Replace current keyword fallback with full BM25 (PostgreSQL `tsvector` or `rank-bm25`)
-- RRF fusion of vector + BM25 results (rank-based, no normalisation needed)
-- Cursor prompt ready: `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`
-- Spec reference: `specs/hybrid-search-spec.docx` (FR-2, FR-3)
+### ~~[FI-008] Hybrid search: BM25 + RRF~~ ✅ Done (2026-03-21)
+**Was:** Pure cosine similarity missed exact strings — error codes, CLI commands, SDK method names, endpoint paths.
+
+**Implemented:**
+- In-memory BM25 over `chunk_text` via `rank-bm25` (`BM25Okapi`), not Postgres `tsvector`
+- RRF fusion of vector + BM25 rankings (`reciprocal_rank_fusion`, k=60)
+- PostgreSQL: `_pgvector_search` + BM25 + RRF in `search_similar_chunks`; SQLite tests: cosine-only path
+- Scores after fusion are RRF (not cosine); debug `mode`: `hybrid` on Postgres
+- Spec reference (still useful for future work): `specs/hybrid-search-spec.docx` (FR-2, FR-3)
 
 ---
 
@@ -67,7 +70,7 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 - Query rewriting: normalize before retrieval.
 - Query expansion: generate 2–3 paraphrases via LLM → search all in parallel → merge via RRF.
 
-**Note:** Adds latency + cost (extra LLM call before retrieval). Do after FI-008 is live and we have data showing this is still a bottleneck.
+**Note:** Adds latency + cost (extra LLM call before retrieval). Run after FI-008 hybrid is proven insufficient (FI-008 is live as of 2026-03-21).
 Spec reference: `specs/hybrid-search-spec.docx` (FR-1)
 
 ---
@@ -100,9 +103,9 @@ Spec reference: `specs/hybrid-search-spec.docx` (FR-1)
 - Run on top-20 candidates after RRF fusion → return top-5 to LLM
 - Model: `cross-encoder/ms-marco-MiniLM-L-6-v2` (local, free) or Cohere Rerank 3.5 (API)
 - Cross-encoder score → feeds Answer Reliability Score (top chunk score as proxy)
-- Adds ~200–400ms latency → run after FI-008 proves BM25+RRF insufficient
+- Adds ~200–400ms latency → run when BM25+RRF hybrid is proven insufficient for quality
 
-**Do after:** FI-008 is live and latency budget is understood.
+**Do after:** FI-008 hybrid is live (✅ 2026-03-21) and latency budget is measured in prod.
 Spec reference: `specs/hybrid-search-spec.docx` (FR-4)
 
 ### [FI-036] HyDE (Hypothetical Document Embeddings)

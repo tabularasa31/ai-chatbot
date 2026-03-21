@@ -33,10 +33,10 @@
 - Zero inference cost for platform operator
 - Builds trust: customers control their data & costs
 
-### 4. Hybrid Search (Vector + Keyword) (8/10)
+### 4. Hybrid Search (Vector + BM25 + RRF) (8/10)
 - Not relying only on embeddings (good!)
-- Fallback to keyword search saves ~30-40% of real queries
-- Shows practical, not just theoretically optimal thinking
+- PostgreSQL path: pgvector + in-memory BM25 (`rank-bm25`) merged with reciprocal rank fusion
+- SQLite / tests: Python cosine only; practical tradeoff for CI
 
 ### 5. Lightweight Standalone Widget (9/10)
 - ~6 KB vanilla JavaScript, zero dependencies

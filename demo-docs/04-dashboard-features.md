@@ -35,9 +35,9 @@ A dedicated page showing all answers marked with 👎.
 Test your bot directly in the dashboard.
 
 - Ask a question and see the full retrieval debug:
-  - Which mode was used (vector / keyword / none).
+  - Which mode was used (vector / keyword / hybrid / none — on production DB with Postgres, retrieval is typically **hybrid**).
   - Which document chunks were retrieved.
-  - Similarity scores for each chunk.
+  - Scores per chunk (cosine on SQLite-style paths; RRF fusion scores on PostgreSQL hybrid).
 
 ## Settings
 

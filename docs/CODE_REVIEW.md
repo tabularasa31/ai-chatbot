@@ -1,50 +1,24 @@
 # Ревью кода ai-chatbot
 
-## Критичные и важные проблемы
+> **Актуализация 2026-03-21:** ниже — архивный снимок ревью. Уже исправлено в коде: **п.1** — на `GET /clients/validate/{api_key}` стоит `@limiter.limit("20/minute")`; **п.2** — на `POST /search` — `30/minute`; **п.3** — у `list_bad_answers` параметры `limit`/`offset` валидируются через `Query(ge=…, le=…)`. Сверяйте с текущими файлами.
 
-### 1. Публичный эндпоинт `/clients/validate/{api_key}` без rate limiting
+## Критичные и важные проблемы *(исторически; часть закрыта)*
 
-```109:124:backend/clients/routes.py
-@clients_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
-def validate_api_key(
-    api_key: str,
-    db: Annotated[Session, Depends(get_db)],
-) -> ValidateApiKeyResponse:
-```
+### 1. ~~Публичный эндпоинт `/clients/validate/{api_key}` без rate limiting~~ → исправлено
 
-Эндпоинт публичный и позволяет проверять валидность API-ключей. Без ограничения частоты запросов возможен перебор ключей (32 hex-символа). Нужен rate limit (например, 10–20 запросов в минуту с IP).
+Ранее: без лимита возможен перебор. **Сейчас:** `backend/clients/routes.py` — `@limiter.limit("20/minute")` на `validate_api_key`.
 
 ---
 
-### 2. `/search` без rate limiting
+### 2. ~~`/search` без rate limiting~~ → исправлено
 
-```20:25:backend/search/routes.py
-@search_router.post("", response_model=SearchResponse)
-def search_route(
-    body: SearchRequest,
-    ...
-```
-
-Эндпоинт защищён JWT, но не ограничен по частоте. Каждый запрос вызывает OpenAI embeddings. Рекомендуется добавить лимит (например, 30/min, как у `/chat`).
+**Сейчас:** `backend/search/routes.py` — `@limiter.limit("30/minute")` на поиск.
 
 ---
 
-### 3. `list_bad_answers`: нет валидации `limit` и `offset`
+### 3. ~~`list_bad_answers`: нет валидации `limit` и `offset`~~ → исправлено
 
-```277:283:backend/chat/routes.py
-@chat_router.get("/bad-answers", response_model=BadAnswerListResponse)
-def list_bad_answers(
-    ...
-    limit: int = 50,
-    offset: int = 0,
-) -> BadAnswerListResponse:
-```
-
-`limit` и `offset` не проверяются. Возможны:
-- `limit=999999` — большая нагрузка на БД;
-- `offset=-1` — ошибка в SQL.
-
-Рекомендуется: `limit` в диапазоне 1–100, `offset >= 0`.
+**Сейчас:** `backend/chat/routes.py` — `limit: Query(ge=1, le=100)`, `offset: Query(ge=0)`.
 
 ---
 
@@ -229,9 +203,9 @@ return data as { token: string; expires_in: number; user: { id: number; email: s
 
 | Приоритет | Проблема |
 |-----------|----------|
-| Высокий | Rate limit для `/clients/validate/{api_key}` |
-| Высокий | Rate limit для `/search` |
-| Высокий | Валидация `limit`/`offset` в `list_bad_answers` |
+| ~~Высокий~~ ✅ | ~~Rate limit для `/clients/validate/{api_key}`~~ — сделано |
+| ~~Высокий~~ ✅ | ~~Rate limit для `/search`~~ — сделано |
+| ~~Высокий~~ ✅ | ~~Валидация `limit`/`offset` в `list_bad_answers`~~ — сделано |
 | Средний | Замена `datetime.utcnow()` на `datetime.now(timezone.utc)` |
 | Средний | Защита от `m.feedback is None` в `get_session_logs` |
 | Низкий | Рефакторинг N+1, вынос общих проверок, мелкие правки |

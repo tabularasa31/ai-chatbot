@@ -58,7 +58,7 @@
 | **FI-EMBED-MVP** | iframe + `public_id`, `/embed.js`, public chat | `GET /embed.js`, `POST /widget/chat`, dashboard embed code |
 | **FI-KYC** | `POST /widget/session/init` with optional `identity_token` → `chats.user_context` | `backend/routes/widget.py`, `backend/core/security.py` |
 | **FI-038** | “Powered by Chat9” footer | `frontend/components/ChatWidget.tsx` |
-| Widget rate limits | 20/min on public widget endpoints | slowapi, `backend/routes/widget.py` |
+| Widget rate limits | 20/min on `POST /widget/session/init` and `POST /widget/chat` | slowapi, `backend/routes/widget.py` |
 
 ---
 
@@ -88,6 +88,7 @@
 | Document | Use for |
 |----------|---------|
 | [`PROGRESS.md`](./PROGRESS.md) | Chronology, session context, “what happened when” |
+| [`BACKLOG_EMBED-PHASE2.md`](./BACKLOG_EMBED-PHASE2.md) | Widget Phase 2/3 backlog (embed.js hardening, CSP, quotas — after baseline limits) |
 | [`BACKLOG_PRODUCT.md`](./BACKLOG_PRODUCT.md) | Queue & RICE; done items marked ~~Done~~ |
 | [`README.md`](../README.md) | Runbook, short API overview |
 | [`qa/PRODUCT-QA-TEST-PLAN.md`](./qa/PRODUCT-QA-TEST-PLAN.md) | Manual QA (Russian) |

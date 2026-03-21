@@ -9,7 +9,7 @@ Technical debt — not user-facing features, but codebase and infrastructure imp
 **Grok Overall Rating:** 8/10 Technical Quality, 7.5/10 Production Readiness
 
 Key recommendations added to this backlog:
-- Rate limiting (already in progress, FI-EMBED Phase 2)
+- Rate limiting — **baseline shipped** (validate, search, chat, widget); **tier 2** (quotas, per-client global caps) still in `BACKLOG_EMBED-PHASE2.md`
 - Background tasks for embeddings (FI-021, already tracked)
 - Structured logging (new — structlog/loguru)
 - Chunking strategy — expose in UI/settings (new)

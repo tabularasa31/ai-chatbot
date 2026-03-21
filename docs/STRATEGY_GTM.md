@@ -24,7 +24,7 @@ The question is never "can this be copied?" — it's "what makes it progressivel
 | 3 | Workflow Integration | WI | Month 3–6 — Sentry, Status Page, GitHub |
 | 4 | Vertical Specialisation | VS | Month 6–12 — developer tooling vertical |
 
-**Switching Cost builds fastest** — that's why KYC, escalation, disclosure controls are P1.
+**Switching Cost builds fastest** — that's why KYC, escalation, and **disclosure (extended: topics, segments)** are P1; **FI-DISC v1** (tenant-wide response level) is already shipped — see `PROGRESS.md`.
 
 ---
 
@@ -48,7 +48,7 @@ SiteGPT ($39–259/mo), Chatbase (10k+ users) — growing fast
 
 ### Tier 3 (compete here now)
 CustomGPT, DocsBot ($19–99/mo) — horizontal RAG widgets
-**Gap they don't fill:** KYC, escalation loops, error tracking, disclosure controls, gap analysis
+**Gap they don't fill:** KYC (you ship v1), escalation loops, error tracking, **full disclosure spec** (topic denylist, etc. beyond FI-DISC v1), gap analysis
 
 **Tier 3 is winning deals that should go to a better product.**
 

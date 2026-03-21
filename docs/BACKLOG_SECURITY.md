@@ -39,9 +39,8 @@ Security, isolation, abuse protection.
 - Protection against API key use on third-party sites.
 - **Effort:** 2 days.
 
-### [FI-023] Rate limit on `GET /clients/validate/{api_key}`
-- Public endpoint without rate limit → brute-force possible.
-- Add `@limiter.limit("20/minute")`.
+### ~~[FI-023] Rate limit on `GET /clients/validate/{api_key}`~~ ✅ Done
+- **Shipped:** `@limiter.limit("20/minute")` on `validate_api_key` in `backend/clients/routes.py`.
 
 ### [FI-035] Prompt injection protection
 - Sanitize incoming messages.

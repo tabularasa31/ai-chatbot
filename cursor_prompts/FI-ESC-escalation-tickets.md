@@ -1,4 +1,4 @@
-# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v3
+# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v4
 
 ⚠️ **CRITICAL: YOU MUST FOLLOW THE SETUP EXACTLY AS WRITTEN. NO SHORTCUTS.**
 
@@ -78,6 +78,7 @@ Build messages (system + developer/tool-style instruction + full recent thread a
 
 - You are the same assistant as in this chat. Reply only in the same language the user has been using; match their formality.
 - If the conversation is too short to determine language (e.g. only "hi" or "привет"), use the `locale` field from the fact block if present; otherwise default to English.
+- `locale` priority: KYC locale (explicit, from tenant) → browser locale (from widget init, see below) → English.
 - You must communicate: request passed to human support; they will reply by email at `{email}` when known; ask for email when unknown; ticket id and approximate SLA — do not promise exact times.
 - End with an offer to help further in chat ("anything else?") when phase requires it.
 - Do not invent ticket numbers, emails, or SLA — use only values from the fact block.
@@ -190,6 +191,50 @@ escalation_followup_pending: bool  # default false, server_default=false
 ended_at: datetime | None  # nullable. When set, chat is closed.
 # Further user messages get short assistant reply (chat_already_closed phase); widget disables input.
 ```
+
+**Widget init — add `locale` field:**
+
+In `backend/routes/widget.py` (and `backend/widget/routes.py`), the session init request already accepts `api_key` and optionally `identity_token`. Add:
+
+```python
+class WidgetSessionInit(BaseModel):
+    api_key: str
+    identity_token: str | None = None
+    locale: str | None = None  # browser locale: "ru-RU", "en-US", "ka-GE", etc.
+```
+
+Store in `Chat.user_context["browser_locale"]` at session creation (merge into existing user_context dict).
+
+In `backend/escalation/service.py`, update `fact_from_ticket()` to include locale resolution:
+
+```python
+def fact_from_ticket(ticket: EscalationTicket, chat: Chat | None = None, sla_hours: int = 24) -> dict:
+    """
+    Locale resolution order:
+    1. KYC locale (user_context.locale from identity token)
+    2. Browser locale (user_context.browser_locale from widget init)
+    3. None (system prompt falls back to English)
+    """
+    user_ctx = (chat.user_context or {}) if chat else {}
+    locale = user_ctx.get("locale") or user_ctx.get("browser_locale")
+    return {
+        "ticket_number": ticket.ticket_number,
+        "sla_hours": sla_hours,
+        "user_email": ticket.user_email,
+        "trigger": ticket.trigger,
+        "locale": locale,  # hint only; model still follows actual chat language if present
+        ...
+    }
+```
+
+In `embed.js` (frontend widget script), pass browser locale at init:
+
+```javascript
+// Widget initialization — add locale
+locale: navigator.language || navigator.userLanguage || null
+```
+
+**Note:** `navigator.language` reflects browser/OS language, not necessarily the user's preferred language. It is a hint only. As soon as the user writes their first message, the model infers language from the conversation and ignores the locale hint.
 
 **Flag check order in chat pipeline:** `ended_at` → `escalation_awaiting_ticket_id` → `escalation_followup_pending` → normal RAG.
 
@@ -557,7 +602,8 @@ git push origin feature/fi-esc-escalation-tickets
 
 ## NOTES
 
-- **Language is emergent, not configured.** Model sees full chat history → writes in user's language automatically. No locale tables, no Accept-Language parsing. Exception: if conversation is too short to determine language, use `locale` from KYC fact block; if absent, default to English.
+- **Language is emergent, not configured.** Model sees full chat history → writes in user's language automatically. No locale tables, no Accept-Language parsing.
+- **Locale fallback chain:** KYC locale → browser locale (`navigator.language` from widget init, stored as `browser_locale` in `Chat.user_context`) → English. Used only when conversation is too short to determine language. Once user writes a message, model follows the conversation, not the hint.
 - **v1 is internal only** — tickets in DB, email notification. Zendesk/Intercom = v2.
 - **T-4 (answer rejection)** — separate endpoint, not in main chat pipeline.
 - **Never raise in `complete_escalation_openai_turn()`** — fallback string on error, log exception.

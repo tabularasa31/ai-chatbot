@@ -188,6 +188,11 @@ class Document(Base):
         default=DocumentStatus.processing,
         index=True,
     )
+    health_status = Column(
+        JSON,
+        nullable=True,
+        default=None,
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

@@ -46,7 +46,7 @@
 
 ## P3 — Позже
 
-- Landing page CTA: URL-first вместо кнопки
+_(пусто — фичи перенесены в backlog)_
 
 ---
 

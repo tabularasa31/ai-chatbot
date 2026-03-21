@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -15,8 +17,32 @@ from backend.core.openai_client import get_openai_client
 from backend.models import Chat, Document, Message, MessageFeedback, MessageRole
 from backend.search.service import search_similar_chunks
 
+logger = logging.getLogger(__name__)
+
 # SQLite tests: cosine-only path; used to label debug mode (not RRF scores).
 RETRIEVAL_VECTOR_CONFIDENCE = 0.70
+
+LOW_CONFIDENCE_THRESHOLD = 0.4
+
+VALIDATION_PROMPT = """You are a fact-checker for a support chatbot.
+
+Context (retrieved from documentation):
+{context}
+
+Question: {question}
+
+Answer to validate: {answer}
+
+Check if the answer is:
+1. Grounded in the provided context (not hallucinated)
+2. Actually answers the question
+
+Respond ONLY with JSON (no markdown, no explanation):
+{{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
+
+FALLBACK_LOW_CONFIDENCE_ANSWER = (
+    "I don't have enough information in my knowledge base to answer this question accurately."
+)
 
 
 def retrieve_context(
@@ -136,6 +162,48 @@ def generate_answer(
     return (answer_text.strip(), total_tokens)
 
 
+def validate_answer(
+    question: str,
+    answer: str,
+    context_chunks: list[str],
+    *,
+    api_key: str,
+) -> dict:
+    """
+    Ask LLM to validate if the answer is grounded in context.
+    Returns {"is_valid": bool, "confidence": float, "reason": str}.
+    On any error, returns {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}.
+    """
+    if not context_chunks:
+        return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
+
+    context = "\n\n---\n\n".join(context_chunks[:3])
+    prompt = VALIDATION_PROMPT.format(
+        context=context,
+        question=question,
+        answer=answer,
+    )
+
+    try:
+        openai_client = get_openai_client(api_key)
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=150,
+        )
+        raw = response.choices[0].message.content or ""
+        result = json.loads(raw.strip())
+        return {
+            "is_valid": bool(result.get("is_valid", True)),
+            "confidence": float(result.get("confidence", 1.0)),
+            "reason": str(result.get("reason", "")),
+        }
+    except Exception as e:
+        logger.warning("Answer validation failed (non-blocking): %s", e)
+        return {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}
+
+
 def process_chat_message(
     client_id: uuid.UUID,
     question: str,
@@ -162,11 +230,16 @@ def process_chat_message(
     )
     document_ids = list(dict.fromkeys(doc_ids))
 
-    # 2. Build RAG prompt
-    prompt = build_rag_prompt(question, chunk_texts)
-
-    # 3. Generate answer
+    # 2. Generate answer
     answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
+
+    # 3. Validate answer (non-blocking on LLM/JSON errors)
+    validation = validate_answer(question, answer, chunk_texts, api_key=api_key)
+    if (
+        not validation["is_valid"]
+        and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
+    ):
+        answer = FALLBACK_LOW_CONFIDENCE_ANSWER
 
     # 4. Find or create Chat
     chat = db.query(Chat).filter(
@@ -234,7 +307,11 @@ def run_debug(
         for doc_id, score, text in zip(document_ids, scores, chunk_texts)
     ]
 
-    debug = {"mode": mode, "chunks": chunks_debug}
+    debug = {
+        "mode": mode,
+        "chunks": chunks_debug,
+        "validation": validate_answer(question, answer, chunk_texts, api_key=api_key),
+    }
     return (answer, tokens_used, debug)
 
 

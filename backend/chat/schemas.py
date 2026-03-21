@@ -62,6 +62,7 @@ class ChatResponse(BaseModel):
     session_id: UUID
     source_documents: list[UUID]
     tokens_used: int
+    validation: Optional[dict] = None
 
 
 class MessageResponse(BaseModel):

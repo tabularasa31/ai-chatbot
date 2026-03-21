@@ -24,6 +24,7 @@
   - `metadata`: `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`
   - Промпт `cursor_prompts/FI-009-improved-chunking.md` удалён после внедрения; описание в `BACKLOG_PRODUCT.md` / `BACKLOG_RAG_QUALITY.md`
 - ✅ **FI-032 (phase 1)** — document health check: `health_status`, `run_document_health_check`, QA-чеклист `docs/qa/FI-032-document-health-check.md`; промпт `cursor_prompts/FI-032-document-health-check.md` удалён.
+- ✅ **FI-034** — LLM-based answer validation (`feature/fi-034-answer-validation`): после `generate_answer()` вызывается `validate_answer()` (gpt-4o-mini, `temperature=0`); при `is_valid=false` и `confidence < 0.4` ответ заменяется на fallback; ошибки валидации не блокируют ответ (`validation_skipped`). Результат в `POST /chat/debug` → `debug.validation`. Промпт `cursor_prompts/FI-034-llm-answer-validation.md` удалён после внедрения.
 
 ---
 
@@ -125,7 +126,7 @@
 ## 📊 FEATURES LIVE IN PRODUCTION
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
-- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata)
+- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; post-generation answer validation FI-034)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)
@@ -177,7 +178,7 @@ Git branches:
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-034-llm-answer-validation.md`; `FI-043-pii-redaction-regex.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `FI-KYC-user-identification.md`; `ci-cd-github-actions.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-043-pii-redaction-regex.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `FI-KYC-user-identification.md`; `ci-cd-github-actions.md`.
 
 ---
 

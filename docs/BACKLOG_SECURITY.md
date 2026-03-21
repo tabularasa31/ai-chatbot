@@ -15,7 +15,7 @@ Security, isolation, abuse protection.
 - Store original text in DB; only redacted text goes to OpenAI
 - Regex patterns: email (RFC-compatible), phone (RU + international formats), API key patterns (Bearer tokens, sk-*, hex strings 32+ chars)
 
-**Where to intercept:** In `backend/chat/service.py` — before `retrieve_context()` and before `generate_answer()`.
+**Where to intercept:** In `backend/chat/service.py` — before `retrieve_context()`, before `generate_answer()`, and before `validate_answer()` (FI-034 adds a second completion call on user question + chunks + draft answer).
 
 **What NOT to do (save for v2):**
 - No Presidio / spaCy NER — too heavy for MVP

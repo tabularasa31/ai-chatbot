@@ -29,6 +29,7 @@
   
 - **LLM Integration:** OpenAI API (via client's own API key)
   - gpt-4o-mini for chat (fast + cheap)
+  - Optional second gpt-4o-mini call per chat turn for answer validation (FI-034): groundedness check; failures do not block the user-facing reply
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
   

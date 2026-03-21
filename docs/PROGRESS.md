@@ -7,8 +7,12 @@
 
 ## ✅ COMPLETED (2026-03-21)
 
+### Widget / marketing
+- ✅ **FI-038** — футер виджета «Powered by Chat9 →» в `frontend/components/ChatWidget.tsx` (ссылка на сайт; prod: iframe-виджет через `backend/static/embed.js` + `/widget`)
+- Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed (`clientId` / `public_id`)
+
 ### Search / retrieval
-- ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`, `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`)
+- ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`); промпт `FI-019ext-bm25-hybrid-hnsw.md` удалён после внедрения
   - PostgreSQL: `_pgvector_search` (top `2×top_k`) + `bm25_search_chunks` по `chunk_text` → `reciprocal_rank_fusion` (k=60)
   - SQLite (тесты): только Python cosine, без BM25 (как в спеке промпта)
   - Debug API: режим **`hybrid`** на Postgres; на SQLite по-прежнему **vector / keyword** по порогу косинуса
@@ -127,6 +131,7 @@
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)
+- ✅ Widget footer «Powered by Chat9 →» (FI-038)
 - ✅ Dashboard (documents, logs, feedback, analytics)
 - ✅ Document health check (phase 1): `health_status`, GPT-structured analysis, re-check API
 - ✅ Email verification (Brevo)
@@ -165,6 +170,14 @@ Git branches:
 | Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
 | No CI/CD pipeline | 🟡 P2 | GitHub Actions needed |
 | Footer links hardcoded | 🟢 P3 | Update when docs site ready |
+
+---
+
+## 📎 Cursor prompts (`cursor_prompts/`)
+
+Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
+
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-034-llm-answer-validation.md`; `FI-043-pii-redaction-regex.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `FI-KYC-user-identification.md`; `ci-cd-github-actions.md`.
 
 ---
 

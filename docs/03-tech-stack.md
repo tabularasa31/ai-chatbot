@@ -105,28 +105,27 @@
 │                   (Client's Website)                     │
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
-│  <script src="https://api.com/embed.js"></script>        │
-│  <div id="ai-chat-widget"></div>                         │
+│  <script src="https://api/embed.js?clientId=ch_…">      │
+│  optional: window.Chat9Config.widgetUrl → Next.js origin   │
 │                                                           │
-│  ↓ (postMessage)                                          │
+│  ↓                                                        │
+│  Loader injects iframe → Next.js /widget?clientId=…      │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
-│                    embed.js (Widget)                      │
-│                   (Vanilla JS, ~50KB)                    │
+│              Next.js /widget (ChatWidget)                 │
 │                                                           │
-│  - Chat UI (input, messages)                             │
-│  - Sends questions to API                                │
-│  - Displays answers                                      │
+│  - Chat UI (messages, input)                             │
+│  - POST /widget/chat (BFF) → FastAPI /widget/chat        │
 │                                                           │
-│  ↓ (HTTPS API call)                                       │
+│  ↓                                                        │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                    FastAPI Backend                       │
 │                  (Railway deployment)                    │
 │                                                           │
-│  POST /chat {question, api_key}                          │
+│  POST /widget/chat (public clientId) or POST /chat (X-API-Key) │
 │    ↓                                                      │
-│    1. Validate API key → get client_id + openai_api_key  │
+│    1. Resolve client → client_id + openai_api_key        │
 │    2. Embed question (OpenAI, client's key)              │
 │    3. Search embeddings (pgvector)                       │
 │    4. Build prompt with top 3 chunks                     │

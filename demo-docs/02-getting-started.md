@@ -27,15 +27,15 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 ## Step 4: Get your embed code
 
 1. Go to Dashboard → Settings (or the main dashboard page).
-2. Copy your API key.
-3. Add the following code to your website:
+2. Click **Copy** on the embed snippet (it includes your `public_id`, e.g. `ch_…`).
+3. Paste the code before the closing `</body>` tag on your site.
+
+Example shape (use the Dashboard copy — URLs and `clientId` are filled in for you):
 
 ```html
-<div id="ai-chat-widget" data-api-key="YOUR_API_KEY"></div>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
+<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
+<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
-
-Replace `YOUR_API_KEY` with your actual API key from the dashboard.
 
 ## Step 5: Test it
 

@@ -11,6 +11,7 @@ from backend.core.limiter import limiter
 from backend.clients.service import get_client_by_user
 from backend.documents.schemas import (
     DocumentDetailResponse,
+    DocumentHealthStatusResponse,
     DocumentListResponse,
     DocumentResponse,
 )
@@ -18,6 +19,7 @@ from backend.documents.service import (
     delete_document,
     get_document,
     get_documents,
+    run_document_health_check,
     upload_document,
 )
 from backend.core.db import get_db
@@ -92,6 +94,7 @@ def upload_document_route(
         status=doc.status.value,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
+        health_status=doc.health_status,
     )
 
 
@@ -117,9 +120,63 @@ def list_documents_route(
                 status=d.status.value,
                 created_at=d.created_at,
                 updated_at=d.updated_at,
+                health_status=d.health_status,
             )
             for d in docs
         ]
+    )
+
+
+@documents_router.get("/{document_id}/health", response_model=DocumentHealthStatusResponse)
+def get_document_health_route(
+    document_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentHealthStatusResponse:
+    """
+    Return stored health_status for a document (does not re-run the check).
+    404 if health_status is null.
+    """
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    doc = get_document(document_id, client.id, db)
+    if doc.health_status is None:
+        raise HTTPException(status_code=404, detail="Health check not yet available")
+    hs = doc.health_status
+    if not isinstance(hs, dict):
+        raise HTTPException(status_code=404, detail="Health check not yet available")
+    return DocumentHealthStatusResponse(
+        score=hs.get("score"),
+        checked_at=str(hs.get("checked_at", "")),
+        warnings=list(hs.get("warnings") or []),
+        error=hs.get("error"),
+    )
+
+
+@documents_router.post("/{document_id}/health/run", response_model=DocumentHealthStatusResponse)
+def run_document_health_check_route(
+    document_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DocumentHealthStatusResponse:
+    """Run health check synchronously and return updated health_status."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    get_document(document_id, client.id, db)
+    if not client.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        )
+    result = run_document_health_check(document_id, db, client.openai_api_key)
+    return DocumentHealthStatusResponse(
+        score=result.get("score"),
+        checked_at=str(result.get("checked_at", "")),
+        warnings=list(result.get("warnings") or []),
+        error=result.get("error"),
     )
 
 
@@ -150,6 +207,7 @@ def get_document_detail_route(
         created_at=doc.created_at,
         updated_at=doc.updated_at,
         parsed_text=preview,
+        health_status=doc.health_status,
     )
 
 

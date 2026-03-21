@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -20,6 +20,7 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    health_status: Optional[dict[str, Any]] = None
 
 
 class DocumentListResponse(BaseModel):
@@ -40,3 +41,13 @@ class DocumentDetailResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     parsed_text: Optional[str]
+    health_status: Optional[dict[str, Any]] = None
+
+
+class DocumentHealthStatusResponse(BaseModel):
+    """Stored document health check result (from DB)."""
+
+    score: Optional[int] = None
+    checked_at: str
+    warnings: list[dict[str, Any]]
+    error: Optional[str] = None

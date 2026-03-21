@@ -106,6 +106,12 @@ def create_embeddings_for_document(
     db.commit()
     for emb in embeddings:
         db.refresh(emb)
+    try:
+        from backend.documents.service import run_document_health_check
+
+        run_document_health_check(document_id, db, api_key)
+    except Exception:
+        pass
     return embeddings
 
 

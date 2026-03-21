@@ -84,6 +84,19 @@ export type AdminClientMetricsItem = {
   has_openai_key: boolean;
 };
 
+export type DocumentHealthWarning = {
+  type: string;
+  severity: string;
+  message: string;
+};
+
+export type DocumentHealthStatus = {
+  score: number | null;
+  checked_at: string;
+  warnings: DocumentHealthWarning[];
+  error?: string;
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -220,7 +233,17 @@ export const api = {
       const res = await authFetch(`${BASE_URL}/documents`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list documents"));
-      const list = data as { documents: Array<{ id: string; filename: string; file_type: string; status: string; created_at: string }> };
+      const list = data as {
+        documents: Array<{
+          id: string;
+          filename: string;
+          file_type: string;
+          status: string;
+          created_at: string;
+          updated_at: string;
+          health_status?: DocumentHealthStatus | null;
+        }>;
+      };
       return list.documents;
     },
     async upload(file: File) {
@@ -248,6 +271,20 @@ export const api = {
         const data = await res.json();
         throw new Error(getErrorMessage(data, "Failed to delete document"));
       }
+    },
+    async getHealth(docId: string): Promise<DocumentHealthStatus> {
+      const res = await authFetch(`${BASE_URL}/documents/${docId}/health`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Health check not available"));
+      return data as DocumentHealthStatus;
+    },
+    async runHealth(docId: string): Promise<DocumentHealthStatus> {
+      const res = await authFetch(`${BASE_URL}/documents/${docId}/health/run`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Health check failed"));
+      return data as DocumentHealthStatus;
     },
   },
   embeddings: {

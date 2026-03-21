@@ -39,11 +39,8 @@
 
 ---
 
-### [FI-034] LLM-based answer validation (post-generation)
-**Идея:** После генерации ответа спросить модель: "Есть ли в контексте явный ответ на вопрос?"
-
-- Если нет → fallback (graceful degradation).
-- Дополнительный слой поверх cosine threshold.
+### ~~[FI-034] LLM-based answer validation (post-generation)~~ ✅ Done (2026-03-21)
+См. `docs/PROGRESS.md` и `docs/BACKLOG_RAG_QUALITY.md`.
 
 ---
 

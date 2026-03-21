@@ -162,11 +162,8 @@ Critical elements:
 
 ### What ChatGPT added (new)
 
-#### 1. LLM-based answer validation
-After generating answer — ask the model:
-> "Is there an explicit answer to the user's question in the context?"
-
-If no → fallback. Additional layer on top of similarity threshold.
+#### 1. LLM-based answer validation ✅ Shipped (FI-034, 2026-03-21)
+After generating the answer, a second `gpt-4o-mini` call checks grounding in retrieved chunks; low-confidence invalid answers are replaced with a fixed fallback; failures in that step are non-blocking. See `backend/chat/service.py` (`validate_answer`) and `docs/PROGRESS.md`.
 
 #### 2. Query rewriting layer
 Before retrieval — normalize and improve the question:
@@ -541,7 +538,7 @@ Markdown для кода, таблиц, списков.
 | FI-019 update | Hybrid search: BM25 + vector + rerank + HNSW | Все три | P1 |
 | FI-031 | Org config / tool layer (support_email вне RAG) | Все три | P1 |
 | FI-033 | Query rewriting перед retrieval | ChatGPT | P2 |
-| FI-034 | LLM-based answer validation (post-generation) | ChatGPT | P2 |
+| FI-034 | LLM-based answer validation (post-generation) ✅ done | ChatGPT | ~~P2~~ |
 | FI-029 | Document versioning & recency scoring | Perplexity + DeepSeek | P2 |
 | FI-035 | Security: prompt injection protection | DeepSeek | P2 |
 | FI-036 | HyDE для коротких/расплывчатых вопросов | Gemini | P2 |

@@ -75,10 +75,14 @@ Spec reference: `specs/hybrid-search-spec.docx` (FR-1)
 
 ---
 
-### [FI-034] LLM-based answer validation
-**Idea:** After generation, ask model: "Is there an explicit answer in context?"
-- If no → fallback.
-- Additional layer on top of cosine threshold.
+### ~~[FI-034] LLM-based answer validation~~ ✅ Done (2026-03-21)
+**Was:** After generation, ask the model whether the answer is grounded in context; if low confidence → safe fallback.
+
+**Implemented:**
+- `backend/chat/service.py`: `validate_answer()` after `generate_answer()` in `process_chat_message()`; threshold `confidence < 0.4` together with `is_valid=false` (including empty retrieval → `no_context`)
+- OpenAI/JSON failures → non-blocking `validation_skipped`, original answer kept
+- `run_debug()` / `POST /chat/debug`: `debug.validation` with `{is_valid, confidence, reason}`
+- `ChatResponse.validation` optional (reserved; public `/chat` does not populate)
 
 ---
 

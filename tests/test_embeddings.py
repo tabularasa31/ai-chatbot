@@ -11,45 +11,71 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.embeddings.service import chunk_text
+from backend.models import Embedding
 
 
 def test_chunk_text_basic() -> None:
-    """Chunk 'a' * 1000 → get multiple chunks of ~500 chars."""
-    text = "a" * 1000
-    chunks = chunk_text(text, chunk_size=500, overlap=100)
+    """Many short sentences → multiple chunks bounded by chunk_size."""
+    text = " ".join([f"block{i}." for i in range(120)])
+    chunks = chunk_text(text, chunk_size=500, overlap_sentences=1)
     assert len(chunks) >= 2
-    for c in chunks[:-1]:
-        assert len(c) == 500
-    assert all(isinstance(c, str) for c in chunks)
+    for c in chunks:
+        assert set(c.keys()) == {"text", "chunk_index", "char_offset", "char_end"}
 
 
 def test_chunk_text_overlap() -> None:
-    """Verify overlap between consecutive chunks."""
-    text = "abcdefghij" * 60  # 600 chars
-    chunks = chunk_text(text, chunk_size=500, overlap=100)
+    """Last sentence of chunk N repeats at start of chunk N+1 (overlap_sentences=1)."""
+    text = " ".join([f"line{n}." for n in range(80)])
+    chunks = chunk_text(text, chunk_size=80, overlap_sentences=1)
     assert len(chunks) >= 2
-    # Chunk 1 ends at 500, chunk 2 starts at 400 (500-100)
-    first_end = chunks[0][-50:]
-    second_start = chunks[1][:50]
-    # Overlap region: chars 400-500 of first = chars 0-100 of second
-    overlap_region = chunks[0][400:500]
-    assert overlap_region in chunks[1] or chunks[1].startswith(overlap_region[:50])
+    tail = chunks[0]["text"].strip().rsplit(maxsplit=1)[-1]
+    assert chunks[1]["text"].strip().startswith(tail)
 
 
 def test_chunk_text_short() -> None:
     """Text shorter than chunk_size → returns single chunk."""
     text = "short"
-    chunks = chunk_text(text, chunk_size=500, overlap=100)
+    chunks = chunk_text(text, chunk_size=500, overlap_sentences=1)
     assert len(chunks) == 1
-    assert chunks[0] == "short"
+    assert chunks[0]["text"] == "short"
 
 
 def test_chunk_text_empty() -> None:
     """Empty string → returns empty list."""
-    chunks = chunk_text("", chunk_size=500, overlap=100)
+    chunks = chunk_text("", chunk_size=500, overlap_sentences=1)
     assert chunks == []
-    chunks2 = chunk_text("   \n\t  ", chunk_size=500, overlap=100)
+    chunks2 = chunk_text("   \n\t  ", chunk_size=500, overlap_sentences=1)
     assert chunks2 == []
+
+
+def test_chunk_text_hello_world() -> None:
+    """Single sentence returns one dict with expected keys and offsets."""
+    text = "Hello world."
+    chunks = chunk_text(text, chunk_size=500, overlap_sentences=1)
+    assert len(chunks) >= 1
+    c0 = chunks[0]
+    for key in ("text", "chunk_index", "char_offset", "char_end"):
+        assert key in c0
+    assert c0["chunk_index"] == 0
+    assert text[c0["char_offset"] : c0["char_end"]] == c0["text"]
+
+
+def test_chunk_text_tokens_are_whole_words() -> None:
+    """Chunks join full sentences only — no mid-token cuts at boundaries (FI-009 checklist)."""
+    text = " ".join([f"w{n:03d}." for n in range(60)])
+    chunks = chunk_text(text, chunk_size=40, overlap_sentences=1)
+    assert len(chunks) >= 2
+    for c in chunks:
+        for token in c["text"].split():
+            assert token.startswith("w") and token.endswith(".")
+
+
+def test_chunk_text_oversized_single_sentence_stays_one_chunk() -> None:
+    """Soft chunk_size: one long sentence without inner boundaries is not split."""
+    text = "n" * 800
+    chunks = chunk_text(text, chunk_size=100, overlap_sentences=1)
+    assert len(chunks) == 1
+    assert chunks[0]["text"] == text
 
 
 @patch("backend.embeddings.service.get_openai_client")
@@ -74,7 +100,7 @@ def test_create_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap=100)
+    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -97,6 +123,25 @@ def test_create_embeddings_success(
     )
     assert list_resp.status_code == 200
     assert list_resp.json()["total_chunks"] == len(chunks)
+
+    rows = (
+        db_session.query(Embedding)
+        .filter(Embedding.document_id == uuid.UUID(doc_id))
+        .order_by(Embedding.created_at.asc())
+        .all()
+    )
+    assert len(rows) == len(chunks)
+    for row in rows:
+        m = row.metadata_json
+        assert set(m.keys()) >= {
+            "chunk_index",
+            "char_offset",
+            "char_end",
+            "filename",
+            "file_type",
+        }
+        assert m["filename"] == "emb.md"
+        assert m["file_type"] == "markdown"
 
 
 def test_create_embeddings_document_not_found(
@@ -211,7 +256,7 @@ def test_create_embeddings_reruns_delete_old(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap=100)
+    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -261,7 +306,7 @@ def test_get_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap=100)
+    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -310,7 +355,7 @@ def test_get_embeddings_wrong_client(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap=100)
+    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -352,7 +397,7 @@ def test_delete_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap=100)
+    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]

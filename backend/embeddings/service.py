@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import uuid
+from typing import TypedDict
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -11,32 +13,98 @@ from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentStatus, Embedding
 
 
-def chunk_text(
-    text: str,
-    chunk_size: int = 500,
-    overlap: int = 100,
-) -> list[str]:
+class ChunkInfo(TypedDict):
+    """One text chunk with position in the original document."""
+
+    text: str
+    chunk_index: int
+    char_offset: int
+    char_end: int
+
+
+def _sentence_spans(text: str) -> list[tuple[str, int, int]]:
     """
-    Split text into overlapping chunks.
-
-    Args:
-        text: Input text to chunk.
-        chunk_size: Max characters per chunk.
-        overlap: Overlap between consecutive chunks.
-
-    Returns:
-        List of chunk strings. Empty chunks are skipped.
+    Split like chunk_text (sentence boundaries); return (sentence, start, end) in `text`.
     """
     if not text.strip():
         return []
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        if chunk.strip():
-            chunks.append(chunk)
-        start = end - overlap if overlap < chunk_size else end
+    lead = len(text) - len(text.lstrip())
+    trail = len(text) - len(text.rstrip())
+    body = text[lead : len(text) - trail]
+    raw_parts = re.split(r"(?<=[.?!])\s+|\n{2,}", body)
+    sentences = [p.strip() for p in raw_parts if p.strip()]
+    if not sentences:
+        return []
+
+    spans: list[tuple[str, int, int]] = []
+    cursor = 0
+    for sent in sentences:
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
+        idx = body.find(sent, cursor)
+        if idx < 0:
+            idx = cursor
+        start = lead + idx
+        end = start + len(sent)
+        spans.append((sent, start, end))
+        cursor = idx + len(sent)
+    return spans
+
+
+def _joined_char_len(parts: list[tuple[str, int, int]]) -> int:
+    if not parts:
+        return 0
+    return sum(len(p[0]) for p in parts) + (len(parts) - 1)
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = 500,
+    overlap_sentences: int = 1,
+) -> list[ChunkInfo]:
+    """
+    Split text into chunks by sentences (not raw characters).
+
+    Returns list of dicts with text, chunk_index, char_offset, char_end (offsets in original `text`).
+    """
+    spans = _sentence_spans(text)
+    if not spans:
+        return []
+
+    chunks: list[ChunkInfo] = []
+    current: list[tuple[str, int, int]] = []
+    current_len = 0
+
+    for sentence, s_start, s_end in spans:
+        sentence_len = len(sentence)
+        if current_len + sentence_len > chunk_size and current:
+            chunk_text_str = " ".join(s[0] for s in current)
+            chunks.append(
+                {
+                    "text": chunk_text_str,
+                    "chunk_index": len(chunks),
+                    "char_offset": current[0][1],
+                    "char_end": current[-1][2],
+                }
+            )
+            overlap = current[-overlap_sentences:] if overlap_sentences > 0 else []
+            current = list(overlap)
+            current_len = _joined_char_len(current)
+
+        current.append((sentence, s_start, s_end))
+        current_len += sentence_len + 1
+
+    if current:
+        chunk_text_str = " ".join(s[0] for s in current)
+        chunks.append(
+            {
+                "text": chunk_text_str,
+                "chunk_index": len(chunks),
+                "char_offset": current[0][1],
+                "char_end": current[-1][2],
+            }
+        )
+
     return chunks
 
 
@@ -72,18 +140,20 @@ def create_embeddings_for_document(
         )
 
     # Delete existing embeddings (re-embed on demand)
-    deleted = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
+    db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
 
     chunks = chunk_text(doc.parsed_text)
     if not chunks:
         return []
 
+    chunk_texts = [c["text"] for c in chunks]
+
     openai_client = get_openai_client(api_key)
     try:
         response = openai_client.embeddings.create(
             model="text-embedding-3-small",
-            input=chunks,
+            input=chunk_texts,
         )
     except Exception as e:
         raise HTTPException(
@@ -94,12 +164,24 @@ def create_embeddings_for_document(
     embeddings: list[Embedding] = []
     for i, item in enumerate(response.data):
         vector = item.embedding  # list of 1536 floats
-        chunk = chunks[i] if i < len(chunks) else ""
+        chunk = chunks[i] if i < len(chunks) else None
+        text_part = chunk["text"] if chunk else ""
+        meta_base = (
+            {
+                "chunk_index": chunk["chunk_index"],
+                "char_offset": chunk["char_offset"],
+                "char_end": chunk["char_end"],
+                "filename": doc.filename,
+                "file_type": doc.file_type.value,
+            }
+            if chunk
+            else {"chunk_index": i}
+        )
         emb = Embedding(
             document_id=document_id,
-            chunk_text=chunk,
+            chunk_text=text_part,
             vector=vector,
-            metadata_json={"chunk_index": i},
+            metadata_json=meta_base,
         )
         db.add(emb)
         embeddings.append(emb)

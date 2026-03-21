@@ -35,6 +35,7 @@
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
+- **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
 - **Dashboard** — Next.js: docs manager, chat logs, feedback, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers

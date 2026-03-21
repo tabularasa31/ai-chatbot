@@ -15,6 +15,7 @@ All done and deployed to production.
 | `migration-pgvector-vector-column-hnsw.md` | ✅ Done |
 | `FI-019-pgvector-cleanup.md` | ✅ Done |
 | `FI-019ext-bm25-hybrid-hnsw.md` (BM25 + RRF) | ✅ Done 2026-03-21 |
+| FI-KYC (widget identity, HMAC token) | ✅ Done 2026-03-21 |
 | Forgot password (FI-AUTH) | ✅ Done |
 | Sign in button (FI-UI) | ✅ Done |
 | FI-EMBED-MVP (zero-config widget) | ✅ Done |

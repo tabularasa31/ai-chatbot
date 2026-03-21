@@ -59,7 +59,9 @@ About document upload, parsing, processing. We already have a basic version, but
 
 **Files:** `kyc-spec.docx`, `kyc-sdk-spec.docx`, `disclosure-controls-spec.docx`
 
-About compliance, user data, GDPR. Important for B2B SaaS, but not critical for early version.
+**Update (2026-03-21):** Widget **user identification (FI-KYC)** is implemented in product: short-lived HMAC token, `chats.user_context`, dashboard signing secrets — see `docs/PROGRESS.md` / `BACKLOG_PRODUCT.md`. External Word specs may still contain extra ideas (SDK, enterprise flows).
+
+Disclosure controls spec remains backlog (**FI-DISC**).
 
 ---
 
@@ -71,7 +73,7 @@ About compliance, user data, GDPR. Important for B2B SaaS, but not critical for 
 3. **Knowledge Ingestion improvements** — spec analysis may yield ideas to optimize document processing
 
 ### Not critical (v2.0):
-- KYC / compliance (until we work with enterprise)
+- Full **KYC/compliance SDK** vs current server-side token flow (enterprise packaging)
 - Error tracking (needed for production, but MVP can work with basic logs)
 - Disclosure controls (future, when we have customer data)
 

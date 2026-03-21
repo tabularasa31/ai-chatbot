@@ -34,13 +34,13 @@ backend/
 │
 ├─ routes/                 # cross-cutting public HTTP
 │  ├─ public.py            # e.g. GET /embed.js
-│  └─ widget.py            # public widget: POST /widget/chat (rate limited)
+│  └─ widget.py            # public widget: POST /widget/session/init, POST /widget/chat (rate limited)
 │
 ├─ static/
 │  └─ embed.js             # loader served by backend (see public.py)
 ├─ widget/
-│  ├─ routes.py            # small helper router (app wires `backend.routes.widget`, not this file)
-│  └─ static/embed.js      # alternate script copy (do not confuse with backend/static/embed.js)
+│  ├─ routes.py            # stub health only; real widget HTTP API is `backend/routes/widget.py`
+│  └─ __init__.py
 │
 └─ migrations/             # Alembic
 
@@ -56,6 +56,7 @@ tests/
 ├─ test_embeddings.py
 ├─ test_search.py
 ├─ test_widget.py
+├─ test_kyc.py             # FI-KYC token + session init + KYC API
 ├─ test_admin_metrics.py
 ├─ test_models.py
 └─ …

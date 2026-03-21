@@ -117,6 +117,8 @@
 │              Next.js /widget (ChatWidget)                 │
 │                                                           │
 │  - Chat UI (messages, input)                             │
+│  - Optional: POST /widget/session/init → session_id +   │
+│    mode (identified | anonymous) for HMAC user context   │
 │  - POST /widget/chat (BFF) → FastAPI /widget/chat        │
 │                                                           │
 │  ↓                                                        │
@@ -125,13 +127,14 @@
 │                    FastAPI Backend                       │
 │                  (Railway deployment)                    │
 │                                                           │
+│  POST /widget/session/init (api_key, optional identity)  │
 │  POST /widget/chat (public clientId) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve client → client_id + openai_api_key        │
 │    2. Redact PII in question (regex, FI-043)             │
 │    3. Embed redacted question (OpenAI, client's key)      │
 │    4. Search embeddings (pgvector)                       │
-│    5. Build prompt with top chunks + redacted question   │
+│    5. Build prompt (+ safe user context line if FI-KYC)  │
 │    6. Call OpenAI gpt-4o-mini (client's key); optional     │
 │       validation call (FI-034) also uses redacted text   │
 │    7. Track token usage                                  │

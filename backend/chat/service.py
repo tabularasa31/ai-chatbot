@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, joinedload
 
 PREVIEW_MAX_LEN = 120
 
+from backend.chat.pii import redact
 from backend.core.openai_client import get_openai_client
 from backend.models import Chat, Document, Message, MessageFeedback, MessageRole
 from backend.search.service import search_similar_chunks
@@ -224,17 +225,24 @@ def process_chat_message(
     Returns:
         Tuple of (answer, document_ids, tokens_used).
     """
+    # Redact PII before sending to OpenAI (embeddings, completion, validation).
+    redacted_question, _was_redacted = redact(question)
+
     # 1. Retrieve context (chunks + document_ids)
     chunk_texts, doc_ids, _scores, _mode = retrieve_context(
-        client_id, question, db, api_key, top_k=5
+        client_id, redacted_question, db, api_key, top_k=5
     )
     document_ids = list(dict.fromkeys(doc_ids))
 
     # 2. Generate answer
-    answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
+    answer, tokens_used = generate_answer(
+        redacted_question, chunk_texts, api_key=api_key
+    )
 
     # 3. Validate answer (non-blocking on LLM/JSON errors)
-    validation = validate_answer(question, answer, chunk_texts, api_key=api_key)
+    validation = validate_answer(
+        redacted_question, answer, chunk_texts, api_key=api_key
+    )
     if (
         not validation["is_valid"]
         and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
@@ -293,10 +301,13 @@ def run_debug(
         Tuple of (answer, tokens_used, debug_dict).
         debug_dict: {"mode": str, "chunks": [{"document_id": str, "score": float, "preview": str}]}
     """
+    redacted_question, _was_redacted = redact(question)
     chunk_texts, document_ids, scores, mode = retrieve_context(
-        client_id, question, db, api_key, top_k=5
+        client_id, redacted_question, db, api_key, top_k=5
     )
-    answer, tokens_used = generate_answer(question, chunk_texts, api_key=api_key)
+    answer, tokens_used = generate_answer(
+        redacted_question, chunk_texts, api_key=api_key
+    )
 
     chunks_debug = [
         {
@@ -310,7 +321,9 @@ def run_debug(
     debug = {
         "mode": mode,
         "chunks": chunks_debug,
-        "validation": validate_answer(question, answer, chunk_texts, api_key=api_key),
+        "validation": validate_answer(
+            redacted_question, answer, chunk_texts, api_key=api_key
+        ),
     }
     return (answer, tokens_used, debug)
 

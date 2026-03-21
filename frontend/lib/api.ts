@@ -36,7 +36,7 @@ export type ChatDebugResponse = {
   answer: string;
   tokens_used: number;
   debug: {
-    mode: "vector" | "keyword" | "none";
+    mode: "vector" | "keyword" | "hybrid" | "none";
     chunks: Array<{
       document_id: string;
       score: number;

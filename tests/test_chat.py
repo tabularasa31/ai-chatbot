@@ -1237,7 +1237,7 @@ def test_debug_with_embeddings_keyword_mode(
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)
-    assert chunk["score"] >= 1  # keyword returns match count
+    assert chunk["score"] >= 0  # SQLite cosine path; orthogonal → similarity 0
     assert "secret" in chunk["preview"].lower()
 
 

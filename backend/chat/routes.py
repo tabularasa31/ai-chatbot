@@ -54,7 +54,7 @@ class DebugChunkResponse(BaseModel):
 class DebugInfoResponse(BaseModel):
     """Debug info for RAG retrieval."""
 
-    mode: Literal["vector", "keyword", "none"]
+    mode: Literal["vector", "keyword", "hybrid", "none"]
     chunks: list[DebugChunkResponse]
 
 

@@ -114,9 +114,8 @@ Per strategy: "A bot that cannot control what it reveals is not production-ready
 
 ---
 
-### [FI-008] Hybrid Search: BM25 + RRF
-Cursor prompt ready: `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`
-See BACKLOG_RAG_QUALITY.md
+### ~~[FI-008] Hybrid Search: BM25 + RRF~~ ✅ Done (2026-03-21)
+Реализация: `backend/search/service.py` (`bm25_search_chunks`, `reciprocal_rank_fusion`, `_pgvector_search`), `rank-bm25` в `backend/requirements.txt`. Промпт: `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`. Подробности: `BACKLOG_RAG_QUALITY.md`, `PROGRESS.md`.
 
 ---
 

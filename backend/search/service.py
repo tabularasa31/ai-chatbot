@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import re
 import uuid
+
+from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, Embedding
 
-VECTOR_CONFIDENCE_THRESHOLD = 0.70  # cosine_similarity >= 0.70 → use vector mode
-# Note: pgvector returns cosine_distance (1 - similarity), so threshold = 1 - 0.70 = 0.30
-DISTANCE_THRESHOLD = 1.0 - VECTOR_CONFIDENCE_THRESHOLD  # 0.30
-
-MIN_KEYWORD_LEN = 3
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 
@@ -37,96 +33,74 @@ def embed_query(query: str, *, api_key: str) -> list[float]:
     return response.data[0].embedding
 
 
-def _extract_keywords(query: str) -> list[str]:
-    """Extract simple keywords: split by whitespace/punctuation, lowercase, filter short tokens."""
-    tokens = re.split(r"\W+", query.lower())
-    return [t for t in tokens if len(t) >= MIN_KEYWORD_LEN]
-
-
-def keyword_search_chunks(
+def bm25_search_chunks(
     client_id: uuid.UUID,
     query: str,
     top_k: int,
     db: Session,
 ) -> list[tuple[Embedding, float]]:
     """
-    Keyword-based fallback search over chunk_text.
-
-    Loads all chunks for client, counts keyword matches in Python.
-    Used as fallback when vector search confidence is low.
-
-    Args:
-        client_id: Client ID for tenant isolation (filter at DB level).
-        query: Search query text.
-        top_k: Number of top results to return.
-        db: Database session.
-
-    Returns:
-        List of (embedding, match_count) tuples, sorted by match_count DESC.
+    BM25 full-text search over chunk_text.
+    Returns normalized scores in [0, 1].
     """
-    keywords = _extract_keywords(query)
-    if not keywords:
+    query_tokens = query.lower().split()
+    if not query_tokens:
         return []
 
-    # Load all chunks for this client (filtering at DB level)
     embeddings = (
         db.query(Embedding)
         .join(Document, Embedding.document_id == Document.id)
         .filter(Document.client_id == client_id)
+        .filter(Embedding.chunk_text.isnot(None))
         .all()
     )
+    if not embeddings:
+        return []
 
-    scored: list[tuple[Embedding, float]] = []
-    for emb in embeddings:
-        chunk_lower = (emb.chunk_text or "").lower()
-        count = sum(1 for kw in keywords if kw in chunk_lower)
-        if count > 0:
-            scored.append((emb, float(count)))
-
+    corpus = [(emb.chunk_text or "").lower().split() for emb in embeddings]
+    bm25 = BM25Okapi(corpus)
+    raw_scores = [float(s) for s in bm25.get_scores(query_tokens)]
+    scored = list(zip(embeddings, raw_scores))
     scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:top_k]
+    scored = scored[:top_k]
+    if not scored:
+        return []
+    max_s = scored[0][1]
+    min_s = scored[-1][1]
+    if max_s == min_s:
+        return [(emb, 1.0) for emb, _ in scored]
+    return [(emb, (s - min_s) / (max_s - min_s)) for emb, s in scored]
 
 
-def search_similar_chunks(
+def reciprocal_rank_fusion(
+    vector_results: list[tuple[Embedding, float]],
+    bm25_results: list[tuple[Embedding, float]],
+    k: int = 60,
+    top_k: int = 5,
+) -> list[tuple[Embedding, float]]:
+    """Combine vector and BM25 results using Reciprocal Rank Fusion."""
+    scores: dict[uuid.UUID, float] = {}
+    id_to_emb: dict[uuid.UUID, Embedding] = {}
+
+    for rank, (emb, _) in enumerate(vector_results):
+        scores[emb.id] = scores.get(emb.id, 0) + 1 / (k + rank + 1)
+        id_to_emb[emb.id] = emb
+
+    for rank, (emb, _) in enumerate(bm25_results):
+        scores[emb.id] = scores.get(emb.id, 0) + 1 / (k + rank + 1)
+        id_to_emb[emb.id] = emb
+
+    sorted_ids = sorted(scores.keys(), key=lambda id_: scores[id_], reverse=True)
+    return [(id_to_emb[id_], scores[id_]) for id_ in sorted_ids[:top_k]]
+
+
+def _pgvector_search(
     client_id: uuid.UUID,
-    query: str,
+    query_vector: list[float],
     top_k: int,
     db: Session,
-    *,
-    api_key: str,
 ) -> list[tuple[Embedding, float]]:
-    """
-    Search for similar chunks using native pgvector cosine distance.
-
-    Uses pgvector <=> operator for fast vector search at DB level.
-    Falls back to keyword search if no confident vector results found.
-
-    Args:
-        client_id: Client ID (mandatory filter for tenant isolation).
-        query: Search query text.
-        top_k: Number of top results to return.
-        db: Database session.
-        api_key: OpenAI API key.
-
-    Returns:
-        List of (embedding, similarity) tuples, sorted by similarity DESC.
-    """
-    query_vector = embed_query(query, api_key=api_key)
-
-    # Check if we're in SQLite (tests) — pgvector not available
-    db_url = str(db.bind.url) if db.bind else ""
-    if "sqlite" in db_url:
-        results = _python_cosine_search(client_id, query_vector, top_k, db)
-        # Apply same confidence/keyword fallback as PostgreSQL path
-        if not results:
-            return keyword_search_chunks(client_id, query, top_k, db)
-        best_similarity = results[0][1]
-        if best_similarity < VECTOR_CONFIDENCE_THRESHOLD:
-            keyword_results = keyword_search_chunks(client_id, query, top_k, db)
-            return keyword_results if keyword_results else results
-        return results
-
-    # pgvector native search (PostgreSQL)
+    """Native pgvector cosine distance search. PostgreSQL only."""
     try:
         distance_expr = Embedding.vector.cosine_distance(query_vector)
         results_with_distance = (
@@ -138,34 +112,44 @@ def search_similar_chunks(
             .limit(top_k)
             .all()
         )
+        return [
+            (emb, max(0.0, 1.0 - distance))
+            for emb, distance in results_with_distance
+        ]
     except Exception:
-        # Fallback to Python search if pgvector fails (e.g., extension not installed)
-        results = _python_cosine_search(client_id, query_vector, top_k, db)
-        if not results:
-            return keyword_search_chunks(client_id, query, top_k, db)
-        best_similarity = results[0][1]
-        if best_similarity < VECTOR_CONFIDENCE_THRESHOLD:
-            keyword_results = keyword_search_chunks(client_id, query, top_k, db)
-            return keyword_results if keyword_results else results
-        return results
+        return _python_cosine_search(client_id, query_vector, top_k, db)
 
-    if not results_with_distance:
-        # No vector results → try keyword search
-        return keyword_search_chunks(client_id, query, top_k, db)
 
-    # Convert distance to similarity (cosine_distance = 1 - cosine_similarity)
-    results: list[tuple[Embedding, float]] = [
-        (emb, max(0.0, 1.0 - distance))
-        for emb, distance in results_with_distance
-    ]
+def search_similar_chunks(
+    client_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: Session,
+    *,
+    api_key: str,
+) -> list[tuple[Embedding, float]]:
+    """
+    Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
 
-    # Check confidence: if best result is not confident, use keyword fallback
-    best_similarity = results[0][1] if results else 0.0
-    if best_similarity < VECTOR_CONFIDENCE_THRESHOLD:
-        keyword_results = keyword_search_chunks(client_id, query, top_k, db)
-        return keyword_results if keyword_results else results
+    SQLite (tests): Python cosine only; pgvector and BM25 are skipped.
+    """
+    query_vector = embed_query(query, api_key=api_key)
 
-    return results
+    db_url = str(db.bind.url if db.bind else "")
+    if "sqlite" in db_url:
+        return _python_cosine_search(client_id, query_vector, top_k, db)
+
+    vector_results = _pgvector_search(client_id, query_vector, top_k * 2, db)
+    bm25_results = bm25_search_chunks(client_id, query, top_k * 2, db)
+
+    if not vector_results and not bm25_results:
+        return []
+    if not bm25_results:
+        return vector_results[:top_k]
+    if not vector_results:
+        return bm25_results[:top_k]
+
+    return reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k)
 
 
 def _python_cosine_search(
@@ -223,7 +207,6 @@ def _python_cosine_search(
     return scored[:top_k]
 
 
-# Keep for backward compatibility (used in chat/service.py)
 def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     """
     Compute cosine similarity between two vectors.

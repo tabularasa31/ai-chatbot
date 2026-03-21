@@ -4,25 +4,27 @@
 
 This backlog contains features that are nice-to-have but not blocking the initial MVP release.
 
+**Status (2026-03-21):** Baseline **slowapi** limits are already in production: `/widget/session/init` and `/widget/chat` (20/min), plus app-wide limits on `/clients/validate/{api_key}`, `/search`, `/chat` (see `PROGRESS.md`, `backend/core/limiter.py`). Items below describe **additional** hardening (per-client global caps, daily quotas, tighter per-IP policy), not “add any limiter from zero.”
+
 ---
 
 ## Phase 2: Robustness & Performance (1-2 weeks)
 
-### FI-EMBED-RATE-LIMIT: Rate Limiting (HIGH PRIORITY)
+### FI-EMBED-RATE-LIMIT: Rate limiting — **next tier** (was: “no limits”)
 
-**Problem:** MVP has no rate limiting. One bot hammering API can use up OpenAI budget.
+**Problem (remaining):** Current limits are uniform; a distributed or multi-key abuse pattern can still burn OpenAI budget. No **daily quota** or **per-tenant** cap on widget traffic.
 
-**Solution:**
-- Per-IP limit: 20 req/min (prevent single-site spike)
-- Per-clientId global limit: 1000 req/min (prevent distributed abuse)
-- Daily quota per client (free: 100, pro: 10k, enterprise: unlimited)
+**Solution (incremental):**
+- Optional stricter **per-IP** policy where it differs from today’s slowapi keys
+- **Per-clientId global** limit (e.g. 1000 req/min) across all callers
+- **Daily quota** per client (free: 100, pro: 10k, enterprise: unlimited) — needs billing/subscription model
 
-**Effort:** 1-2 days
+**Effort:** 1-2 days (on top of existing limiter)
 
 **Files:**
-- `backend/core/limiter.py` (add rate limiting config)
-- `backend/routes/widget.py` (add @limiter decorators)
-- Tests for rate limiting
+- `backend/core/limiter.py` (tiered keys / config)
+- `backend/routes/widget.py` (extend decorators or middleware)
+- Tests for new caps
 
 ---
 
@@ -246,7 +248,7 @@ This backlog contains features that are nice-to-have but not blocking the initia
 ## Suggested Order (After MVP)
 
 1. **Immediately (Week 2):**
-   - Rate limiting (prevents abuse)
+   - **Tier-2** rate limits / quotas if metrics show abuse (baseline limits already shipped)
    - Error handling + mobile (improves UX)
    - CSP docs (unblocks enterprise customers with strict CSP)
 
@@ -267,7 +269,7 @@ This backlog contains features that are nice-to-have but not blocking the initia
 
 | Feature | Reach | Impact | Confidence | Effort | Score |
 |---------|-------|--------|------------|--------|-------|
-| Rate Limiting | High | High | High | Low | 12 |
+| Rate limiting (tier 2: quotas / per-client global) | High | High | High | Medium | 10 |
 | Error Handling | Medium | High | High | Low | 6 |
 | Mobile Responsive | High | Medium | High | Medium | 6 |
 | CSP Docs | Medium | Medium | High | Low | 4 |
@@ -276,17 +278,17 @@ This backlog contains features that are nice-to-have but not blocking the initia
 | GDPR | Low | High | High | Medium | 3 |
 | Versioning | Medium | High | Medium | Low | 3 |
 
-**Top priorities:** Rate Limiting > Error Handling > Mobile > CSP Docs
+**Top priorities:** Error handling (embed.js) > Mobile > CSP docs > **tier-2** rate limits (quotas / per-client global)
 
 ---
 
 ## Notes
 
 - These are all **optional for MVP**
-- Phase 2 should be started **within 2 weeks** (rate limiting especially)
+- Baseline widget + API rate limits are **shipped**; prioritize **embed robustness** and **mobile** next unless abuse metrics demand quotas sooner.
 - Phase 3 can wait **1-2 months** (nice-to-have features)
-- Review this backlog after MVP ships
+- Review this backlog quarterly or after incident reports
 
 ---
 
-_Last updated: 2026-03-19_
+_Last updated: 2026-03-21_

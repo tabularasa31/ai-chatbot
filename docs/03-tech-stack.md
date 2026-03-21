@@ -231,9 +231,12 @@
 - No way to see other client's documents
 - No way to see other client's chat history
 
-### Rate Limiting (Future)
-- Per-API-key request rate limiting
-- OpenAI error handling (invalid key, quota exceeded)
+### Rate limiting (shipped baseline)
+- **slowapi** on public and sensitive routes: e.g. `GET /clients/validate/{api_key}` (20/min), `POST /search` (30/min), `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
+- **Future / Phase 2 embed:** per-client daily quotas, global per-tenant caps, subscription-tier limits — see `docs/BACKLOG_EMBED-PHASE2.md`.
+
+### OpenAI errors (ongoing)
+- Invalid key / quota: surface clear errors in UI; retry/backoff for transient limits remains backlog where not yet implemented
 
 ---
 

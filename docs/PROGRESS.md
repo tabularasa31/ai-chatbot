@@ -13,7 +13,7 @@
 - **API:** `GET` / `PUT /clients/me/disclosure` (PUT — только для подтверждённого email)
 - **UI:** `frontend/app/(app)/settings/disclosure/page.tsx`, пункт навигации **Response controls**, `api.disclosure`
 - **Миграция:** `fi_disc_v1` (`backend/migrations/versions/fi_disc_disclosure_config.py`); модуль `backend/disclosure_config.py`; тесты `tests/test_disclosure.py`
-- Промпт `cursor_prompts/FI-DISC-disclosure-controls.md` остаётся как спека; **не** в scope v1: блоклист тем, preview, сегменты/KYC по уровню
+- Промпт FI-DISC удалён после merge; **не** в scope v1: блоклист тем, preview, сегменты/KYC по уровню — см. `BACKLOG_PRODUCT.md` (future phases)
 
 ### Identity / widget (FI-KYC)
 - ✅ **FI-KYC** — идентификация пользователя виджета через **краткоживущий HMAC-токен** (не через `data-*` в embed): `POST /widget/session/init` (`api_key`, опционально `identity_token`), ответ `session_id` + `mode` (`identified` | `anonymous`); контекст в `chats.user_context` (JSON); в LLM попадают только `plan_tier`, `locale`, `audience_tag`
@@ -195,7 +195,7 @@ Git branches:
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `ci-cd-github-actions.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md`; `ci-cd-github-actions.md`. Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
 
 ---
 
@@ -207,7 +207,7 @@ Git branches:
 | `BACKLOG_PRODUCT.md` | Product features (FI-xxx), RICE scored |
 | `BACKLOG_TECH_DEBT.md` | Tech improvements |
 | `BACKLOG_SECURITY-IMPROVEMENTS.md` | Security: vectorDB filter, rate limiting, tracing |
-| `BACKLOG_EMBED-PHASE2.md` | Widget improvements (rate limiting, mobile, CSP) |
+| `BACKLOG_EMBED-PHASE2.md` | Widget Phase 2/3 (embed.js, mobile, CSP; **tier-2** limits after baseline slowapi) |
 | `BACKLOG_RAG_QUALITY.md` | RAG quality: chunking, re-ranker |
 | `BACKLOG_MONETIZATION.md` | Pricing strategy |
 

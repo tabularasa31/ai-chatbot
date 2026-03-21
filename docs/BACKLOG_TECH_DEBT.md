@@ -95,9 +95,9 @@ Key recommendations added to this backlog:
 - **Effort:** 1 day
 
 ### [TD-033] Chunking Strategy Configuration
-- Currently: RecursiveCharacterTextSplitter with fixed params.
-- Expose to client: `chunk_size`, `chunk_overlap`, `splitter_type` in settings.
-- Options: recursive, markdown-aware, semantic.
+- Currently: fixed sentence-aware `chunk_text()` in `backend/embeddings/service.py` (`chunk_size`, `overlap_sentences`).
+- Expose to client: `chunk_size`, `overlap_sentences` / token targets, optional `splitter_type` in settings.
+- Options: current sentence splitter, future markdown-aware / structural / semantic.
 - **Effort:** 1-2 days
 
 ### [TD-034] Soft-Delete for Documents

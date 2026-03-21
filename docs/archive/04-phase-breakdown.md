@@ -198,7 +198,7 @@ Tests: ≥80%
 
 **Process (after document upload):**
 1. Document marked `processing`
-2. Async job: Split text into chunks (500 chars, 100 char overlap)
+2. Async job: Split text into sentence-aware chunks (soft ~500 chars, sentence overlap; см. `embeddings.service.chunk_text`)
 3. For each chunk:
    - Call OpenAI `text-embedding-3-small` API
    - Get 1536-dim vector

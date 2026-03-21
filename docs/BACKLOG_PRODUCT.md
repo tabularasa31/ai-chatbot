@@ -1,7 +1,7 @@
 # Product Features Backlog
 
 Product features for clients and platform operators.
-Last updated: 2026-03-21
+Last updated: 2026-03-21 (промпты реализованных фич убраны из `cursor_prompts/`)
 
 ---
 
@@ -25,6 +25,23 @@ Last updated: 2026-03-21
 ### [FI-014] Admin metrics MVP ✅ DONE
 ### [FI-010] 👍/👎 feedback + Review bad answers ✅ DONE
 
+### [FI-009] Sentence-aware chunking + embedding metadata ✅ DONE
+- **Code:** `backend/embeddings/service.py` — `chunk_text()` по границам предложений (`.?!` + двойной перенос строки), мягкий лимит ~500 символов, перекрытие `overlap_sentences` (по умолчанию 1).
+- **DB:** в JSON-поле `embeddings.metadata` хранятся `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`.
+- **Tests:** `tests/test_embeddings.py`, `tests/test_verification_enforcement.py`.
+- **Branch:** `feature/fi-009-improved-chunking` → merge в `main` по процессу репозитория.
+- Дальнейшие улучшения чанкинга (структурный сплит, токеновый overlap, Small-to-Big) — см. `BACKLOG_RAG_QUALITY.md`.
+
+### [FI-032] Document health check (phase 1) ✅ DONE
+- **Code:** `backend/documents/service.py` (`run_document_health_check`), колонка `documents.health_status`, роуты в `documents/routes.py`; после эмбеддинга вызывается из `embeddings/service.py`.
+- **QA:** `docs/qa/FI-032-document-health-check.md`
+- Промпт `cursor_prompts/FI-032-document-health-check.md` удалён после внедрения. **Phase 2** (кросс-тенантные бенчмарки) — см. раздел P2 ниже.
+
+### [FI-UI] Тёмная авторизация, brand transition, лимит виджета ✅ DONE
+- Ветки: `feature/ui-brand-transition`, `feature/auth-pages-dark-theme`, `fix/widget-rate-limiting`.
+- `POST /widget/chat` — 20/min (`slowapi`, `backend/routes/widget.py`).
+- Промпты `FI-UI_brand-transition.md`, `FI-UI_auth-pages-dark-theme.md`, `widget-rate-limiting.md` удалены из `cursor_prompts/`.
+
 ---
 
 ## 🔴 P1 — Do now (в порядке запуска)
@@ -41,24 +58,6 @@ Last updated: 2026-03-21
 - File: `backend/widget/static/embed.js`
 
 **Effort:** 30 minutes. Do this first.
-
----
-
-### [FI-032] Document Health Check → Gap Analyzer v1 🌟 CRITICAL DIFFERENTIATOR
-**Why critical:** Core of the product strategy. Gap Analyzer is Chat9's #1 differentiator vs ALL Tier 3 competitors. Must be on all plans. Cursor prompt ready.
-
-**What it does:**
-- After document upload → GPT-4o-mini analyzes structure
-- Returns warnings: missing sections, poor structure, outdated content, no examples
-- Score 0–100 shown in dashboard with colored badge
-- "Re-check" button per document
-
-**Phase 1 (now):** Structural analysis per document — FI-032 prompt ready.
-
-**Phase 2 (later):** Cross-tenant benchmarks — "products like yours get questions about X, but you have no page on X." Requires data accumulation from multiple tenants.
-
-**Cursor prompt:** `cursor_prompts/FI-032-document-health-check.md`
-**Effort:** 3 days.
 
 ---
 
@@ -127,13 +126,16 @@ See BACKLOG_SECURITY.md
 
 ---
 
-### [FI-009] Improved Chunking
-Cursor prompt ready: `cursor_prompts/FI-009-improved-chunking.md`
-See BACKLOG_RAG_QUALITY.md
+## 🟠 P2 — Next sprint
+
+### [FI-032 Phase 2] Gap Analyzer — cross-tenant benchmarks 🌟
+**Why:** Следующий уровень дифференциатора после phase 1 (структурный health check уже в проде).
+
+**What:** Сравнение с когортой — «у продуктов как у вас спрашивают про X, а у вас нет раздела про X». Требует накопления анонимизированной статистики по тенантам.
+
+**Effort:** несколько дней после появления данных; отдельный промпт/спека по мере готовности.
 
 ---
-
-## 🟠 P2 — Next sprint
 
 ### [FI-ONBOARD] Conversational Onboarding (4-question flow)
 **Why:** Reduces time-to-first-value. Per strategy: "4 questions, bot is live. No loading screens."

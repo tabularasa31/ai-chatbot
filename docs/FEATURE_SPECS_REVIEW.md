@@ -61,7 +61,7 @@ About document upload, parsing, processing. We already have a basic version, but
 
 **Update (2026-03-21):** Widget **user identification (FI-KYC)** is implemented in product: short-lived HMAC token, `chats.user_context`, dashboard signing secrets — see `docs/PROGRESS.md` / `BACKLOG_PRODUCT.md`. External Word specs may still contain extra ideas (SDK, enterprise flows).
 
-Disclosure controls spec remains backlog (**FI-DISC**).
+**Update (2026-03-21):** **FI-DISC phase 1** is implemented: tenant-wide response detail level (Detailed / Standard / Corporate), `clients.disclosure_config`, dashboard **Response controls**, prompt injection in `build_rag_prompt`. Topic blocklists, preview API, and per-audience levels remain future work; see `cursor_prompts/FI-DISC-disclosure-controls.md`.
 
 ---
 
@@ -75,7 +75,7 @@ Disclosure controls spec remains backlog (**FI-DISC**).
 ### Not critical (v2.0):
 - Full **KYC/compliance SDK** vs current server-side token flow (enterprise packaging)
 - Error tracking (needed for production, but MVP can work with basic logs)
-- Disclosure controls (future, when we have customer data)
+- Full **disclosure-controls-spec.docx** scope (topic denylist, etc.) beyond shipped FI-DISC v1
 
 ---
 

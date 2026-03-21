@@ -9,7 +9,7 @@ Based on: Chat9 Product Strategy (March 2026)
 **Don't charge yet** — focus on product-market fit and first 10 customers.
 Build the product that's expensive to leave, then monetize.
 
-**Shipped (product, not billing):** Widget **KYC v1** (HMAC identity token, `POST /widget/session/init`, dashboard signing secret) — 2026-03-21. Escalation / disclosure / gap analyzer remain on the roadmap as listed below.
+**Shipped (product, not billing):** Widget **KYC v1** (HMAC identity token, `POST /widget/session/init`, dashboard signing secret) — 2026-03-21. **FI-DISC v1** (tenant-wide response level, Response controls UI) — 2026-03-21. Escalation / gap analyzer / further disclosure (topic blocklist, segments) remain on the roadmap as listed below.
 
 ---
 
@@ -55,7 +55,7 @@ Client pays OpenAI directly. Charging for conversations = double-billing with no
 "Unlimited conversations" is both honest and a marketing advantage vs competitors.
 
 **3. Core features on all plans**
-KYC, escalation, disclosure controls, gap analyzer = baseline for production-ready bot.
+KYC, escalation, disclosure (extended), gap analyzer = baseline for production-ready bot. (Disclosure **v1** level control is shipped; see `PROGRESS.md`.)
 "A bot that can't identify users, can't escalate, can't control what it reveals is not production-ready."
 
 **4. Integrations gate the tiers**

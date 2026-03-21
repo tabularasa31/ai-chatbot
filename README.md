@@ -126,6 +126,8 @@ npm run dev
 |--------|------|-------------|
 | POST | `/clients` | Create client (JWT, verified only) |
 | GET | `/clients/me` | Get current client info (JWT) |
+| GET | `/clients/me/disclosure` | Tenant-wide response detail level (JWT) |
+| PUT | `/clients/me/disclosure` | Update response level: `detailed` \| `standard` \| `corporate` (JWT, verified) |
 
 ### Documents
 | Method | Path | Description |

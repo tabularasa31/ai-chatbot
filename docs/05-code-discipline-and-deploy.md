@@ -6,58 +6,61 @@
 
 ### Rule #1: Atomic Architecture
 
+Actual repository layout (updated to match the codebase). Tests live in the root **`tests/`** directory, not inside each feature package.
+
 ```
 backend/
-├─ core/
-│  ├─ __init__.py
-│  ├─ db.py (database connection, pgvector setup)
-│  ├─ config.py (settings from env vars)
-│  ├─ security.py (JWT, bcrypt utilities)
-│  └─ models.py (SQLAlchemy base models)
+├─ main.py                 # FastAPI app, router includes
+├─ models.py               # SQLAlchemy models (single module)
+├─ requirements.txt        # mirrors repo root dependencies (see below)
 │
-├─ auth/ [Feature 1]
-│  ├─ routes.py
-│  ├─ service.py
-│  └─ tests/
+├─ core/                   # DB, config, JWT helpers, rate limiter, OpenAI wrapper
+│  ├─ db.py
+│  ├─ config.py
+│  ├─ security.py
+│  ├─ crypto.py
+│  ├─ limiter.py           # slowapi
+│  ├─ openai_client.py
+│  └─ utils.py
 │
-├─ clients/ [Feature 2]
-│  ├─ routes.py
-│  ├─ service.py
-│  └─ tests/
+├─ auth/                   # register, login, email verification, password reset
+├─ admin/                  # admin metrics
+├─ clients/                # tenant clients, API key, public_id
+├─ documents/              # upload, parsing, status
+├─ embeddings/             # chunking, embeddings (sync indexing; no separate worker.py)
+├─ search/                 # chunk retrieval
+├─ chat/                   # RAG chat (per-route auth: JWT, X-API-Key, etc.)
+├─ email/                  # transactional email (Brevo)
 │
-├─ documents/ [Feature 3]
-│  ├─ routes.py
-│  ├─ service.py
-│  ├─ parsers.py
-│  └─ tests/
+├─ routes/                 # cross-cutting public HTTP
+│  ├─ public.py            # e.g. GET /embed.js
+│  └─ widget.py            # public widget: POST /widget/chat (rate limited)
 │
-├─ embeddings/ [Feature 4]
-│  ├─ service.py
-│  ├─ worker.py
-│  └─ tests/
+├─ static/
+│  └─ embed.js             # loader served by backend (see public.py)
+├─ widget/
+│  ├─ routes.py            # small helper router (app wires `backend.routes.widget`, not this file)
+│  └─ static/embed.js      # alternate script copy (do not confuse with backend/static/embed.js)
 │
-├─ search/ [Feature 5]
-│  ├─ routes.py
-│  ├─ service.py
-│  └─ tests/
-│
-├─ chat/ [Feature 6]
-│  ├─ routes.py
-│  ├─ service.py
-│  └─ tests/
-│
-├─ widget/ [Feature 7]
-│  ├─ routes.py
-│  └─ tests/
-│
-├─ main.py (FastAPI app, import all routes)
-├─ requirements.txt
-└─ tests/
-   ├─ test_models.py
-   └─ conftest.py (pytest fixtures)
+└─ migrations/             # Alembic
+
+requirements.txt           # repo root — primary for local setup (see README)
+tests/
+├─ conftest.py
+├─ test_auth.py
+├─ test_chat.py
+├─ test_clients.py
+├─ test_documents.py
+├─ test_embeddings.py
+├─ test_search.py
+├─ test_widget.py
+├─ test_admin_metrics.py
+├─ test_models.py
+└─ …
+frontend/                  # Next.js app (separate from backend)
 ```
 
-**RULE:** Each phase = separate module. Don't touch other modules.
+**RULE:** One phase = one coherent set of files in its area. Do not change other modules without an explicit spec and review.
 
 ---
 
@@ -77,7 +80,7 @@ FILES TO CREATE:
 ✅ tests/test_module.py
 
 FILES TO MODIFY:
-✅ main.py (only 1 import line: from .module import router)
+✅ backend/main.py (minimal change: `include_router` / import line only if the spec says so)
 
 MUST NOT TOUCH:
 ❌ backend/core/*
@@ -93,23 +96,18 @@ IF YOU NEED TO CHANGE FROZEN CODE:
 
 ### Rule #3: Branch per Phase
 
+This repo uses **`main`** for ongoing work; production deploys often track a **`deploy`** branch (Vercel / Railway). There may be no `develop` branch—treat **`main`** as the default base.
+
 ```bash
-# Start
-git checkout develop
+git checkout main
+git pull origin main
 git checkout -b feature/documents
+# … work, commit, pytest locally …
+git push -u origin feature/documents
+# Open PR into main (or agreed base)
 
-# Work on feature (edit, commit, test locally)
-# ...
-
-# Submit for review
-git add .
-git commit -m "feat(documents): add upload and parsing"
-git push origin feature/documents
-
-# Create PR on GitHub
-# → I review
-# → If approve: merge to main (you)
-# → If reject: git reset --hard develop (start over with feedback)
+# After merge: merge or fast-forward into `deploy` when cutting a production release (your process).
+# If you need to discard local work: git fetch origin && git reset --hard origin/main
 ```
 
 ---
@@ -221,50 +219,36 @@ cd ai-chatbot
 git config user.name "Your Name"
 git config user.email "your@email.com"
 
-# Create develop branch
-git checkout -b develop
-git push -u origin develop
+git checkout main
+git pull origin main
+# Optional: maintain `deploy` for production triggers
 ```
 
 ### Per-Phase Workflow
 
 ```bash
-# 1. Create feature branch from develop
-git checkout develop
-git pull
+# 1. Feature branch from up-to-date main
+git checkout main
+git pull origin main
 git checkout -b feature/documents
 
-# 2. Make changes
-# - Create files
-# - Edit code
-# - Write tests
-# - Run pytest locally: pytest tests/ -v
+# 2. Changes: stay within spec; tests under tests/; run pytest tests/ -v
 
-# 3. Commit (atomic commits)
+# 3. Atomic commits
 git add backend/documents/
 git commit -m "feat(documents): add PDF parsing"
 git add tests/test_documents.py
-git commit -m "test(documents): add 15 test cases"
+git commit -m "test(documents): extend coverage"
 
-# 4. Push
+# 4. Push and open PR to main
 git push -u origin feature/documents
 
-# 5. Create PR on GitHub
-# - Title: "feat: document upload and parsing"
-# - Description: what changed, why
-# - Link: closes #1 (if applicable)
+# 5. After approval: merge to main
+# 6. Production: merge main → deploy when ready (per team process)
 
-# 6. Get review (me)
-
-# 7a. If APPROVED:
-git checkout main
-git pull
-git merge feature/documents --no-ff  # merge commit
-git push
-
-# 7b. If REJECTED:
-git reset --hard develop
-# Fix issues, repeat from step 2
+# Reset local branch after feedback:
+git fetch origin
+git reset --hard origin/main
 ```
 
 ---
@@ -291,15 +275,16 @@ git reset --hard develop
 **Step 3: Set Environment Variables**
 ```bash
 DATABASE_URL=postgresql://...
-OPENAI_API_KEY=sk-...
 JWT_SECRET=<generate random 32-char string>
 ENVIRONMENT=production
+ENCRYPTION_KEY=<Fernet key for per-client OpenAI key storage>
+# Also Brevo, FRONTEND_URL, CORS_ALLOWED_ORIGINS, etc. (see .env.example)
+# Global OPENAI_API_KEY is optional—clients set keys in the dashboard
 ```
 
 **Step 4: Deploy**
 ```bash
-# Railway auto-deploys from git
-# git push main → automatic deployment
+# Railway: deploy from the configured branch (often `deploy` or `main`)
 # Check logs in Railway dashboard
 ```
 
@@ -332,8 +317,7 @@ NEXT_PUBLIC_API_URL=https://api.yourdomain.com
 
 **Step 4: Deploy**
 ```bash
-# Vercel auto-deploys from git
-# git push main → automatic build + deploy
+# Vercel: production branch is often `deploy` (confirm in project settings)
 ```
 
 **Step 5: Test**
@@ -344,29 +328,18 @@ Visit https://app.yourdomain.com
 - Can view chat logs
 ```
 
-### Widget (CDN)
+### Widget (served from API)
 
-**embed.js served from:**
-```
-https://api.yourdomain.com/embed.js
-```
+**Script:** `GET /embed.js` — loader injects an iframe pointing at `/widget?clientId=…`.
 
-**Clients add:**
+**Typical snippet (public `clientId` like `ch_…` from the dashboard):**
 ```html
-<script src="https://api.yourdomain.com/embed.js"></script>
-<div id="ai-chat-widget"></div>
+<script src="https://api.yourdomain.com/embed.js?clientId=YOUR_PUBLIC_CLIENT_ID"></script>
 ```
 
-**Test on external page:**
-```bash
-# Create test.html
-<html>
-  <script src="https://api.yourdomain.com/embed.js"></script>
-  <div id="ai-chat-widget"></div>
-</html>
+When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashboard “Copy embed code” may add `window.Chat9Config = { widgetUrl: "…" }` before the script tag.
 
-# Open in browser → widget should appear
-```
+**Smoke test:** paste the snippet into a static HTML page with a real `clientId` and open in the browser.
 
 ---
 
@@ -386,10 +359,9 @@ https://api.yourdomain.com/embed.js
   - All show "ready" status
 
 ✅ Embed widget
-  - Copy embed code
-  - Create test.html
-  - Open in browser
-  - Widget appears
+  - Copy embed code from dashboard (`embed.js?clientId=ch_…`)
+  - Paste into test.html
+  - Open in browser → iframe widget visible
 
 ✅ Ask 10 questions
   1. "How much does it cost?"
@@ -442,7 +414,7 @@ https://api.yourdomain.com/embed.js
 ### Security ✅
 - Users only see own clients
 - Clients only see own documents
-- API key required for chat
+- Dashboard/API chat uses API key; public widget uses `clientId` — tenant isolation in both paths
 - No sensitive data in logs
 
 ---
@@ -466,4 +438,4 @@ https://api.yourdomain.com/embed.js
 
 ---
 
-**Ready to build!** 🚀
+Keep Rule #1 in sync whenever the backend tree changes materially.

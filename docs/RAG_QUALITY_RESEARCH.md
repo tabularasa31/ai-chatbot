@@ -163,7 +163,7 @@ Critical elements:
 ### What ChatGPT added (new)
 
 #### 1. LLM-based answer validation ✅ Shipped (FI-034, 2026-03-21)
-After generating the answer, a second `gpt-4o-mini` call checks grounding in retrieved chunks; low-confidence invalid answers are replaced with a fixed fallback; failures in that step are non-blocking. See `backend/chat/service.py` (`validate_answer`) and `docs/PROGRESS.md`.
+After generating the answer, a second `gpt-4o-mini` call checks grounding in retrieved chunks; low-confidence invalid answers are replaced with a fixed fallback; failures in that step are non-blocking. The user question passed into this step is **regex-redacted** like the main RAG path (FI-043). See `backend/chat/service.py` (`validate_answer`, `redact`) and `docs/PROGRESS.md`.
 
 #### 2. Query rewriting layer
 Before retrieval — normalize and improve the question:

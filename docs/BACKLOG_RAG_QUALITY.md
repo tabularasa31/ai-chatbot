@@ -79,7 +79,7 @@ Spec reference: `specs/hybrid-search-spec.docx` (FR-1)
 **Was:** After generation, ask the model whether the answer is grounded in context; if low confidence → safe fallback.
 
 **Implemented:**
-- `backend/chat/service.py`: `validate_answer()` after `generate_answer()` in `process_chat_message()`; threshold `confidence < 0.4` together with `is_valid=false` (including empty retrieval → `no_context`)
+- `backend/chat/service.py`: `validate_answer()` after `generate_answer()` in `process_chat_message()`; threshold `confidence < 0.4` together with `is_valid=false` (including empty retrieval → `no_context`); the `question` argument is the **redacted** user text (FI-043), same as for retrieval and generation
 - OpenAI/JSON failures → non-blocking `validation_skipped`, original answer kept
 - `run_debug()` / `POST /chat/debug`: `debug.validation` with `{is_valid, confidence, reason}`
 - `ChatResponse.validation` optional (reserved; public `/chat` does not populate)

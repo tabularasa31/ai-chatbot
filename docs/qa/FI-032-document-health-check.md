@@ -64,4 +64,4 @@
 
 ---
 
-*Связанный промпт разработки: `cursor_prompts/FI-032-document-health-check.md`.*
+*Промпт разработки в `cursor_prompts/` удалён после внедрения фичи; актуальный код — `backend/documents/service.py`, `documents/routes.py`.*

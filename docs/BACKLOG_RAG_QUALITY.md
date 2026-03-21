@@ -39,13 +39,15 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 ---
 
-### [FI-009] Improved chunking + metadata
-**Recommendations from all 6 models:**
-- `chunk_size = 450 tokens`, `chunk_overlap = 120 tokens` (Grok — most specific).
-- Recursive splitter: `["\n\n", "\n", ". ", " ", ""]`.
-- Structural chunking: split by headers (H1–H3), don't break code blocks.
-- Small-to-Big / Sentence-window: small chunk for search, ±2 sentences at retrieval.
-- Metadata per chunk: `section_title`, `doc_id`, `doc_date`, `content_type`, `tenant_id`.
+### [FI-009] Chunking + metadata — baseline ✅ / phase 2 open
+
+**Shipped (2026-03-21):** В проде sentence-aware чанкинг в `backend/embeddings/service.py`: границы по предложениям, мягкий лимит ~500 символов, `overlap_sentences` (default 1). В `embeddings.metadata` (JSON): `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`.
+
+**Still backlog (research / quality next steps — см. `RAG_QUALITY_RESEARCH.md`):**
+- Целевые размеры в **токенах** и overlap 60–120 токенов (рецепт Grok: 450 / 120).
+- **Структурный** сплит: заголовки H1–H3, не рвать code blocks.
+- **Small-to-Big / sentence-window** при retrieval (малый чанк для поиска, расширенный контекст в промпт).
+- Расширенные метаданные: `section_title`, `doc_date`, `content_type`, явный `tenant_id` в мете чанка.
 
 ---
 
@@ -53,7 +55,7 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 **Problem:** Pure cosine similarity fails on exact strings — error codes, CLI commands, SDK method names, endpoint paths.
 - Replace current keyword fallback with full BM25 (PostgreSQL `tsvector` or `rank-bm25`)
 - RRF fusion of vector + BM25 results (rank-based, no normalisation needed)
-- Cursor prompt ready: `cursor-fi-019ext-bm25-hybrid-hnsw.md`
+- Cursor prompt ready: `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`
 - Spec reference: `specs/hybrid-search-spec.docx` (FR-2, FR-3)
 
 ---

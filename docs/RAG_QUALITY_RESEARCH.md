@@ -16,7 +16,7 @@ Sources: Perplexity + ChatGPT, 2026-03-18.
   - 384–512 tokens, 60–80 tokens overlap.
   - Smaller chunks (200–300) for FAQ/errors.
 
-**FI-009 update:** add overlap 60–80 tokens + structural chunking.
+**Prod baseline (2026-03, FI-009):** sentence-aware chunking + метаданные позиции/файла в `embeddings.metadata`. **Следующий шаг (FI-009+):** overlap в токенах (60–80) + структурный сплит по заголовкам/коду.
 
 ---
 
@@ -279,7 +279,7 @@ rewrite → retrieve → rerank → validate → answer
 - При нахождении → отдавай модели расширенный контекст вокруг чанка (parent document).
 - Эффект: точность поиска + глубина ответа.
 
-**Это новый подход к FI-009**, стоит изучить.
+**Это следующий шаг после базового FI-009** (sentence chunks уже в проде) — Small-to-Big / parent context, стоит изучить.
 
 #### 2. Chain-of-Thought (CoT) в system prompt
 
@@ -454,7 +454,7 @@ ROLE: Ты — специалист технической поддержки [�
 | Prompt versioning в БД | — | — | — | — | 🔥 | — | В FI-007 |
 | Question routing | — | — | — | Intent classifier | 🔥 | — | FI-031 |
 | Query expansion | — | 🔥 | — | Translation | 🔥 | — | FI-033 |
-| Sentence-window | — | — | — | 🔥 | 🔥 | — | В FI-009 |
+| Sentence-window | — | — | — | 🔥 | 🔥 | — | Baseline в FI-009; расширить Small-to-Big |
 | HyDE | — | — | — | 🔥 | — | — | FI-036, P2 |
 | Observability | ✅ | ✅ | Prometheus | — | ✅ | **Langfuse/Phoenix** | Расширить /chat/debug |
 | Namespace per version | — | — | — | — | — | 🔥 | В FI-029 |
@@ -536,7 +536,7 @@ Markdown для кода, таблиц, списков.
 
 | FI | Что | Источник | Приоритет |
 |----|-----|----------|-----------|
-| FI-009 update | Chunking: overlap 60–80 токенов + структурный | Все три | P1 |
+| FI-009+ | Chunking: токеновый overlap 60–80 + структурный сплит | Все три | P1 |
 | FI-007 update | System prompt: 5 элементов + fallback-фразы | Все три | P1 |
 | FI-019 update | Hybrid search: BM25 + vector + rerank + HNSW | Все три | P1 |
 | FI-031 | Org config / tool layer (support_email вне RAG) | Все три | P1 |
@@ -545,7 +545,7 @@ Markdown для кода, таблиц, списков.
 | FI-029 | Document versioning & recency scoring | Perplexity + DeepSeek | P2 |
 | FI-035 | Security: prompt injection protection | DeepSeek | P2 |
 | FI-036 | HyDE для коротких/расплывчатых вопросов | Gemini | P2 |
-| FI-009 update | Small-to-Big / Sentence-window + citations | Gemini + Sonnet | P1 |
+| FI-009+ | Small-to-Big / расширенный sentence-window + citations | Gemini + Sonnet | P1 |
 | FI-007 update | CoT + citations + prompt versioning в БД | Gemini + Sonnet | P1 |
 | FI-031 update | Knowledge Tiers таблица + question routing | Sonnet | P1 |
 | FI-033 update | Query expansion (несколько перефразировок + RRF) | Sonnet | P2 |

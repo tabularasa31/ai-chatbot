@@ -42,7 +42,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 - Documents are parsed, chunked, and embedded automatically
 
 ### 3. Indexing
-- Documents split into chunks (500 chars with 100 char overlap)
+- Parsed text split into **sentence-aware chunks** (мягкий лимит ~500 символов, перекрытие последних *N* предложений между соседними чанками)
 - Each chunk vectorized using OpenAI `text-embedding-3-small`
 - Vectors stored in PostgreSQL with pgvector
 

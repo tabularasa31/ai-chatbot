@@ -1,7 +1,18 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-20 09:05 UTC  
+**Last updated:** 2026-03-21 (UTC)  
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-21)
+
+### RAG / embeddings
+- ✅ **FI-009** — Sentence-aware chunking + метаданные эмбеддингов (`feature/fi-009-improved-chunking`)
+  - `chunk_text()`: границы по предложениям, ~500 символов мягкий лимит, `overlap_sentences`
+  - `metadata`: `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`
+  - Промпт `cursor_prompts/FI-009-improved-chunking.md` удалён после внедрения; описание в `BACKLOG_PRODUCT.md` / `BACKLOG_RAG_QUALITY.md`
+- ✅ **FI-032 (phase 1)** — document health check: `health_status`, `run_document_health_check`, QA-чеклист `docs/qa/FI-032-document-health-check.md`; промпт `cursor_prompts/FI-032-document-health-check.md` удалён.
 
 ---
 
@@ -20,6 +31,7 @@
 - ✅ **Widget rate limiting** (`fix/widget-rate-limiting`)
   - `POST /widget/chat` — 20/min via slowapi
   - 135 tests passed
+- Промпты в `cursor_prompts/`: `FI-UI_brand-transition.md`, `FI-UI_auth-pages-dark-theme.md`, `widget-rate-limiting.md` — **удалены** после внедрения (актуальное описание здесь и в `BACKLOG_PRODUCT.md`).
 
 ---
 
@@ -102,13 +114,14 @@
 ## 📊 FEATURES LIVE IN PRODUCTION
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
-- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini)
+- ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata)
 - ✅ Hybrid retrieval (vector + keyword fallback)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)
 - ✅ Dashboard (documents, logs, feedback, analytics)
+- ✅ Document health check (phase 1): `health_status`, GPT-structured analysis, re-check API
 - ✅ Email verification (Brevo)
 - ✅ Forgot password flow (Brevo) — tested end-to-end
 - ✅ Admin metrics
@@ -117,7 +130,7 @@
 - ✅ Landing page (getchat9.live)
 - ✅ Sign in button on landing page
 - ✅ CORS security (whitelist)
-- ✅ Rate limiting (chat, search, validate)
+- ✅ Rate limiting (chat, search, validate, widget/chat)
 
 ---
 
@@ -161,4 +174,4 @@ Git branches:
 
 ---
 
-_Updated: 2026-03-20 08:40 UTC_
+_Updated: 2026-03-21_

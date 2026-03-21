@@ -47,8 +47,6 @@
 ## P3 — Позже
 
 - Landing page CTA: URL-first вместо кнопки
-- Demo bots (Stripe, Cloudflare) — после FI-021
-- Public roadmap
 
 ---
 

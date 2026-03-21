@@ -64,6 +64,19 @@
 
 ---
 
+## 🚀 Deploy checklist
+
+**Vercel:**
+- [ ] Settings → Git → Production Branch = `deploy`
+- [ ] Settings → Environment Variables → `NEXT_PUBLIC_API_URL` задан для Production (значение: Railway backend URL)
+
+**Railway:**
+- [ ] Service → Settings → Branch = `deploy`
+
+**После проверки:** redeploy на Vercel если меняли переменные.
+
+---
+
 ## 🐛 Баг: NetworkError при сохранении OpenAI key
 
 **Симптом:** При добавлении OpenAI API key в дашборде — `NetworkError when attempting to fetch resource`.

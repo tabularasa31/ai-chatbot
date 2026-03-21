@@ -330,8 +330,12 @@ def get_latest_escalation_ticket_for_chat(chat_id: UUID, db: Session) -> Escalat
     The flag should never be True without a linked ticket; if it is, log and raise.
     """
 
-def fact_from_ticket(ticket: EscalationTicket, sla_hours: int = 24) -> dict:
-    """Serialize ticket_number, sla_hours, user_email, trigger, etc. for the model fact block."""
+def fact_from_ticket(ticket: EscalationTicket, chat: Chat | None = None, sla_hours: int = 24) -> dict:
+    """
+    Serialize ticket_number, sla_hours, user_email, trigger, etc. for the model fact block.
+    Locale resolution: KYC locale → browser_locale (from Chat.user_context) → None.
+    See full implementation spec in the Widget init — add locale field section above.
+    """
 
 def build_chat_messages_for_openai(chat: Chat, current_user_text: str) -> list[dict]:
     """Same roles/content as main chat completion; includes current user message."""

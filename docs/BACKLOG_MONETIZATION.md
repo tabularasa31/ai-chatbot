@@ -1,108 +1,103 @@
 # Monetization Backlog
 
-Monetization ideas for Chat9.
+Last updated: 2026-03-21
+Based on: Chat9 Product Strategy (March 2026)
 
 ---
 
-## Model: Freemium
-
-Base model — free with limits, paid without.
-
-### Free tier (current state)
-- Up to 20 documents.
-- All basic features (widget, logs, feedback).
-- "Powered by Chat9" in widget footer.
-
-### Premium (ideas for paid tier)
-
-| Feature | Free | Premium |
-|---------|------|---------|
-| Documents | 20 | Unlimited / 100+ |
-| Remove "Powered by Chat9" | ❌ | ✅ |
-| Chat sessions per month | 500 | Unlimited |
-| Custom system prompt | ❌ | ✅ |
-| Priority support | ❌ | ✅ |
-| Branded widget (custom colors) | ❌ | ✅ |
-| Multiple team members | ❌ | ✅ |
-| API access (programmatic upload) | ❌ | ✅ |
-| Zendesk/Intercom integration | ❌ | ✅ |
+## Current Status
+**Don't charge yet** — focus on product-market fit and first 10 customers.
+Build the product that's expensive to leave, then monetize.
 
 ---
 
-## Pricing ideas
+## Pricing Model (Revised per Strategy)
 
-### Option A: By sessions (usage-based)
-- Free: 500 chat sessions/month.
-- Starter ($19/mo): 2000 sessions.
-- Pro ($49/mo): unlimited.
+**Core principle:** Charge for what actually costs us money.
+- Conversations cost Chat9 **nothing** (client pays OpenAI directly)
+- Real costs: pgvector storage (grows with document volume) + integration maintenance
+- → Price axis: **pages in index** (transparent, countable by client)
 
-**Pro:** easy to understand, easy to scale.
-**Con:** client doesn't know how many sessions they'll have.
-
----
-
-### Option B: By clients / domains
-- Free: 1 domain / 1 client.
-- Pro ($29/mo): up to 5 domains.
-- Business ($99/mo): unlimited domains.
-
-**Pro:** good for agencies/resellers.
+### One unit = one URL or one file up to 50,000 words
+(Larger files split automatically)
 
 ---
 
-### Option C: Flat monthly (simple)
-- Free: limited set.
-- Pro ($29/mo): all included.
+## Pricing Tiers
 
-**Pro:** simplest for client.
-**Con:** no intermediate upsell points.
-
----
-
-## Viral mechanics
-
-### [FI-038] "Powered by Chat9" in widget
-- Free → branding visible.
-- Premium → remove (upgrade incentive).
-- Each widget = Chat9 advertising on client's site.
-
-### Referral program (idea)
-- Client invites another company → gets free month of Premium.
-- Referral gets 20% discount for first 3 months.
-
-### Public "Built with Chat9" badge
-- Client can add badge to their site.
-- Link to Chat9 in plain view.
+| Feature | Starter (free) | Growth ($19/mo) | Pro ($49/mo) |
+|---------|---------------|-----------------|--------------|
+| Pages in index | 50 pages | 500 pages | 5,000 pages |
+| Conversations | Unlimited | Unlimited | Unlimited |
+| Bots | 1 | 5 | Unlimited |
+| KYC (user identification) | ✅ | ✅ | ✅ |
+| L2 Escalation tickets | ✅ | ✅ | ✅ |
+| Disclosure Controls | ✅ | ✅ | ✅ |
+| Gap Analyzer | ✅ | ✅ | ✅ |
+| "Powered by Chat9" | visible | visible | removable |
+| Status Page integration | ❌ | ✅ | ✅ |
+| Sentry / error tracking | ❌ | ❌ | ✅ |
+| Repository intelligence | ❌ | ❌ | ✅ |
+| Priority support | ❌ | ❌ | ✅ |
 
 ---
 
-## Enterprise (long-term)
+## Key Pricing Principles (from strategy)
 
-- Self-hosted / on-premise version.
-- Own LLM models (not just OpenAI).
-- SSO / SAML.
-- SLA guarantees.
-- Custom integrations.
+**1. Gap Analyzer on all plans**
+It's the #1 differentiator. Hiding it behind paywall hides the main purchase argument.
+Customers who see it will upgrade. Customers who don't see it won't.
+
+**2. Unlimited conversations on all plans**
+Client pays OpenAI directly. Charging for conversations = double-billing with no justification.
+"Unlimited conversations" is both honest and a marketing advantage vs competitors.
+
+**3. Core features on all plans**
+KYC, escalation, disclosure controls, gap analyzer = baseline for production-ready bot.
+"A bot that can't identify users, can't escalate, can't control what it reveals is not production-ready."
+
+**4. Integrations gate the tiers**
+External integrations (Status Page, Sentry, GitHub) have highest switching cost.
+Deeper integration = harder to leave. This is where Growth/Pro justify their price.
 
 ---
 
-## What to do now
+## The Limit-as-Funnel Strategy (demo builder)
 
-1. Keep Free without limits — not enough user base yet.
-2. Implement FI-038 ("Powered by Chat9") — viral marketing.
-3. When 5–10 active clients appear — run interviews: what would they pay for?
-4. After interviews — choose pricing model and launch Stripe.
+Trial limits are conversion mechanisms:
+- "Your docs have 200 pages. The demo indexed 50. Sign up to index everything."
+- "You've asked 20 questions. Upgrade to continue."
+- "Your demo expires in 2 days. Keep it live — upgrade to Starter."
 
 ---
 
-## Competitors (prices for reference)
+## Old Models (archived, for reference)
 
-| Product | Price |
-|---------|-------|
-| Intercom Fin | $29/resolution |
-| DataDome | $1000+/mo |
-| Crisp | $25–95/mo |
-| Tidio | $19–49/mo |
-| Custom Intercom bot | $0.99/resolution |
+### Option A: By sessions
+- Free: 500/mo | Starter $19: 2000/mo | Pro $49: unlimited
 
-Chat9 positioned cheaper — for small B2B teams.
+### Option B: By domains
+- Free: 1 domain | Pro $29: 5 domains | Business $99: unlimited
+
+### Option C: Flat monthly
+- Free limited | Pro $29: all included
+
+---
+
+## Roadmap
+
+**Now:** Build product, get first customers for free, prove value.
+**Month 3–4:** Launch Starter → Growth pricing.
+**Month 6+:** Pro tier with deep integrations.
+**When to charge:** When a customer voluntarily says "this saves us X hours/week."
+
+---
+
+## Notes on Competitors
+
+| Competitor | Price | What we beat |
+|-----------|-------|-------------|
+| DocsBot | $19–99/mo | Unbranded widget: DocsBot = $99/mo; we include in Pro |
+| SiteGPT | $39–259/mo | Cheaper, transparent pricing |
+| Chatbase | 10k+ users | Feedback loop, gap analyzer, daily email |
+| Intercom | $300+/mo | Fraction of the price for the same AI features |

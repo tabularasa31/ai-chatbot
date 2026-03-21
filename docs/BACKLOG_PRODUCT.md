@@ -1,283 +1,310 @@
 # Product Features Backlog
 
 Product features for clients and platform operators.
-RICE prioritization — in `PRODUCT_BACKLOG.md`.
+Last updated: 2026-03-21
 
 ---
 
-## 🟢 ✅ COMPLETED (2026-03-19)
+## 🟢 ✅ COMPLETED
 
 ### [FI-033] Switch to gpt-4o-mini ✅ DONE
-- **Model updated:** gpt-3.5-turbo → gpt-4o-mini
-- **System prompt:** Optimized for new model
-- **Tests:** Updated and passing (135 tests)
-- **Documentation:** Updated (03-tech-stack, 01-overview, 04-phase-breakdown, BACKLOG_TECH_DEBT)
-- **Cost:** Same (~$0.15 per 1M input tokens)
-- **Quality:** Significantly better for reasoning & multilingual
-- **Status:** Deployed to production ✅
+- Model updated: gpt-3.5-turbo → gpt-4o-mini
+- System prompt optimized, tests updated (135 passing)
+- Status: Production ✅
 
 ### [FI-035] Landing Page ✅ DONE
-- **Domain:** getchat9.live/ (live & public)
-- **Design:** Dark modern, fully responsive (mobile-first)
-- **Stack:** Next.js, TailwindCSS, Figma → React
-- **Sections:** Hero, Features (4), Demo widget, Stats, CTA, Footer
-- **CTA wiring:** All "Try for free" buttons → `/signup`
-- **Features:**
-  - Demo widget with real Chat9 (needs API key config)
-  - Animated hero section
-  - Responsive navigation
-  - All animations smooth (framer-motion)
-- **Build:** 0 errors, 0 ESLint warnings
-- **Status:** Production-ready ✅
+- Live: getchat9.live
+- Dark modern, fully responsive, Figma → React
+- Sections: Hero, Features (4), Demo widget, Stats, CTA, Footer
+- Status: Production ✅
 
-### [SECURITY] Protect /review endpoint ✅ DONE
-- **Issue:** `/review` was accessible without auth (contains sensitive client data)
-- **Fix:** Added `/review` to PROTECTED_PATHS in middleware
-- **What /review shows:** Bad answers, client feedback, debug retrieval info
-- **Status:** Enforced via middleware ✅
-
+### [SECURITY] /review endpoint protection ✅ DONE
 ### [SECURITY] CORS Configuration ✅ DONE
-- **Was:** `allow_origins=["*"]` (insecure)
-- **Now:** Whitelist via `CORS_ALLOWED_ORIGINS` env var
-- **Implementation:** Robust parsing with `.strip()` + filtering
-- **Methods:** GET, POST, PUT, DELETE, OPTIONS (restricted)
-- **Headers:** Content-Type, Authorization (restricted)
-- **Dev config:** localhost:3000, getchat9.live
-- **Prod config:** getchat9.live (set on Railway)
-- **Status:** Production-ready ✅
+### [FI-015/016/017] Email verification via Brevo ✅ DONE
+### [FI-018] Token tracking ✅ DONE
+### [FI-014] Admin metrics MVP ✅ DONE
+### [FI-010] 👍/👎 feedback + Review bad answers ✅ DONE
 
 ---
 
-## 🔴 P1 — Doing now
+## 🔴 P1 — Do now (в порядке запуска)
 
-### [FI-005] Greeting message in widget (RICE: 1440)
-- Client sets `greeting_message` in settings.
-- Widget shows it first on open (assistant role).
-- If not set → default template.
-- **Effort:** 1 day.
+> Priority order revised per product strategy (2026-03-21).
+> Focus: build Switching Cost moats first — they work fastest.
 
-### [FI-007] Per-client system prompt (RICE: 1020)
-- Client configures bot personality in dashboard.
-- Different bots for different clients.
-- *(details in BACKLOG_RAG_QUALITY.md)*
+### [FI-038] "Powered by Chat9" widget footer ⚡ 30 MIN
+**Why now:** Passive viral marketing. Each embedded widget = free ad on client's site.
+
+- Add small "Powered by Chat9 →" link at bottom of chat window
+- Style: small gray text, non-intrusive
+- Future: Premium tier removes branding ("Remove branding" as upsell)
+- File: `backend/widget/static/embed.js`
+
+**Effort:** 30 minutes. Do this first.
 
 ---
 
-## 🔴 P1 — Quick wins
+### [FI-032] Document Health Check → Gap Analyzer v1 🌟 CRITICAL DIFFERENTIATOR
+**Why critical:** Core of the product strategy. Gap Analyzer is Chat9's #1 differentiator vs ALL Tier 3 competitors. Must be on all plans. Cursor prompt ready.
 
-### [FI-038] "Powered by Chat9" in widget footer
-**Idea:** Small "Powered by Chat9" line with link to getchat9.live at the bottom of each widget.
+**What it does:**
+- After document upload → GPT-4o-mini analyzes structure
+- Returns warnings: missing sections, poor structure, outdated content, no examples
+- Score 0–100 shown in dashboard with colored badge
+- "Re-check" button per document
 
-**Why it matters:**
-- Each embedded widget = Chat9 advertising on client's site.
-- Works like "Sent from iPhone" — passive viral marketing.
-- Free for us, minimal cost for client.
+**Phase 1 (now):** Structural analysis per document — FI-032 prompt ready.
+
+**Phase 2 (later):** Cross-tenant benchmarks — "products like yours get questions about X, but you have no page on X." Requires data accumulation from multiple tenants.
+
+**Cursor prompt:** `cursor_prompts/FI-032-document-health-check.md`
+**Effort:** 3 days.
+
+---
+
+### [FI-KYC] Know Your Customer — User Identification
+**Why:** Switching Cost moat. KYC means clients' support workflows depend on Chat9.
+Per strategy: "A bot that cannot identify its users is not production-ready at any price point."
+
+**What it does:**
+- Widget can identify users: email, user_id, company name passed via JS embed
+- Logged on every conversation: who asked what
+- Client dashboard shows "user X asked 5 questions this week"
+- Optional: require email before chat starts (toggle in settings)
 
 **Implementation:**
-- Add to `backend/widget/static/embed.js` at bottom of chat window:
-  ```html
-  <div style="...">
-    Powered by <a href="https://getchat9.live" target="_blank">Chat9</a>
-  </div>
-  ```
-- Style: small gray text, doesn't distract from chat.
-- Future Premium can remove ("Remove branding").
+- `data-user-email`, `data-user-id` attributes on embed script
+- Pass through widget → backend → store on Chat/Message
+- Dashboard: user-level view in /logs
 
-**Effort:** 30 minutes.
+**Effort:** 2 days.
 
 ---
 
-### [FI-040] Client Analytics Dashboard
-**Idea:** Simple analytics for client right in dashboard — not charts for charts' sake, but concrete insights on how the bot performs.
+### [FI-ESC] L2 Escalation Tickets
+**Why:** Switching Cost moat. When bot can't answer → creates a ticket instead of "I don't know."
 
-**Concept (compact widget on main page):**
-```
-This week:
-📊 47 sessions  ·  143 messages  ·  avg 3.0 msg/session
-🔢 12,450 tokens  ·  ~$0.04 (gpt-4o-mini)
-🔝 Top topics: CORS (12), Live stream (8), API limits (6)
-⚠️  3 unanswered questions
-```
+**What it does:**
+- Bot detects low-confidence answer (score < threshold)
+- Offers: "Want me to create a support ticket for this?"
+- User confirms → ticket created (internal log or integrated with Zendesk/email)
+- Client dashboard: ticket inbox with unanswered questions
 
-**Metrics for client:**
-- Sessions per period (day / week / month)
-- Unique users (by session_id)
-- Avg messages per session
-- **Tokens used** (sum Chat.tokens_used per period)
-- **Approximate cost** ($) — auto-calculated from known gpt-4o-mini pricing
-- Top 5 topics (question clustering via GPT)
-- % unanswered questions (fallback rate)
-- % with 👎 (bad answers)
+**v1 (internal):** ticket = row in DB, visible in dashboard + email notification to client.
+**v2:** Zendesk/Intercom integration.
 
-**Why it matters:**
-- Client sees real bot value in numbers.
-- Highlights documentation gaps (top unanswered questions).
-- Standard among competitors (Tidio, DocsBot, SiteGPT).
-- Tied to Daily Summary Email (FI-039) — same data.
+**Effort:** 3 days (v1).
+
+---
+
+### [FI-DISC] Disclosure Controls
+**Why:** Switching Cost moat + enterprise requirement.
+Per strategy: "A bot that cannot control what it reveals is not production-ready."
+
+**What it does:**
+- Client defines topics the bot must NOT discuss (pricing, competitors, legal)
+- Bot redirects these to human agent / support email
+- Example: "I can't discuss pricing — please contact sales@company.com"
 
 **Implementation:**
-- Backend: aggregation over `Chat` and `Message` per period, topic clustering via GPT.
-- Frontend: widget on dashboard main page + separate `/analytics` page.
+- `disclosure_rules` JSON on Client model
+- In `build_rag_prompt()` — inject "Do NOT discuss: X, Y, Z. Redirect to: [contact]"
+- Dashboard UI: simple list of restricted topics + redirect contact
 
-**Effort:** 3–4 days.
-**Priority:** P2.
-
----
-
-### [FI-039] Daily Summary Email — "Chat9 as a team member"
-**Idea:** Every morning account owner gets an email report from Chat9 about yesterday — as if the bot is reporting as a support team member.
-
-**Email structure:**
-```
-Chat9 Daily Report — [Client name] — [Date]
-
-Yesterday I answered N questions from your users.
-Tokens used: 4,230 (~$0.01)
-
-Most asked about:
-- [topic 1] — X questions
-- [topic 2] — Y questions
-
-Where I couldn't help (N questions):
-- "[question]" — no info in documentation
-- "[question]" — found partial answer
-
-Recommend adding to documentation:
-- [topic 1]
-- [topic 2]
-
-See you tomorrow,
-Chat9
-```
-
-**Why it matters:**
-- Changes product perception: bot → "team member".
-- Automatically highlights documentation gaps.
-- Client sees value every day — even without opening dashboard.
-- Differentiator — competitors (DocsBot, SiteGPT) don't have this.
-
-**Technical:**
-- Cron job once a day (morning in client timezone).
-- GPT analyzes yesterday's sessions → generates report.
-- Send via Brevo (already configured).
-- Settings: on/off in dashboard, send time.
-
-**Effort:** 2–3 days.
-**Priority:** P2 — after basic features, but before Zendesk integration.
+**Effort:** 2 days.
 
 ---
 
-### [FI-041] Status Page Integration (from Elina's spec)
-**Idea:** Integrate real-time service status (Statuspage.io, Instatus, Freshstatus) into the bot.
+### [FI-008] Hybrid Search: BM25 + RRF
+Cursor prompt ready: `cursor_prompts/FI-019ext-bm25-hybrid-hnsw.md`
+See BACKLOG_RAG_QUALITY.md
 
-When user asks "why is my API broken?" during an incident → bot instantly answers:
-```
-⚠️ There's an active incident affecting the API.
-Started: 14:23 UTC  |  Status: Investigating
-Latest: Engineers identified root cause, deploying fix. ETA 30min
-Learn more: https://status.yourproduct.com
-```
+---
 
-**Why it matters:**
-- Differentiator — competitors lack real-time incident awareness
-- Reduces support tickets by 50%+ during incidents
-- Viral value — people check status more often via bot
-- Potential premium feature
+### [FI-043] PII Redaction (Regex)
+Cursor prompt ready: `cursor_prompts/FI-043-pii-redaction-regex.md`
+See BACKLOG_SECURITY.md
 
-**Technical:**
-- Polling worker every 60 sec (Celery / FastAPI background tasks)
-- Redis cache with TTL 90 sec
-- Query-time relevance check: show incident only if relevant to question
-- Webhook support for Statuspage.io
-- Component-to-topic mapping in tenant dashboard
+---
 
-**Effort:** 5–6 days (polling + caching + relevance + dashboard + tests)
-
-**Priority:** P2 (after gpt-4o-mini and email verification)
-
-**Spec:** See `docs/FEATURE_SPECS_REVIEW.md` and source `status-page-spec.docx`
+### [FI-009] Improved Chunking
+Cursor prompt ready: `cursor_prompts/FI-009-improved-chunking.md`
+See BACKLOG_RAG_QUALITY.md
 
 ---
 
 ## 🟠 P2 — Next sprint
 
-### [FI-009] Improved chunking + metadata (RICE: 420)
-- Overlap + structural chunking.
-- *(details in BACKLOG_RAG_QUALITY.md)*
+### [FI-ONBOARD] Conversational Onboarding (4-question flow)
+**Why:** Reduces time-to-first-value. Per strategy: "4 questions, bot is live. No loading screens."
+
+**Flow:**
+1. "What's your product called and what does it do?" (1 sentence)
+2. "Paste your documentation URL" → parsing starts in background
+3. "What should the bot say when it can't answer?" → disclosure default
+4. "What's your support email for escalations?" → bot is live ✅
+- Questions 5+ (Sentry, KYC, custom style) → appear as optional suggestions over next days
+
+**Design rules:**
+- URL parsing runs in background while next question is asked — no loading screens
+- Live preview inline after URL submitted — tenant can ask bot a question mid-onboarding
+- Every question has "Skip, I'll set this up later"
+- 4 questions max before bot is live
+
+**Effort:** 3–4 days.
+
+---
+
+### [FI-AUTODESIGN] Auto-Brand Widget Matching
+**Why:** Removes the #2 objection in demos: "will it look right on our site?"
+
+**What it does:**
+- When client submits docs URL → extract brand colors + fonts from their site
+- Pre-style the widget to match
+- Show "We matched your brand — does this look right?" (not "please configure")
+
+**Implementation:**
+- CSS variable extraction from client's site (80% accurate on standard sites)
+- Fallback to manual picker if extraction fails
+- Also useful in demo builder (auto-styles the demo bot)
+
+**Effort:** 2–3 days.
+
+---
+
+### [FI-DEMO-BOTS] Public Demo Bots (Stripe, Cloudflare, etc.)
+**Why:** SEO + social proof + product-led growth.
+Per strategy: "a developer searching for Stripe API finds Chat9, gets a better answer than official docs search, understands the product instantly."
+
+**Candidates (criteria: large public docs + technical audience + OpenAPI spec):**
+- Stripe (OpenAPI spec → showcase curl generation)
+- Cloudflare
+- Twilio
+- Supabase (OpenAPI spec)
+
+**Each demo page:**
+- Live bot built on their public docs
+- Auto-refresh every 48h (uses FI-021 background embeddings)
+- Legal disclaimer: "built on public docs, not affiliated with [Company]"
+- Live stats panel (when we have data): conversation count, avg cost, most asked today
+- CTA: "Want this for your own API docs? Start free →"
+- SEO target: "stripe api chatbot", "stripe documentation assistant"
+
+**Effort:** 2 days setup + ongoing maintenance (auto-refresh).
+**Dependency:** FI-021 (background embeddings) must be done first.
+
+---
+
+### [FI-CTA] URL-First Primary CTA on Landing Page
+**Why:** Per strategy: person sees result before deciding to register. Higher conversion.
+
+**Change:**
+- Current: "Start free trial" button
+- New: Input field "Enter your documentation URL →" as main CTA
+
+**Flow after URL submitted:**
+- Parse docs (background) → show preview bot → ask to sign up to keep it
+- Trial limits: 50 pages indexed, 20 questions, 3-day expiry
+- Limits become conversion funnels: "You have 200 pages. Sign up to index all."
+- Email gate: enter work email before demo activates (prevents abuse)
+
+**Effort:** 2–3 days (frontend + backend demo builder).
+
+---
+
+### [FI-ROADMAP] Public Roadmap with Feature Voting
+**Why:** Retains customers, attracts new (SEO), provides free research.
+Per strategy: "customers who vote and see feature move to In Progress do not churn before it ships."
+
+**Statuses:**
+- 🔭 Under consideration — we're aware, not committed
+- 🔜 Planned — committed to this quarter
+- 🚧 In progress — in development now
+- ✅ Shipped — done (with link to changelog)
+
+**Rules:**
+- Weight votes by plan tier (5 Enterprise votes > 200 free votes)
+- Email voters when feature ships — highest-ROI retention touchpoint
+- Never promise specific dates publicly (quarters only)
+- Review monthly, not weekly
+
+**Effort:** 2 days (can use Canny, Frill, or build simple custom version).
+
+---
+
+### [FI-021] Background Embeddings (Async)
+- Sync embedding = timeout on large files
+- Move to background task (FastAPI BackgroundTasks or Celery)
+- **Dependency for FI-DEMO-BOTS**
+- Effort: 2 days | Priority: P2
+
+### [FI-039] Daily Summary Email — "Chat9 as a team member"
+See full spec above (unchanged). Priority: P2.
+
+### [FI-040] Client Analytics Dashboard
+See full spec above (unchanged). Priority: P2.
+
+### [FI-041] Status Page Integration
+See full spec above (unchanged). Priority: P2 (becomes P1 for Growth tier launch).
+
+### [FI-005] Greeting message in widget (RICE: 1440)
+- Client sets `greeting_message` in settings
+- Effort: 1 day | Priority: P2
 
 ### [FI-011 v2] Auto-generation of FAQ from tickets (RICE: 325)
-- Not manual input — auto-generation from uploaded tickets.
-- Client approves/rejects suggested Q&A pairs.
-- USP: "Upload tickets → we'll build FAQ for you."
+Priority: P2.
 
 ### [FI-027] Ticketing systems integration (Zendesk, Intercom, Freshdesk)
-- Level 1: import tickets → embeddings (auto-sync).
-- Level 2: escalation → auto-create ticket if bot doesn't know.
-- Level 3: live handoff to agent.
-- **Key for Western market.**
-- **Effort:** 5–8 days (Level 1).
+- Level 1: import tickets → embeddings
+- Level 2: escalation → auto-create ticket
+- Level 3: live handoff
+- Effort: 5–8 days (Level 1) | Priority: P2
 
-### [FI-014] Admin metrics (already implemented ✅)
-- Summary + per-client table.
-- Tokens, sessions, documents, OpenAI key status.
+### [FI-P2-MULTUPLOAD] Multiple file upload
+Effort: 1 day | Priority: P2
 
-### [FI-012] Admin dashboard (operator view)
-- Extended: global logs, % bad answers per client.
-- Do after data accumulates.
+### [FI-P2-SOFTDELETE] Soft-delete for documents with restore
+Effort: 1 day | Priority: P2
+
+### [FI-P2-CONFIRM-DELETE] Delete confirmation dialog
+Effort: 2 hours | Priority: P2
 
 ---
 
 ## 🟡 P3 — Later
 
+### [FI-LIVE-ANALYTICS-DEMO] Live Analytics Panel on Demo Pages
+- Counter: conversations, cost per conversation, "Most asked today"
+- WebSocket or 5-min polling
+- **Only launch when real data exists** (50+ convos on demo bot)
+- Transparent cost display = differentiation
+- Priority: P3 (wait for demo bots to accumulate data)
+
 ### [FI-001] Telegram integration (RICE: 120)
-- Client enters Telegram Bot Token → webhook → our `/chat`.
+Client enters Telegram Bot Token → webhook → `/chat`.
 
 ### [FI-003/004] Rate limiting per-user
-- Needed together with pricing plans (Stripe).
+Needed together with pricing plans.
 
-### Stripe / pricing plans (RICE: 206)
-- Free / Premium tiers.
-- Limits on requests, documents, tokens.
-
----
-
-## 🧊 Long-term backlog (P3+, when the time comes)
-
-- **Conversation summaries** — GPT summary of each session in logs. Useful when 50+ sessions/day.
-- **Analytics charts** — trend charts by questions, topics, resolution rate.
-- **MCP server** — connect Chat9 as data source for Claude/Cursor via Model Context Protocol.
-- **Multi-user / team** — multiple team members in one account.
-- **Custom widget design** — custom colors, fonts, logo in widget (see BACKLOG_EMBED-PHASE2.md).
-
----
-
-## Added from Grok Review (2026-03-19)
-
-### [FI-P2-MULTUPLOAD] Multiple file upload
-- Currently: one file at a time.
-- Add multi-select + bulk upload with progress.
-- **Effort:** 1 day | **Priority:** P2
-
-### [FI-P2-SOFTDELETE] Soft-delete for documents with restore
-- Currently: hard delete (no undo).
-- Add `deleted_at` + trash view + restore option.
-- Prevents accidental data loss.
-- **Effort:** 1 day | **Priority:** P2
-
-### [FI-P2-CONFIRM-DELETE] Delete confirmation dialog
-- Add confirmation modal before deleting docs/bots.
-- Simple UX improvement, prevents accidents.
-- **Effort:** 2 hours | **Priority:** P2
+### Stripe / pricing plans
+See BACKLOG_MONETIZATION.md for updated model.
 
 ### [FI-P3-WIDGET-THEME] Widget theming (data attributes)
-- `data-theme="dark|light"`, `data-position="left|right"`, `data-color="#007bff"`
-- Already tracked in BACKLOG_EMBED-PHASE2.md
-- **Priority:** P3
+Priority: P3
 
 ### [FI-P3-LARGEPDF] Large PDF progress bar
-- PDFs >50 pages cause slow embedding with no feedback.
-- Add progress indicator + background task.
-- **Effort:** 1-2 days | **Priority:** P3
+Priority: P3
+
+---
+
+## 🧊 Long-term (P3+)
+
+- **Conversation summaries** — GPT summary of each session
+- **Analytics charts** — trend charts
+- **MCP server** — Chat9 as Claude/Cursor data source
+- **Multi-user / team** — multiple members per account
+- **Repository intelligence** — connect GitHub repo for code-aware support (Pro tier)
+- **Customer success hire** — first hire when 20+ paying customers (not sales — customer success)
 
 ---
 

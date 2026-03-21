@@ -77,7 +77,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 #### Day 1: Onboarding
 1. Sign up → Dashboard
 2. Add your OpenAI API key (used for all AI calls)
-3. Copy API key + embed code → paste `<script>` tag on website
+3. Copy embed code from the Dashboard (`public_id` / `ch_…` in the script) → paste before `</body>` (API key stays private for dashboard/API use)
 
 #### Day 2: Upload Documents
 1. Upload PDFs, Markdown, Swagger files

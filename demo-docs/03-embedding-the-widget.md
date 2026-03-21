@@ -2,27 +2,28 @@
 
 ## Basic embed
 
-Add these two lines anywhere in your HTML, before the closing `</body>` tag:
+Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. It loads a small script from your API host and points the iframe UI at the Chat9 app.
+
+Example (placeholders — the Dashboard fills in your real `clientId` and may adjust URLs):
 
 ```html
-<div id="ai-chat-widget" data-api-key="YOUR_API_KEY"></div>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
+<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
+<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-Replace `YOUR_API_KEY` with your API key from the Dashboard.
+`clientId` is your client **public id** (`ch_…`), not the secret API key.
 
 ## What the widget does
 
-- A floating blue chat button appears in the bottom-right corner of your page.
-- When clicked, a chat window opens (380×500px).
-- Users can type questions and receive answers from your documentation.
-- The widget maintains session continuity — follow-up questions work correctly.
+- A floating chat iframe appears in the bottom-right corner of your page (about 400×600px).
+- Users type questions and receive answers from your documentation.
+- Session continuity works across messages in the same visit.
 - The widget works in any language.
 
-## Where to get your API key
+## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Your API key is displayed on the main Dashboard page.
+2. Copy the embed block from the dashboard (same as Settings / main page).
 
 ## CORS
 
@@ -34,4 +35,4 @@ Each user gets a `session_id` stored in their browser. This allows the bot to ma
 
 ## Security
 
-Your API key is used to identify which bot (and which documents) to use for answering questions. Keep it safe — do not share it publicly in open-source repositories. However, it is safe to include it in your website's HTML, as it only grants access to the chat endpoint.
+The **public id** (`ch_…`) in the script URL identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.

@@ -17,12 +17,14 @@
 | **Dashboard** | https://getchat9.live |
 | **API Docs (Swagger)** | https://ai-chatbot-production-6531.up.railway.app/docs |
 
-**Embed on any website:**
+**Embed on any website** (use the snippet from your Dashboard — it matches your `public_id` / URLs):
 
 ```html
-<div id="ai-chat-widget" data-api-key="YOUR_API_KEY"></div>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
+<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
+<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
+
+`clientId` is your client **`public_id`** (`ch_…`) from the Dashboard. If the frontend and API share the same origin (self‑hosted), you can omit `Chat9Config` and use a single script tag with `?clientId=…` only.
 
 ---
 
@@ -32,7 +34,7 @@
 - **Document upload** — PDF, Markdown, Swagger (JSON/YAML), plain text
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only
-- **Embeddable JS widget** — chat bubble on any site (~6KB, no dependencies)
+- **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Dashboard** — Next.js: docs manager, chat logs, feedback, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
@@ -160,11 +162,11 @@ npm run dev
 ## Embed Widget
 
 ```html
-<div id="ai-chat-widget" data-api-key="YOUR_API_KEY"></div>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js"></script>
+<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
+<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-Get your API key from the Dashboard. The widget loads a floating chat bubble; users can ask questions and get answers from your documents.
+Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat`.
 
 ---
 
@@ -176,7 +178,7 @@ Get your API key from the Dashboard. The widget loads a floating chat bubble; us
 | Database | PostgreSQL 15 + pgvector | Railway |
 | AI | OpenAI text-embedding-3-small + gpt-4o-mini | OpenAI API |
 | Frontend | Next.js 14 + TailwindCSS | Vercel |
-| Widget | Vanilla JS | Railway (as /embed.js) |
+| Widget | Vanilla loader + Next.js `/widget` (iframe) | Vercel + Railway (`/embed.js`) |
 | Email | Brevo HTTP API | Brevo |
 
 ---

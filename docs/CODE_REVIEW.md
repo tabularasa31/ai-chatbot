@@ -185,11 +185,7 @@ app.add_middleware(
 
 ### 14. Хардкод URL в embed.js
 
-```5:5:backend/widget/static/embed.js
-  var apiBase = scriptEl ? new URL(scriptEl.src).origin : "https://ai-chatbot-production-6531.up.railway.app";
-```
-
-URL захардкожен. Лучше вынести в конфиг или переменную окружения.
+~~`backend/widget/static/embed.js`~~ удалён: актуальный лоадер — `backend/static/embed.js` (iframe на Next.js `/widget`). Для origin виджета используется `window.Chat9Config.widgetUrl` или origin скрипта.
 
 ---
 

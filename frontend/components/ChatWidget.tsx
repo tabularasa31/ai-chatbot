@@ -7,6 +7,9 @@ interface ChatWidgetProps {
   clientId: string;
 }
 
+const CHAT9_SITE_URL =
+  process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
+
 export function ChatWidget({ clientId }: ChatWidgetProps) {
   const [messages, setMessages] = useState<
     Array<{ role: string; content: string }>
@@ -143,6 +146,17 @@ export function ChatWidget({ clientId }: ChatWidgetProps) {
         <Button onClick={handleSend} disabled={loading}>
           {loading ? "Sending..." : "Send"}
         </Button>
+      </div>
+
+      <div className="mt-2.5 text-center text-[11px] leading-snug">
+        <a
+          href={CHAT9_SITE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-gray-400 no-underline transition-colors hover:text-gray-500 hover:underline"
+        >
+          Powered by Chat9 →
+        </a>
       </div>
     </div>
   );

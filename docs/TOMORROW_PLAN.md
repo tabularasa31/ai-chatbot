@@ -11,9 +11,10 @@ All done and deployed to production.
 | Prompt | Status |
 |--------|--------|
 | `deps-remove-pypdf2-update-openai.md` | ✅ Done |
-| `FI-038-powered-by-chat9-footer.md` | ✅ Done |
+| `FI-038-powered-by-chat9-footer.md` | ✅ Done (`frontend/components/ChatWidget.tsx`) |
 | `migration-pgvector-vector-column-hnsw.md` | ✅ Done |
 | `FI-019-pgvector-cleanup.md` | ✅ Done |
+| `FI-019ext-bm25-hybrid-hnsw.md` (BM25 + RRF) | ✅ Done 2026-03-21 |
 | Forgot password (FI-AUTH) | ✅ Done |
 | Sign in button (FI-UI) | ✅ Done |
 | FI-EMBED-MVP (zero-config widget) | ✅ Done |
@@ -36,4 +37,4 @@ All done and deployed to production.
 
 ---
 
-_Updated: 2026-03-20_
+_Updated: 2026-03-21_

@@ -56,6 +56,7 @@ class DebugInfoResponse(BaseModel):
 
     mode: Literal["vector", "keyword", "hybrid", "none"]
     chunks: list[DebugChunkResponse]
+    validation: Optional[dict] = None
 
 
 class ChatDebugResponse(BaseModel):
@@ -162,6 +163,7 @@ def chat_debug(
             )
             for c in debug_dict["chunks"]
         ],
+        validation=debug_dict.get("validation"),
     )
     return ChatDebugResponse(
         answer=answer,

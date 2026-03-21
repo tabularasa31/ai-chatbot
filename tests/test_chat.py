@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.chat.service import build_rag_prompt, generate_answer
+from backend.chat.service import (
+    FALLBACK_LOW_CONFIDENCE_ANSWER,
+    build_rag_prompt,
+    generate_answer,
+    validate_answer,
+)
 
 
 # --- Unit tests ---
@@ -43,6 +48,22 @@ def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
     assert answer == "I don't have information about this."
     assert tokens == 0
     mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
+    """Empty context → invalid + no_context; no OpenAI call."""
+    result = validate_answer("q", "a", [], api_key="sk-test")
+    assert result == {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
+    mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
+    """OpenAI/JSON errors → validation_skipped, does not raise."""
+    mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
+    result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
+    assert result["is_valid"] is True
+    assert result["confidence"] == 1.0
+    assert result["reason"] == "validation_skipped"
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
@@ -259,7 +280,7 @@ def test_chat_no_embeddings(
         json={"question": "Anything"},
     )
     assert response.status_code == 200
-    assert response.json()["answer"] == "I don't have information about this."
+    assert response.json()["answer"] == FALLBACK_LOW_CONFIDENCE_ANSWER
     assert response.json()["tokens_used"] == 0
 
 

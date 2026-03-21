@@ -1,4 +1,4 @@
-# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v2
+# CURSOR PROMPT: [FI-ESC] L2 Escalation Tickets — v3
 
 ⚠️ **CRITICAL: YOU MUST FOLLOW THE SETUP EXACTLY AS WRITTEN. NO SHORTCUTS.**
 
@@ -46,7 +46,7 @@ This is worse than no bot at all. Every unanswered question is a missed feedback
 
 This feature makes the bot recognize its own failure and act: create a structured escalation ticket automatically, notify the user with a ticket number and response time, and surface the ticket in the tenant's dashboard.
 
-**v1 scope (this prompt):**
+**v3 scope (this prompt):**
 - Internal tickets only (stored in DB, visible in dashboard + email notification to tenant)
 - 4 escalation triggers: low similarity, no documents, manual request, answer rejection
 - **User-facing escalation wording is produced by OpenAI** (same stack as the main bot): the model sees full chat context and writes the reply in the user's language; the backend only orchestrates (tickets, flags, parsing) and relays the model output to the client (see Escalation UX via OpenAI below)
@@ -77,6 +77,7 @@ Build messages (system + developer/tool-style instruction + full recent thread a
 ### System instructions (essence, implement in English in code)
 
 - You are the same assistant as in this chat. Reply only in the same language the user has been using; match their formality.
+- If the conversation is too short to determine language (e.g. only "hi" or "привет"), use the `locale` field from the fact block if present; otherwise default to English.
 - You must communicate: request passed to human support; they will reply by email at `{email}` when known; ask for email when unknown; ticket id and approximate SLA — do not promise exact times.
 - End with an offer to help further in chat ("anything else?") when phase requires it.
 - Do not invent ticket numbers, emails, or SLA — use only values from the fact block.
@@ -276,8 +277,13 @@ def resolve_ticket(
 ) -> EscalationTicket:
     """Mark resolved, store resolution, set resolved_at."""
 
-def get_latest_escalation_ticket_for_chat(chat_id: UUID, db: Session) -> EscalationTicket | None:
-    """Most recent escalation ticket linked to this chat."""
+def get_latest_escalation_ticket_for_chat(chat_id: UUID, db: Session) -> EscalationTicket:
+    """
+    Most recent escalation ticket linked to this chat.
+    MUST raise ValueError (not return None) if no ticket found —
+    callers in escalation_followup_pending branch rely on this invariant.
+    The flag should never be True without a linked ticket; if it is, log and raise.
+    """
 
 def fact_from_ticket(ticket: EscalationTicket, sla_hours: int = 24) -> dict:
     """Serialize ticket_number, sla_hours, user_email, trigger, etc. for the model fact block."""
@@ -322,14 +328,9 @@ def complete_escalation_openai_turn(
     On OpenAI error: return EscalationLlmResult with short English fallback, log exception.
     """
 
-def handoff_user_message_via_openai(
-    ticket: EscalationTicket,
-    chat: Chat,
-    *,
-    phase: EscalationPhase,
-    api_key: str,
-) -> str:
-    """Build chat_messages + fact_json from DB, call complete_escalation_openai_turn, return message_to_user."""
+# NOTE: handoff_user_message_via_openai is NOT used in the pipeline — remove it.
+# The pipeline calls complete_escalation_openai_turn directly everywhere.
+# Do not implement this wrapper; it would be dead code.
 ```
 
 **`routes.py`:**
@@ -338,8 +339,23 @@ def handoff_user_message_via_openai(
 GET  /escalations                      → list tickets (filter: status, priority, date range)
 GET  /escalations/{ticket_id}          → get single ticket
 POST /escalations/{ticket_id}/resolve  → resolve with resolution_text
-POST /chat/{session_id}/escalate       → manual escalation (user clicks "Talk to support")
+POST /chat/{session_id}/escalate       → manual escalation (T-3 / T-4)
 ```
+
+**`POST /chat/{session_id}/escalate` — full contract:**
+
+Request body:
+```json
+{ "user_note": "optional string | null", "trigger": "user_request | answer_rejected" }
+```
+
+Behaviour:
+1. Load chat by session_id, verify ownership
+2. `create_escalation_ticket(trigger=trigger, ...)` — same as inline T-3
+3. Call `complete_escalation_openai_turn()` with `phase=handoff_ask_email` (or `handoff_email_known` if KYC email present)
+4. Set `chat.escalation_awaiting_ticket_id` or `chat.escalation_followup_pending` — same flag logic as T-3
+5. Persist assistant Message in DB
+6. Return `{ "message": message_to_user, "ticket_number": ticket.ticket_number }`
 
 ### 4. Integrate into chat pipeline (`backend/chat/service.py`)
 
@@ -453,6 +469,8 @@ Note: T-4 (answer rejection) handled via `POST /chat/{session_id}/escalate`. Sam
 
 ### 5. Email notification to tenant
 
+Use `FRONTEND_URL` from environment config (not hardcoded `https://getchat9.live`):
+
 ```
 Subject: [Chat9] New support ticket #{ticket_number} — {primary_question[:60]}
 
@@ -464,7 +482,7 @@ Trigger: {trigger}
 Priority: {priority}
 User: {user_email or "anonymous"}
 
-View in dashboard: https://getchat9.live/escalations/{ticket_id}
+View in dashboard: {FRONTEND_URL}/escalations/{ticket_id}
 ```
 
 ### 6. Frontend: Escalations page (`frontend/app/(app)/escalations/page.tsx`)
@@ -539,7 +557,7 @@ git push origin feature/fi-esc-escalation-tickets
 
 ## NOTES
 
-- **Language is emergent, not configured.** Model sees full chat history → writes in user's language automatically. No locale tables, no Accept-Language parsing.
+- **Language is emergent, not configured.** Model sees full chat history → writes in user's language automatically. No locale tables, no Accept-Language parsing. Exception: if conversation is too short to determine language, use `locale` from KYC fact block; if absent, default to English.
 - **v1 is internal only** — tickets in DB, email notification. Zendesk/Intercom = v2.
 - **T-4 (answer rejection)** — separate endpoint, not in main chat pipeline.
 - **Never raise in `complete_escalation_openai_turn()`** — fallback string on error, log exception.
@@ -547,6 +565,8 @@ git push origin feature/fi-esc-escalation-tickets
 - **Email notification**: best-effort — ticket created even if Brevo fails. Log failure.
 - **`[[escalation_ticket:ESC-####]]`** machine token: append in Python if model omitted it, strip in widget display.
 - Works without FI-KYC — `user_email` will be null for anonymous sessions (triggers `handoff_ask_email` phase).
+- **Double token cost at T-1/T-2** is intentional: `generate_answer` + `complete_escalation_openai_turn` are two separate calls. Track both in `tokens_used` and sum them in the return value. This is a known product cost, not a bug.
+- **`get_latest_escalation_ticket_for_chat()` must raise, not return None** — the `escalation_followup_pending` branch has no None-guard. Invariant: this flag is only set when a ticket exists.
 
 ---
 

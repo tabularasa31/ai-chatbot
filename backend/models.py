@@ -3,7 +3,9 @@ from __future__ import annotations
 import datetime as dt
 import enum
 import uuid
+from typing import Optional
 
+from pydantic import BaseModel, Field
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -68,6 +70,23 @@ class MessageFeedback(str, enum.Enum):
     none = "none"
     up = "up"
     down = "down"
+
+
+class UserContext(BaseModel):
+    """Identity fields from a signed KYC token; stored on Chat and used in the pipeline."""
+
+    model_config = {"extra": "ignore"}
+
+    user_id: str = Field(..., min_length=1)
+    email: Optional[str] = None
+    name: Optional[str] = None
+    plan_tier: Optional[str] = Field(
+        default=None,
+        description='e.g. "free" | "starter" | "growth" | "pro" | "enterprise"',
+    )
+    audience_tag: Optional[str] = None
+    company: Optional[str] = None
+    locale: Optional[str] = None
 
 
 class User(Base):
@@ -137,6 +156,10 @@ class Client(Base):
         default=generate_public_id,
     )
     openai_api_key = Column(String(500), nullable=True, default=None)
+    kyc_secret_key = Column(String(512), nullable=True)
+    kyc_secret_key_previous = Column(String(512), nullable=True)
+    kyc_secret_previous_expires_at = Column(DateTime, nullable=True)
+    kyc_secret_key_hint = Column(String(8), nullable=True)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
@@ -261,6 +284,7 @@ class Chat(Base):
         index=True,
     )
     session_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    user_context = Column(JSON, nullable=True)
     tokens_used = Column(
         Integer,
         nullable=False,
@@ -321,6 +345,40 @@ class Message(Base):
     )
 
     chat = relationship("Chat", back_populates="messages")
+
+
+class UserSession(Base):
+    """Cross-session history for identified users (v2+); v1 only persists schema."""
+
+    __tablename__ = "user_sessions"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    client_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(String(255), nullable=False, index=True)
+    email = Column(String(255), nullable=True)
+    name = Column(String(255), nullable=True)
+    plan_tier = Column(String(64), nullable=True)
+    audience_tag = Column(String(128), nullable=True)
+    session_started_at = Column(DateTime, nullable=False, default=_utcnow)
+    session_ended_at = Column(DateTime, nullable=True)
+    conversation_turns = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+Index(
+    "ix_user_sessions_client_user",
+    UserSession.client_id,
+    UserSession.user_id,
+)
 
 
 # Note: pgvector HNSW index is created via migration, not here

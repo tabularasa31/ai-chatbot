@@ -1,24 +1,110 @@
 """Widget API routes for embedded chat (public, clientId-based)."""
 
+import logging
 import uuid
-from typing import Annotated, Optional
+from typing import Any, Annotated, Dict, Literal, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from openai import APIError
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
+from backend.clients.service import get_kyc_decrypted_keys_for_validation
 from backend.core.db import get_db
 from backend.core.limiter import limiter, widget_public_rate_limit_key
-from backend.models import Client
+from backend.core.security import validate_kyc_token_detail
+from backend.models import Chat, Client, UserContext
+
+logger = logging.getLogger(__name__)
 
 widget_router = APIRouter(prefix="/widget", tags=["widget"])
+
+
+class WidgetSessionInitRequest(BaseModel):
+    api_key: str = Field(..., min_length=1)
+    identity_token: Optional[str] = None
+
+
+class WidgetSessionInitResponse(BaseModel):
+    session_id: uuid.UUID
+    mode: Literal["identified", "anonymous"]
 
 
 @widget_router.get("/health")
 def widget_health() -> dict[str, str]:
     """Health check for widget endpoints."""
     return {"status": "ok"}
+
+
+def _resolve_widget_identity(
+    client: Client,
+    identity_token: Optional[str],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Returns (stored_user_context dict, None) on success, or (None, failure_reason).
+    Never logs PII.
+    """
+    if not identity_token or not identity_token.strip():
+        return None, None
+    keys = get_kyc_decrypted_keys_for_validation(client)
+    if not keys:
+        return None, "no_secret_configured"
+    last_reason = "bad_signature"
+    for sk, _label in keys:
+        raw_ctx, err = validate_kyc_token_detail(
+            identity_token.strip(), sk, client.public_id
+        )
+        if raw_ctx is not None:
+            try:
+                validated = UserContext.model_validate(raw_ctx)
+                return validated.model_dump(), None
+            except Exception:
+                return None, "malformed_context"
+        if err:
+            last_reason = err
+    return None, last_reason
+
+
+@widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
+@limiter.limit("20/minute", key_func=widget_public_rate_limit_key)
+def widget_session_init(
+    request: Request,
+    body: Annotated[WidgetSessionInitRequest, Body()],
+    db: Session = Depends(get_db),
+) -> WidgetSessionInitResponse:
+    """
+    Start a widget session. Optional signed identity_token enables identified mode.
+    """
+    client = (
+        db.query(Client)
+        .filter(Client.api_key == body.api_key.strip())
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Invalid API key")
+    if not client.is_active:
+        raise HTTPException(status_code=403, detail="Client is not active")
+
+    session_id = uuid.uuid4()
+    mode: Literal["identified", "anonymous"] = "anonymous"
+
+    ctx, fail_reason = _resolve_widget_identity(client, body.identity_token)
+    if ctx is not None:
+        chat = Chat(
+            client_id=client.id,
+            session_id=session_id,
+            user_context=ctx,
+        )
+        db.add(chat)
+        db.commit()
+        mode = "identified"
+        logger.info("kyc_session_identified: client_id=%s", client.id)
+    elif body.identity_token and body.identity_token.strip():
+        reason = fail_reason or "invalid_token"
+        logger.info("kyc_validation_failed: reason=%s", reason)
+
+    return WidgetSessionInitResponse(session_id=session_id, mode=mode)
 
 
 @widget_router.post("/chat")
@@ -59,6 +145,7 @@ def widget_chat(
             session_id=sid,
             db=db,
             api_key=client.openai_api_key,
+            user_context=None,
         )
     except APIError:
         raise HTTPException(

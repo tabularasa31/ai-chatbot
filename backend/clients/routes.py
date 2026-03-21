@@ -11,15 +11,20 @@ from backend.clients.schemas import (
     ClientMeResponse,
     ClientResponse,
     CreateClientRequest,
+    KycSecretGeneratedResponse,
+    KycStatusResponse,
     UpdateClientRequest,
     ValidateApiKeyResponse,
 )
 from backend.clients.service import (
     create_client,
     delete_client,
+    generate_kyc_secret_for_client,
     get_client_by_api_key,
     get_client_by_id,
     get_client_by_user,
+    get_kyc_status,
+    rotate_kyc_secret,
     update_client,
 )
 from backend.core.db import get_db
@@ -75,6 +80,36 @@ def get_my_client(
         is_admin=current_user.is_admin,
         is_verified=current_user.is_verified,
     )
+
+
+@clients_router.post("/me/kyc/secret", response_model=KycSecretGeneratedResponse)
+def create_kyc_secret_route(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KycSecretGeneratedResponse:
+    """Generate and store KYC signing secret (returned once)."""
+    _client, raw = generate_kyc_secret_for_client(current_user.id, db)
+    return KycSecretGeneratedResponse(secret_key=raw)
+
+
+@clients_router.post("/me/kyc/rotate", response_model=KycSecretGeneratedResponse)
+def rotate_kyc_secret_route(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KycSecretGeneratedResponse:
+    """Rotate signing secret; previous key remains valid for 1 hour."""
+    _client, raw = rotate_kyc_secret(current_user.id, db)
+    return KycSecretGeneratedResponse(secret_key=raw)
+
+
+@clients_router.get("/me/kyc/status", response_model=KycStatusResponse)
+def kyc_status_route(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KycStatusResponse:
+    """Return KYC secret presence and identified-session metrics."""
+    data = get_kyc_status(current_user.id, db)
+    return KycStatusResponse(**data)
 
 
 @clients_router.patch("/me", response_model=ClientResponse)

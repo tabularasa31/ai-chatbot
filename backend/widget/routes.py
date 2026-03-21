@@ -1,4 +1,7 @@
-"""Widget routes for embed functionality."""
+"""Widget routes for embed functionality.
+
+Session init and chat live on ``backend.routes.widget`` (included from ``main``).
+"""
 
 from fastapi import APIRouter
 

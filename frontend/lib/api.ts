@@ -60,6 +60,18 @@ export type ClientMeResponse = ClientResponse & {
   is_verified: boolean;
 };
 
+export type KycStatusResponse = {
+  has_secret: boolean;
+  identified_session_rate_7d: number;
+  last_identified_session: string | null;
+  masked_secret_hint: string | null;
+};
+
+export type KycSecretResponse = {
+  secret_key: string;
+  message: string;
+};
+
 export type AdminMetricsSummary = {
   total_users: number;
   total_clients: number;
@@ -226,6 +238,30 @@ export const api = {
       const responseData = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
       return responseData as ClientResponse;
+    },
+  },
+  kyc: {
+    async generateSecret(): Promise<KycSecretResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/kyc/secret`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate KYC secret"));
+      return data as KycSecretResponse;
+    },
+    async getStatus(): Promise<KycStatusResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/kyc/status`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get KYC status"));
+      return data as KycStatusResponse;
+    },
+    async rotateSecret(): Promise<KycSecretResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/kyc/rotate`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate KYC secret"));
+      return data as KycSecretResponse;
     },
   },
   documents: {

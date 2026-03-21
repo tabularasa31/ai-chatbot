@@ -64,3 +64,19 @@ class ValidateApiKeyResponse(BaseModel):
 
     client_id: uuid.UUID
     name: str
+
+
+class KycSecretGeneratedResponse(BaseModel):
+    """One-time plaintext signing secret after generate or rotate."""
+
+    secret_key: str
+    message: str = "Store this securely. It will not be shown again."
+
+
+class KycStatusResponse(BaseModel):
+    """KYC / widget identity configuration status."""
+
+    has_secret: bool
+    identified_session_rate_7d: float
+    last_identified_session: Optional[datetime] = None
+    masked_secret_hint: Optional[str] = None

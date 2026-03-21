@@ -61,3 +61,20 @@
 **Вопрос по FI-021:** делать через FastAPI `BackgroundTasks` (просто, без зависимостей) или через Celery (надёжнее, но сложнее)? При текущем Railway-хостинге BackgroundTasks — оптимальный выбор.
 
 **Вопрос по тестированию:** проверить FI-EMBED-MVP на реальном домене (`getchat9.live`) — ждёт действия от admin.
+
+---
+
+## 🐛 Баг: NetworkError при сохранении OpenAI key
+
+**Симптом:** При добавлении OpenAI API key в дашборде — `NetworkError when attempting to fetch resource`.
+
+**Это не бэкенд-ошибка** — запрос не дошёл до сервера. Браузерная ошибка сети.
+
+**Проверить:**
+1. Vercel → Settings → Environment Variables → есть ли `NEXT_PUBLIC_API_URL`?
+   - Должно быть: `https://ваш-backend.railway.app`
+   - Проверить для обоих окружений: `main` (dev) и `deploy` (production)
+2. Если переменная есть — открыть DevTools → Network → найти упавший `PATCH /clients/me` → посмотреть полный URL и статус ответа
+3. Если URL выглядит как `/clients/me` без домена — переменная не подтянулась → redeploy на Vercel после проверки
+
+**Скорее всего:** `NEXT_PUBLIC_API_URL` не задан для `deploy` ветки, поэтому `BASE_URL = ""` и запрос идёт на относительный путь которого нет на Vercel.

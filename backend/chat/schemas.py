@@ -63,6 +63,7 @@ class ChatResponse(BaseModel):
     source_documents: list[UUID]
     tokens_used: int
     validation: Optional[dict] = None
+    chat_ended: bool = False
 
 
 class MessageResponse(BaseModel):

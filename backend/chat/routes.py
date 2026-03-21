@@ -24,6 +24,8 @@ from backend.chat.schemas import (
     MessageFeedbackResponse,
     MessageResponse,
 )
+from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
+from backend.escalation.service import perform_manual_escalation
 from backend.chat.service import (
     get_chat_history,
     get_session_logs,
@@ -34,7 +36,7 @@ from backend.chat.service import (
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.auth.middleware import get_current_user
-from backend.models import Chat, Message, MessageFeedback, MessageRole, User
+from backend.models import Chat, EscalationTrigger, Message, MessageFeedback, MessageRole, User
 
 
 class DebugRequest(BaseModel):
@@ -76,6 +78,7 @@ def chat(
     body: ChatRequest,
     db: Annotated[Session, Depends(get_db)],
     x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_browser_locale: Annotated[Optional[str], Header(alias="X-Browser-Locale")] = None,
 ) -> ChatResponse:
     """
     Chat endpoint (PUBLIC — no JWT, uses X-API-Key).
@@ -98,12 +101,13 @@ def chat(
     session_id = body.session_id or uuid.uuid4()
 
     try:
-        answer, document_ids, tokens_used = process_chat_message(
+        answer, document_ids, tokens_used, chat_ended = process_chat_message(
             client_id=client.id,
             question=body.question,
             session_id=session_id,
             db=db,
             api_key=client.openai_api_key,
+            browser_locale=x_browser_locale,
         )
     except APIError:
         raise HTTPException(
@@ -116,6 +120,7 @@ def chat(
         session_id=session_id,
         source_documents=document_ids,
         tokens_used=tokens_used,
+        chat_ended=chat_ended,
     )
 
 
@@ -170,6 +175,46 @@ def chat_debug(
         tokens_used=tokens_used,
         debug=debug_resp,
     )
+
+
+@chat_router.post("/{session_id}/escalate", response_model=ManualEscalateResponse)
+@limiter.limit("30/minute")
+def chat_escalate(
+    request: Request,
+    session_id: uuid.UUID,
+    body: ManualEscalateRequest,
+    db: Annotated[Session, Depends(get_db)],
+    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+) -> ManualEscalateResponse:
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    client = get_client_by_api_key(x_api_key, db)
+    if not client:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    if not client.openai_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        )
+    trig = (
+        EscalationTrigger.user_request
+        if body.trigger == "user_request"
+        else EscalationTrigger.answer_rejected
+    )
+    try:
+        msg, tnum = perform_manual_escalation(
+            db,
+            client,
+            session_id,
+            api_key=client.openai_api_key,
+            user_note=body.user_note,
+            trigger=trig,
+        )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    except APIError:
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable")
+    return ManualEscalateResponse(message=msg, ticket_number=tnum)
 
 
 @chat_router.get("/sessions", response_model=ChatSessionListResponse)

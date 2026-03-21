@@ -67,6 +67,9 @@ export function Navbar() {
               <Link href="/review" className={navLinkClass}>
                 Review
               </Link>
+              <Link href="/escalations" className={navLinkClass}>
+                Escalations
+              </Link>
               <Link href="/debug" className={navLinkClass}>
                 Debug
               </Link>

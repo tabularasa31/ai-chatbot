@@ -7,6 +7,9 @@ import { ChatWidget } from "@/components/ChatWidget";
 function WidgetContent() {
   const searchParams = useSearchParams();
   const clientId = searchParams.get("clientId");
+  const locale =
+    searchParams.get("locale") ||
+    (typeof window !== "undefined" ? navigator.language : null);
 
   if (!clientId) {
     return (
@@ -32,7 +35,7 @@ function WidgetContent() {
         background: "#fff",
       }}
     >
-      <ChatWidget clientId={clientId} />
+      <ChatWidget clientId={clientId} locale={locale} />
     </div>
   );
 }

@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-21
+**Last updated:** 2026-03-21 (FI-ESC)
 
 ---
 
@@ -47,6 +47,7 @@
 | RAG pipeline | Retrieve → prompt → generate → persist messages | `backend/chat/service.py` `process_chat_message`, `POST /chat` (X-API-Key) |
 | **FI-034** | LLM answer validation; fallback on low confidence | `validate_answer()`, `POST /chat/debug` → `validation` |
 | **FI-043** | Regex PII redaction before OpenAI; original in `Message.content` | `backend/chat/pii.py` |
+| **FI-ESC v1** | L2 escalation: tickets (DB + tenant email), triggers (low similarity, no chunks, human phrase, manual), OpenAI JSON handoff UX, `chat_ended` on `POST /chat` | `backend/escalation/`, `process_chat_message`, `POST /chat/{session_id}/escalate`, JWT `GET/POST /escalations*`, migration `fi_esc_v1` |
 | Sessions / logs / feedback | Session list, logs, thumbs, ideal answer, bad answers | `GET /chat/sessions`, logs, feedback, bad-answers |
 
 ---
@@ -57,8 +58,10 @@
 |-----------|--------------|------------|
 | **FI-EMBED-MVP** | iframe + `public_id`, `/embed.js`, public chat | `GET /embed.js`, `POST /widget/chat`, dashboard embed code |
 | **FI-KYC** | `POST /widget/session/init` with optional `identity_token` → `chats.user_context` | `backend/routes/widget.py`, `backend/core/security.py` |
+| **FI-ESC (widget)** | Optional `locale` on session init and `/widget/chat`; `POST /widget/escalate` (public); response includes `chat_ended` | `backend/routes/widget.py`, `frontend/app/widget/escalate/route.ts`, `ChatWidget.tsx` |
 | **FI-038** | “Powered by Chat9” footer | `frontend/components/ChatWidget.tsx` |
-| Widget rate limits | 20/min on `POST /widget/session/init` and `POST /widget/chat` | slowapi, `backend/routes/widget.py` |
+| Widget rate limits | 20/min on `POST /widget/session/init`, `/widget/chat`, `/widget/escalate` | slowapi, `backend/routes/widget.py` |
+| **embed.js** | Passes `navigator.language` as `locale` into iframe URL | `backend/static/embed.js` |
 
 ---
 
@@ -67,7 +70,7 @@
 | ID / area | What shipped | Where |
 |-----------|--------------|-------|
 | **FI-UI** | Dark brand, navbar, auth pages, post-login transition | `frontend/components/Navbar.tsx`, auth pages, `AuthTransition` |
-| Dashboard, Documents, Logs, Review, Debug | Main app sections | `frontend/app/(app)/` |
+| Dashboard, Documents, Logs, Review, Debug, **Escalations** | Main app sections; **Escalations** = ticket inbox (FI-ESC) | `frontend/app/(app)/`, `/escalations` |
 | Landing | Marketing page, Sign in | `frontend/app/` (landing routes) |
 
 ---
@@ -92,6 +95,7 @@
 | [`BACKLOG_PRODUCT.md`](./BACKLOG_PRODUCT.md) | Queue & RICE; done items marked ~~Done~~ |
 | [`README.md`](../README.md) | Runbook, short API overview |
 | [`qa/PRODUCT-QA-TEST-PLAN.md`](./qa/PRODUCT-QA-TEST-PLAN.md) | Manual QA (Russian) |
+| [`qa/FI-ESC-escalation-tickets-qa.md`](./qa/FI-ESC-escalation-tickets-qa.md) | FI-ESC escalation — чеклист для тестировщика |
 
 ---
 

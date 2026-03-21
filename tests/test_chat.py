@@ -143,6 +143,7 @@ def test_chat_success(
     assert "session_id" in data
     assert data["source_documents"] == [str(doc.id)]
     assert data["tokens_used"] == 50
+    assert data.get("chat_ended") is False
 
 
 def test_chat_creates_messages_in_db(
@@ -283,8 +284,12 @@ def test_chat_no_embeddings(
         json={"question": "Anything"},
     )
     assert response.status_code == 200
-    assert response.json()["answer"] == FALLBACK_LOW_CONFIDENCE_ANSWER
-    assert response.json()["tokens_used"] == 0
+    data = response.json()
+    assert data["answer"].startswith(FALLBACK_LOW_CONFIDENCE_ANSWER)
+    assert "A support ticket was created for you." in data["answer"]
+    assert "[[escalation_ticket:ESC-0001]]" in data["answer"]
+    assert data["tokens_used"] == 15
+    assert data.get("chat_ended") is False
 
 
 def test_chat_uses_context(

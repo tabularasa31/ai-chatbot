@@ -141,12 +141,20 @@ npm run dev
 ### Chat
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/chat` | RAG chat (X-API-Key header) |
+| POST | `/chat` | RAG chat (X-API-Key header); response includes `chat_ended`; optional header `X-Browser-Locale` |
+| POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
 | GET | `/chat/sessions` | List chat sessions (JWT) |
 | GET | `/chat/logs/session/{id}` | Full session log (JWT) |
 | GET | `/chat/bad-answers` | Answers marked 👎 (JWT) |
 | POST | `/chat/messages/{id}/feedback` | Set 👍/👎 + ideal answer (JWT) |
 | POST | `/chat/debug` | Debug retrieval (JWT) |
+
+### Escalations (FI-ESC)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/escalations` | List support tickets for the tenant (JWT); optional query `status` = `open`, `in_progress`, or `resolved` |
+| GET | `/escalations/{id}` | Ticket detail (JWT) |
+| POST | `/escalations/{id}/resolve` | Mark resolved with `resolution_text` (JWT) |
 
 ### Admin
 | Method | Path | Description |
@@ -170,7 +178,7 @@ npm run dev
 <script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat`.
+Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; response includes `chat_ended`). Optional identified sessions: `POST /widget/session/init` with `locale`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
 
 ---
 

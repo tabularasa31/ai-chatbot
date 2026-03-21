@@ -115,8 +115,9 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ✅ Document upload (PDF, Markdown, Swagger, Text)  
 ✅ RAG-powered chat API (gpt-4o-mini)  
 ✅ pgvector native search with HNSW index + BM25 hybrid (RRF) on PostgreSQL  
-✅ Zero-config embeddable widget (iframe, no CORS issues)  
-✅ Chat history & session logging  
+✅ Zero-config embeddable widget (iframe, no CORS issues)
+✅ Optional widget user identification (FI-KYC): HMAC token + session init
+✅ Chat history & session logging
 ✅ Feedback system (👍/👎 + ideal answer)  
 ✅ Token usage tracking  
 ✅ Debug mode  

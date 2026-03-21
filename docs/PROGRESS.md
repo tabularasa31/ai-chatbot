@@ -7,6 +7,12 @@
 
 ## ✅ COMPLETED (2026-03-21)
 
+### Identity / widget (FI-KYC)
+- ✅ **FI-KYC** — идентификация пользователя виджета через **краткоживущий HMAC-токен** (не через `data-*` в embed): `POST /widget/session/init` (`api_key`, опционально `identity_token`), ответ `session_id` + `mode` (`identified` | `anonymous`); контекст в `chats.user_context` (JSON); в LLM попадают только `plan_tier`, `locale`, `audience_tag`
+- **Секрет подписи:** `POST/GET/POST` `/clients/me/kyc/secret|status|rotate` (шифрование как у OpenAI key; ротация с перекрытием старого ключа 1 ч); UI: `frontend/app/(app)/settings/widget/page.tsx`, `api.kyc`, пункт навигации **Widget API**
+- **Код:** `backend/core/security.py` (`generate_kyc_token`, `validate_kyc_token`), миграция `fi_kyc_user_identification`, таблица `user_sessions` (схема под v2), тесты `tests/test_kyc.py`
+- Промпт `cursor_prompts/FI-KYC-user-identification.md` **удалён** после внедрения (описание здесь и в `BACKLOG_PRODUCT.md`)
+
 ### Widget / marketing
 - ✅ **FI-038** — футер виджета «Powered by Chat9 →» в `frontend/components/ChatWidget.tsx` (ссылка на сайт; prod: iframe-виджет через `backend/static/embed.js` + `/widget`)
 - Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed (`clientId` / `public_id`)
@@ -25,7 +31,7 @@
   - Промпт `cursor_prompts/FI-009-improved-chunking.md` удалён после внедрения; описание в `BACKLOG_PRODUCT.md` / `BACKLOG_RAG_QUALITY.md`
 - ✅ **FI-032 (phase 1)** — document health check: `health_status`, `run_document_health_check`, QA-чеклист `docs/qa/FI-032-document-health-check.md`; промпт `cursor_prompts/FI-032-document-health-check.md` удалён.
 - ✅ **FI-034** — LLM-based answer validation (`feature/fi-034-answer-validation`): после `generate_answer()` вызывается `validate_answer()` (gpt-4o-mini, `temperature=0`); при `is_valid=false` и `confidence < 0.4` ответ заменяется на fallback; ошибки валидации не блокируют ответ (`validation_skipped`). Результат в `POST /chat/debug` → `debug.validation`. Промпт `cursor_prompts/FI-034-llm-answer-validation.md` удалён после внедрения.
-- ✅ **FI-043** — PII redaction Stage 1 (regex): модуль `backend/chat/pii.py` (`redact` / `redact_text`); в `process_chat_message()` и `run_debug()` перед вызовами OpenAI текст вопроса маскируется (email, телефоны, типичные API-ключи, номера карт → `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]`). В `Message.content` сохраняется **оригинал**. Те же регулярки применяются к вопросу в `validate_answer()` (второй вызов LLM). Тесты: `tests/chat/test_pii.py`. После merge в `main` промпт `cursor_prompts/FI-043-pii-redaction-regex.md` удалить по дисциплине репозитория.
+- ✅ **FI-043** — PII redaction Stage 1 (regex): модуль `backend/chat/pii.py` (`redact` / `redact_text`); в `process_chat_message()` и `run_debug()` перед вызовами OpenAI текст вопроса маскируется (email, телефоны, типичные API-ключи, номера карт → `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]`). В `Message.content` сохраняется **оригинал**. Те же регулярки применяются к вопросу в `validate_answer()` (второй вызов LLM). Тесты: `tests/chat/test_pii.py`. Промпт `FI-043` удалить из `cursor_prompts/` после merge в `main`, если ещё лежит.
 
 ---
 
@@ -133,6 +139,7 @@
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)
+- ✅ Optional **identified widget sessions** (FI-KYC): HMAC identity token + `/widget/session/init`, signing secret in dashboard
 - ✅ Widget footer «Powered by Chat9 →» (FI-038)
 - ✅ Dashboard (documents, logs, feedback, analytics)
 - ✅ Document health check (phase 1): `health_status`, GPT-structured analysis, re-check API
@@ -179,7 +186,7 @@ Git branches:
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-043-pii-redaction-regex.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `FI-KYC-user-identification.md`; `ci-cd-github-actions.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-043-pii-redaction-regex.md`; `FI-DISC-disclosure-controls.md`; `FI-ESC-escalation-tickets.md`; `ci-cd-github-actions.md`.
 
 ---
 

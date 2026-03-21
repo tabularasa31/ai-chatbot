@@ -30,6 +30,7 @@
 **Widget:**
 - Embeddable chat widget (iframe)
 - Send question → get answer
+- Optional **identified sessions** (FI-KYC): server-signed token at `POST /widget/session/init`; context on `chats.user_context`
 - Basic styling (no customization)
 
 **Database:**
@@ -76,12 +77,14 @@ users
 ```sql
 clients
 ├─ id (PK, UUID)
-├─ public_id (VARCHAR(32), UNIQUE — used in widget/embed URLs)
+├─ public_id (VARCHAR(20), UNIQUE — used in widget/embed URLs, ch_…)
 ├─ user_id (FK → users, NOT NULL)
 ├─ name (VARCHAR, NOT NULL)
 ├─ api_key (UNIQUE, NOT NULL, 32-char random)
-├─ openai_api_key (VARCHAR, NOT NULL — client's own OpenAI key)
+├─ openai_api_key (VARCHAR, encrypted, nullable — client's OpenAI key)
+├─ kyc_secret_key (+ previous + previous_expires_at + hint) — FI-KYC signing secrets (encrypted)
 ├─ settings (JSONB, default={})
+├─ is_active (BOOLEAN)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 ```
@@ -130,11 +133,21 @@ chats
 ├─ id (PK, UUID)
 ├─ client_id (FK → clients, NOT NULL)
 ├─ session_id (UUID, unique per visitor session)
+├─ user_context (JSONB, nullable — FI-KYC identified session payload fields)
+├─ tokens_used (INTEGER)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 
 Indexes:
 └─ (client_id)
+```
+
+#### User sessions (FI-KYC schema placeholder)
+```sql
+user_sessions   -- v2+ cross-session analytics; table exists, app logic minimal in v1
+├─ id, client_id, user_id (tenant's id), email, name, plan_tier, audience_tag
+├─ session_started_at, session_ended_at, conversation_turns, created_at
+└─ INDEX (client_id, user_id)
 ```
 
 #### Chat Messages

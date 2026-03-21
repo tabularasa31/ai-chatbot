@@ -9,6 +9,8 @@ Based on: Chat9 Product Strategy (March 2026)
 **Don't charge yet** — focus on product-market fit and first 10 customers.
 Build the product that's expensive to leave, then monetize.
 
+**Shipped (product, not billing):** Widget **KYC v1** (HMAC identity token, `POST /widget/session/init`, dashboard signing secret) — 2026-03-21. Escalation / disclosure / gap analyzer remain on the roadmap as listed below.
+
 ---
 
 ## Pricing Model (Revised per Strategy)

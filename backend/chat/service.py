@@ -94,7 +94,26 @@ def retrieve_context(
     return (chunk_texts, document_ids, scores, mode)
 
 
-def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
+def _user_context_prompt_line(ctx: dict | None) -> str | None:
+    """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4)."""
+    if not ctx:
+        return None
+    parts: list[str] = []
+    for key in ("plan_tier", "locale", "audience_tag"):
+        val = ctx.get(key)
+        if val is not None and str(val).strip() != "":
+            parts.append(f"{key}={val}")
+    if not parts:
+        return None
+    return "[User context: " + ", ".join(parts) + "]"
+
+
+def build_rag_prompt(
+    question: str,
+    context_chunks: list[str],
+    *,
+    user_context_line: str | None = None,
+) -> str:
     """
     Build prompt from question + retrieved context chunks.
 
@@ -114,6 +133,8 @@ def build_rag_prompt(question: str, context_chunks: list[str]) -> str:
         "- For \"which setting\" / \"какая настройка\" or similar: name the exact setting/field as in docs; cite where it is (section/page/menu) if the context contains it.\n"
         "- Answer in the SAME LANGUAGE as the question (e.g. Russian if asked in Russian).\n"
     )
+    if user_context_line:
+        system_rules = f"{system_rules}\n{user_context_line}\n"
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -135,6 +156,7 @@ def generate_answer(
     context_chunks: list[str],
     *,
     api_key: str,
+    user_context_line: str | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI gpt-4o-mini with RAG prompt.
@@ -150,7 +172,9 @@ def generate_answer(
     if not context_chunks:
         return ("I don't have information about this.", 0)
 
-    prompt = build_rag_prompt(question, context_chunks)
+    prompt = build_rag_prompt(
+        question, context_chunks, user_context_line=user_context_line
+    )
     openai_client = get_openai_client(api_key)
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
@@ -212,6 +236,7 @@ def process_chat_message(
     db: Session,
     *,
     api_key: str,
+    user_context: dict | None = None,
 ) -> tuple[str, list[uuid.UUID], int]:
     """
     Full RAG pipeline: search → prompt → generate → save → return.
@@ -228,6 +253,18 @@ def process_chat_message(
     # Redact PII before sending to OpenAI (embeddings, completion, validation).
     redacted_question, _was_redacted = redact(question)
 
+    existing_chat = (
+        db.query(Chat)
+        .filter(Chat.session_id == session_id, Chat.client_id == client_id)
+        .first()
+    )
+    effective_user_ctx: dict | None = None
+    if existing_chat and existing_chat.user_context:
+        effective_user_ctx = existing_chat.user_context
+    elif user_context:
+        effective_user_ctx = user_context
+    user_context_line = _user_context_prompt_line(effective_user_ctx)
+
     # 1. Retrieve context (chunks + document_ids)
     chunk_texts, doc_ids, _scores, _mode = retrieve_context(
         client_id, redacted_question, db, api_key, top_k=5
@@ -236,7 +273,10 @@ def process_chat_message(
 
     # 2. Generate answer
     answer, tokens_used = generate_answer(
-        redacted_question, chunk_texts, api_key=api_key
+        redacted_question,
+        chunk_texts,
+        api_key=api_key,
+        user_context_line=user_context_line,
     )
 
     # 3. Validate answer (non-blocking on LLM/JSON errors)
@@ -255,7 +295,11 @@ def process_chat_message(
         Chat.client_id == client_id,
     ).first()
     if not chat:
-        chat = Chat(client_id=client_id, session_id=session_id)
+        chat = Chat(
+            client_id=client_id,
+            session_id=session_id,
+            user_context=user_context,
+        )
         db.add(chat)
         db.commit()
         db.refresh(chat)

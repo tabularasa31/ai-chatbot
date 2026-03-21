@@ -70,6 +70,9 @@ export function Navbar() {
               <Link href="/debug" className={navLinkClass}>
                 Debug
               </Link>
+              <Link href="/settings/widget" className={navLinkClass}>
+                Widget API
+              </Link>
             </div>
             <div className="flex items-center gap-4">
               {userEmail && (

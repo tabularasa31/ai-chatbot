@@ -57,7 +57,7 @@ app.state.limiter = limiter
 def upload_doc():
     pass
 
-@limiter.limit("500/minute")
+@limiter.limit("20/minute")
 @app.post("/widget/chat")
 def widget_chat():
     pass
@@ -66,9 +66,9 @@ def widget_chat():
 **Endpoints to protect:**
 - `/auth/*` — 5 attempts/minute
 - `/clients/validate/*` — 20/minute
-- `/search` — 100/minute
-- `/widget/chat` — 500/minute
-- `/chat` — 100/minute
+- `/search` — 30/minute (see `backend/search/routes.py`)
+- `/widget/chat` and `/widget/session/init` — **20/minute** (see `backend/routes/widget.py`, `slowapi`)
+- `/chat` — 30/minute
 
 **Effort:** 1 day
 

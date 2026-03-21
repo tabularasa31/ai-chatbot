@@ -1,0 +1,269 @@
+"""Tests for KYC widget identity (HMAC tokens, session init, secret endpoints)."""
+
+from __future__ import annotations
+
+import json
+import secrets
+import uuid
+
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from backend.core.security import (
+    generate_kyc_token,
+    validate_kyc_token,
+    validate_kyc_token_detail,
+)
+from backend.models import Chat, Client
+from tests.conftest import register_and_verify_user
+
+
+def test_generate_kyc_token_validate_returns_user_context() -> None:
+    secret = secrets.token_hex(32)
+    tenant = "ch_roundtrip0000001"
+    payload = {
+        "user_id": "user-1",
+        "tenant_id": tenant,
+        "plan_tier": "pro",
+        "locale": "en",
+    }
+    token = generate_kyc_token(payload, secret)
+    out = validate_kyc_token(token, secret, tenant)
+    assert out is not None
+    assert out["user_id"] == "user-1"
+    assert out["plan_tier"] == "pro"
+    assert out["locale"] == "en"
+    assert "tenant_id" not in out
+    assert "exp" not in out
+
+
+def test_validate_kyc_token_expired_returns_none() -> None:
+    secret = secrets.token_hex(32)
+    tenant = "ch_expired00000001"
+    token = generate_kyc_token(
+        {"user_id": "u", "tenant_id": tenant},
+        secret,
+        ttl_seconds=-120,
+    )
+    assert validate_kyc_token(token, secret, tenant) is None
+    _ctx, reason = validate_kyc_token_detail(token, secret, tenant)
+    assert reason == "expired"
+
+
+def test_validate_kyc_token_tampered_payload_returns_none() -> None:
+    secret = secrets.token_hex(32)
+    tenant = "ch_tamper000000001"
+    token = generate_kyc_token({"user_id": "u", "tenant_id": tenant}, secret)
+    b64, sig = token.split(".", 1)
+    flip = "b" if b64[-1] != "b" else "a"
+    bad = f"{b64[:-1]}{flip}.{sig}"
+    assert validate_kyc_token(bad, secret, tenant) is None
+    _ctx, reason = validate_kyc_token_detail(bad, secret, tenant)
+    assert reason == "bad_signature"
+
+
+def test_validate_kyc_token_wrong_tenant_returns_none() -> None:
+    secret = secrets.token_hex(32)
+    tenant = "ch_correct0000001"
+    token = generate_kyc_token({"user_id": "u", "tenant_id": tenant}, secret)
+    assert validate_kyc_token(token, secret, "ch_other0000000001") is None
+
+
+def test_validate_kyc_token_missing_user_id_returns_none() -> None:
+    secret = secrets.token_hex(32)
+    tenant = "ch_nouid0000000001"
+    now = __import__("time").time()
+    raw = json.dumps(
+        {"tenant_id": tenant, "exp": int(now) + 300, "iat": int(now)},
+        sort_keys=True,
+    )
+    import base64
+    import hashlib
+    import hmac
+
+    b64 = (
+        base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+    )
+    sig = hmac.new(
+        secret.encode("utf-8"),
+        b64.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    token = f"{b64}.{sig}"
+    assert validate_kyc_token(token, secret, tenant) is None
+
+
+def test_kyc_secret_endpoint_returns_key_once(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-secret@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "KYC Co"},
+    )
+    assert cr.status_code == 201
+
+    r1 = client.post("/clients/me/kyc/secret", headers={"Authorization": f"Bearer {token}"})
+    assert r1.status_code == 200
+    body = r1.json()
+    assert "secret_key" in body
+    assert len(body["secret_key"]) == 64
+
+    r2 = client.post("/clients/me/kyc/secret", headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 409
+
+
+def test_widget_session_init_identified_and_anonymous(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-widget@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget KYC Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+    client_uuid = uuid.UUID(cr.json()["id"])
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    id_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id, "plan_tier": "growth"},
+        secret_hex,
+    )
+    init_ok = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert init_ok.status_code == 200
+    data_ok = init_ok.json()
+    assert data_ok["mode"] == "identified"
+    sid = uuid.UUID(data_ok["session_id"])
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.session_id == sid, Chat.client_id == client_uuid)
+        .first()
+    )
+    assert chat is not None
+    assert chat.user_context is not None
+    assert chat.user_context.get("user_id") == "ext-42"
+
+    init_anon = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key},
+    )
+    assert init_anon.status_code == 200
+    assert init_anon.json()["mode"] == "anonymous"
+    sid_anon = uuid.UUID(init_anon.json()["session_id"])
+    assert (
+        db_session.query(Chat)
+        .filter(Chat.session_id == sid_anon)
+        .first()
+        is None
+    )
+
+    bad_token = generate_kyc_token(
+        {"user_id": "x", "tenant_id": public_id},
+        secret_hex,
+    )
+    b64, sig = bad_token.split(".", 1)
+    init_bad = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": f"{b64[:-2]}xx.{sig}"},
+    )
+    assert init_bad.status_code == 200
+    assert init_bad.json()["mode"] == "anonymous"
+
+
+def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
+    client: TestClient,
+    db_session: Session,
+    caplog,
+) -> None:
+    import logging
+
+    token = register_and_verify_user(client, db_session, email="kyc-fallback@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fallback Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+    public_id = cr.json()["public_id"]
+
+    bad = generate_kyc_token(
+        {"user_id": "u", "tenant_id": public_id},
+        secret_hex,
+    )
+    b64, sig = bad.split(".", 1)
+    tampered = f"{b64[:-1]}X.{sig}"
+
+    with caplog.at_level(logging.INFO, logger="backend.routes.widget"):
+        r = client.post(
+            "/widget/session/init",
+            json={"api_key": api_key, "identity_token": tampered},
+        )
+    assert r.status_code == 200
+    assert r.json()["mode"] == "anonymous"
+    assert any("kyc_validation_failed" in rec.message for rec in caplog.records)
+
+
+def test_kyc_rotate_returns_new_secret(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-rotate@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Rotate Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+
+    r1 = client.post("/clients/me/kyc/secret", headers={"Authorization": f"Bearer {token}"})
+    assert r1.status_code == 200
+    old_secret = r1.json()["secret_key"]
+    me = client.get("/clients/me", headers={"Authorization": f"Bearer {token}"})
+    public_id = me.json()["public_id"]
+
+    r2 = client.post("/clients/me/kyc/rotate", headers={"Authorization": f"Bearer {token}"})
+    assert r2.status_code == 200
+    new_secret = r2.json()["secret_key"]
+    assert new_secret != old_secret
+
+    tok_old = generate_kyc_token(
+        {"user_id": "u", "tenant_id": public_id},
+        old_secret,
+    )
+    tok_new = generate_kyc_token(
+        {"user_id": "u", "tenant_id": public_id},
+        new_secret,
+    )
+    assert validate_kyc_token(tok_new, new_secret, public_id) is not None
+    assert validate_kyc_token(tok_old, new_secret, public_id) is None
+    assert validate_kyc_token(tok_old, old_secret, public_id) is not None
+
+    overlap = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": tok_old},
+    )
+    assert overlap.status_code == 200
+    assert overlap.json()["mode"] == "identified"

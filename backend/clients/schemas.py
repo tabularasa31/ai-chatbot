@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -80,3 +80,18 @@ class KycStatusResponse(BaseModel):
     identified_session_rate_7d: float
     last_identified_session: Optional[datetime] = None
     masked_secret_hint: Optional[str] = None
+
+
+DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
+
+
+class DisclosureConfigResponse(BaseModel):
+    """Tenant-wide bot response detail level (all end-users)."""
+
+    level: DisclosureLevelLiteral
+
+
+class UpdateDisclosureConfigRequest(BaseModel):
+    """PUT body for /clients/me/disclosure."""
+
+    level: DisclosureLevelLiteral

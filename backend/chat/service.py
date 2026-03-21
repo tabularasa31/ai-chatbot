@@ -7,7 +7,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -15,7 +15,8 @@ PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
 from backend.core.openai_client import get_openai_client
-from backend.models import Chat, Document, Message, MessageFeedback, MessageRole
+from backend.disclosure_config import resolve_level
+from backend.models import Chat, Client, Message, MessageFeedback, MessageRole
 from backend.search.service import search_similar_chunks
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,29 @@ logger = logging.getLogger(__name__)
 RETRIEVAL_VECTOR_CONFIDENCE = 0.70
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
+
+DISCLOSURE_HARD_LIMITS = (
+    "Hard limits (always follow):\n"
+    "- Never reveal another user's identity or data in any response.\n"
+    "- Never confirm or deny specific internal investigation details about security incidents.\n"
+    "- Never state that a problem has been resolved unless resolution is confirmed in the source data.\n"
+)
+
+DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
+    "detailed": "Answer with full technical detail. Include all relevant information.",
+    "standard": (
+        "Answer in plain language. Do NOT include: internal file paths, stack trace details, "
+        "error tracking system names (e.g. Sentry), number of affected users, "
+        "internal team or developer names, or version regression details. "
+        "Link to public documentation or status pages, not internal tools."
+    ),
+    "corporate": (
+        "Answer in polished, non-technical language suitable for a business audience. "
+        "Acknowledge issues exist and are being addressed, but do NOT include: ETAs, "
+        "technical details, status page links, or internal system information. "
+        "If an issue is ongoing, offer to connect the user with the support team."
+    ),
+}
 
 VALIDATION_PROMPT = """You are a fact-checker for a support chatbot.
 
@@ -113,6 +137,7 @@ def build_rag_prompt(
     context_chunks: list[str],
     *,
     user_context_line: str | None = None,
+    disclosure_config: dict[str, Any] | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -124,7 +149,14 @@ def build_rag_prompt(
     Returns:
         Formatted prompt string for GPT.
     """
+    level = resolve_level(disclosure_config)
+    level_instruction = DISCLOSURE_LEVEL_INSTRUCTIONS.get(
+        level, DISCLOSURE_LEVEL_INSTRUCTIONS["standard"]
+    )
+    disclosure_block = f"[Response level: {level}]\n{level_instruction}"
+
     system_rules = (
+        f"{DISCLOSURE_HARD_LIMITS}\n"
         "You are a technical support agent for the client's product (SaaS, API, docs).\n"
         "Rules:\n"
         "- Answer based ONLY on the provided context. If context mentions the topic, you MUST answer from it.\n"
@@ -135,6 +167,7 @@ def build_rag_prompt(
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
+    system_rules = f"{system_rules}\n{disclosure_block}\n"
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -157,6 +190,7 @@ def generate_answer(
     *,
     api_key: str,
     user_context_line: str | None = None,
+    disclosure_config: dict[str, Any] | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI gpt-4o-mini with RAG prompt.
@@ -173,7 +207,10 @@ def generate_answer(
         return ("I don't have information about this.", 0)
 
     prompt = build_rag_prompt(
-        question, context_chunks, user_context_line=user_context_line
+        question,
+        context_chunks,
+        user_context_line=user_context_line,
+        disclosure_config=disclosure_config,
     )
     openai_client = get_openai_client(api_key)
     response = openai_client.chat.completions.create(
@@ -265,6 +302,11 @@ def process_chat_message(
         effective_user_ctx = user_context
     user_context_line = _user_context_prompt_line(effective_user_ctx)
 
+    client_row = db.query(Client).filter(Client.id == client_id).first()
+    disclosure_cfg: dict[str, Any] | None = None
+    if client_row and isinstance(client_row.disclosure_config, dict):
+        disclosure_cfg = client_row.disclosure_config
+
     # 1. Retrieve context (chunks + document_ids)
     chunk_texts, doc_ids, _scores, _mode = retrieve_context(
         client_id, redacted_question, db, api_key, top_k=5
@@ -277,6 +319,7 @@ def process_chat_message(
         chunk_texts,
         api_key=api_key,
         user_context_line=user_context_line,
+        disclosure_config=disclosure_cfg,
     )
 
     # 3. Validate answer (non-blocking on LLM/JSON errors)
@@ -349,8 +392,15 @@ def run_debug(
     chunk_texts, document_ids, scores, mode = retrieve_context(
         client_id, redacted_question, db, api_key, top_k=5
     )
+    client_row = db.query(Client).filter(Client.id == client_id).first()
+    disclosure_cfg: dict[str, Any] | None = None
+    if client_row and isinstance(client_row.disclosure_config, dict):
+        disclosure_cfg = client_row.disclosure_config
     answer, tokens_used = generate_answer(
-        redacted_question, chunk_texts, api_key=api_key
+        redacted_question,
+        chunk_texts,
+        api_key=api_key,
+        disclosure_config=disclosure_cfg,
     )
 
     chunks_debug = [

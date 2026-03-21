@@ -11,9 +11,11 @@ from backend.clients.schemas import (
     ClientMeResponse,
     ClientResponse,
     CreateClientRequest,
+    DisclosureConfigResponse,
     KycSecretGeneratedResponse,
     KycStatusResponse,
     UpdateClientRequest,
+    UpdateDisclosureConfigRequest,
     ValidateApiKeyResponse,
 )
 from backend.clients.service import (
@@ -23,9 +25,11 @@ from backend.clients.service import (
     get_client_by_api_key,
     get_client_by_id,
     get_client_by_user,
+    get_disclosure_config_for_user,
     get_kyc_status,
     rotate_kyc_secret,
     update_client,
+    update_disclosure_config_for_user,
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter
@@ -110,6 +114,27 @@ def kyc_status_route(
     """Return KYC secret presence and identified-session metrics."""
     data = get_kyc_status(current_user.id, db)
     return KycStatusResponse(**data)
+
+
+@clients_router.get("/me/disclosure", response_model=DisclosureConfigResponse)
+def get_disclosure_route(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DisclosureConfigResponse:
+    """Tenant-wide response detail level (same for all users and channels)."""
+    data = get_disclosure_config_for_user(current_user.id, db)
+    return DisclosureConfigResponse(**data)
+
+
+@clients_router.put("/me/disclosure", response_model=DisclosureConfigResponse)
+def put_disclosure_route(
+    body: UpdateDisclosureConfigRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DisclosureConfigResponse:
+    """Update tenant-wide disclosure level."""
+    data = update_disclosure_config_for_user(current_user.id, body.level, db)
+    return DisclosureConfigResponse(**data)
 
 
 @clients_router.patch("/me", response_model=ClientResponse)

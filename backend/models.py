@@ -160,6 +160,7 @@ class Client(Base):
     kyc_secret_key_previous = Column(String(512), nullable=True)
     kyc_secret_previous_expires_at = Column(DateTime, nullable=True)
     kyc_secret_key_hint = Column(String(8), nullable=True)
+    disclosure_config = Column(JSON, nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)

@@ -192,8 +192,7 @@ def test_create_embeddings_allowed_for_verified_user(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()
     assert data["document_id"] == doc_id
-    assert data["chunks_created"] == len(chunks)
-    assert data["status"] == "ready"
+    assert data["status"] == "embedding"

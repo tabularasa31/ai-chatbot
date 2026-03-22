@@ -37,9 +37,10 @@ Key recommendations added to this backlog:
 - `.github/workflows/ci.yml`: pytest + coverage + ruff + eslint.
 - Add tests for `build_rag_prompt()` and `validate/{api_key}`.
 
-### [Deps] Remove PyPDF2, update openai
-- Remove `PyPDF2==3.0.1` (duplicate of pypdf).
-- Update `openai==1.6.0` → 1.60+.
+### ~~[Deps] Remove PyPDF2, update openai~~ ✅ Done (2026-03-20)
+- ~~Remove `PyPDF2==3.0.1` (duplicate of pypdf).~~
+- ~~Update `openai==1.6.0` → 1.60+.~~
+- Мигрировано на `pypdf>=4.0.0` + `openai>=1.70.0` (ветка `chore/deps-pypdf2-openai`).
 
 ### ~~[Quick] GPT-3.5-turbo → gpt-4o-mini~~ ✅ Done (FI-033)
 - ~~One line: `model = "gpt-4o-mini"`.~~

@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ClientResponse } from "@/lib/api";
+import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const APP_URL =
@@ -20,7 +21,6 @@ function DashboardContent() {
   const [error, setError] = useState("");
   const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [copiedApiKey, setCopiedApiKey] = useState(false);
-  const [copiedEmbed, setCopiedEmbed] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -79,12 +79,6 @@ function DashboardContent() {
       return `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n<script src="${scriptUrl}"></script>`;
     }
     return `<script src="${scriptUrl}"></script>`;
-  }
-
-  function copyEmbedCode() {
-    navigator.clipboard.writeText(getEmbedSnippet());
-    setCopiedEmbed(true);
-    setTimeout(() => setCopiedEmbed(false), 2000);
   }
 
   if (loading) {
@@ -165,18 +159,15 @@ function DashboardContent() {
           Add this snippet to your website HTML, right before{" "}
           <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code>:
         </p>
-        <pre className="bg-slate-100 p-4 rounded-lg text-sm text-slate-800 overflow-x-auto mb-3">
-          {getEmbedSnippet()}
-        </pre>
+        <CodeBlockWithCopy
+          code={getEmbedSnippet()}
+          copyLabel="Copy embed code"
+          tone="light"
+          preClassName="text-sm mb-3"
+        />
         <p className="text-slate-400 text-xs mb-4">
           One-line embed — works on any domain. No CORS setup needed.
         </p>
-        <button
-          onClick={copyEmbedCode}
-          className="px-4 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 transition-colors"
-        >
-          {copiedEmbed ? "Copied!" : "Copy embed code"}
-        </button>
       </div>
 
     </div>

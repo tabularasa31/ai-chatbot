@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { api, getToken, saveToken } from "@/lib/api";
-import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
+import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -12,6 +12,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [verificationSent, setVerificationSent] = useState(false);
 
   useEffect(() => {
     const token = getToken();
@@ -28,13 +29,39 @@ export default function SignupPage() {
     try {
       const { token } = await api.auth.register(email, password);
       saveToken(token);
-      router.replace("/dashboard?verification_sent=1");
+      setVerificationSent(true);
     } catch (err) {
       const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
       setError(typeof msg === "string" ? msg : "Registration failed");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (verificationSent) {
+    return (
+      <AuthCardCentered>
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-14 h-14 rounded-full bg-[#E879F9]/10 flex items-center justify-center">
+            <svg className="w-7 h-7 text-[#E879F9]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25H4.5a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5H4.5a2.25 2.25 0 00-2.25 2.25m19.5 0-9.75 6.75L2.25 6.75" />
+            </svg>
+          </div>
+          <h1 className={authStyles.headingSm}>Check your inbox</h1>
+          <p className={authStyles.subtext}>
+            We sent a verification link to{" "}
+            <span className="text-[#E879F9] font-medium">{email}</span>.
+            Click the link to activate your account.
+          </p>
+          <p className="text-[#FAF5FF]/40 text-xs">
+            Didn&apos;t get the email? Check your spam folder.
+          </p>
+          <Link href="/login" className={authStyles.ctaLink}>
+            Go to sign in
+          </Link>
+        </div>
+      </AuthCardCentered>
+    );
   }
 
   return (

@@ -18,6 +18,7 @@ function DashboardContent() {
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [copiedApiKey, setCopiedApiKey] = useState(false);
   const [copiedEmbed, setCopiedEmbed] = useState(false);
 
@@ -38,6 +39,9 @@ function DashboardContent() {
             const msg = err instanceof Error ? err.message : "";
             if (msg.includes("already exists") || msg.includes("409")) {
               client = await api.clients.getMe();
+            } else if (msg.toLowerCase().includes("email not verified") || msg.includes("403")) {
+              setEmailNotVerified(true);
+              return;
             } else {
               setError(msg || "Failed to create client");
               return;
@@ -48,7 +52,12 @@ function DashboardContent() {
         setPublicId(client.public_id ?? null);
         setHasOpenaiKey(client.has_openai_key ?? false);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load");
+        const msg = err instanceof Error ? err.message : "Failed to load";
+        if (msg.toLowerCase().includes("email not verified") || msg.includes("403")) {
+          setEmailNotVerified(true);
+        } else {
+          setError(msg);
+        }
       } finally {
         setLoading(false);
       }
@@ -82,6 +91,24 @@ function DashboardContent() {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
+      </div>
+    );
+  }
+
+  if (emailNotVerified) {
+    return (
+      <div className="max-w-md mx-auto mt-16 text-center space-y-4">
+        <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto">
+          <svg className="w-7 h-7 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25H4.5a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5H4.5a2.25 2.25 0 00-2.25 2.25m19.5 0-9.75 6.75L2.25 6.75" />
+          </svg>
+        </div>
+        <h2 className="text-lg font-semibold text-slate-800">Verify your email to continue</h2>
+        <p className="text-slate-500 text-sm">
+          We sent a verification link to{userEmail ? <> <span className="font-medium text-slate-700">{userEmail}</span></> : " your email"}.
+          Click the link in the email to activate your account.
+        </p>
+        <p className="text-slate-400 text-xs">Didn&apos;t get it? Check your spam folder.</p>
       </div>
     );
   }

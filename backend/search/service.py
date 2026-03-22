@@ -13,6 +13,10 @@ from backend.models import Document, Embedding
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 
+# Number of vector candidates to pre-fetch before BM25 scoring.
+# BM25 runs only on this pool (already in memory) — never queries all client chunks.
+BM25_CANDIDATE_POOL = 200
+
 
 def embed_query(query: str, *, api_key: str) -> list[float]:
     """
@@ -33,34 +37,24 @@ def embed_query(query: str, *, api_key: str) -> list[float]:
     return response.data[0].embedding
 
 
-def bm25_search_chunks(
-    client_id: uuid.UUID,
+def _bm25_score_candidates(
+    candidates: list[Embedding],
     query: str,
     top_k: int,
-    db: Session,
 ) -> list[tuple[Embedding, float]]:
     """
-    BM25 full-text search over chunk_text.
+    BM25 scoring over a pre-loaded list of Embedding objects.
+    No DB access — operates on objects already in memory.
     Returns normalized scores in [0, 1].
     """
     query_tokens = query.lower().split()
-    if not query_tokens:
+    if not query_tokens or not candidates:
         return []
 
-    embeddings = (
-        db.query(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.client_id == client_id)
-        .filter(Embedding.chunk_text.isnot(None))
-        .all()
-    )
-    if not embeddings:
-        return []
-
-    corpus = [(emb.chunk_text or "").lower().split() for emb in embeddings]
+    corpus = [(emb.chunk_text or "").lower().split() for emb in candidates]
     bm25 = BM25Okapi(corpus)
     raw_scores = [float(s) for s in bm25.get_scores(query_tokens)]
-    scored = list(zip(embeddings, raw_scores))
+    scored = list(zip(candidates, raw_scores))
     scored.sort(key=lambda x: x[1], reverse=True)
     scored = scored[:top_k]
     if not scored:
@@ -70,6 +64,27 @@ def bm25_search_chunks(
     if max_s == min_s:
         return [(emb, 1.0) for emb, _ in scored]
     return [(emb, (s - min_s) / (max_s - min_s)) for emb, s in scored]
+
+
+def bm25_search_chunks(
+    client_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: Session,
+) -> list[tuple[Embedding, float]]:
+    """
+    BM25 full-text search over chunk_text for a client.
+    Fetches all client chunks from DB, then delegates scoring to _bm25_score_candidates.
+    Public API preserved for direct use and tests.
+    """
+    embeddings = (
+        db.query(Embedding)
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.client_id == client_id)
+        .filter(Embedding.chunk_text.isnot(None))
+        .all()
+    )
+    return _bm25_score_candidates(embeddings, query, top_k)
 
 
 def reciprocal_rank_fusion(
@@ -139,17 +154,20 @@ def search_similar_chunks(
     if "sqlite" in db_url:
         return _python_cosine_search(client_id, query_vector, top_k, db)
 
-    vector_results = _pgvector_search(client_id, query_vector, top_k * 2, db)
-    bm25_results = bm25_search_chunks(client_id, query, top_k * 2, db)
+    # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
+    # BM25 then re-ranks only these candidates — no separate full-table scan.
+    vector_candidates = _pgvector_search(client_id, query_vector, BM25_CANDIDATE_POOL, db)
 
-    if not vector_results and not bm25_results:
+    if not vector_candidates:
         return []
-    if not bm25_results:
-        return vector_results[:top_k]
-    if not vector_results:
-        return bm25_results[:top_k]
 
-    return reciprocal_rank_fusion(vector_results, bm25_results, top_k=top_k)
+    bm25_results = _bm25_score_candidates(vector_candidates, query, top_k * 2)
+    vector_for_rrf = vector_candidates[:top_k * 2]
+
+    if not bm25_results:
+        return vector_for_rrf[:top_k]
+
+    return reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k)
 
 
 def _python_cosine_search(

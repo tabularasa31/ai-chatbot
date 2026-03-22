@@ -12,6 +12,18 @@ from sqlalchemy.orm import Session
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentStatus, Embedding
 
+# Optimal chunking parameters per document type.
+# Tune these values here when re-evaluating retrieval quality.
+CHUNKING_CONFIG: dict[str, dict[str, int]] = {
+    "swagger": {"chunk_size": 500, "overlap_sentences": 0},
+    "markdown": {"chunk_size": 700, "overlap_sentences": 1},
+    "pdf":      {"chunk_size": 1000, "overlap_sentences": 1},
+    # future types
+    "logs":     {"chunk_size": 300, "overlap_sentences": 0},
+    "code":     {"chunk_size": 600, "overlap_sentences": 1},
+}
+_CHUNKING_DEFAULT: dict[str, int] = {"chunk_size": 700, "overlap_sentences": 1}
+
 
 class ChunkInfo(TypedDict):
     """One text chunk with position in the original document."""
@@ -143,7 +155,8 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
 
-    chunks = chunk_text(doc.parsed_text)
+    cfg = CHUNKING_CONFIG.get(doc.file_type.value, _CHUNKING_DEFAULT)
+    chunks = chunk_text(doc.parsed_text, **cfg)
     if not chunks:
         return []
 

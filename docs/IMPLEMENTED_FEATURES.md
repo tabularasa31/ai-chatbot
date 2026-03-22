@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-21 (FI-ESC)
+**Last updated:** 2026-03-22 (TD-033, FI-021)
 
 ---
 
@@ -33,7 +33,9 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
 | Upload / parse | PDF (pypdf), MD, Swagger, text | `backend/documents/`, `POST /documents` |
-| **FI-009** | Sentence-aware chunking, chunk metadata | `backend/embeddings/` (chunking), migrations |
+| **FI-009** | Sentence-aware chunking, chunk metadata | `backend/embeddings/service.py` (`chunk_text`), migrations |
+| **TD-033** | Per-doc-type chunking: `swagger` 500 chars/0 overlap, `markdown` 700/1, `pdf` 1000/1; `CHUNKING_CONFIG` dict — tune in one place, no client UI | `backend/embeddings/service.py` |
+| **FI-021** | Async embeddings: `202 Accepted` immediately, `BackgroundTasks` with own DB session, status `ready → embedding → ready/error`; frontend polls every 2 s | `backend/embeddings/routes.py`, `service.py`, `frontend/app/(app)/documents/page.tsx` |
 | Embeddings | text-embedding-3-small, pgvector / SQLite test fallback | `backend/embeddings/`, `POST /embeddings/documents/{id}` |
 | **FI-032 ph.1** | Document health check (GPT), `health_status`, re-check | `GET`/`POST /documents/{id}/health*`, `docs/qa/FI-032-document-health-check.md` |
 

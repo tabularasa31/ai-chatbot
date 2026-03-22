@@ -100,7 +100,10 @@ def test_create_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    # Use the same chunking config as the service uses for markdown documents
+    from backend.embeddings.service import CHUNKING_CONFIG
+    md_cfg = CHUNKING_CONFIG.get("markdown", {"chunk_size": 700, "overlap_sentences": 1})
+    chunks = chunk_text(md_content.decode(), **md_cfg)
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -111,12 +114,12 @@ def test_create_embeddings_success(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 202
     data = response.json()
     assert data["document_id"] == doc_id
-    assert data["chunks_created"] == len(chunks)
-    assert data["status"] == "ready"
+    assert data["status"] == "embedding"
 
+    # Background task ran synchronously; verify chunks were created via the list endpoint
     list_resp = client.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
@@ -124,12 +127,15 @@ def test_create_embeddings_success(
     assert list_resp.status_code == 200
     assert list_resp.json()["total_chunks"] == len(chunks)
 
-    rows = (
-        db_session.query(Embedding)
-        .filter(Embedding.document_id == uuid.UUID(doc_id))
-        .order_by(Embedding.created_at.asc())
-        .all()
-    )
+    # Verify metadata fields via a fresh session (background task uses its own session)
+    from backend.core.db import SessionLocal
+    with SessionLocal() as fresh_db:
+        rows = (
+            fresh_db.query(Embedding)
+            .filter(Embedding.document_id == uuid.UUID(doc_id))
+            .order_by(Embedding.created_at.asc())
+            .all()
+        )
     assert len(rows) == len(chunks)
     for row in rows:
         m = row.metadata_json
@@ -231,7 +237,14 @@ def test_create_embeddings_openai_error(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert response.status_code == 503
+    assert response.status_code == 202
+    # Background task ran synchronously and set doc status to "error" after OpenAI failure
+    doc_resp = client.get(
+        f"/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert doc_resp.status_code == 200
+    assert doc_resp.json()["status"] == "error"
 
 
 @patch("backend.embeddings.service.get_openai_client")
@@ -267,21 +280,18 @@ def test_create_embeddings_reruns_delete_old(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert r1.status_code == 200
-    n1 = r1.json()["chunks_created"]
+    assert r1.status_code == 202
 
     r2 = client.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert r2.status_code == 200
-    n2 = r2.json()["chunks_created"]
-    assert n2 == n1
+    assert r2.status_code == 202
     list_resp = client.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert list_resp.json()["total_chunks"] == n1
+    assert list_resp.json()["total_chunks"] == len(chunks)
 
 
 @patch("backend.embeddings.service.get_openai_client")

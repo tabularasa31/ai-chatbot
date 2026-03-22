@@ -9,6 +9,12 @@
 
 ### Bug fixes & tech debt
 
+- ✅ **FI-021: Background embeddings** (async, `BackgroundTasks`)
+  - `POST /embeddings/documents/{id}` возвращает `202 Accepted` немедленно; генерация чанков и вызов OpenAI уходят в `FastAPI.BackgroundTasks` с собственной DB-сессией (`SessionLocal`)
+  - Новый статус `DocumentStatus.embedding` (синий badge): `ready → embedding → ready|error`
+  - Фронтенд: polling `GET /documents/{id}` каждые 2 сек до `ready` или `error` (таймаут 120 сек); live-обновление статуса без перезагрузки страницы
+  - Изменения: `backend/models.py`, `backend/embeddings/service.py` (`run_embeddings_background`), `backend/embeddings/routes.py`, `frontend/lib/api.ts` (`getById`), `frontend/app/(app)/documents/page.tsx`
+
 - ✅ **FIX: race condition in `generate_ticket_number`** (`fix/ticket-number-race-condition`, merged)
   - Два конкурентных запроса для одного клиента могли оба вычислить одинаковый номер тикета → `IntegrityError` → 500 для одного пользователя
   - `generate_ticket_number()`: `SELECT FOR UPDATE SKIP LOCKED` (advisory lock на PostgreSQL; SQLite игнорирует) + regex `^ESC-(\d+)$` вместо `startswith + int(num[4:])`
@@ -144,8 +150,7 @@
 1. **Test FI-EMBED-MVP on real domain** — waiting for domain admin to update embed script
 
 ### Backlog (P1–P2):
-2. **FI-021** — Background embeddings (async processing)
-3. **FI-026** — CI/CD pipeline (GitHub Actions: pytest + ruff + eslint on PR)
+2. **FI-026** — CI/CD pipeline (GitHub Actions: pytest + ruff + eslint on PR)
 4. **FI-039** — Daily summary email (Brevo)
 5. **FI-040** — Client analytics dashboard
 6. **FI-041** — Status page integration (real-time incident awareness)
@@ -161,6 +166,7 @@
 ## 📊 FEATURES LIVE IN PRODUCTION
 
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
+- ✅ **Async embedding** (FI-021): `202 Accepted` + background task, polling по статусу `embedding → ready|error`
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)

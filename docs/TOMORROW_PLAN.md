@@ -17,11 +17,9 @@
 - ~~Промпт: `cursor_prompts/FIX-ticket-number-race-condition.md`~~
 - Смержено в `main`; `generate_ticket_number` + `create_escalation_ticket` с retry-циклом
 
-### 2. FI-021: Background embeddings (async)
-- Промпт: нет, нужно написать (или запустить по описанию из `BACKLOG_TECH_DEBT.md`)
-- `POST /embeddings/documents/{id}` синхронный → timeout на больших файлах
-- 202 Accepted сразу, статус: `pending → embedded`
-- Зависимость для demo bots (auto-refresh каждые 48ч)
+### ~~2. FI-021: Background embeddings (async)~~ ✅ Done (2026-03-22)
+- `202 Accepted` немедленно, `BackgroundTasks`, статус: `ready → embedding → ready|error`
+- Фронтенд polling каждые 2 сек; live-обновление статуса
 
 ### 3. FI-026: CI/CD (GitHub Actions)
 - Промпт: `cursor_prompts/ci-cd-github-actions.md` — проверить актуальность
@@ -51,7 +49,7 @@ _(пусто — фичи перенесены в backlog)_
 
 ## На обсуждение
 
-**Вопрос по FI-021:** делать через FastAPI `BackgroundTasks` (просто, без зависимостей) или через Celery (надёжнее, но сложнее)? При текущем Railway-хостинге BackgroundTasks — оптимальный выбор.
+~~**Вопрос по FI-021:** делать через FastAPI `BackgroundTasks` (просто, без зависимостей) или через Celery (надёжнее, но сложнее)?~~ → Сделано через `BackgroundTasks`.
 
 **Вопрос по тестированию:** проверить FI-EMBED-MVP на реальном домене (`getchat9.live`) — ждёт действия от admin.
 

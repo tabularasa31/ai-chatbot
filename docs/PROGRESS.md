@@ -5,6 +5,28 @@
 
 ---
 
+## ✅ COMPLETED (2026-03-22) — UI redesign session
+
+### Sidebar navigation & design system (feat/sidebar-navigation-redesign)
+
+- ✅ **UI-NAV: Sidebar layout** — все навигационные ссылки перенесены из navbar в фиксированный левый сайдбар (200px). Navbar: только Chat9, email, Logout. Sidebar: иконки, группировка секций (main nav / SETTINGS / Admin), активное состояние через `usePathname`. Navbar сделан `fixed top-0 z-100` — не уезжает при скролле.
+- ✅ **UI-NAV: Knowledge hub** (`/knowledge`, бывший `/documents`) — единая страница: карточки внешних источников (GitHub + coming soon: Confluence, Notion, URL Crawler) + единая таблица всех проиндексированных источников (файлы, будущие git/url строки) с type-бейджами, health-индикатором, действиями Delete/Re-check.
+- ✅ **UI-NAV: Agents page** (`/settings`) — новая страница управления OpenAI API key (перенесена с Dashboard). Пункт **Agents** в секции SETTINGS сайдбара. С Dashboard убраны форма ключа и Quick links; при отсутствии ключа — amber-баннер со ссылкой на `/settings`.
+- ✅ **UI-NAV: Design system** — единый стиль по всем app-страницам (dashboard, knowledge, agents, logs, review, escalations, debug, response controls, widget api):
+  - Карточки: `rounded-xl border border-slate-200` (без `shadow-md`)
+  - Primary button: `bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors`
+  - Secondary button: `bg-slate-100 hover:bg-slate-200 rounded-lg`
+  - Текстовые ссылки: `text-violet-600`
+  - Подзаголовки страниц: `text-slate-500 text-sm`
+  - Инпуты/textarea: `border-slate-200 rounded-lg focus:border-slate-400 outline-none`
+  - Error banners: `bg-red-50 border border-red-100 rounded-lg`
+  - Заголовки секций (h2): `text-base font-semibold text-slate-800`
+  - Active radio (Response controls): `border-violet-400 bg-violet-50/50`
+- ✅ **middleware.ts** — добавлены `/knowledge` и `/settings` в список защищённых маршрутов
+- **QA:** `docs/qa/UI-NAV-sidebar-redesign-qa.md`
+
+---
+
 ## ✅ COMPLETED (2026-03-22)
 
 ### Bug fixes & tech debt

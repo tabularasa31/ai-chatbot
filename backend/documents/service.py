@@ -236,7 +236,7 @@ def upload_document(
     if file_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type. Allowed: pdf, markdown, swagger",
+            detail="Unsupported file type. Allowed: pdf, markdown, swagger",
         )
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(

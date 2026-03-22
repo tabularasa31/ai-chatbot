@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-22 (UI-NAV sidebar redesign; doc registry + `04-features` / demo-docs sync)
+**Last updated:** 2026-03-22 (FI-026 CI; UI-NAV sidebar redesign; doc registry + `04-features` / demo-docs sync)
 
 ---
 
@@ -90,6 +90,14 @@
 | CORS | Production allowlist | app config |
 | pgvector + HNSW | Native vector column + index | migration `dd643d1a544a`, `embeddings.vector` |
 | Deploy | `main` vs `deploy`, Vercel + Railway | see `PROGRESS.md` → Infrastructure |
+
+---
+
+## CI & quality
+
+| ID / area | What shipped | Code / API |
+|-----------|--------------|------------|
+| **FI-026** | GitHub Actions on `main` + `deploy`: backend `ruff` + `pytest tests/` + coverage; frontend `eslint` + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
 
 ---
 

@@ -1,235 +1,64 @@
-# Infrastructure: CI/CD GitHub Actions — Cursor Prompt
+# Infrastructure: CI/CD GitHub Actions — reference (implemented)
 
-⚠️ **CRITICAL: YOU MUST FOLLOW THE SETUP EXACTLY AS WRITTEN. NO SHORTCUTS.**
+This prompt described **FI-026**, now implemented. Use this file as the **source of truth** for how CI works in this repo; do not copy older snippets that run `pytest` from `backend/` or require a Postgres service for the current test suite.
 
 ---
 
-## SETUP
+## What runs
+
+Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+
+**Triggers:** `push` and `pull_request` to `main` and `deploy`.
+
+**Backend job**
+
+- Python **3.11**, `pip install -r backend/requirements.txt` (from repository root).
+- `ruff check backend` — config: [`backend/ruff.toml`](../backend/ruff.toml) (E/F/W; migrations excluded; intentional late imports in `main.py` / `chat/service.py` ignored for E402).
+- `pytest tests/ -q --cov=backend --cov-report=term-missing` — **must run from the repository root**; tests live in [`tests/`](../tests/) and use **SQLite** via [`tests/conftest.py`](../tests/conftest.py). No Postgres service in CI.
+
+**Frontend job**
+
+- Node **20**, `npm ci` in `frontend/`, `npm run lint`, `npm run build`.
+- `NEXT_PUBLIC_API_URL=https://ci.invalid` for build only (placeholder; real API not required).
+
+**Secrets:** not required for CI — test `ENCRYPTION_KEY` and related vars are set inline in the workflow (aligned with conftest defaults).
+
+---
+
+## Dependencies
+
+- [`backend/requirements.txt`](../backend/requirements.txt) includes **`pgvector>=0.2.0`** (needed to import `backend.models` in tests) and **`ruff>=0.3.0`**.
+
+---
+
+## Local parity
+
+From repo root (Python 3.11+ recommended):
 
 ```bash
-cd <repo-root>
-git checkout main
-git pull origin main
-git checkout -b infra/ci-cd-github-actions
+pip install -r backend/requirements.txt
+ruff check backend
+pytest tests/ -q --cov=backend --cov-report=term-missing
 ```
 
-**IMPORTANT:** Follow these commands in EXACT ORDER:
-1. Checkout main branch
-2. Pull latest from origin/main
-3. Create NEW branch from main
-
-**DO NOT:**
-- Skip `git pull origin main`
-- Reuse branches from previous attempts
-- Work on any branch other than the newly created one
-
----
-
-## CODE DISCIPLINE
-
-**Scope (you MAY modify):**
-- `.github/workflows/ci.yml` — create new file
-- `backend/ruff.toml` — create new file
-- `backend/requirements.txt` — add `ruff>=0.3.0`
-
-**Do NOT touch:**
-- Any route, model, or service files
-- migrations
-- Frontend source files (only runs `npm run lint` and `npm run build`)
-
-**If you think something outside Scope must be changed, STOP and describe it in a comment instead of editing code.**
-
----
-
-## CONTEXT
-
-**Problem:** No automated checks on PRs. Broken code can be merged without anyone noticing until production.
-
-**Goal:** On every push to `main` and every PR:
-- Backend: run `ruff` (linter) + `pytest`
-- Frontend: run `eslint` + `next build`
-
-**Why ruff:** Replaces flake8 + isort + pyupgrade in one tool, 10-100x faster.
-
----
-
-## WHAT TO DO
-
-### 1. Create `.github/workflows/ci.yml`
-
-```yaml
-name: CI
-
-on:
-  push:
-    branches: [main, deploy]
-  pull_request:
-    branches: [main]
-
-jobs:
-  backend:
-    name: Backend (pytest + ruff)
-    runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: pgvector/pgvector:pg15
-        env:
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: test_chatbot
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    env:
-      DATABASE_URL: postgresql://postgres:password@localhost:5432/test_chatbot
-      JWT_SECRET: test-secret-key-min-32-chars-long!!
-      ENVIRONMENT: test
-      ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY_TEST }}
-      FRONTEND_URL: http://localhost:3000
-      BREVO_API_KEY: test-key
-      EMAIL_FROM: test@example.com
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
-          pip install ruff
-
-      - name: Lint with ruff
-        run: |
-          cd backend
-          ruff check .
-
-      - name: Run tests
-        run: |
-          cd backend
-          pytest --cov=backend --cov-report=term-missing -q
-
-  frontend:
-    name: Frontend (eslint + build)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Node.js 18
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          cd frontend
-          npm ci
-
-      - name: Lint
-        run: |
-          cd frontend
-          npm run lint
-
-      - name: Build
-        run: |
-          cd frontend
-          npm run build
-        env:
-          NEXT_PUBLIC_API_URL: https://ai-chatbot-production-6531.up.railway.app
-```
-
-### 2. Create `backend/ruff.toml`
-
-```toml
-line-length = 100
-target-version = "py311"
-
-[lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]
-```
-
-### 3. Add `ruff` to `backend/requirements.txt`
-
-```
-ruff>=0.3.0
-```
-
-### 4. Add GitHub Secret
-
-After merging, go to GitHub repo → Settings → Secrets → Actions → New secret:
-- Name: `ENCRYPTION_KEY_TEST`
-- Value: generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
-
-(Note this in PR description so the reviewer knows to add it.)
-
----
-
-## TESTING
-
-Before pushing:
-- [ ] `.github/workflows/ci.yml` is valid YAML (check with `python -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"`)
-- [ ] `ruff check backend/` runs locally without errors
-- [ ] `pytest -q` still passes locally
-
----
-
-## GIT PUSH
+Frontend:
 
 ```bash
-git add .github/workflows/ci.yml backend/ruff.toml backend/requirements.txt
-git commit -m "infra: add GitHub Actions CI — pytest + ruff + eslint + next build"
-git push origin infra/ci-cd-github-actions
+cd frontend && npm ci && npm run lint && NEXT_PUBLIC_API_URL=https://ci.invalid npm run build
 ```
 
-**STRICT ORDER:**
-1. Add files
-2. Commit with message
-3. Push to origin
-4. Do NOT skip any step
-
 ---
 
-## NOTES
-
-- First run will fail if `ENCRYPTION_KEY_TEST` secret is not set — add it before merging PR
-- `pgvector/pgvector:pg15` image in CI matches production PostgreSQL version
-- `ENVIRONMENT=test` makes rate limiter use random keys (no rate limiting in tests)
-- Frontend build uses production API URL — build will succeed even without a running backend
-
----
-
-## PR DESCRIPTION
-
-After completing the implementation, provide the Pull Request description in English (Markdown format):
+## PR description template (English)
 
 ```markdown
 ## Summary
-Added GitHub Actions CI pipeline: backend (ruff + pytest) and frontend (eslint + next build) run on every PR and push to main.
+GitHub Actions CI: backend (ruff + pytest + coverage) and frontend (eslint + next build) on PR/push to `main` and `deploy`.
 
 ## Changes
-- `.github/workflows/ci.yml` — CI pipeline with backend and frontend jobs
-- `backend/ruff.toml` — ruff linter config
-- `backend/requirements.txt` — added ruff>=0.3.0
+- `.github/workflows/ci.yml`
+- `backend/ruff.toml`, `backend/requirements.txt` (ruff + pgvector)
 
 ## Testing
-- [ ] CI runs on this PR
-- [ ] Both backend and frontend jobs pass
-
-## Notes
-⚠️ Add ENCRYPTION_KEY_TEST secret in GitHub repo settings before merging.
-Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+- [ ] CI green on this PR
 ```

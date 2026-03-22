@@ -1,7 +1,20 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-21 (UTC)  
+**Last updated:** 2026-03-22 (UTC)  
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-22)
+
+### Bug fixes & tech debt
+
+- ✅ **FIX: race condition in `generate_ticket_number`** (`fix/ticket-number-race-condition`)
+  - Два конкурентных запроса для одного клиента могли оба вычислить одинаковый номер тикета → `IntegrityError` → 500 для одного пользователя
+  - `generate_ticket_number()`: `SELECT FOR UPDATE SKIP LOCKED` (advisory lock на PostgreSQL; SQLite игнорирует) + regex `^ESC-(\d+)$` вместо `startswith + int(num[4:])`
+  - `create_escalation_ticket()`: retry-цикл max 3 попытки при `IntegrityError` → `db.rollback()` → пересчёт номера; на 3-й неудаче исключение пробрасывается
+  - Новые тесты: `test_generate_ticket_number_concurrent_reads_return_same`, `test_create_escalation_ticket_retries_on_integrity_error`, `test_create_escalation_ticket_raises_after_max_retries`; 193/193 тестов прошли
+  - Промпт `cursor_prompts/FIX-ticket-number-race-condition.md` — удалить после merge
 
 ---
 
@@ -133,9 +146,10 @@
 
 ### Backlog (P1–P2):
 2. **FI-021** — Background embeddings (async processing)
-3. **FI-039** — Daily summary email (Brevo)
-4. **FI-040** — Client analytics dashboard
-5. **FI-041** — Status page integration (real-time incident awareness)
+3. **FI-026** — CI/CD pipeline (GitHub Actions: pytest + ruff + eslint on PR)
+4. **FI-039** — Daily summary email (Brevo)
+5. **FI-040** — Client analytics dashboard
+6. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
 6. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
@@ -203,7 +217,7 @@ Git branches:
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md` (архив спеки; реализация — блок **L2 escalation (FI-ESC)** выше); `ci-cd-github-actions.md`. Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md` (архив спеки; реализация — блок **L2 escalation (FI-ESC)** выше); `ci-cd-github-actions.md`; `FIX-ticket-number-race-condition.md` (удалить после merge `fix/ticket-number-race-condition`). Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
 
 ---
 
@@ -221,4 +235,4 @@ Git branches:
 
 ---
 
-_Updated: 2026-03-21_
+_Updated: 2026-03-22_

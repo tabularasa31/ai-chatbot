@@ -13,10 +13,11 @@
 
 ## P1 — Технический долг (делать первым)
 
-### 1. FIX: race condition в generate_ticket_number
-- Промпт: `cursor_prompts/FIX-ticket-number-race-condition.md`
-- Время: ~1 час
-- Риск сейчас низкий, но правильно исправить до роста трафика
+### ~~1. FIX: race condition в generate_ticket_number~~ ✅ Done (2026-03-22)
+- ~~Промпт: `cursor_prompts/FIX-ticket-number-race-condition.md`~~
+- Ветка `fix/ticket-number-race-condition` запушена, PR открыт
+- `generate_ticket_number`: `with_for_update(skip_locked=True)` + regex
+- `create_escalation_ticket`: retry-цикл до 3 попыток при `IntegrityError`
 
 ### 2. FI-021: Background embeddings (async)
 - Промпт: нет, нужно написать (или запустить по описанию из `BACKLOG_TECH_DEBT.md`)

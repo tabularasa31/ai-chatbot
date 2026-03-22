@@ -1,46 +1,68 @@
 # Dashboard Features
 
-## Documents
+The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for platform admins). The top bar shows the Chat9 brand, your email, and **Logout**.
 
-Upload and manage your knowledge base documents.
+## Dashboard (`/dashboard`)
+
+- **API key** — your secret `X-Api-Key` for server-to-server API calls (`POST /chat`, etc.). Copy with one click.
+- **Embed code** — HTML snippet with your **`public_id`** (`ch_…`) in the script URL. Copy the block; code areas use an inline **copy** icon.
+- If the **OpenAI API key** is not set, an amber banner links to **Agents** (`/settings`) to configure it.
+
+## Knowledge hub (`/knowledge`)
+
+Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
 - **Supported formats:** PDF, Markdown, plain text, Swagger/OpenAPI JSON/YAML.
-- **Maximum documents:** 20 per account.
-- **Maximum file size:** 50 MB per document.
-- **Embedding:** After uploading, the document is processed automatically for AI search.
-- **Status badges:** Each document shows its status: Uploaded, Embedded, or Error.
-- **Delete:** Remove a document at any time. This also removes its embeddings.
+- **Limits:** e.g. max file size 50 MB (see product limits); embedding runs asynchronously after upload/trigger.
+- **Status:** Documents move through `ready` → `embedding` → `ready` or `error`; the UI polls the API until embedding finishes.
+- **Health:** After embedding, health indicators and re-check actions (see FI-032).
+- **Delete:** Removes the document and its embeddings.
+- **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
 
-## Chat Logs
+## Agents (`/settings`)
+
+- **OpenAI API key** — per-tenant key, encrypted at rest; required for embeddings, chat, and document health checks.
+- Save, update, or remove the key from this page.
+
+## Chat Logs (`/logs`)
 
 View all conversations your users have had with your bot.
 
 - **Inbox layout:** Sessions list on the left, full conversation on the right.
 - **Session details:** Last question, last answer preview, last activity time.
-- **Message view:** User messages appear on the right (blue), bot answers on the left (gray).
+- **Message view:** User messages and bot answers in a thread layout.
 - **Feedback:** Click 👍 or 👎 on any bot answer to rate its quality.
-- **Ideal answer:** For bad answers, you can write the correct answer for future improvement.
 
-## Review Bad Answers
+## Review Bad Answers (`/review`)
 
-A dedicated page showing all answers marked with 👎.
+A dedicated page showing answers marked with 👎.
 
 - Review each bad answer with the original question.
 - See which document chunks were retrieved (retrieval debug).
 - Write or edit the ideal answer.
 - Use "Open in Logs" to see the full conversation context.
 
-## Debug
+## Debug (`/debug`)
 
 Test your bot directly in the dashboard.
 
-- Ask a question and see the full retrieval debug:
-  - Which mode was used (vector / keyword / hybrid / none — on production DB with Postgres, retrieval is typically **hybrid**).
-  - Which document chunks were retrieved.
-  - Scores per chunk (cosine on SQLite-style paths; RRF fusion scores on PostgreSQL hybrid).
+- Ask a question and see retrieval debug (mode, chunks, scores on Postgres).
+- **Answer** is shown in a code-style block with an inline **copy** icon.
 
-## Settings
+## Response controls (`/settings/disclosure`)
 
-- **OpenAI API key:** Connect your own key. Required for embeddings and chat.
-- **API key:** Your widget API key for embedding the bot on your website.
-- **Embed code:** Copy-paste snippet ready to use.
+Set the tenant-wide **response detail level** (Detailed / Standard / Corporate) for FI-DISC v1.
+
+## Widget API (`/settings/widget`)
+
+- Manage **KYC signing secret** (generate, rotate) for optional **identified** widget sessions.
+- Server-side token example (Node.js) with copy-to-clipboard on the snippet block.
+
+## Escalations (`/escalations`)
+
+- L2 ticket inbox (FI-ESC): open/resolved, triggers, link to session.
+- Resolve tickets from the UI.
+
+## Admin (`/admin/metrics`)
+
+- Visible only to users with **`is_admin`**. Platform-wide usage metrics.

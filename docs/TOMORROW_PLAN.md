@@ -21,10 +21,9 @@
 - `202 Accepted` немедленно, `BackgroundTasks`, статус: `ready → embedding → ready|error`
 - Фронтенд polling каждые 2 сек; live-обновление статуса
 
-### 3. FI-026: CI/CD (GitHub Actions)
-- Промпт: `cursor_prompts/ci-cd-github-actions.md` — проверить актуальность
-- pytest + ruff + eslint на каждый PR
-- 160+ тестов без автозапуска = риск
+### ~~3. FI-026: CI/CD (GitHub Actions)~~ ✅ Done (2026-03-22)
+- `.github/workflows/ci.yml`: `main` + `deploy`, backend `ruff` + `pytest tests/` (корень репо), frontend `lint` + `build`
+- `backend/ruff.toml`, `pgvector` + `ruff` в `backend/requirements.txt`
 
 ---
 
@@ -58,13 +57,13 @@ _(пусто — фичи перенесены в backlog)_
 ## 🚀 Deploy checklist
 
 **Vercel:**
-- [ ] Settings → Git → Production Branch = `deploy`
-- [ ] Settings → Environment Variables → `NEXT_PUBLIC_API_URL` задан для Production (значение: Railway backend URL)
+- [x] Settings → Git → Production Branch = `deploy`
+- [x] Settings → Environment Variables → `NEXT_PUBLIC_API_URL` задан для Production (значение: Railway backend URL)
 
 **Railway:**
-- [ ] Service → Settings → Branch = `deploy`
+- [x] Service → Settings → Branch = `deploy`
 
-**После проверки:** redeploy на Vercel если меняли переменные.
+**Проверено.** Redeploy на Vercel — только если позже меняли переменные.
 
 ---
 
@@ -74,11 +73,9 @@ _(пусто — фичи перенесены в backlog)_
 
 **Это не бэкенд-ошибка** — запрос не дошёл до сервера. Браузерная ошибка сети.
 
-**Проверить:**
-1. Vercel → Settings → Environment Variables → есть ли `NEXT_PUBLIC_API_URL`?
-   - Должно быть: `https://ваш-backend.railway.app`
-   - Проверить для обоих окружений: `main` (dev) и `deploy` (production)
-2. Если переменная есть — открыть DevTools → Network → найти упавший `PATCH /clients/me` → посмотреть полный URL и статус ответа
-3. Если URL выглядит как `/clients/me` без домена — переменная не подтянулась → redeploy на Vercel после проверки
+**Проверено:**
+- [x] Vercel → Environment Variables → `NEXT_PUBLIC_API_URL` есть (`https://…railway.app`), для `main` (dev) и `deploy` (production)
+- [x] DevTools → Network → `PATCH /clients/me` — полный URL корректный, ответ от backend
+- [x] Относительный `/clients/me` без домена не воспроизводится
 
-**Скорее всего:** `NEXT_PUBLIC_API_URL` не задан для `deploy` ветки, поэтому `BASE_URL = ""` и запрос идёт на относительный путь которого нет на Vercel.
+**Было (диагностика):** при отсутствии `NEXT_PUBLIC_API_URL` на production `BASE_URL = ""` и запрос уходил на Vercel вместо Railway — отсюда `NetworkError`.

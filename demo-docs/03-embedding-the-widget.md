@@ -23,7 +23,7 @@ Example (placeholders — the Dashboard fills in your real `clientId` and may ad
 ## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the dashboard (same as Settings / main page).
+2. Copy the embed block from the **Dashboard** home (`/dashboard`).
 
 ## CORS
 

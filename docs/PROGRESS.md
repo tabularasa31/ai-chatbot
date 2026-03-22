@@ -25,11 +25,25 @@
 - ✅ **middleware.ts** — добавлены `/knowledge` и `/settings` в список защищённых маршрутов
 - **QA:** `docs/qa/UI-NAV-sidebar-redesign-qa.md`
 
+### Documentation sync (registry + product docs)
+
+- ✅ **`IMPLEMENTED_FEATURES.md` / `PROGRESS.md`** — путь UI для FI-021: `knowledge/page.tsx` (старый `/documents` удалён)
+- ✅ **`docs/04-features.md`** — актуальный embed (`embed.js?clientId=…`, опционально `Chat9Config.widgetUrl`); таблица разделов Dashboard приведена к UI-NAV (Knowledge, Agents, sidebar); Admin — в сайдбаре
+- ✅ **`demo-docs/04-dashboard-features.md`** — Knowledge hub, Agents (`/settings`), навигация через sidebar
+- ✅ **`README.md`** — формулировка про Dashboard / Knowledge hub
+
 ---
 
 ## ✅ COMPLETED (2026-03-22)
 
 ### Bug fixes & tech debt
+
+- ✅ **FI-026: GitHub Actions CI**
+  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to `main` and `deploy` — job **backend** (Python 3.11): `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend` with SQLite test env vars; job **frontend** (Node 20): `npm ci`, `npm run lint`, `npm run build` with `NEXT_PUBLIC_API_URL=https://ci.invalid`
+  - [`backend/ruff.toml`](../backend/ruff.toml): E/F/W lint; `extend-exclude` migrations; per-file `E402` for intentional late imports in `main.py` and `chat/service.py`
+  - [`backend/requirements.txt`](../backend/requirements.txt): added `ruff>=0.3.0` and `pgvector>=0.2.0` (was missing vs root `requirements.txt`; needed for `backend.models` import in tests)
+  - Test fix: [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — assert `public_id` / `owner_email` / `has_openai_key` (API no longer returns client `name` on metrics row)
+  - [`.gitignore`](../.gitignore): `.venv-ci/` for local CI parity venvs
 
 - ✅ **TD-033: Per-document-type chunking config**
   - Заменён глобальный хардкод `chunk_text(doc.parsed_text)` на `CHUNKING_CONFIG` dict в `backend/embeddings/service.py`
@@ -42,7 +56,7 @@
   - `POST /embeddings/documents/{id}` возвращает `202 Accepted` немедленно; генерация чанков и вызов OpenAI уходят в `FastAPI.BackgroundTasks` с собственной DB-сессией (`SessionLocal`)
   - Новый статус `DocumentStatus.embedding` (синий badge): `ready → embedding → ready|error`
   - Фронтенд: polling `GET /documents/{id}` каждые 2 сек до `ready` или `error` (таймаут 120 сек); live-обновление статуса без перезагрузки страницы
-  - Изменения: `backend/models.py`, `backend/embeddings/service.py` (`run_embeddings_background`), `backend/embeddings/routes.py`, `frontend/lib/api.ts` (`getById`), `frontend/app/(app)/documents/page.tsx`
+  - Изменения: `backend/models.py`, `backend/embeddings/service.py` (`run_embeddings_background`), `backend/embeddings/routes.py`, `frontend/lib/api.ts` (`getById`), `frontend/app/(app)/knowledge/page.tsx`
 
 - ✅ **FIX: race condition in `generate_ticket_number`** (`fix/ticket-number-race-condition`, merged)
   - Два конкурентных запроса для одного клиента могли оба вычислить одинаковый номер тикета → `IntegrityError` → 500 для одного пользователя
@@ -179,16 +193,14 @@
 1. **Test FI-EMBED-MVP on real domain** — waiting for domain admin to update embed script
 
 ### Backlog (P1–P2):
-2. **FI-026** — CI/CD pipeline (GitHub Actions: pytest + ruff + eslint on PR)
-4. **FI-039** — Daily summary email (Brevo)
-5. **FI-040** — Client analytics dashboard
-6. **FI-041** — Status page integration (real-time incident awareness)
+2. **FI-039** — Daily summary email (Brevo)
+3. **FI-040** — Client analytics dashboard
+4. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
-6. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
-7. **Langfuse tracing** (LLM observability)
-8. **Per-client system prompt**
-9. **Multiple file upload**
+5. **Langfuse tracing** (LLM observability)
+6. **Per-client system prompt**
+7. **Multiple file upload**
 
 ---
 
@@ -206,7 +218,7 @@
 - ✅ **Response controls (FI-DISC v1):** tenant-wide detail level (Detailed / Standard / Corporate), dashboard **Response controls**
 - ✅ Optional **identified widget sessions** (FI-KYC): HMAC identity token + `/widget/session/init`, signing secret in dashboard
 - ✅ Widget footer «Powered by Chat9 →» (FI-038)
-- ✅ Dashboard (documents, logs, feedback, analytics)
+- ✅ Dashboard (API key, embed snippet), Knowledge hub, logs, feedback, review, escalations, debug; sidebar navigation (UI-NAV)
 - ✅ Document health check (phase 1): `health_status`, GPT-structured analysis, re-check API
 - ✅ Email verification (Brevo)
 - ✅ Forgot password flow (Brevo) — tested end-to-end
@@ -233,6 +245,8 @@ User → getchat9.live (Vercel, Next.js)
 Git branches:
   main   → development (no auto-deploy)
   deploy → production (Vercel + Railway listen here)
+
+CI: GitHub Actions (`.github/workflows/ci.yml`) on push/PR to main + deploy
 ```
 
 ---
@@ -243,7 +257,7 @@ Git branches:
 |-------|----------|-------|
 | FI-EMBED-MVP real-domain test | 🟡 P1 | Waiting for admin to update embed script |
 | Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
-| No CI/CD pipeline | 🟡 P2 | GitHub Actions needed |
+| ~~No CI/CD pipeline~~ | — | ✅ FI-026: `.github/workflows/ci.yml` |
 | Footer links hardcoded | 🟢 P3 | Update when docs site ready |
 
 ---

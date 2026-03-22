@@ -33,10 +33,9 @@ Key recommendations added to this backlog:
 - Added `DocumentStatus.embedding`; background task sets `ready` on success, `error` on failure.
 - Frontend polls `GET /documents/{id}` every 2 s until status leaves `embedding`.
 
-### [FI-026] GitHub Actions CI (pytest + ruff + eslint)
-- 108+ tests without auto-run on PR.
-- `.github/workflows/ci.yml`: pytest + coverage + ruff + eslint.
-- Add tests for `build_rag_prompt()` and `validate/{api_key}`.
+### ~~[FI-026] GitHub Actions CI (pytest + ruff + eslint)~~ ✅ Done (2026-03-22)
+- `.github/workflows/ci.yml`: backend `ruff` + `pytest tests/` from repo root; frontend `eslint` + `next build`; triggers `main` + `deploy`.
+- See `PROGRESS.md` (FI-026 block) for details. Optional follow-up: tests for `build_rag_prompt()` and `validate/{api_key}`.
 
 ### ~~[Deps] Remove PyPDF2, update openai~~ ✅ Done (2026-03-20)
 - ~~Remove `PyPDF2==3.0.1` (duplicate of pypdf).~~

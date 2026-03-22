@@ -109,7 +109,8 @@ def get_client_metrics(
         items.append(
             AdminClientMetricsItem(
                 client_id=c.id,
-                name=c.name,
+                public_id=c.public_id,
+                owner_email=c.user.email if c.user else None,
                 users_count=users_count,
                 documents_count=documents_count,
                 embedded_documents_count=embedded_documents_count,

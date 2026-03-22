@@ -1,173 +1,185 @@
-# UI-NAV — Sidebar navigation redesign: QA checklist
+# UI-NAV — Редизайн навигации: чеклист для тестировщика
 
-**Branch:** `feat/sidebar-navigation-redesign`  
-**PR scope:** Sidebar layout, Knowledge hub (`/knowledge`), Agents page (`/settings`), unified design system.
+**Ветка:** `feat/sidebar-navigation-redesign`  
+**Что проверяем:** боковое меню (сайдбар), страница Knowledge, страница Agents, единый стиль кнопок и карточек по всему приложению.
 
-**Related docs:** [`IMPLEMENTED_FEATURES.md`](../IMPLEMENTED_FEATURES.md), [`PROGRESS.md`](../PROGRESS.md)
-
----
-
-## Before testing
-
-1. Run `npm run dev` from `frontend/` — app available at `http://localhost:3000`.
-2. Make sure the backend is reachable (either Railway prod or local `uvicorn`).
-3. Have a logged-in account ready. Two accounts useful for isolation checks (section G).
+**Ссылки:** [`IMPLEMENTED_FEATURES.md`](../IMPLEMENTED_FEATURES.md) · [`PROGRESS.md`](../PROGRESS.md)
 
 ---
 
-## A. Navbar
+## Перед тестом
 
-| # | Action | Expected |
-|---|--------|----------|
-| A1 | Open any app page (dashboard, logs, etc.) | Navbar is **fixed** at the top and does not scroll away |
-| A2 | Inspect navbar content | Shows only: **Chat9** (link → `/dashboard`), user email, **Logout** button |
-| A3 | No navigation links in navbar | Dashboard, Documents, Logs, etc. are **not** present in the navbar |
-| A4 | Click **Logout** | Token cleared, redirect to `/login` |
-| A5 | Email not verified → verification banner | Amber banner appears **below** the navbar, not hidden behind it |
+1. Открой браузер и зайди на **https://getchat9.live** (это прод).
+2. Войди в аккаунт. Если нет тестового — зарегистрируй новый.
+3. Держи открытым DevTools (F12 → Console) — если страница падает с ошибкой, скопируй текст из консоли в баг-репорт.
+
+> **Как фиксировать баги:** напиши номер теста (например `A3`), что ты сделал, что ожидал увидеть и что увидел на самом деле. Скриншот приветствуется.
 
 ---
 
-## B. Sidebar — general
+## A. Верхняя панель (Navbar)
 
-| # | Action | Expected |
-|---|--------|----------|
-| B1 | Open any app page | Fixed 200px left sidebar visible, does not scroll with content |
-| B2 | Sidebar sections present | Main nav: Dashboard, Knowledge, Logs, Review, Escalations, Debug; **SETTINGS** label with: Agents, Response controls, Widget API; **Admin** (visible only for `is_admin` users) |
-| B3 | Each item has a unique icon | No two items share the same SVG icon |
-| B4 | Active item highlighted | Current route shows left violet bar + `bg-violet-50/08` background; other items dimmed |
-| B5 | Navigate between pages via sidebar | Active state updates correctly on every page |
-| B6 | Non-admin account | **Admin** entry is **not** shown in sidebar |
-| B7 | Admin account | **Admin** entry is shown below the bottom divider |
+Это тёмная полоска в самом верху страницы.
 
----
-
-## C. Layout & scroll
-
-| # | Action | Expected |
-|---|--------|----------|
-| C1 | Open a long page (e.g., Logs with many sessions) | Scrolling content — navbar and sidebar stay fixed |
-| C2 | Content area top padding | Content does not hide behind the fixed navbar (starts below 48px + 32px gap) |
-| C3 | No white gap between navbar and sidebar | On scroll the sidebar top aligns exactly with the navbar bottom; no visible white stripe |
-| C4 | Narrow viewport (< 900px) | Note any overflow; sidebar should not cover content completely — log findings |
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| A1 | Открой любую страницу приложения, например `/dashboard` | Верхняя тёмная полоска **не уезжает** при прокрутке страницы — она всегда прилеплена к верху |
+| A2 | Посмотри что есть в верхней полоске | Слева — надпись **Chat9** (кликабельная). Справа — твой email и кнопка **Logout**. Больше ничего не должно быть |
+| A3 | Убедись что навигационных ссылок в верхней полоске нет | Dashboard, Documents, Logs и других ссылок в верхней полоске **нет** — они теперь в левом меню |
+| A4 | Нажми **Logout** | Тебя выбросит на страницу входа `/login` |
 
 ---
 
-## D. Knowledge page (`/knowledge`)
+## B. Левое меню (Sidebar)
 
-| # | Action | Expected |
-|---|--------|----------|
-| D1 | Click **Knowledge** in sidebar | Navigates to `/knowledge`, page title "Knowledge" with subtitle |
-| D2 | Old URL `/documents` | Returns 404 or not found (route removed) |
-| D3 | **External sources** cards visible | Four cards: GitHub, Confluence, Notion, URL Crawler — Confluence/Notion/URL Crawler are greyed out "Coming soon" and non-clickable |
-| D4 | **Upload file** button | Opens native file picker; allowed types `.pdf .md .json .yaml .yml` |
-| D5 | Upload a valid file | Row appears in table with type badge `file`, status `embedding…`, health `Pending` |
-| D6 | After embedding completes | Status changes to `ready`, health shows Good/Fair/Needs attention dot |
-| D7 | **Filter sources** input | Typing filters visible rows by filename; clearing restores full list |
-| D8 | **Re-check** action on a ready file | Health status updates; button shows `…` while loading |
-| D9 | **Delete** action | Confirmation dialog; on confirm row disappears |
-| D10 | Delete during embedding | Delete button is disabled (opacity, no click) |
-| D11 | Type badges | Files show blue `file` badge; future git rows would show green `git`; url rows show yellow `url` |
-| D12 | Empty state | When no files: "No sources yet. Upload a file above." message in table |
-| D13 | Filter with no matches | "No sources match your filter." message in table |
+Это тёмная вертикальная панель слева.
+
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| B1 | Открой любую страницу приложения | Слева видна тёмная панель шириной ~200px. При прокрутке страницы **она не двигается** — остаётся на месте |
+| B2 | Посмотри на список пунктов в меню | Сверху вниз должно быть: **Dashboard**, **Knowledge**, **Logs**, **Review**, **Escalations**, **Debug** — затем разделитель и секция **SETTINGS** с пунктами **Agents**, **Response controls**, **Widget API** — затем ещё разделитель и **Admin** |
+| B3 | Зайди под обычным аккаунтом (не admin) | Пункт **Admin** в меню **не отображается** |
+| B4 | Зайди под admin-аккаунтом (если есть) | Пункт **Admin** виден внизу меню |
+| B5 | Кликни по каждому пункту меню | Каждый пункт открывает свою страницу. Активный пункт выделен — слева от него тонкая фиолетовая полоска и светлый фон |
+| B6 | Перейди на разные страницы | Активная подсветка переключается на тот пункт, который соответствует текущей странице |
+| B7 | Посмотри на иконки у каждого пункта | У каждого пункта **своя** уникальная иконка — нет двух одинаковых |
 
 ---
 
-## E. Agents page (`/settings`)
+## C. Прокрутка и расположение элементов
 
-| # | Action | Expected |
-|---|--------|----------|
-| E1 | Click **Agents** in sidebar | Navigates to `/settings`, page title "Agents" |
-| E2 | OpenAI key **not configured** | Amber status banner "No API key — chat and embeddings are disabled" |
-| E3 | OpenAI key **configured** | Green status banner "API key configured" |
-| E4 | Input field placeholder | Shows `sk-...` |
-| E5 | Type invalid key (not starting with `sk-`) and click **Save key** | Error message "OpenAI API key must start with 'sk-'" |
-| E6 | Type valid key and click **Save key** | Green "Saved." banner appears briefly; status banner switches to green "API key configured" |
-| E7 | Press Enter in input | Triggers save (same as clicking button) |
-| E8 | Click **Update key** (when key already set) | Works the same as Save |
-| E9 | Click **Remove key** | Key removed; status banner switches to amber |
-| E10 | `/settings` is protected | Visiting without token → redirect to `/login` |
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| C1 | Открой страницу с длинным содержимым (например **Logs** с несколькими сессиями) и прокрути вниз | Верхняя полоска и левое меню **остаются на месте**. Прокручивается только основной контент |
+| C2 | Посмотри на основной контент | Текст страницы начинается ниже верхней полоски — контент не прячется за ней |
+| C3 | Прокрути страницу вниз на несколько экранов | Между верхней полоской и левым меню **нет белого зазора** — они стыкуются вплотную |
 
 ---
 
-## F. Dashboard changes
+## D. Страница Knowledge (`/knowledge`)
 
-| # | Action | Expected |
-|---|--------|----------|
-| F1 | Open `/dashboard` | Page shows: heading, API key card, (optional warning), Embed code card |
-| F2 | OpenAI key **not set** | Amber banner: "OpenAI API key is not set — configure in Settings" with a link |
-| F3 | Click link in banner | Navigates to `/settings` |
-| F4 | OpenAI key **is set** | No amber banner on dashboard |
-| F5 | **Quick links** section | Not present (removed) |
-| F6 | OpenAI key form on dashboard | Not present (moved to `/settings`) |
-| F7 | **Copy** button on API key | Copies key to clipboard; button text changes to "Copied!" for ~2s |
-| F8 | **Copy embed code** button | Copies snippet; "Copied!" state |
+Это бывшая страница Documents, теперь переименована.
 
----
-
-## G. Design system consistency
-
-Check each page below for uniform styling:
-
-| Page | Card style | Primary button | Links | Inputs |
-|------|-----------|---------------|-------|--------|
-| Dashboard | `rounded-xl border border-slate-200` | `bg-violet-600` | — | — |
-| Knowledge | same | `bg-violet-600` (Upload) | — | `border-slate-200 rounded-lg` |
-| Agents | same | `bg-violet-600` | `text-violet-600` | `border-slate-200 rounded-lg` |
-| Logs | same | `bg-violet-600` | `text-violet-600` | `border-slate-200 rounded-lg` |
-| Review | same | `bg-violet-600` | `text-violet-600` | `border-slate-200 rounded-lg` |
-| Escalations | same | `bg-violet-600` | `text-violet-600` | `border-slate-200 rounded-lg` |
-| Debug | same | `bg-violet-600` | — | `border-slate-200 rounded-lg` |
-| Response controls | same + `border-violet-400` active radio | `bg-violet-600` | — | — |
-| Widget API | same | `bg-violet-600` | — | — |
-
-For each page verify:
-- [ ] No `shadow-md` on cards (replaced by border)
-- [ ] No blue buttons (`bg-blue-600`)
-- [ ] No black buttons (`bg-[#0A0A0F]`, `bg-slate-900`)
-- [ ] Error banners have `border border-red-100 rounded-lg`
-- [ ] Section headings (h2) are `text-base font-semibold text-slate-800`
-- [ ] Page subtitles are `text-slate-500 text-sm`
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| D1 | Кликни **Knowledge** в левом меню | Открывается страница с заголовком **Knowledge** и подписью «Everything your bot knows» |
+| D2 | Попробуй открыть старый адрес **`/documents`** | Страница не найдена (404) — старый адрес больше не работает |
+| D3 | Посмотри на блок **External sources** вверху страницы | Видны четыре карточки: **GitHub**, **Confluence**, **Notion**, **URL Crawler**. Три последних серые с надписью «Coming soon» — на них нельзя нажать |
+| D4 | Нажми **▲ Upload file** | Открывается окно выбора файла на твоём компьютере |
+| D5 | Попробуй загрузить файл с расширением `.pdf`, `.md` или `.json` | Файл начинает загружаться. В таблице появляется новая строка с типом `file`, статусом `embedding…` и health `Pending` |
+| D6 | Подожди 20–60 секунд после загрузки | Статус меняется на `ready`, в колонке **Health** появляется цветная точка с текстом (Good / Fair / Needs attention) |
+| D7 | Напечатай что-нибудь в поле **Filter sources…** справа над таблицей | Таблица фильтруется — показываются только строки, где имя файла содержит введённый текст |
+| D8 | Очисти поле фильтра | Все строки снова видны |
+| D9 | У готового файла (статус `ready`) нажми **Re-check** | Кнопка показывает `…` пока идёт проверка, затем health-статус обновляется |
+| D10 | Нажми **Delete** у любого файла | Появляется диалог «Удалить?». Нажми OK — строка исчезает из таблицы |
+| D11 | Попробуй нажать **Delete** у файла со статусом `embedding…` | Кнопка неактивна (серая) — нажать нельзя пока файл обрабатывается |
+| D12 | Удали все файлы (или зайди с чистым аккаунтом без файлов) | В таблице написано: «No sources yet. Upload a file above.» |
+| D13 | Введи в фильтр текст, которого нет ни в одном файле | В таблице написано: «No sources match your filter.» |
 
 ---
 
-## H. Navigation isolation / protected routes
+## E. Страница Agents (`/settings`)
 
-| # | Action | Expected |
-|---|--------|----------|
-| H1 | Visit `/knowledge` without token | Redirect to `/login` |
-| H2 | Visit `/settings` without token | Redirect to `/login` |
-| H3 | Visit `/documents` (old URL) | Not found / 404 (no redirect defined) |
-| H4 | Visit `/settings/disclosure` | Response controls page loads correctly |
-| H5 | Visit `/settings/widget` | Widget API page loads correctly |
+Здесь хранится ключ OpenAI.
 
----
-
-## I. Regression — existing features
-
-| # | Area | Check |
-|---|------|-------|
-| I1 | Logs | Session list loads; selecting a session shows messages; thumbs feedback works; "Edit ideal answer" button saves |
-| I2 | Review | Bad answers list loads; saving ideal answer works; "Show debug" expands retrieval info |
-| I3 | Escalations | Ticket list loads; expand/collapse row; resolve with notes works |
-| I4 | Debug | Question input → Run debug → answer + chunks table displayed |
-| I5 | Response controls | Level loads; changing and saving works; "Saved." banner appears |
-| I6 | Widget API | Status loads; "Generate signing secret" / "Rotate" works; one-time secret shown |
-| I7 | Admin | Admin users see `/admin/metrics`; non-admin get redirected |
-| I8 | Widget embed | Embed code on dashboard contains correct `clientId`; widget loads in iframe at `/widget` |
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| E1 | Кликни **Agents** в левом меню (секция SETTINGS) | Открывается страница с заголовком **Agents** |
+| E2 | Зайди на страницу когда OpenAI ключ **не настроен** | Видна жёлтая плашка: «No API key — chat and embeddings are disabled» |
+| E3 | Зайди на страницу когда OpenAI ключ **настроен** | Видна зелёная плашка: «API key configured» |
+| E4 | Посмотри на поле ввода | Подсказка внутри поля: `sk-...` |
+| E5 | Введи что-нибудь, что **не начинается** с `sk-` (например `hello`) и нажми кнопку сохранения | Появляется красная ошибка: «OpenAI API key must start with 'sk-'» |
+| E6 | Введи правильный ключ (начинается с `sk-`) и нажми **Save key** | Появляется зелёная плашка «Saved.» на пару секунд. Статус-плашка сверху меняется на зелёную |
+| E7 | Нажми Enter в поле ввода (не кликая кнопку) | Ключ сохраняется — так же как при клике на кнопку |
+| E8 | Когда ключ уже есть — введи новый и нажми **Update key** | Ключ обновляется, зелёная плашка «Saved.» |
+| E9 | Нажми **Remove key** | Ключ удаляется, плашка меняется на жёлтую «No API key…» |
+| E10 | Выйди из аккаунта и попробуй открыть `/settings` напрямую | Тебя перекидывает на страницу входа `/login` |
 
 ---
 
-## J. Edge cases
+## F. Страница Dashboard (`/dashboard`)
 
-| # | Scenario | Expected |
-|---|----------|----------|
-| J1 | Upload file > 50MB | Error message shown; no crash |
-| J2 | Upload unsupported type (e.g., `.txt`) | File picker restricts or backend returns error |
-| J3 | Knowledge page with no files and active filter | "No sources match your filter." (not broken layout) |
-| J4 | Sidebar on a page not in nav (e.g., `/admin/metrics`) | Sidebar renders, no active item highlighted (or Admin highlighted) |
-| J5 | Very long email in navbar | Truncates gracefully, does not break navbar layout |
-| J6 | Browser back/forward navigation | Active sidebar state updates to match current URL |
+Проверяем что лишнего больше нет, а нужное осталось.
+
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| F1 | Открой **Dashboard** | Видны: заголовок страницы, карточка с API Key, карточка с Embed code |
+| F2 | Посмотри на Dashboard когда OpenAI ключ **не настроен** | Жёлтая плашка: «OpenAI API key is not set — configure in Settings» со ссылкой |
+| F3 | Кликни по ссылке в жёлтой плашке | Переходит на страницу **Agents** (`/settings`) |
+| F4 | Посмотри на Dashboard когда OpenAI ключ **настроен** | Жёлтой плашки нет |
+| F5 | Поищи на Dashboard секцию «Quick links» | Её **нет** — была раньше, убрали |
+| F6 | Поищи на Dashboard форму с полем `sk-...` для ввода OpenAI ключа | Её **нет** — перенесена на страницу Agents |
+| F7 | Нажми **Copy** рядом с API Key | Ключ скопирован в буфер. Кнопка на секунду показывает «Copied!» |
+| F8 | Нажми **Copy embed code** | Код скопирован в буфер. Кнопка на секунду показывает «Copied!» |
 
 ---
 
-*Add scenario notes or bugs found below this line.*
+## G. Единый стиль кнопок и карточек
+
+Проходимся по каждой странице и проверяем внешний вид. Не нужно проверять вёрстку попиксельно — просто убедись что везде одинаково.
+
+**На каждой из этих страниц проверь:**
+
+- [ ] `/dashboard` — Dashboard
+- [ ] `/knowledge` — Knowledge
+- [ ] `/settings` — Agents
+- [ ] `/logs` — Logs
+- [ ] `/review` — Review
+- [ ] `/escalations` — Escalations
+- [ ] `/debug` — Debug
+- [ ] `/settings/disclosure` — Response controls
+- [ ] `/settings/widget` — Widget API
+
+**Что проверять на каждой странице:**
+
+| Элемент | Как должно выглядеть |
+|---------|----------------------|
+| Основные кнопки (Save, Upload, Copy, Run debug и т.п.) | **Фиолетовые** — при наведении чуть темнее |
+| Кнопки «отмены» или «удалить» второстепенные | Светло-серые |
+| Карточки/блоки с информацией | Белые, с **тонкой серой рамкой**, с **закруглёнными углами**, **без тени** |
+| Синих кнопок | **Нет нигде** |
+| Ссылки внутри текста (например «see Logs» или «configure in Settings») | **Фиолетовые** |
+| Поля ввода (input, textarea) | Тонкая серая рамка, закруглённые углы — при клике рамка становится чуть темнее |
+| Сообщения об ошибках (красные плашки) | Бледно-красный фон, красная рамка, закруглённые углы |
+
+---
+
+## H. Защита страниц (не должны открываться без входа)
+
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| H1 | Выйди из аккаунта. Попробуй открыть `/knowledge` напрямую | Перебрасывает на `/login` |
+| H2 | То же самое с `/settings` | Перебрасывает на `/login` |
+| H3 | То же самое с `/dashboard` | Перебрасывает на `/login` |
+| H4 | Попробуй открыть `/documents` (старый адрес) | Страница не найдена — это нормально |
+
+---
+
+## I. Проверяем что старое не сломалось (регрессия)
+
+Быстрая проверка — основные фичи должны работать как раньше.
+
+| # | Что проверять | Что должно работать |
+|---|---------------|---------------------|
+| I1 | **Logs** | Список сессий загружается. Кликни на сессию — видны сообщения. Кнопки 👍 👎 нажимаются |
+| I2 | **Review** | Список плохих ответов загружается (или написано «No bad answers yet»). Кнопка «Add» открывает поле для ввода идеального ответа |
+| I3 | **Escalations** | Список тикетов загружается. Клик по строке — раскрывает детали |
+| I4 | **Debug** | Введи вопрос → нажми **Run debug** → появляется ответ и таблица чанков |
+| I5 | **Response controls** | Страница загружается, видны три варианта (Detailed / Standard / Corporate). Кнопка Save работает |
+| I6 | **Widget API** | Страница загружается, виден статус секрета |
+| I7 | **Embed code на Dashboard** | Код содержит `clientId=...` с твоим идентификатором (не пустой) |
+
+---
+
+## J. Нестандартные ситуации (edge cases)
+
+| # | Что делать | Что должно быть |
+|---|------------|-----------------|
+| J1 | На странице Knowledge введи в фильтр очень длинный текст (50+ символов) | Поле не ломается, страница работает нормально |
+| J2 | Попробуй загрузить файл формата `.txt` или `.exe` | Либо файл-пикер не даёт выбрать такой файл, либо появляется ошибка после попытки загрузки |
+| J3 | Нажми кнопку **Refresh** на странице Escalations несколько раз подряд быстро | Страница не падает, список обновляется |
+| J4 | Нажми кнопку назад в браузере после перехода между страницами | Активный пункт в сайдбаре переключается на правильный для текущей страницы |
+
+---
+
+*Если нашёл баг или поведение не совпадает с описанием — запиши номер теста, шаги и что увидел. Скриншот поможет разработчику разобраться быстрее.*

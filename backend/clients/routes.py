@@ -161,7 +161,15 @@ def update_my_client(
                 detail="OpenAI API key must start with 'sk-'",
             )
         update_kwargs["openai_api_key"] = key_val
-    client = update_client(current_user.id, db, **update_kwargs)
+    try:
+        client = update_client(current_user.id, db, **update_kwargs)
+    except RuntimeError as e:
+        if "ENCRYPTION_KEY" in str(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Server misconfiguration: encryption is not configured. Contact support.",
+            ) from e
+        raise
     return _client_to_response(client)
 
 

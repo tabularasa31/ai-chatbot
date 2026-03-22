@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { api, type ChatDebugResponse } from "@/lib/api";
+import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function DebugPage() {
   const [question, setQuestion] = useState("");
@@ -69,9 +70,11 @@ export default function DebugPage() {
         <>
           <div className="bg-white rounded-xl border border-slate-200 p-6">
             <h2 className="text-base font-semibold text-slate-800 mb-2">Answer</h2>
-            <pre className="bg-slate-100 p-4 rounded-md text-sm text-slate-800 overflow-x-auto whitespace-pre-wrap break-words">
-              {result.answer}
-            </pre>
+            <CodeBlockWithCopy
+              code={result.answer}
+              copyLabel="Copy answer"
+              preClassName="bg-slate-100 rounded-md text-sm text-slate-800 whitespace-pre-wrap break-words"
+            />
             <p className="text-slate-500 text-xs mt-2">
               Tokens used: {result.tokens_used}
             </p>

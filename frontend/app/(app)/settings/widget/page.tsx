@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
+import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function WidgetSettingsPage() {
   const [status, setStatus] = useState<KycStatusResponse | null>(null);
@@ -202,9 +203,7 @@ function makeWidgetIdentityToken({
           <code className="text-slate-800">identity_token</code>. Use your tenant public ID as{" "}
           <code className="text-slate-800">tenant_id</code> in the payload.
         </p>
-        <pre className="text-xs bg-slate-900 text-slate-100 p-4 rounded-lg overflow-x-auto whitespace-pre">
-          {nodeSnippet}
-        </pre>
+        <CodeBlockWithCopy code={nodeSnippet} />
       </section>
     </div>
   );

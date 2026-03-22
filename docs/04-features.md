@@ -33,7 +33,7 @@ Full reset flow:
 
 ### Admin flag
 
-Users can have `is_admin = true`. Admins see an **Admin** link in the navbar and can access platform-wide metrics (`GET /admin/metrics/*`) — total users, sessions, tokens used across all tenants.
+Users can have `is_admin = true`. Admins see an **Admin** section in the **sidebar** (app shell) and can access platform-wide metrics (`GET /admin/metrics/*`) — total users, sessions, tokens used across all tenants.
 
 ---
 
@@ -84,7 +84,7 @@ Embedding is expensive for large documents (20+ chunks → multiple OpenAI calls
 - A `FastAPI BackgroundTask` runs the actual work in the same process but after the response is sent
 - The background task opens its own database session (independent of the request session)
 - Document status transitions: `ready → embedding → ready` (success) or `error` (failure)
-- The dashboard **polls** `GET /documents/{id}` every 2 seconds and updates the status badge in real time (timeout: 120 seconds)
+- The **Knowledge hub** UI (`/knowledge`) **polls** `GET /documents/{id}` every 2 seconds and updates the status badge in real time (timeout: 120 seconds)
 
 ### Chunking (FI-009, TD-033)
 
@@ -275,16 +275,21 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ### How embedding works
 
-Tenants copy a two-line snippet from their dashboard:
+Tenants copy a snippet from the **Dashboard** (and optionally from docs). The canonical pattern is a **script tag** whose URL includes `clientId` (the client **`public_id`**, `ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
+
+Example (placeholders — the Dashboard fills in your real `clientId` and URLs):
 
 ```html
-<script src="https://api.getchat9.live/embed.js" defer></script>
-<div data-chat9-client="ch_xxxxxxxxxxxxxxxx"></div>
+<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
+<script src="https://<your-api-host>/embed.js?clientId=ch_xxxxxxxxxxxxxxxx"></script>
 ```
 
-`embed.js` (~6 KB, vanilla JS):
-- Finds the `data-chat9-client` div
-- Creates an `<iframe>` pointing to `/widget?clientId=ch_xxx&locale=<navigator.language>`
+If the frontend and API share the same origin, you can omit `Chat9Config` and use a single script tag with `?clientId=…` only.
+
+`embed.js` (vanilla JS, served from the API):
+- Reads `clientId` from the **script URL** query string (required)
+- Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script’s origin, as the **iframe base URL**
+- Appends a fixed-position container and an `<iframe>` pointing to `/widget?clientId=…&locale=<navigator.language>`
 - The iframe renders the full `ChatWidget` React component
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk.
@@ -309,18 +314,20 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 
 ## 10. Dashboard
 
-The web dashboard at `getchat9.live` is a Next.js 14 app. Main sections:
+The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages use a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for `is_admin` users); the top bar shows brand, email, and logout.
 
-| Page | What it shows |
-|------|--------------|
-| **Dashboard** | Overview: document count, session count, embedded doc count |
-| **Documents** | Upload, embed, health check, delete documents; live embedding status |
-| **Logs** | Full chat history across all sessions; thumbs up/down feedback |
-| **Review** | Bad answers (thumbs down) with ideal answer input for future fine-tuning |
-| **Escalations** | Ticket inbox; resolve tickets |
-| **Debug** | Test RAG pipeline with any query; see retrieved chunks, prompt, validation result |
-| **Response controls** | Set disclosure level (Detailed / Standard / Corporate) |
-| **Widget API** | Generate / rotate widget signing secret |
+| Page / route | What it shows |
+|--------------|---------------|
+| **Dashboard** (`/dashboard`) | **API key** (server-to-server `X-Api-Key`), **embed code** snippet (`public_id` / `ch_…`); banner linking to Agents if OpenAI key is missing |
+| **Knowledge** (`/knowledge`) | Upload, trigger embeddings, health indicators, delete; external source cards + unified indexed sources table (replaces legacy `/documents`) |
+| **Agents** (`/settings`) | Per-tenant **OpenAI API key** (encrypted), save/update/remove |
+| **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |
+| **Review** (`/review`) | Bad answers (thumbs down) with ideal answer input |
+| **Escalations** (`/escalations`) | L2 ticket inbox; resolve tickets |
+| **Debug** (`/debug`) | Run RAG debug; answer + retrieval table (code blocks use inline copy) |
+| **Response controls** (`/settings/disclosure`) | Disclosure level (Detailed / Standard / Corporate) |
+| **Widget API** (`/settings/widget`) | Generate / rotate KYC signing secret; Node.js token example |
+| **Admin** (`/admin/metrics`, admins only) | Platform-wide metrics |
 
 ---
 

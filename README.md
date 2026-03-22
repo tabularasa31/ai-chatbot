@@ -37,7 +37,7 @@
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
-- **Dashboard** — Next.js: docs manager, chat logs, feedback, admin metrics
+- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`), chat logs, feedback, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
 - **Email verification** — signup link via Brevo HTTP API

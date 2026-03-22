@@ -66,7 +66,7 @@ export default function EscalationsPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-slate-800">Escalations</h1>
-      <p className="text-slate-600 text-sm max-w-2xl">
+      <p className="text-slate-500 text-sm max-w-2xl">
         Support tickets created when the bot could not answer, the user asked for a human, or they
         used &quot;Talk to support&quot;. Resolve here when your team has replied by email.
       </p>
@@ -77,7 +77,7 @@ export default function EscalationsPage() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="ml-2 border border-slate-300 rounded-md px-2 py-1 text-slate-800 bg-white"
+            className="ml-2 border border-slate-200 rounded-lg px-2 py-1 text-slate-800 bg-white outline-none focus:border-slate-400"
           >
             {STATUS_OPTIONS.map((o) => (
               <option key={o.value || "all"} value={o.value}>
@@ -89,24 +89,24 @@ export default function EscalationsPage() {
         <button
           type="button"
           onClick={() => load()}
-          className="text-sm text-blue-600 hover:underline"
+          className="text-sm text-violet-600 hover:underline"
         >
           Refresh
         </button>
       </div>
 
       {error && (
-        <div className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-md">{error}</div>
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">{error}</div>
       )}
 
       {loading ? (
         <div className="text-slate-500 text-sm">Loading…</div>
       ) : tickets.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center text-slate-500">
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
           No tickets for this filter.
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden border border-slate-200">
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-600 text-left">
@@ -274,7 +274,7 @@ function TicketRow({
                     onChange={(e) => setResolution(e.target.value)}
                     placeholder="What you did / told the user…"
                     rows={3}
-                    className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:border-slate-400"
                   />
                   {localError && (
                     <p className="text-red-600 text-xs">{localError}</p>
@@ -283,7 +283,7 @@ function TicketRow({
                     type="button"
                     onClick={resolve}
                     disabled={saving}
-                    className="px-4 py-2 rounded-md bg-slate-900 text-white text-sm hover:bg-slate-800 disabled:opacity-50"
+                    className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm hover:bg-violet-700 disabled:opacity-50"
                   >
                     {saving ? "Saving…" : "Mark as resolved"}
                   </button>

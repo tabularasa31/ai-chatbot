@@ -42,12 +42,12 @@ export default function ReviewPage() {
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-slate-800">Review bad answers</h1>
-      <p className="text-slate-600 text-sm">
+      <p className="text-slate-500 text-sm">
         Assistant answers marked as 👎. Add ideal answers for future training.
       </p>
 
       {error && (
-        <div className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-md">
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
           {error}
         </div>
       )}
@@ -55,9 +55,9 @@ export default function ReviewPage() {
       {loading ? (
         <div className="text-slate-500 text-sm">Loading…</div>
       ) : items.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center text-slate-500">
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
           No bad answers yet. Mark answers with 👎 in{" "}
-          <Link href="/logs" className="text-blue-600 hover:underline">
+          <Link href="/logs" className="text-violet-600 hover:underline">
             Logs
           </Link>{" "}
           to see them here.
@@ -136,13 +136,13 @@ function BadAnswerCard({
   }, [item.message_id, idealText, onUpdate]);
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-4 border border-slate-200">
+    <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mb-2">
         <span>{formatDateTime(item.created_at)}</span>
         <span>·</span>
         <Link
           href={`/logs?session=${item.session_id}`}
-          className="text-blue-600 hover:underline font-mono"
+          className="text-violet-600 hover:underline font-mono"
           title={item.session_id}
         >
           Session {truncateSessionId(item.session_id)}
@@ -165,7 +165,7 @@ function BadAnswerCard({
                 value={idealText}
                 onChange={(e) => setIdealText(e.target.value)}
                 placeholder="Enter ideal answer for training..."
-                className="w-full text-sm border border-slate-300 rounded px-2 py-1.5 text-slate-800"
+                className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 outline-none focus:border-slate-400"
                 rows={4}
               />
               <div className="flex gap-2 mt-2">
@@ -173,7 +173,7 @@ function BadAnswerCard({
                   type="button"
                   onClick={handleSave}
                   disabled={saving}
-                  className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded hover:bg-blue-700"
+                  className="text-sm bg-violet-600 text-white px-3 py-1.5 rounded-lg hover:bg-violet-700"
                 >
                   {saving ? "Saving…" : "Save"}
                 </button>
@@ -196,7 +196,7 @@ function BadAnswerCard({
               <button
                 type="button"
                 onClick={() => setEditing(true)}
-                className="text-xs text-blue-600 hover:underline shrink-0"
+                className="text-xs text-violet-600 hover:underline shrink-0"
               >
                 {item.ideal_answer ? "Edit" : "Add"}
               </button>
@@ -213,7 +213,7 @@ function BadAnswerCard({
               <button
                 type="button"
                 onClick={handleToggleDebug}
-                className="text-xs text-blue-600 hover:underline"
+                className="text-xs text-violet-600 hover:underline"
               >
                 {showDebug ? "Hide debug" : "Show debug"}
               </button>
@@ -226,7 +226,7 @@ function BadAnswerCard({
                   <button
                     type="button"
                     onClick={handleRetryDebug}
-                    className="ml-2 text-blue-600 hover:underline"
+                    className="ml-2 text-violet-600 hover:underline"
                   >
                     Retry
                   </button>

@@ -110,7 +110,7 @@ function MessageBubble({
             <button
               type="button"
               onClick={() => setShowIdeal(!showIdeal)}
-              className="text-xs text-blue-600 hover:underline"
+              className="text-xs text-violet-600 hover:underline"
             >
               {showIdeal ? "Cancel" : "Edit ideal answer"}
             </button>
@@ -121,14 +121,14 @@ function MessageBubble({
                   value={idealText}
                   onChange={(e) => setIdealText(e.target.value)}
                   placeholder="Ideal answer for training..."
-                  className="w-full text-sm border border-slate-300 rounded px-2 py-1 text-slate-800"
+                  className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 outline-none focus:border-slate-400"
                   rows={3}
                 />
                 <button
                   type="button"
                   onClick={handleSaveIdeal}
                   disabled={saving}
-                  className="mt-1 text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                  className="mt-1 text-xs bg-violet-600 text-white px-2 py-1 rounded-md hover:bg-violet-700"
                 >
                   Save ideal answer
                 </button>
@@ -203,9 +203,9 @@ function LogsPageContent() {
 
       <div className="flex flex-col md:flex-row gap-4">
         {/* Left: Sessions list */}
-        <div className="w-full md:w-1/3 bg-white rounded-lg shadow-md overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-200">
-            <h2 className="text-lg font-medium text-slate-800">Sessions</h2>
+        <div className="w-full md:w-1/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100">
+            <h2 className="text-base font-semibold text-slate-800">Sessions</h2>
           </div>
           <div className="max-h-[400px] overflow-y-auto">
             {loadingSessions ? (
@@ -220,7 +220,7 @@ function LogsPageContent() {
                       type="button"
                       onClick={() => setSelectedSessionId(s.session_id)}
                       className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors ${
-                        selectedSessionId === s.session_id ? "bg-blue-50 border-l-4 border-blue-600" : ""
+                        selectedSessionId === s.session_id ? "bg-violet-50 border-l-2 border-violet-500" : ""
                       }`}
                     >
                       <p className="text-xs font-mono text-slate-500 truncate" title={s.session_id}>
@@ -241,14 +241,14 @@ function LogsPageContent() {
         </div>
 
         {/* Right: Messages view */}
-        <div className="w-full md:w-2/3 bg-white rounded-lg shadow-md overflow-hidden">
+        <div className="w-full md:w-2/3 bg-white rounded-xl border border-slate-200 overflow-hidden">
           {!selectedSessionId ? (
             <div className="p-8 text-center text-slate-500">
               Select a session to view conversation.
             </div>
           ) : (
             <>
-              <div className="px-4 py-3 border-b border-slate-200">
+              <div className="px-4 py-3 border-b border-slate-100">
                 <p className="text-xs font-mono text-slate-500 break-all">
                   Session: {selectedSessionId}
                 </p>
@@ -261,7 +261,7 @@ function LogsPageContent() {
               </div>
               <div className="p-4 max-h-[400px] overflow-y-auto">
                 {error && (
-                  <div className="mb-4 text-red-600 text-sm bg-red-50 px-3 py-2 rounded-md">
+                  <div className="mb-4 text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
                     {error}
                   </div>
                 )}

@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { api, type ClientResponse } from "@/lib/api";
 
@@ -17,14 +16,10 @@ function DashboardContent() {
   const [publicId, setPublicId] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [docCount, setDocCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [copiedApiKey, setCopiedApiKey] = useState(false);
   const [copiedEmbed, setCopiedEmbed] = useState(false);
-  const [openaiKeyInput, setOpenaiKeyInput] = useState("");
-  const [openaiKeySaving, setOpenaiKeySaving] = useState(false);
-  const [openaiKeyError, setOpenaiKeyError] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -52,9 +47,6 @@ function DashboardContent() {
         setApiKey(client.api_key);
         setPublicId(client.public_id ?? null);
         setHasOpenaiKey(client.has_openai_key ?? false);
-
-        const docs = await api.documents.list();
-        setDocCount(docs.length);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -63,40 +55,6 @@ function DashboardContent() {
     }
     load();
   }, []);
-
-  async function saveOpenaiKey() {
-    setOpenaiKeyError("");
-    const key = openaiKeyInput.trim();
-    if (!key) return;
-    if (!key.startsWith("sk-")) {
-      setOpenaiKeyError("OpenAI API key must start with 'sk-'");
-      return;
-    }
-    setOpenaiKeySaving(true);
-    try {
-      await api.clients.update({ openai_api_key: key });
-      setHasOpenaiKey(true);
-      setOpenaiKeyInput("");
-    } catch (err) {
-      setOpenaiKeyError(err instanceof Error ? err.message : "Failed to save");
-    } finally {
-      setOpenaiKeySaving(false);
-    }
-  }
-
-  async function removeOpenaiKey() {
-    setOpenaiKeyError("");
-    setOpenaiKeySaving(true);
-    try {
-      await api.clients.update({ openai_api_key: null });
-      setHasOpenaiKey(false);
-      setOpenaiKeyInput("");
-    } catch (err) {
-      setOpenaiKeyError(err instanceof Error ? err.message : "Failed to remove");
-    } finally {
-      setOpenaiKeySaving(false);
-    }
-  }
 
   function copyApiKey() {
     if (apiKey) {
@@ -123,7 +81,7 @@ function DashboardContent() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-600">Loading...</div>
+        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
       </div>
     );
   }
@@ -137,132 +95,63 @@ function DashboardContent() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-2xl">
       {showVerificationBanner && (
-        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg">
+        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm">
           We sent a verification link to your email. Please check your inbox and click the link to verify your account.
         </div>
       )}
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
         {userEmail && (
-          <p className="text-slate-600 text-sm mt-1">{userEmail}</p>
+          <p className="text-slate-500 text-sm mt-1">{userEmail}</p>
         )}
       </div>
 
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-medium text-slate-800 mb-2">
-          Welcome{userEmail ? ", " + userEmail : ""}!
-        </h2>
-        <p className="text-slate-600 mb-4">Your API Key:</p>
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h2 className="text-base font-semibold text-slate-800 mb-1">Your API Key</h2>
+        <p className="text-slate-500 text-sm mb-3">Use this key to authenticate API requests.</p>
         <div className="flex items-center gap-2 flex-wrap">
-          <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-md text-sm text-slate-800 break-all">
+          <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all">
             {apiKey}
           </code>
           <button
             onClick={copyApiKey}
-            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
+            className="px-4 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 transition-colors"
           >
             {copiedApiKey ? "Copied!" : "Copy"}
           </button>
         </div>
       </div>
 
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-medium text-slate-800 mb-2">OpenAI API Key</h2>
-        {!hasOpenaiKey ? (
-          <>
-            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg mb-4">
-              ⚠️ Add your OpenAI API key to enable chat
-            </div>
-            <input
-              type="password"
-              placeholder="sk-..."
-              value={openaiKeyInput}
-              onChange={(e) => setOpenaiKeyInput(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md text-slate-800 mb-2"
-            />
-            <button
-              onClick={saveOpenaiKey}
-              disabled={openaiKeySaving || !openaiKeyInput.trim()}
-              className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
-            >
-              {openaiKeySaving ? "Saving..." : "Save"}
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="text-green-600 mb-2">✅ API key configured</p>
-            <input
-              type="password"
-              placeholder="sk-..."
-              value={openaiKeyInput}
-              onChange={(e) => setOpenaiKeyInput(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-md text-slate-800 mb-2"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={saveOpenaiKey}
-                disabled={openaiKeySaving || !openaiKeyInput.trim()}
-                className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 disabled:opacity-50"
-              >
-                {openaiKeySaving ? "Saving..." : "Update key"}
-              </button>
-              <button
-                onClick={removeOpenaiKey}
-                disabled={openaiKeySaving}
-                className="px-4 py-2 bg-slate-200 text-slate-700 text-sm font-medium rounded-md hover:bg-slate-300 disabled:opacity-50"
-              >
-                Remove key
-              </button>
-            </div>
-          </>
-        )}
-        {openaiKeyError && (
-          <p className="text-red-600 text-sm mt-2">{openaiKeyError}</p>
-        )}
-        <p className="text-slate-500 text-xs mt-2">
-          Your key is used for embeddings and chat. Get yours at platform.openai.com
-        </p>
-      </div>
+      {!hasOpenaiKey && (
+        <div className="bg-amber-50 border border-amber-100 text-amber-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+          OpenAI API key is not set —{" "}
+          <a href="/settings" className="underline font-medium">configure in Settings</a>
+        </div>
+      )}
 
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-medium text-slate-800 mb-2">Embed code</h2>
-        <p className="text-slate-600 mb-2 text-sm">
+      <div className="bg-white rounded-xl border border-slate-200 p-6">
+        <h2 className="text-base font-semibold text-slate-800 mb-1">Embed code</h2>
+        <p className="text-slate-500 text-sm mb-3">
           Add this snippet to your website HTML, right before{" "}
           <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code>:
         </p>
-        <pre className="bg-slate-100 p-4 rounded-md text-sm text-slate-800 overflow-x-auto mb-2">
+        <pre className="bg-slate-100 p-4 rounded-lg text-sm text-slate-800 overflow-x-auto mb-3">
           {getEmbedSnippet()}
         </pre>
-        <p className="text-slate-500 text-xs mb-4">
+        <p className="text-slate-400 text-xs mb-4">
           One-line embed — works on any domain. No CORS setup needed.
         </p>
         <button
           onClick={copyEmbedCode}
-          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700"
+          className="px-4 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 transition-colors"
         >
           {copiedEmbed ? "Copied!" : "Copy embed code"}
         </button>
       </div>
 
-      <div className="bg-white rounded-lg shadow-md p-6">
-        <h2 className="text-lg font-medium text-slate-800 mb-4">Quick links</h2>
-        <div className="flex flex-wrap gap-4">
-          <Link
-            href="/documents"
-            className="inline-flex items-center gap-2 text-blue-600 hover:underline"
-          >
-            Documents ({docCount ?? 0})
-          </Link>
-          <Link
-            href="/logs"
-            className="inline-flex items-center gap-2 text-blue-600 hover:underline"
-          >
-            Chat logs
-          </Link>
-        </div>
-      </div>
     </div>
   );
 }
@@ -271,7 +160,7 @@ export default function DashboardPage() {
   return (
     <Suspense fallback={
       <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-600">Loading...</div>
+        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
       </div>
     }>
       <DashboardContent />

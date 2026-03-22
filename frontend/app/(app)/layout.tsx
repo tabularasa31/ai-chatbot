@@ -1,4 +1,5 @@
 import { Navbar } from "@/components/Navbar";
+import { Sidebar } from "@/components/Sidebar";
 
 export default function AppLayout({
   children,
@@ -8,7 +9,10 @@ export default function AppLayout({
   return (
     <div className="min-h-screen bg-[#F8F9FA]">
       <Navbar />
-      <main className="max-w-4xl mx-auto px-4 py-8">{children}</main>
+      <Sidebar />
+      <main className="ml-[200px] pt-[calc(48px+32px)] pb-8 px-8 min-h-screen">
+        {children}
+      </main>
     </div>
   );
 }

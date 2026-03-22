@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-22 (TD-033, FI-021)
+**Last updated:** 2026-03-22 (UI-NAV sidebar redesign)
 
 ---
 
@@ -72,7 +72,11 @@
 | ID / area | What shipped | Where |
 |-----------|--------------|-------|
 | **FI-UI** | Dark brand, navbar, auth pages, post-login transition | `frontend/components/Navbar.tsx`, auth pages, `AuthTransition` |
-| Dashboard, Documents, Logs, Review, Debug, **Escalations** | Main app sections; **Escalations** = ticket inbox (FI-ESC) | `frontend/app/(app)/`, `/escalations` |
+| **UI-NAV** | Persistent sidebar (icons, active state, Settings/Admin sections); slim fixed navbar (brand + email + logout only) | `frontend/components/Sidebar.tsx`, `frontend/components/Navbar.tsx`, `frontend/app/(app)/layout.tsx` |
+| **Knowledge hub** | `/knowledge` (replaces `/documents`): external source cards (GitHub + coming-soon) + unified indexed sources table with type badges, health, actions | `frontend/app/(app)/knowledge/page.tsx` |
+| **Agents** | `/settings`: OpenAI API key management (moved from Dashboard); status banners; save/update/remove flow | `frontend/app/(app)/settings/page.tsx` |
+| Dashboard, **Knowledge**, Logs, Review, Debug, **Escalations** | Main app sections | `frontend/app/(app)/` |
+| **Design system** | Unified card/button/link/input/error style across all app pages; `rounded-xl border border-slate-200`, `bg-violet-600` primary, `text-violet-600` links | All `frontend/app/(app)/**` pages |
 | Landing | Marketing page, Sign in | `frontend/app/` (landing routes) |
 
 ---
@@ -98,6 +102,7 @@
 | [`README.md`](../README.md) | Runbook, short API overview |
 | [`qa/PRODUCT-QA-TEST-PLAN.md`](./qa/PRODUCT-QA-TEST-PLAN.md) | Manual QA (Russian) |
 | [`qa/FI-ESC-escalation-tickets-qa.md`](./qa/FI-ESC-escalation-tickets-qa.md) | FI-ESC escalation — чеклист для тестировщика |
+| [`qa/UI-NAV-sidebar-redesign-qa.md`](./qa/UI-NAV-sidebar-redesign-qa.md) | UI-NAV sidebar redesign — QA checklist |
 
 ---
 

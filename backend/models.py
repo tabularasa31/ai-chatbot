@@ -60,6 +60,7 @@ class DocumentType(str, enum.Enum):
 class DocumentStatus(str, enum.Enum):
     processing = "processing"
     ready = "ready"
+    embedding = "embedding"
     error = "error"
 
 

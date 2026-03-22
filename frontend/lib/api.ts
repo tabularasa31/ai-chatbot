@@ -348,6 +348,20 @@ export const api = {
         created_at: string;
       };
     },
+    async getById(id: string) {
+      const res = await authFetch(`${BASE_URL}/documents/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get document"));
+      return data as {
+        id: string;
+        filename: string;
+        file_type: string;
+        status: string;
+        created_at: string;
+        updated_at: string;
+        health_status?: DocumentHealthStatus | null;
+      };
+    },
     async delete(id: string) {
       const res = await authFetch(`${BASE_URL}/documents/${id}`, { method: "DELETE" });
       if (res.status !== 204 && !res.ok) {
@@ -377,7 +391,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create embeddings"));
-      return data as { document_id: string; chunks_created: number; status: string };
+      return data as { document_id: string; status: string };
     },
   },
   chat: {

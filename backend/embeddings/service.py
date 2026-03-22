@@ -128,7 +128,7 @@ def create_embeddings_for_document(
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if doc.status != DocumentStatus.ready:
+    if doc.status not in (DocumentStatus.ready, DocumentStatus.embedding):
         raise HTTPException(
             status_code=400,
             detail="Document is not ready for embedding. Status must be 'ready'.",
@@ -195,6 +195,35 @@ def create_embeddings_for_document(
     except Exception:
         pass
     return embeddings
+
+
+def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
+    """
+    Background task: create embeddings using a dedicated DB session.
+
+    Sets document status to `ready` on success or `error` on failure.
+    Must be called via FastAPI BackgroundTasks (not from a request handler directly).
+    """
+    import logging
+
+    from backend.core.db import SessionLocal
+
+    logger = logging.getLogger(__name__)
+    db = SessionLocal()
+    try:
+        create_embeddings_for_document(document_id, db, api_key=api_key)
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc:
+            doc.status = DocumentStatus.ready
+            db.commit()
+    except Exception:
+        logger.exception("Background embedding failed for document %s", document_id)
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if doc:
+            doc.status = DocumentStatus.error
+            db.commit()
+    finally:
+        db.close()
 
 
 def get_embeddings_for_document(

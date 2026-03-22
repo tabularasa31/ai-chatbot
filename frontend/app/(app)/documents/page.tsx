@@ -16,6 +16,7 @@ type Document = {
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     processing: "bg-yellow-100 text-yellow-800",
+    embedding: "bg-blue-100 text-blue-800",
     ready: "bg-green-100 text-green-800",
     error: "bg-red-100 text-red-800",
   };
@@ -103,6 +104,22 @@ export default function DocumentsPage() {
     load();
   }, []);
 
+  async function pollUntilEmbedded(docId: string, timeoutMs = 120_000) {
+    const interval = 2_000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, interval));
+      const updated = await api.documents.getById(docId);
+      setDocuments((prev) =>
+        prev.map((d) => (d.id === docId ? { ...d, status: updated.status } : d))
+      );
+      if (updated.status === "ready" || updated.status === "error") {
+        return updated.status;
+      }
+    }
+    return "timeout";
+  }
+
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -112,6 +129,7 @@ export default function DocumentsPage() {
       const doc = await api.documents.upload(file);
       setDocuments((prev) => [doc, ...prev]);
       await api.embeddings.create(doc.id);
+      await pollUntilEmbedded(doc.id);
       await load();
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
@@ -171,7 +189,11 @@ export default function DocumentsPage() {
             className="text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:bg-blue-50 file:text-blue-700 file:font-medium hover:file:bg-blue-100 file:cursor-pointer disabled:opacity-50"
           />
         </label>
-        {uploading && <span className="ml-4 text-slate-600 text-sm">Uploading...</span>}
+        {uploading && (
+          <span className="ml-4 text-slate-600 text-sm animate-pulse">
+            Processing…
+          </span>
+        )}
         {uploadError && (
           <div className="mt-4 text-red-600 text-sm bg-red-50 px-3 py-2 rounded-md">
             {uploadError}

@@ -28,9 +28,10 @@ Key recommendations added to this backlog:
 - HNSW: индекс в миграции (раньше).
 - BM25: `rank-bm25` в процессе запроса по чанкам клиента + RRF с векторным ранжированием (`backend/search/service.py`). Postgres full-text (`tsvector`) не используется — при росте корпуса см. кэширование / FTS в бэклоге.
 
-### [FI-021] Embeddings generation → BackgroundTasks
-- `POST /embeddings/documents/{id}` is synchronous → timeout with 20+ chunks.
-- Move to FastAPI BackgroundTasks: `202 Accepted` immediately, status `pending → embedded`.
+### ~~[FI-021] Embeddings generation → BackgroundTasks~~ ✅ Done (2026-03-22)
+- `POST /embeddings/documents/{id}` returns `202 Accepted` immediately.
+- Added `DocumentStatus.embedding`; background task sets `ready` on success, `error` on failure.
+- Frontend polls `GET /documents/{id}` every 2 s until status leaves `embedding`.
 
 ### [FI-026] GitHub Actions CI (pytest + ruff + eslint)
 - 108+ tests without auto-run on PR.
@@ -104,8 +105,8 @@ Key recommendations added to this backlog:
 - Add `deleted_at` column + restore option in dashboard.
 - **Effort:** 1 day
 
-### [TD-035] background_tasks for Embeddings (already tracked as FI-021)
-- See FI-021 above. Grok confirms: critical for UX with large docs.
+### ~~[TD-035] background_tasks for Embeddings (already tracked as FI-021)~~ ✅ Done
+- See FI-021 above.
 
 ### [TD-036] JSDoc for Widget (vanilla JS)
 - embed.js is ~100 lines, no type hints.

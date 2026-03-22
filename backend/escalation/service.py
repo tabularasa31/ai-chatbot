@@ -95,19 +95,30 @@ def compute_priority(
     return EscalationPriority.medium
 
 
+_TICKET_NUM_RE = re.compile(r"^ESC-(\d+)$", re.IGNORECASE)
+
+
 def generate_ticket_number(client_id: uuid.UUID, db: Session) -> str:
+    """
+    Generate next sequential ticket number for client.
+
+    Uses MAX(ticket_number) + 1. SELECT FOR UPDATE SKIP LOCKED is an advisory
+    lock on PostgreSQL; SQLite (used in tests) ignores it gracefully.
+    Duplicate prevention is the UniqueConstraint; retry logic lives in
+    create_escalation_ticket().
+    """
     rows = (
         db.query(EscalationTicket.ticket_number)
         .filter(EscalationTicket.client_id == client_id)
+        .with_for_update(skip_locked=True)
         .all()
     )
     max_n = 0
     for (num,) in rows:
-        if isinstance(num, str) and num.upper().startswith("ESC-"):
-            try:
-                max_n = max(max_n, int(num[4:]))
-            except ValueError:
-                continue
+        if isinstance(num, str):
+            m = _TICKET_NUM_RE.match(num)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
     return f"ESC-{max_n + 1:04d}"
 
 
@@ -165,11 +176,12 @@ def create_escalation_ticket(
     user_context: dict | None = None,
     user_note: str | None = None,
 ) -> EscalationTicket:
+    from sqlalchemy.exc import IntegrityError
+
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise ValueError("client not found")
 
-    ticket_number = generate_ticket_number(client_id, db)
     summary: str | None = None
     if chat_id:
         summary = _conversation_summary_from_chat(chat_id, db)
@@ -183,26 +195,38 @@ def create_escalation_ticket(
 
     priority = compute_priority(trigger, plan, user_context)
 
-    ticket = EscalationTicket(
-        client_id=client_id,
-        ticket_number=ticket_number,
-        primary_question=primary_question[:8000],
-        conversation_summary=summary,
-        trigger=trigger,
-        best_similarity_score=best_similarity_score,
-        retrieved_chunks_preview=retrieved_chunks,
-        user_id=str(uid) if uid else None,
-        user_email=str(email) if email else None,
-        user_name=str(name) if name else None,
-        plan_tier=str(plan) if plan else None,
-        user_note=user_note,
-        priority=priority,
-        status=EscalationStatus.open,
-        chat_id=chat_id,
-        session_id=session_id,
-    )
-    db.add(ticket)
-    db.commit()
+    ticket: EscalationTicket | None = None
+    for attempt in range(3):
+        ticket_number = generate_ticket_number(client_id, db)
+        ticket = EscalationTicket(
+            client_id=client_id,
+            ticket_number=ticket_number,
+            primary_question=primary_question[:8000],
+            conversation_summary=summary,
+            trigger=trigger,
+            best_similarity_score=best_similarity_score,
+            retrieved_chunks_preview=retrieved_chunks,
+            user_id=str(uid) if uid else None,
+            user_email=str(email) if email else None,
+            user_name=str(name) if name else None,
+            plan_tier=str(plan) if plan else None,
+            user_note=user_note,
+            priority=priority,
+            status=EscalationStatus.open,
+            chat_id=chat_id,
+            session_id=session_id,
+        )
+        db.add(ticket)
+        try:
+            db.commit()
+            break
+        except IntegrityError:
+            db.rollback()
+            if attempt == 2:
+                raise
+            continue
+
+    assert ticket is not None
     db.refresh(ticket)
 
     try:

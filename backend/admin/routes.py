@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
 from backend.admin.schemas import (
@@ -81,12 +81,11 @@ def get_client_metrics(
         users_count = db.query(User).filter(User.client_id == c.id).count()
         documents_count = db.query(Document).filter(Document.client_id == c.id).count()
         embedded_documents_count = (
-            db.query(Document)
+            db.query(func.count(distinct(Document.id)))
             .filter(Document.client_id == c.id)
-            .join(Embedding)
-            .distinct()
-            .count()
-        )
+            .join(Embedding, Embedding.document_id == Document.id)
+            .scalar()
+        ) or 0
         chat_sessions_count = db.query(Chat).filter(Chat.client_id == c.id).count()
         messages_user_count = (
             db.query(Message)

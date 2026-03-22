@@ -1,11 +1,15 @@
 """FastAPI application entry point."""
 
+import logging
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+
+logger = logging.getLogger(__name__)
 
 from backend.core.limiter import limiter
 from backend.admin.routes import admin_router
@@ -41,6 +45,20 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Browser-Locale"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catch all unhandled exceptions so they flow through CORSMiddleware properly.
+
+    Without this, ServerErrorMiddleware sends the 500 response bypassing
+    CORSMiddleware's send wrapper, stripping Access-Control-Allow-Origin headers.
+    """
+    logger.exception("Unhandled exception: %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router)

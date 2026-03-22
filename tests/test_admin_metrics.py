@@ -147,7 +147,9 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Metrics Client"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    cl_data = cl_resp.json()
+    client_id = uuid.UUID(cl_data["id"])
+    public_id = cl_data["public_id"]
 
     user = db_session.query(User).filter(User.email == "admin2@example.com").first()
     assert user is not None
@@ -196,7 +198,9 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     items = data["items"]
     our = next((i for i in items if i["client_id"] == str(client_id)), None)
     assert our is not None
-    assert our["name"] == "Metrics Client"
+    assert our["public_id"] == public_id
+    assert our["owner_email"] == "admin2@example.com"
+    assert our["has_openai_key"] is False
     assert our["users_count"] >= 1
     assert our["documents_count"] >= 1
     assert our["embedded_documents_count"] >= 1

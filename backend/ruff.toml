@@ -1,0 +1,16 @@
+line-length = 100
+target-version = "py311"
+
+# Alembic revisions: unused imports / whitespace are common; plan defers migration edits for CI.
+extend-exclude = ["migrations"]
+
+[lint]
+# E/F/W only: isort (I) would require widespread import reordering across backend;
+# run `ruff check backend --select I --fix` when you want to normalize imports.
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+# Imports after module-level setup (logging / constants) are intentional.
+"main.py" = ["E402"]
+"chat/service.py" = ["E402"]

@@ -38,6 +38,13 @@
 
 ### Bug fixes & tech debt
 
+- ✅ **FI-026: GitHub Actions CI**
+  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to `main` and `deploy` — job **backend** (Python 3.11): `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend` with SQLite test env vars; job **frontend** (Node 20): `npm ci`, `npm run lint`, `npm run build` with `NEXT_PUBLIC_API_URL=https://ci.invalid`
+  - [`backend/ruff.toml`](../backend/ruff.toml): E/F/W lint; `extend-exclude` migrations; per-file `E402` for intentional late imports in `main.py` and `chat/service.py`
+  - [`backend/requirements.txt`](../backend/requirements.txt): added `ruff>=0.3.0` and `pgvector>=0.2.0` (was missing vs root `requirements.txt`; needed for `backend.models` import in tests)
+  - Test fix: [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — assert `public_id` / `owner_email` / `has_openai_key` (API no longer returns client `name` on metrics row)
+  - [`.gitignore`](../.gitignore): `.venv-ci/` for local CI parity venvs
+
 - ✅ **TD-033: Per-document-type chunking config**
   - Заменён глобальный хардкод `chunk_text(doc.parsed_text)` на `CHUNKING_CONFIG` dict в `backend/embeddings/service.py`
   - Значения по типу: `swagger` 500 chars / 0 overlap, `markdown` 700/1, `pdf` 1000/1; fallback 700/1
@@ -186,16 +193,14 @@
 1. **Test FI-EMBED-MVP on real domain** — waiting for domain admin to update embed script
 
 ### Backlog (P1–P2):
-2. **FI-026** — CI/CD pipeline (GitHub Actions: pytest + ruff + eslint on PR)
-4. **FI-039** — Daily summary email (Brevo)
-5. **FI-040** — Client analytics dashboard
-6. **FI-041** — Status page integration (real-time incident awareness)
+2. **FI-039** — Daily summary email (Brevo)
+3. **FI-040** — Client analytics dashboard
+4. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
-6. **CI/CD pipeline** (GitHub Actions: pytest + ruff + eslint on PR)
-7. **Langfuse tracing** (LLM observability)
-8. **Per-client system prompt**
-9. **Multiple file upload**
+5. **Langfuse tracing** (LLM observability)
+6. **Per-client system prompt**
+7. **Multiple file upload**
 
 ---
 
@@ -240,6 +245,8 @@ User → getchat9.live (Vercel, Next.js)
 Git branches:
   main   → development (no auto-deploy)
   deploy → production (Vercel + Railway listen here)
+
+CI: GitHub Actions (`.github/workflows/ci.yml`) on push/PR to main + deploy
 ```
 
 ---
@@ -250,7 +257,7 @@ Git branches:
 |-------|----------|-------|
 | FI-EMBED-MVP real-domain test | 🟡 P1 | Waiting for admin to update embed script |
 | Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
-| No CI/CD pipeline | 🟡 P2 | GitHub Actions needed |
+| ~~No CI/CD pipeline~~ | — | ✅ FI-026: `.github/workflows/ci.yml` |
 | Footer links hardcoded | 🟢 P3 | Update when docs site ready |
 
 ---

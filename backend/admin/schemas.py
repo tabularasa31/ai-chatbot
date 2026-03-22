@@ -24,7 +24,8 @@ class AdminClientMetricsItem(BaseModel):
     """Per-client metrics row."""
 
     client_id: UUID
-    name: str
+    public_id: str
+    owner_email: str | None
     users_count: int
     documents_count: int
     embedded_documents_count: int

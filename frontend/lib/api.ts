@@ -114,7 +114,8 @@ export type AdminMetricsSummary = {
 
 export type AdminClientMetricsItem = {
   client_id: string;
-  name: string;
+  public_id: string;
+  owner_email: string | null;
   users_count: number;
   documents_count: number;
   embedded_documents_count: number;

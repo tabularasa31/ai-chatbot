@@ -128,7 +128,10 @@ export default function AdminMetricsPage() {
             <thead className="bg-slate-50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
-                  Client
+                  Public ID
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
+                  Email
                 </th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Users
@@ -159,7 +162,8 @@ export default function AdminMetricsPage() {
             <tbody className="divide-y divide-slate-200">
               {clients.map((c) => (
                 <tr key={c.client_id} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 text-sm text-slate-800 font-medium">{c.name}</td>
+                  <td className="px-4 py-3 text-sm text-slate-800 font-medium">{c.public_id}</td>
+                  <td className="px-4 py-3 text-sm text-slate-600">{c.owner_email ?? "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-600 text-right">
                     {c.users_count}
                   </td>

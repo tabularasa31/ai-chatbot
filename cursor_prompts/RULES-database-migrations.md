@@ -32,9 +32,10 @@ alembic check                  # verify model/migration sync
 ## CREATING NEW MIGRATIONS
 
 1. **Create the migration file manually** — do NOT use `alembic revision --autogenerate` against production DB
-2. Set correct `down_revision` — it must point to the current head
-3. `upgrade()` adds columns/tables, `downgrade()` removes them — write both, but never run downgrade
-4. Test by reading the migration file — not by running downgrade/upgrade cycles
+2. Set correct `down_revision` — it must point to the current head (`alembic heads` before you start)
+3. **Normal migrations:** `upgrade()` adds columns/tables, `downgrade()` reverses them — write both for documentation and local discipline, but **never run downgrade** against shared or production DBs
+4. Test by reading the migration file and running **`alembic upgrade head`** on a throwaway/local DB — not by downgrade/upgrade cycles
+5. **Repair / idempotent migrations** (schema drift, “column already exists” on some envs): in `upgrade()`, use `inspect()` or SQL `IF NOT EXISTS` so applying twice is safe. `downgrade()` may be a **documented no-op** if reversing would drop data or collide with older revisions — note this in the file docstring (example: `repair_users_is_admin_column.py`)
 
 ```bash
 # Correct flow:

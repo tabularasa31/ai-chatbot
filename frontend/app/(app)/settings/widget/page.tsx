@@ -105,8 +105,8 @@ function makeWidgetIdentityToken({
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-900">Widget · API keys</h1>
-        <p className="mt-1 text-slate-600 text-sm">
+        <h1 className="text-2xl font-semibold text-slate-800">Widget · API keys</h1>
+        <p className="mt-1 text-slate-500 text-sm">
           Signed identity tokens let the embed know who is chatting (plan tier, locale, audience)
           without putting PII into the page.
         </p>
@@ -119,8 +119,8 @@ function makeWidgetIdentityToken({
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-4">
-        <h2 className="text-lg font-medium text-slate-900">Identified mode</h2>
-        <p className="text-slate-600 text-sm">
+        <h2 className="text-base font-semibold text-slate-800">Identified mode</h2>
+        <p className="text-slate-500 text-sm">
           Status:{" "}
           <strong>
             {status?.has_secret
@@ -139,7 +139,7 @@ function makeWidgetIdentityToken({
               type="button"
               disabled={busy}
               onClick={handleGenerate}
-              className="rounded-lg bg-[#0A0A0F] text-[#FAF5FF] px-4 py-2 text-sm font-medium disabled:opacity-50"
+              className="rounded-lg bg-violet-600 text-white px-4 py-2 text-sm font-medium hover:bg-violet-700 disabled:opacity-50"
             >
               Generate signing secret
             </button>
@@ -148,7 +148,7 @@ function makeWidgetIdentityToken({
               type="button"
               disabled={busy}
               onClick={handleRotate}
-              className="rounded-lg border border-slate-300 text-slate-800 px-4 py-2 text-sm font-medium disabled:opacity-50"
+              className="rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 text-sm font-medium disabled:opacity-50 transition-colors"
             >
               Rotate secret
             </button>
@@ -177,7 +177,7 @@ function makeWidgetIdentityToken({
       )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-3">
-        <h2 className="text-lg font-medium text-slate-900">Integration health (7 days)</h2>
+        <h2 className="text-base font-semibold text-slate-800">Integration health (7 days)</h2>
         <ul className="text-sm text-slate-600 space-y-1">
           <li>
             Identified session rate:{" "}
@@ -195,8 +195,8 @@ function makeWidgetIdentityToken({
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm space-y-3">
-        <h2 className="text-lg font-medium text-slate-900">Server-side token (Node.js)</h2>
-        <p className="text-slate-600 text-sm">
+        <h2 className="text-base font-semibold text-slate-800">Server-side token (Node.js)</h2>
+        <p className="text-slate-500 text-sm">
           Call <code className="text-slate-800">POST /widget/session/init</code> with{" "}
           <code className="text-slate-800">api_key</code> and optional{" "}
           <code className="text-slate-800">identity_token</code>. Use your tenant public ID as{" "}

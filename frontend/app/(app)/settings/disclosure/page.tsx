@@ -67,37 +67,38 @@ export default function DisclosureSettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-2xl font-semibold text-[#0A0A0F] mb-2">Response controls</h1>
-      <p className="text-sm text-gray-600 mb-6">
-        One setting for your whole tenant: every chat (widget and API) uses this response style. Same rules for
-        all end-users.
-      </p>
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-2xl font-semibold text-slate-800">Response controls</h1>
+        <p className="text-sm text-slate-500 mt-1">
+          One setting for your whole tenant: every chat (widget and API) uses this response style.
+        </p>
+      </div>
 
       {loading ? (
-        <p className="text-sm text-gray-500">Loading…</p>
+        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
       ) : (
         <>
           {error && (
-            <div className="mb-4 rounded-md bg-red-50 text-red-800 text-sm px-3 py-2 border border-red-100">
+            <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
               {error}
             </div>
           )}
           {savedOk && (
-            <div className="mb-4 rounded-md bg-emerald-50 text-emerald-800 text-sm px-3 py-2 border border-emerald-100">
+            <div className="rounded-lg bg-emerald-50 text-emerald-700 text-sm px-3 py-2 border border-emerald-100">
               Saved.
             </div>
           )}
 
-          <fieldset className="space-y-4">
-            <legend className="text-sm font-medium text-[#0A0A0F] mb-3">Response detail level</legend>
+          <fieldset className="space-y-3">
+            <legend className="text-sm font-semibold text-slate-800 mb-1">Response detail level</legend>
             {OPTIONS.map((opt) => (
               <label
                 key={opt.value}
-                className={`flex gap-3 p-4 rounded-lg border cursor-pointer transition-colors ${
+                className={`flex gap-3 p-4 rounded-xl border cursor-pointer transition-colors ${
                   level === opt.value
-                    ? "border-[#E879F9] bg-[#FAF5FF]/50"
-                    : "border-gray-200 bg-white hover:border-gray-300"
+                    ? "border-violet-400 bg-violet-50/50"
+                    : "border-slate-200 bg-white hover:border-slate-300"
                 }`}
               >
                 <input
@@ -109,8 +110,8 @@ export default function DisclosureSettingsPage() {
                   className="mt-1"
                 />
                 <div>
-                  <div className="font-medium text-[#0A0A0F]">{opt.label}</div>
-                  <div className="text-sm text-gray-600 mt-1">{opt.description}</div>
+                  <div className="font-medium text-slate-800">{opt.label}</div>
+                  <div className="text-sm text-slate-500 mt-1">{opt.description}</div>
                 </div>
               </label>
             ))}
@@ -120,7 +121,7 @@ export default function DisclosureSettingsPage() {
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="mt-6 px-4 py-2 rounded-md bg-[#0A0A0F] text-[#FAF5FF] text-sm font-medium disabled:opacity-50 hover:bg-[#1a1a24]"
+            className="mt-6 px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700"
           >
             {saving ? "Saving…" : "Save"}
           </button>

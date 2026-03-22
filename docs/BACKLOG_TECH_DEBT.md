@@ -55,9 +55,8 @@ Key recommendations added to this backlog:
 - `docker-compose.yml` with pgvector/pgvector:pg15 + healthcheck.
 - `docker compose up` instead of `docker run ...`.
 
-### [Refactor] Dead code in backend/auth/middleware.py
-- `JWTMiddleware` is no longer used.
-- Remove unused class.
+### ~~[Refactor] Dead code in backend/auth/middleware.py~~ ✅ Already gone
+- `JWTMiddleware` не найден в кодовой базе — был удалён ранее.
 
 ### [FI-020] asyncpg + SQLAlchemy async
 - Synchronous code blocks Uvicorn worker for 1–3 sec on OpenAI calls.
@@ -93,11 +92,10 @@ Key recommendations added to this backlog:
 - Dashboard chart: avg latency per day, retrieval mode mix (в т.ч. `hybrid` на Postgres).
 - **Effort:** 1 day
 
-### [TD-033] Chunking Strategy Configuration
-- Currently: fixed sentence-aware `chunk_text()` in `backend/embeddings/service.py` (`chunk_size`, `overlap_sentences`).
-- Expose to client: `chunk_size`, `overlap_sentences` / token targets, optional `splitter_type` in settings.
-- Options: current sentence splitter, future markdown-aware / structural / semantic.
-- **Effort:** 1-2 days
+### ~~[TD-033] Chunking Strategy Configuration~~ ✅ Done (2026-03-22)
+- Клиентские настройки не нужны — выбраны оптимальные значения по типу документа.
+- `CHUNKING_CONFIG` в `backend/embeddings/service.py`: `swagger` 500/0, `markdown` 700/1, `pdf` 1000/1; fallback 700/1.
+- Для будущих типов (`logs` 300/0, `code` 600/1) конфиг уже добавлен.
 
 ### [TD-034] Soft-Delete for Documents
 - Currently: hard delete removes document and embeddings immediately.

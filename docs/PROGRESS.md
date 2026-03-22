@@ -9,6 +9,13 @@
 
 ### Bug fixes & tech debt
 
+- ✅ **TD-033: Per-document-type chunking config**
+  - Заменён глобальный хардкод `chunk_text(doc.parsed_text)` на `CHUNKING_CONFIG` dict в `backend/embeddings/service.py`
+  - Значения по типу: `swagger` 500 chars / 0 overlap, `markdown` 700/1, `pdf` 1000/1; fallback 700/1
+  - Предзаполнены будущие типы: `logs` 300/0, `code` 600/1
+  - Клиентских настроек нет — конфиг централизованный, правится в одном месте в коде
+  - Ветка: `chore/td-033-chunking-config`
+
 - ✅ **FI-021: Background embeddings** (async, `BackgroundTasks`)
   - `POST /embeddings/documents/{id}` возвращает `202 Accepted` немедленно; генерация чанков и вызов OpenAI уходят в `FastAPI.BackgroundTasks` с собственной DB-сессией (`SessionLocal`)
   - Новый статус `DocumentStatus.embedding` (синий badge): `ready → embedding → ready|error`
@@ -168,6 +175,7 @@
 - ✅ Document upload (PDF, Markdown, Swagger, Text)
 - ✅ **Async embedding** (FI-021): `202 Accepted` + background task, polling по статусу `embedding → ready|error`
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
+- ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Multi-tenant isolation (client_id scoping)

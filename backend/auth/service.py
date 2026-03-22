@@ -129,5 +129,9 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
     user.password_hash = hash_password(new_password)
     user.reset_password_token = None
     user.reset_password_expires_at = None
+    # Password reset via email link proves ownership — mark as verified
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_expires_at = None
     db.commit()
     return True

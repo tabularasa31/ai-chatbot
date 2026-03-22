@@ -96,6 +96,19 @@ npm run dev
 
 ---
 
+## CI (GitHub Actions)
+
+On every **push** and **pull request** to **`main`** and **`deploy`**, GitHub runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): **Ruff** + **pytest** for the backend (from the repo root, suite in `tests/`) and **ESLint** + **`next build`** for the frontend.
+
+**Local checks** (after `pip install -r backend/requirements.txt`):
+
+```bash
+ruff check backend
+pytest tests/ -q
+```
+
+---
+
 ## Environment Variables
 
 | Variable | Layer | Description |

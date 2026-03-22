@@ -1,39 +1,34 @@
-# Infrastructure: CI/CD GitHub Actions — reference (implemented)
+# Infrastructure: CI/CD GitHub Actions — reference (FI-026, implemented)
 
-This prompt described **FI-026**, now implemented. Use this file as the **source of truth** for how CI works in this repo; do not copy older snippets that run `pytest` from `backend/` or require a Postgres service for the current test suite.
-
----
-
-## What runs
-
-Workflow: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
-
-**Triggers:** `push` and `pull_request` to `main` and `deploy`.
-
-**Backend job**
-
-- Python **3.11**, `pip install -r backend/requirements.txt` (from repository root).
-- `ruff check backend` — config: [`backend/ruff.toml`](../backend/ruff.toml) (E/F/W; migrations excluded; intentional late imports in `main.py` / `chat/service.py` ignored for E402).
-- `pytest tests/ -q --cov=backend --cov-report=term-missing` — **must run from the repository root**; tests live in [`tests/`](../tests/) and use **SQLite** via [`tests/conftest.py`](../tests/conftest.py). No Postgres service in CI.
-
-**Frontend job**
-
-- Node **20**, `npm ci` in `frontend/`, `npm run lint`, `npm run build`.
-- `NEXT_PUBLIC_API_URL=https://ci.invalid` for build only (placeholder; real API not required).
-
-**Secrets:** not required for CI — test `ENCRYPTION_KEY` and related vars are set inline in the workflow (aligned with conftest defaults).
+Справка по текущему CI в репозитории. Не использовать старые инструкции с `cd backend && pytest` или обязательным Postgres в CI — тесты в [`tests/`](../tests/) на **SQLite**.
 
 ---
 
-## Dependencies
+## Workflow
 
-- [`backend/requirements.txt`](../backend/requirements.txt) includes **`pgvector>=0.2.0`** (needed to import `backend.models` in tests) and **`ruff>=0.3.0`**.
+**Файл:** [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
+
+**Триггеры:** `push` и `pull_request` на ветки **`main`** и **`deploy`**.
+
+| Job | Что делает |
+|-----|------------|
+| **Backend (pytest + ruff)** | Python 3.11, из корня репо: `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend --cov-report=term-missing` |
+| **Frontend (eslint + build)** | Node 20, в `frontend/`: `npm ci`, `npm run lint`, `npm run build` с `NEXT_PUBLIC_API_URL=https://ci.invalid` |
+
+Переменные для тестов заданы в job (секреты GitHub **не** нужны для CI).
 
 ---
 
-## Local parity
+## Конфиг и зависимости
 
-From repo root (Python 3.11+ recommended):
+- [`backend/ruff.toml`](../backend/ruff.toml) — правила E/F/W; `extend-exclude` для `migrations/`; per-file `E402` для `main.py` и `chat/service.py`.
+- [`backend/requirements.txt`](../backend/requirements.txt) — **`ruff>=0.3.0`**, **`pgvector>=0.2.0`** (импорт `backend.models` в тестах).
+
+---
+
+## Локально (как в CI)
+
+Из корня репозитория (Python 3.11+):
 
 ```bash
 pip install -r backend/requirements.txt
@@ -49,7 +44,13 @@ cd frontend && npm ci && npm run lint && NEXT_PUBLIC_API_URL=https://ci.invalid 
 
 ---
 
-## PR description template (English)
+## Прод: `deploy`
+
+Рекомендуется PR **`main` → `deploy`** после зелёного CI. Опционально — **branch ruleset** на `deploy` (обязательный PR + required checks: `Backend (pytest + ruff)`, `Frontend (eslint + build)`).
+
+---
+
+## Шаблон описания PR (English)
 
 ```markdown
 ## Summary

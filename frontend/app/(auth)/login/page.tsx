@@ -1,19 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, getToken, saveToken } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 import { AuthTransition } from "@/components/AuthTransition";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
+
+  const notVerified = searchParams.get("error") === "email_not_verified";
 
   const onAuthTransitionComplete = useCallback(() => {
     router.replace("/dashboard");
@@ -47,6 +50,11 @@ export default function LoginPage() {
     <AuthCard>
       {transitioning && <AuthTransition onComplete={onAuthTransitionComplete} />}
       <h1 className={authStyles.heading}>Sign in</h1>
+      {notVerified && (
+        <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm rounded-lg px-4 py-3 mb-2">
+          Please verify your email before signing in. Check your inbox for the verification link.
+        </div>
+      )}
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label htmlFor="email" className={authStyles.label}>
@@ -96,5 +104,13 @@ export default function LoginPage() {
         </Link>
       </p>
     </AuthCard>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

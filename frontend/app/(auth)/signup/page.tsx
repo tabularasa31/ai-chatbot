@@ -53,6 +53,12 @@ export default function SignupPage() {
           <p className="text-[#FAF5FF]/40 text-xs">
             Didn&apos;t get the email? Check your spam folder.
           </p>
+          <button
+            onClick={() => setVerificationSent(false)}
+            className={authStyles.ctaLink}
+          >
+            ← Back
+          </button>
         </div>
       </AuthCardCentered>
     );

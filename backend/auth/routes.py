@@ -100,6 +100,8 @@ def login(
     user = authenticate_user(body.email, body.password, db)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.is_verified:
+        raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox.")
     token, expires_in = create_token_for_user(user)
     return AuthResponse(
         token=token,

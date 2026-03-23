@@ -1,0 +1,27 @@
+---
+description: Git workflow rules — commit and push discipline
+alwaysApply: true
+---
+
+# Git Workflow
+
+## Never do without explicit instruction
+
+- **Never push to `main`** — not under any circumstances, unless the owner explicitly says "push to main"
+- **Never merge into `main`** without explicit instruction
+- **Never push at all** without an explicit command from the owner
+- **Never commit** without an explicit request
+
+## Required workflow
+
+1. Make code changes
+2. Report what was done — wait for owner to review
+3. Only commit after an explicit "commit" instruction
+4. Only push after an explicit "push" instruction — always to a **feature branch**, never to `main`
+5. Only push to `main` after an explicit "push to main" or "merge to main" instruction
+
+## Branches
+
+- All changes go through a dedicated feature branch (e.g. `feature/auth-refactor`)
+- `git push origin main` is **forbidden** without a direct "push to main" instruction
+- Name the branch after the task or propose a name to the owner

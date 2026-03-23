@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, getToken, saveToken } from "@/lib/api";
+import { api, getToken } from "@/lib/api";
 import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 export default function SignupPage() {
@@ -15,9 +15,7 @@ export default function SignupPage() {
   const [verificationSent, setVerificationSent] = useState(false);
 
   useEffect(() => {
-    const token = getToken();
-    if (token) {
-      saveToken(token);
+    if (getToken()) {
       router.replace("/dashboard");
     }
   }, [router]);
@@ -27,8 +25,7 @@ export default function SignupPage() {
     setError("");
     setLoading(true);
     try {
-      const { token } = await api.auth.register(email, password);
-      saveToken(token);
+      await api.auth.register(email, password);
       setVerificationSent(true);
     } catch (err) {
       const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";
@@ -56,9 +53,12 @@ export default function SignupPage() {
           <p className="text-[#FAF5FF]/40 text-xs">
             Didn&apos;t get the email? Check your spam folder.
           </p>
-          <Link href="/login" className={authStyles.ctaLink}>
-            Go to sign in
-          </Link>
+          <button
+            onClick={() => setVerificationSent(false)}
+            className={authStyles.ctaLink}
+          >
+            ← Back
+          </button>
         </div>
       </AuthCardCentered>
     );

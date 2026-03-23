@@ -9,14 +9,23 @@ from fastapi.testclient import TestClient
 from backend.embeddings.service import chunk_text
 
 
-def _get_unverified_user_token(client: TestClient) -> str:
-    """Register user (is_verified=False), return JWT."""
-    resp = client.post(
-        "/auth/register",
-        json={"email": "unverified@example.com", "password": "SecurePass1!"},
+def _get_unverified_user_token(client: TestClient, db_session=None) -> str:
+    """Register user (is_verified=False), return JWT via create_token_for_user."""
+    from backend.auth.service import create_token_for_user
+    from backend.core.security import hash_password
+    from backend.models import User
+
+    assert db_session is not None, "db_session required for _get_unverified_user_token"
+    user = User(
+        email="unverified@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=False,
     )
-    assert resp.status_code == 200
-    return resp.json()["token"]
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    token, _ = create_token_for_user(user)
+    return token
 
 
 def _get_verified_user_token(client: TestClient, db_session) -> str:
@@ -28,10 +37,10 @@ def _get_verified_user_token(client: TestClient, db_session) -> str:
 
 @patch("backend.auth.routes.send_email")
 def test_create_client_forbidden_for_unverified_user(
-    mock_send_email: Mock, client: TestClient
+    mock_send_email: Mock, client: TestClient, db_session
 ) -> None:
     """POST /clients with unverified user → 403."""
-    token = _get_unverified_user_token(client)
+    token = _get_unverified_user_token(client, db_session)
     response = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -68,7 +77,7 @@ def test_upload_document_forbidden_for_unverified_user(
     db_session,
 ) -> None:
     """POST /documents with unverified user → 403."""
-    token = _get_unverified_user_token(client)
+    token = _get_unverified_user_token(client, db_session)
     md_content = b"# Test\n\nContent."
     response = client.post(
         "/documents",

@@ -33,7 +33,7 @@ ALLOWED_ORIGINS = [
     x.strip()
     for x in os.getenv(
         "CORS_ALLOWED_ORIGINS",
-        "http://localhost:3000,http://localhost:3001,https://getchat9.live",
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,https://getchat9.live",
     ).split(",")
     if x.strip()
 ]

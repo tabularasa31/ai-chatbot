@@ -15,11 +15,7 @@ from tests.conftest import register_and_verify_user
 
 def test_admin_metrics_summary_requires_admin(client: TestClient, db_session: Session) -> None:
     """Non-admin JWT → 403. Admin JWT → 200."""
-    non_admin = client.post(
-        "/auth/register",
-        json={"email": "nonadmin@example.com", "password": "SecurePass1!"},
-    )
-    token = non_admin.json()["token"]
+    token = register_and_verify_user(client, db_session, email="nonadmin@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
@@ -46,11 +42,7 @@ def test_admin_metrics_summary_requires_admin(client: TestClient, db_session: Se
 
 def test_admin_metrics_clients_requires_admin(client: TestClient, db_session: Session) -> None:
     """Non-admin JWT → 403. Admin JWT → 200."""
-    non_admin = client.post(
-        "/auth/register",
-        json={"email": "nonadmin2@example.com", "password": "SecurePass1!"},
-    )
-    token = non_admin.json()["token"]
+    token = register_and_verify_user(client, db_session, email="nonadmin2@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},

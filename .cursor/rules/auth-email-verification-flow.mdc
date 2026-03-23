@@ -1,6 +1,6 @@
 ---
 description: Protect email verification flow — no changes without explicit owner approval
-globs: frontend/app/(auth)/verify/page.tsx,frontend/app/(app)/layout.tsx,frontend/components/EmailVerificationGuard.tsx,frontend/app/(app)/dashboard/page.tsx,backend/auth/service.py,backend/auth/routes.py
+globs: frontend/app/(auth)/verify/page.tsx,frontend/app/(auth)/signup/page.tsx,frontend/app/(app)/layout.tsx,frontend/middleware.ts,backend/auth/service.py,backend/auth/routes.py,backend/auth/schemas.py
 alwaysApply: false
 ---
 
@@ -8,24 +8,43 @@ alwaysApply: false
 
 This flow was intentionally designed and QA-tested. **Do not modify any part of it without the explicit written approval of the project owner.**
 
+## Architecture: JWT issued only after email verification
+
+```
+Register → no JWT → "Check your inbox" screen
+     ↓
+Click link in email → POST /auth/verify-email → returns JWT
+     ↓
+saveToken(jwt) → router.replace("/dashboard") → dashboard opens
+```
+
+Unverified users have **no JWT** → they cannot reach any `(app)` route → middleware redirects to `/login`.
+
 ## What is frozen and why
 
 | File | What to preserve |
 |------|-----------------|
-| `frontend/app/(auth)/verify/page.tsx` | On success: `router.replace("/dashboard")` if `getToken()` exists; otherwise show "Go to Dashboard" button. Never redirect to `/login` on success. |
-| `frontend/components/EmailVerificationGuard.tsx` | Wraps all `(app)` routes. Calls `GET /clients/me` to detect unverified state; renders a single "Verify your email" screen. Must NOT be removed or bypassed. |
-| `frontend/app/(app)/layout.tsx` | `<EmailVerificationGuard>` must remain as the outermost wrapper. Do not unwrap it. |
-| `frontend/app/(app)/dashboard/page.tsx` | No client-creation logic here — that lives in the Guard. Do not re-add `emailNotVerified` state or duplicate client-creation. |
+| `backend/auth/routes.py` — `register()` | Returns `RegisterResponse` (user only, **no JWT**). JWT is issued by `verify_email()` only. |
+| `backend/auth/routes.py` — `login()` | Raises HTTP 403 "Email not verified. Please check your inbox." if `user.is_verified` is False. Token is **never** issued to unverified users. |
+| `backend/auth/routes.py` — `verify_email()` | Returns `VerifyEmailResponse` with JWT token after marking user verified. |
+| `backend/auth/schemas.py` | `RegisterResponse` has no token field. `VerifyEmailResponse` has token/expires_in/user. Do not merge them back. |
+| `frontend/app/(auth)/signup/page.tsx` | No `saveToken()` after register. No "Go to sign in" link. Has **"← Back"** button that resets `verificationSent` state. |
+| `frontend/app/(auth)/login/page.tsx` | Reads `?error=email_not_verified` query param and shows amber banner. The 403 from `/login` also surfaces as a form error. |
+| `frontend/app/(auth)/verify/page.tsx` | On success: `saveToken(data.token)` from verify response, then `router.replace("/dashboard")`. No conditional checks needed. |
+| `frontend/app/(app)/dashboard/page.tsx` | On "email not verified" error from `/clients/me`: set `redirecting=true`, call `removeToken()`, then `router.replace("/login?error=email_not_verified")`. Show loading spinner during redirect. |
+| `frontend/middleware.ts` | All `(app)` routes are in `PROTECTED_PATHS`. Cookie check redirects unauthenticated users to `/login`. |
 | `backend/auth/service.py` — `reset_password()` | `user.is_verified = True` on password reset is **intentional** (email link proves ownership). Do not remove. |
-| `backend/auth/routes.py` — `register()` | JWT is issued before verification — intentional. Guard on the frontend enforces access control. |
-| `backend/main.py` | `CORS_ALLOWED_ORIGINS` default includes `localhost:3001` for local dev. Keep it. |
 
 ## Invariants (must always hold)
 
-1. An unverified user who navigates to **any** `(app)` route sees the "Verify your email" screen — not an API error.
-2. Clicking the verification link from email redirects to `/dashboard` if a JWT is in localStorage — no intermediate `/login`.
-3. Resetting password via email link automatically verifies the account (`is_verified = True`).
-4. The Guard is the **only** place that handles client creation for first-time users.
+1. `POST /auth/register` **never** returns a JWT token.
+2. `POST /auth/login` **raises 403** if the user's email is not verified.
+3. `POST /auth/verify-email` **always** returns a JWT token on success.
+4. An unauthenticated user who navigates to any `(app)` route is redirected to `/login` by middleware.
+5. Clicking the verification link from email saves the token and redirects to `/dashboard` — no intermediate `/login`.
+6. Resetting password via email link automatically verifies the account (`is_verified = True`).
+7. `EmailVerificationGuard` component does not exist — do not re-create it.
+8. The "Check your inbox" screen has a **"← Back"** button — it must not be removed.
 
 ## If a change seems necessary
 

@@ -1,0 +1,12 @@
+---
+description: Next.js App Router, React, Tailwind (frontend)
+globs: frontend/**/*.tsx
+alwaysApply: false
+---
+
+# Frontend — Next.js 14 (App Router)
+
+- Pages and layouts under `app/` — route groups `(marketing)`, `(auth)`, `(app)`, `widget/`; files `page.tsx`, `layout.tsx`.
+- Components and types: `PascalCase`; functions and variables: `camelCase`.
+- Styles: Tailwind in JSX; do not add new CSS frameworks without a strong reason; match existing spacing and UI patterns.
+- API data: reuse existing helpers and `fetch` patterns — avoid duplicate wrappers without cause.

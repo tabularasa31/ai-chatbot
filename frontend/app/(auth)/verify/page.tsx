@@ -2,14 +2,15 @@
 
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { useRouter, useSearchParams } from "next/navigation";
+import { api, getToken } from "@/lib/api";
 import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
 
 type Status = "idle" | "loading" | "success" | "error";
 
 function VerifyContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const token = searchParams.get("token");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState("");
@@ -23,12 +24,18 @@ function VerifyContent() {
     setStatus("loading");
     api.auth
       .verifyEmail(token)
-      .then(() => setStatus("success"))
+      .then(() => {
+        setStatus("success");
+        // Если пользователь уже залогинен — сразу в дашборд
+        if (getToken()) {
+          router.replace("/dashboard");
+        }
+      })
       .catch((err) => {
         setStatus("error");
         setError(err instanceof Error ? err.message : "Verification failed");
       });
-  }, [token]);
+  }, [token, router]);
 
   if (status === "idle" || status === "loading") {
     return (
@@ -45,10 +52,10 @@ function VerifyContent() {
       <AuthCardCentered>
         <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>Email verified successfully</h1>
         <p className="text-[#FAF5FF]/80 mb-6">
-          Your email has been verified. You can now sign in to your account.
+          Your email has been verified. Redirecting to dashboard…
         </p>
-        <Link href="/login" className={authStyles.ctaLink}>
-          Go to Sign in
+        <Link href="/dashboard" className={authStyles.ctaLink}>
+          Go to Dashboard
         </Link>
       </AuthCardCentered>
     );

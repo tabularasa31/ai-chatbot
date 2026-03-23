@@ -89,7 +89,8 @@
 | Rate limiting | `/validate`, `/search`, `/chat`, widget | `backend/core/limiter.py`, routes |
 | CORS | Production allowlist | app config |
 | pgvector + HNSW | Native vector column + index | migration `dd643d1a544a`, `embeddings.vector` |
-| Deploy | `main` vs `deploy`, Vercel + Railway | see `PROGRESS.md` → Infrastructure |
+| **FI-026** | GitHub Actions on `main` + `deploy`: backend Ruff + pytest + coverage; frontend ESLint + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
+| Deploy | `main` vs `deploy`, Vercel + Railway; promote via PR after green CI | see `PROGRESS.md` → Infrastructure |
 
 ---
 

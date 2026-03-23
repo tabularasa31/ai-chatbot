@@ -277,6 +277,7 @@
 
 - **Backend:** `git push` → Railway auto-deploys FastAPI
 - **Frontend:** `git push` → Vercel auto-builds Next.js
+- **CI (FI-026):** GitHub Actions on `push` / `pull_request` to `main` and `deploy` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
 - **Database:** PostgreSQL on Railway
 - **Email:** Brevo HTTP API (transactional + future daily reports)
 - **Secrets:** Environment variables (.env)

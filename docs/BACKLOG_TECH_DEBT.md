@@ -34,8 +34,9 @@ Key recommendations added to this backlog:
 - Frontend polls `GET /documents/{id}` every 2 s until status leaves `embedding`.
 
 ### ~~[FI-026] GitHub Actions CI (pytest + ruff + eslint)~~ ✅ Done (2026-03-22)
-- `.github/workflows/ci.yml`: backend `ruff` + `pytest tests/` from repo root; frontend `eslint` + `next build`; triggers `main` + `deploy`.
-- See `PROGRESS.md` (FI-026 block) for details. Optional follow-up: tests for `build_rag_prompt()` and `validate/{api_key}`.
+- `.github/workflows/ci.yml` on `main` + `deploy`: backend Ruff + `pytest tests/` из корня репо; frontend eslint + `next build`.
+- Подробности: `PROGRESS.md` (блок FI-026), `cursor_prompts/ci-cd-github-actions.md`.
+- Опционально позже: тесты для `build_rag_prompt()` и `validate/{api_key}`.
 
 ### ~~[Deps] Remove PyPDF2, update openai~~ ✅ Done (2026-03-20)
 - ~~Remove `PyPDF2==3.0.1` (duplicate of pypdf).~~

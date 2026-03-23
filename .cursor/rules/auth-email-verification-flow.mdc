@@ -1,0 +1,34 @@
+---
+description: Protect email verification flow — no changes without explicit owner approval
+globs: frontend/app/(auth)/verify/page.tsx,frontend/app/(app)/layout.tsx,frontend/components/EmailVerificationGuard.tsx,frontend/app/(app)/dashboard/page.tsx,backend/auth/service.py,backend/auth/routes.py
+alwaysApply: false
+---
+
+# Email Verification Flow — FROZEN
+
+This flow was intentionally designed and QA-tested. **Do not modify any part of it without the explicit written approval of the project owner.**
+
+## What is frozen and why
+
+| File | What to preserve |
+|------|-----------------|
+| `frontend/app/(auth)/verify/page.tsx` | On success: `router.replace("/dashboard")` if `getToken()` exists; otherwise show "Go to Dashboard" button. Never redirect to `/login` on success. |
+| `frontend/components/EmailVerificationGuard.tsx` | Wraps all `(app)` routes. Calls `GET /clients/me` to detect unverified state; renders a single "Verify your email" screen. Must NOT be removed or bypassed. |
+| `frontend/app/(app)/layout.tsx` | `<EmailVerificationGuard>` must remain as the outermost wrapper. Do not unwrap it. |
+| `frontend/app/(app)/dashboard/page.tsx` | No client-creation logic here — that lives in the Guard. Do not re-add `emailNotVerified` state or duplicate client-creation. |
+| `backend/auth/service.py` — `reset_password()` | `user.is_verified = True` on password reset is **intentional** (email link proves ownership). Do not remove. |
+| `backend/auth/routes.py` — `register()` | JWT is issued before verification — intentional. Guard on the frontend enforces access control. |
+| `backend/main.py` | `CORS_ALLOWED_ORIGINS` default includes `localhost:3001` for local dev. Keep it. |
+
+## Invariants (must always hold)
+
+1. An unverified user who navigates to **any** `(app)` route sees the "Verify your email" screen — not an API error.
+2. Clicking the verification link from email redirects to `/dashboard` if a JWT is in localStorage — no intermediate `/login`.
+3. Resetting password via email link automatically verifies the account (`is_verified = True`).
+4. The Guard is the **only** place that handles client creation for first-time users.
+
+## If a change seems necessary
+
+1. Open a task / PR and explicitly ask the project owner: *"Can we modify the email verification flow?"*
+2. Re-run the QA checklist in `docs/qa/PRODUCT-QA-TEST-PLAN.md` — Blocks B1 and B2 — before merging.
+3. Update `docs/qa/PRODUCT-QA-TEST-PLAN.md` if expected behavior changes.

@@ -1,6 +1,6 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-22 (UTC)  
+**Last updated:** 2026-03-22 (UTC) — FI-026 CI on `main`/`deploy`  
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
@@ -38,12 +38,14 @@
 
 ### Bug fixes & tech debt
 
-- ✅ **FI-026: GitHub Actions CI**
-  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to `main` and `deploy` — job **backend** (Python 3.11): `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend` with SQLite test env vars; job **frontend** (Node 20): `npm ci`, `npm run lint`, `npm run build` with `NEXT_PUBLIC_API_URL=https://ci.invalid`
-  - [`backend/ruff.toml`](../backend/ruff.toml): E/F/W lint; `extend-exclude` migrations; per-file `E402` for intentional late imports in `main.py` and `chat/service.py`
-  - [`backend/requirements.txt`](../backend/requirements.txt): added `ruff>=0.3.0` and `pgvector>=0.2.0` (was missing vs root `requirements.txt`; needed for `backend.models` import in tests)
-  - Test fix: [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — assert `public_id` / `owner_email` / `has_openai_key` (API no longer returns client `name` on metrics row)
-  - [`.gitignore`](../.gitignore): `.venv-ci/` for local CI parity venvs
+- ✅ **FI-026: GitHub Actions CI** (в `main`; промот в `deploy` через PR)
+  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to **`main`** and **`deploy`** — job **Backend (pytest + ruff)** (Python 3.11): `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend --cov-report=term-missing` (SQLite test env в workflow); job **Frontend (eslint + build)** (Node 20): `npm ci`, `npm run lint`, `npm run build` с `NEXT_PUBLIC_API_URL=https://ci.invalid`
+  - [`backend/ruff.toml`](../backend/ruff.toml): E/F/W; `extend-exclude` migrations; per-file `E402` для поздних импортов в `main.py` и `chat/service.py`
+  - [`backend/requirements.txt`](../backend/requirements.txt): `ruff>=0.3.0`, `pgvector>=0.2.0` (импорт `backend.models` в тестах)
+  - [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — `public_id` / `owner_email` / `has_openai_key`; мелкий фикс `f`-string в `backend/documents/service.py`
+  - [`.gitignore`](../.gitignore): `.venv-ci/`
+  - Доки: `TOMORROW_PLAN`, `BACKLOG_TECH_DEBT`, `IMPLEMENTED_FEATURES`; [`cursor_prompts/ci-cd-github-actions.md`](../cursor_prompts/ci-cd-github-actions.md)
+  - **Релиз:** PR **`main` → `deploy`** после зелёного CI; опционально GitHub **ruleset** на `deploy` (PR + required checks)
 
 - ✅ **TD-033: Per-document-type chunking config**
   - Заменён глобальный хардкод `chunk_text(doc.parsed_text)` на `CHUNKING_CONFIG` dict в `backend/embeddings/service.py`
@@ -246,7 +248,7 @@ Git branches:
   main   → development (no auto-deploy)
   deploy → production (Vercel + Railway listen here)
 
-CI: GitHub Actions (`.github/workflows/ci.yml`) on push/PR to main + deploy
+CI: GitHub Actions — `.github/workflows/ci.yml` on push/PR to `main` + `deploy`
 ```
 
 ---
@@ -257,7 +259,7 @@ CI: GitHub Actions (`.github/workflows/ci.yml`) on push/PR to main + deploy
 |-------|----------|-------|
 | FI-EMBED-MVP real-domain test | 🟡 P1 | Waiting for admin to update embed script |
 | Static Stats on landing page | 🟡 P2 | Hardcoded, connect real API later |
-| ~~No CI/CD pipeline~~ | — | ✅ FI-026: `.github/workflows/ci.yml` |
+| ~~No CI/CD pipeline~~ | — | ✅ FI-026 — `.github/workflows/ci.yml` |
 | Footer links hardcoded | 🟢 P3 | Update when docs site ready |
 
 ---
@@ -284,4 +286,4 @@ CI: GitHub Actions (`.github/workflows/ci.yml`) on push/PR to main + deploy
 
 ---
 
-_Updated: 2026-03-22_
+_Updated: 2026-03-22 (FI-026 CI documented)_

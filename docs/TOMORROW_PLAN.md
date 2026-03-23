@@ -22,8 +22,10 @@
 - Фронтенд polling каждые 2 сек; live-обновление статуса
 
 ### ~~3. FI-026: CI/CD (GitHub Actions)~~ ✅ Done (2026-03-22)
-- `.github/workflows/ci.yml`: `main` + `deploy`, backend `ruff` + `pytest tests/` (корень репо), frontend `lint` + `build`
-- `backend/ruff.toml`, `pgvector` + `ruff` в `backend/requirements.txt`
+- `.github/workflows/ci.yml`: `main` + `deploy` — backend **Ruff** + **pytest** из корня (`tests/`), frontend **eslint** + **next build**
+- `backend/ruff.toml`; в `backend/requirements.txt`: **ruff**, **pgvector**
+- Промот в прод: PR **`main` → `deploy`** после зелёного CI (опционально ruleset на `deploy`)
+- Справка: `cursor_prompts/ci-cd-github-actions.md`
 
 ---
 

@@ -1,8 +1,8 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { useSearchParams, useRouter } from "next/navigation";
+import { api, removeToken } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
@@ -12,23 +12,49 @@ const APP_URL =
 
 function DashboardContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [publicId, setPublicId] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState("");
   const [copiedApiKey, setCopiedApiKey] = useState(false);
 
   useEffect(() => {
     async function load() {
       try {
-        const [user, client] = await Promise.all([
-          api.auth.getMe(),
-          api.clients.getMe(),
-        ]);
+        const user = await api.auth.getMe();
         setUserEmail(user.email);
+
+        let client;
+        try {
+          client = await api.clients.getMe();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "";
+          if (msg.toLowerCase().includes("email not verified")) {
+            setRedirecting(true);
+            removeToken();
+            router.replace("/login?error=email_not_verified");
+            return;
+          }
+          // Client doesn't exist yet — create workspace on first login
+          try {
+            client = await api.clients.create("My Workspace");
+          } catch (createErr) {
+            const createMsg = createErr instanceof Error ? createErr.message : "";
+            if (createMsg.toLowerCase().includes("email not verified")) {
+              setRedirecting(true);
+              removeToken();
+              router.replace("/login?error=email_not_verified");
+              return;
+            }
+            throw createErr;
+          }
+        }
+
         setApiKey(client.api_key);
         setPublicId(client.public_id ?? null);
         setHasOpenaiKey(client.has_openai_key ?? false);
@@ -39,7 +65,7 @@ function DashboardContent() {
       }
     }
     load();
-  }, []);
+  }, [router]);
 
   function copyApiKey() {
     if (apiKey) {
@@ -57,7 +83,7 @@ function DashboardContent() {
     return `<script src="${scriptUrl}"></script>`;
   }
 
-  if (loading) {
+  if (loading || redirecting) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-pulse text-slate-500 text-sm">Loading…</div>

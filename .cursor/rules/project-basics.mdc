@@ -1,0 +1,12 @@
+---
+description: Core repo conventions for every chat
+alwaysApply: true
+---
+
+# Project — basics
+
+- Change only what the task requires; no drive-by refactors of unrelated modules.
+- Match neighboring files (imports, types, comment depth).
+- Stack overview and directory tree — root `AGENTS.md`.
+- Feature details and regressions — `docs/` (`docs/04-features.md`, `docs/qa/`).
+- App Python package: `backend.*` imports from the repository root (`PYTHONPATH` = repo root).

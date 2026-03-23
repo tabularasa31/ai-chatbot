@@ -161,7 +161,8 @@ def search_similar_chunks(
     if not vector_candidates:
         return []
 
-    bm25_results = _bm25_score_candidates(vector_candidates, query, top_k * 2)
+    vector_embs = [emb for emb, _ in vector_candidates]
+    bm25_results = _bm25_score_candidates(vector_embs, query, top_k * 2)
     vector_for_rrf = vector_candidates[:top_k * 2]
 
     if not bm25_results:

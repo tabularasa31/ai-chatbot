@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+from unittest.mock import patch
+
 import jwt
 import pytest
 from fastapi.testclient import TestClient
@@ -12,15 +14,14 @@ from backend.core.security import ALGORITHM
 
 
 def test_register_success(client: TestClient) -> None:
-    """Register creates user and returns JWT token."""
+    """Register creates user — no JWT yet (email must be verified first)."""
     response = client.post(
         "/auth/register",
         json={"email": "user@example.com", "password": "SecurePass1!"},
     )
     assert response.status_code == 200
     data = response.json()
-    assert "token" in data
-    assert data["expires_in"] == 24 * 60 * 60
+    assert "token" not in data
     assert data["user"]["email"] == "user@example.com"
     assert "id" in data["user"]
     assert "created_at" in data["user"]
@@ -53,12 +54,11 @@ def test_register_duplicate_email(client: TestClient) -> None:
     assert "already registered" in response.json()["detail"].lower()
 
 
-def test_login_success(client: TestClient) -> None:
-    """Login with correct credentials returns token."""
-    client.post(
-        "/auth/register",
-        json={"email": "login@example.com", "password": "SecurePass1!"},
-    )
+def test_login_success(client: TestClient, db_session) -> None:
+    """Login with correct credentials and verified email returns token."""
+    from tests.conftest import register_and_verify_user
+
+    token = register_and_verify_user(client, db_session, email="login@example.com")
     response = client.post(
         "/auth/login",
         json={"email": "login@example.com", "password": "SecurePass1!"},
@@ -92,13 +92,11 @@ def test_login_user_not_found(client: TestClient) -> None:
     assert response.status_code == 401
 
 
-def test_get_me_authenticated(client: TestClient) -> None:
+def test_get_me_authenticated(client: TestClient, db_session) -> None:
     """Protected route returns user when valid token provided."""
-    reg = client.post(
-        "/auth/register",
-        json={"email": "me@example.com", "password": "SecurePass1!"},
-    )
-    token = reg.json()["token"]
+    from tests.conftest import register_and_verify_user
+
+    token = register_and_verify_user(client, db_session, email="me@example.com")
     response = client.get(
         "/auth/me",
         headers={"Authorization": f"Bearer {token}"},
@@ -138,12 +136,21 @@ def test_get_me_expired_token(client: TestClient) -> None:
     assert "expired" in response.json()["detail"].lower()
 
 
-def test_token_expiration(client: TestClient) -> None:
+def test_token_expiration(client: TestClient, db_session) -> None:
     """Token expires after 24 hours (expires_in is 86400 seconds)."""
-    response = client.post(
-        "/auth/register",
-        json={"email": "exp@example.com", "password": "SecurePass1!"},
-    )
+    from tests.conftest import register_and_verify_user
+    from unittest.mock import patch
+
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "exp@example.com", "password": "SecurePass1!"},
+        )
+    from backend.models import User
+
+    user = db_session.query(User).filter(User.email == "exp@example.com").first()
+    assert user is not None
+    response = client.post("/auth/verify-email", json={"token": user.verification_token})
     assert response.status_code == 200
     assert response.json()["expires_in"] == 24 * 60 * 60
 

@@ -191,12 +191,12 @@ def register_and_verify_user(
     with patch("backend.auth.routes.send_email"):
         resp = test_client.post("/auth/register", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.json()
-    token = resp.json()["token"]
     from backend.models import User
 
     user = db_session.query(User).filter(User.email == email).first()
     assert user is not None
     verify_resp = test_client.post("/auth/verify-email", json={"token": user.verification_token})
-    assert verify_resp.status_code == 200
+    assert verify_resp.status_code == 200, verify_resp.json()
+    token = verify_resp.json()["token"]
     return token
 

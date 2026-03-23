@@ -182,7 +182,7 @@ class Client(Base):
     name = Column(String(255), nullable=False)
     api_key = Column(String(32), unique=True, nullable=False, index=True)
     public_id = Column(
-        String(20),
+        String(21),
         unique=True,
         nullable=False,
         index=True,

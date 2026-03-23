@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
-  const params = new URLSearchParams({ clientId, session_id: sessionId });
+  const params = new URLSearchParams({ client_id: clientId, session_id: sessionId });
   const res = await fetch(`${API_URL}/widget/escalate?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

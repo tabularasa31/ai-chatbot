@@ -5,6 +5,18 @@
 
 ---
 
+## ✅ COMPLETED (2026-03-23) — Landing live demo chat
+
+### Live chat demo on landing page (feature/landing-demo-chat)
+
+- ✅ **DemoBlock** — заменён статичный макет чата на `DemoChat`: живые API-запросы к `/widget/chat`, тёмная цветовая схема лендинга (`#2D2D44` / `#38BDF8` / `#E879F9`), аватары у сообщений бота, typing-indicator (три точки). Анимация появления переведена на `whileInView + once: true` — не сбрасывается при скролле. Скролл сообщений происходит внутри контейнера чата, не прокручивает страницу.
+- ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: при проксировании на бэкенд `clientId` переименовывается в `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
+- ✅ **ChatWidget error handling** — добавлена `formatApiDetail`: корректно читает `detail` из FastAPI-ответа в любом формате (строка, массив validation objects). Устранён `[object Object]` в сообщениях об ошибках.
+- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID` (public `ch_...` клиента) задаётся через env; при отсутствии — fallback-заглушка без падения страницы. Добавлены комментарии в `.env.example`.
+- **Setup:** `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID=ch_...` (public_id из дашборда embed snippet) — в `.env.local` локально и в Vercel env до пересборки.
+
+---
+
 ## ✅ COMPLETED (2026-03-22) — UI redesign session
 
 ### Sidebar navigation & design system (feat/sidebar-navigation-redesign)

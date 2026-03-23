@@ -22,6 +22,17 @@ function stripEscalationToken(content: string): string {
   return content.replace(/\[\[escalation_ticket:[^\]]+\]\]\s*/g, "").trim();
 }
 
+function formatApiDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail) && detail.length > 0) {
+    const first = detail[0];
+    if (typeof first === "object" && first !== null && "msg" in first) {
+      return String((first as { msg: unknown }).msg);
+    }
+  }
+  return fallback;
+}
+
 export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
   const [messages, setMessages] = useState<
     Array<{ role: string; content: string }>
@@ -64,7 +75,10 @@ export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(
-          (err as { detail?: string }).detail || `API error: ${res.status}`
+          formatApiDetail(
+            (err as { detail?: unknown }).detail,
+            `API error: ${res.status}`
+          )
         );
       }
 
@@ -105,7 +119,10 @@ export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(
-          (err as { detail?: string }).detail || `API error: ${res.status}`
+          formatApiDetail(
+            (err as { detail?: unknown }).detail,
+            `API error: ${res.status}`
+          )
         );
       }
       const data = (await res.json()) as { message: string; ticket_number: string };

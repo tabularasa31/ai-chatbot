@@ -51,9 +51,9 @@ Key recommendations added to this backlog:
 
 ## 🟠 P2 — DevEx & infrastructure
 
-### [FI-025] Docker Compose for local dev
-- `docker-compose.yml` with pgvector/pgvector:pg15 + healthcheck.
-- `docker compose up` instead of `docker run ...`.
+### ~~[FI-025] Docker Compose for local dev~~ ✅ Done (2026-03-23)
+- `docker-compose.yml` с `pgvector/pgvector:pg15`, healthcheck, именованным volume `pgdata`.
+- `docker compose up -d` вместо `docker run ...`.
 
 ### ~~[Refactor] Dead code in backend/auth/middleware.py~~ ✅ Already gone
 - `JWTMiddleware` не найден в кодовой базе — был удалён ранее.

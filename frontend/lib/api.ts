@@ -189,7 +189,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
-      return data as { token: string; expires_in: number; user: { id: number; email: string } };
+      return data as { user: { id: string; email: string; created_at: string } };
     },
     async login(email: string, password: string) {
       const res = await fetch(`${BASE_URL}/auth/login`, {
@@ -207,7 +207,7 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
       return data as { id: string; email: string; created_at: string };
     },
-    async verifyEmail(token: string): Promise<{ status: string }> {
+    async verifyEmail(token: string): Promise<{ token: string; expires_in: number; user: { id: string; email: string; created_at: string } }> {
       const res = await fetch(`${BASE_URL}/auth/verify-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

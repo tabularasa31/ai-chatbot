@@ -60,10 +60,24 @@ class AuthResponse(BaseModel):
     user: UserResponse
 
 
+class RegisterResponse(BaseModel):
+    """Response for registration (no token — issued only after email verification)."""
+
+    user: UserResponse
+
+
 class VerifyEmailRequest(BaseModel):
     """Request body for email verification."""
 
     token: str
+
+
+class VerifyEmailResponse(BaseModel):
+    """Response for email verification — includes JWT token."""
+
+    token: str
+    expires_in: int
+    user: UserResponse
 
 
 class ForgotPasswordRequest(BaseModel):

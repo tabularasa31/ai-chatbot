@@ -16,10 +16,12 @@ from backend.auth.schemas import (
     ForgotPasswordResponse,
     LoginRequest,
     RegisterRequest,
+    RegisterResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
     UserResponse,
     VerifyEmailRequest,
+    VerifyEmailResponse,
 )
 from backend.auth.service import (
     authenticate_user,
@@ -35,17 +37,17 @@ from backend.models import User
 auth_router = APIRouter(tags=["auth"])
 
 
-@auth_router.post("/register", response_model=AuthResponse)
+@auth_router.post("/register", response_model=RegisterResponse)
 @limiter.limit("5/hour")
 def register(
     request: Request,
     body: RegisterRequest,
     db: Annotated[Session, Depends(get_db)],
-) -> AuthResponse:
+) -> RegisterResponse:
     """
     Register a new user.
 
-    Returns JWT token and user info on success.
+    Returns user info only — no JWT token until email is verified.
     Sends verification email. Errors: 400 (invalid input), 409 (email exists), 500 (db error).
     """
     user = register_user(body.email, body.password, db)
@@ -73,10 +75,7 @@ def register(
         import logging
         logging.getLogger(__name__).warning("Failed to send verification email: %s", e)
 
-    jwt_token, expires_in = create_token_for_user(user)
-    return AuthResponse(
-        token=jwt_token,
-        expires_in=expires_in,
+    return RegisterResponse(
         user=UserResponse(
             id=user.id,
             email=user.email,
@@ -113,12 +112,12 @@ def login(
     )
 
 
-@auth_router.post("/verify-email")
+@auth_router.post("/verify-email", response_model=VerifyEmailResponse)
 def verify_email(
     body: VerifyEmailRequest,
     db: Annotated[Session, Depends(get_db)],
-) -> dict:
-    """Verify user's email using a one-time token."""
+) -> VerifyEmailResponse:
+    """Verify user's email using a one-time token. Returns JWT on success."""
     now = datetime.now(timezone.utc)
     user = (
         db.query(User)
@@ -139,7 +138,16 @@ def verify_email(
     user.verification_expires_at = None
     db.commit()
 
-    return {"status": "ok"}
+    jwt_token, expires_in = create_token_for_user(user)
+    return VerifyEmailResponse(
+        token=jwt_token,
+        expires_in=expires_in,
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            created_at=user.created_at,
+        ),
+    )
 
 
 @auth_router.post("/forgot-password", response_model=ForgotPasswordResponse)

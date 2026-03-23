@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, getToken } from "@/lib/api";
+import { api, saveToken } from "@/lib/api";
 import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
 
 type Status = "idle" | "loading" | "success" | "error";
@@ -24,12 +24,10 @@ function VerifyContent() {
     setStatus("loading");
     api.auth
       .verifyEmail(token)
-      .then(() => {
+      .then((data) => {
+        saveToken(data.token);
         setStatus("success");
-        // Если пользователь уже залогинен — сразу в дашборд
-        if (getToken()) {
-          router.replace("/dashboard");
-        }
+        router.replace("/dashboard");
       })
       .catch((err) => {
         setStatus("error");
@@ -52,11 +50,8 @@ function VerifyContent() {
       <AuthCardCentered>
         <h1 className={`${authStyles.headingSm} text-[#4ADE80]`}>Email verified successfully</h1>
         <p className="text-[#FAF5FF]/80 mb-6">
-          Your email has been verified. Redirecting to dashboard…
+          Redirecting to dashboard…
         </p>
-        <Link href="/dashboard" className={authStyles.ctaLink}>
-          Go to Dashboard
-        </Link>
       </AuthCardCentered>
     );
   }

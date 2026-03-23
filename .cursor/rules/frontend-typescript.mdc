@@ -1,0 +1,12 @@
+---
+description: Next.js route handlers and other TS without JSX
+globs: frontend/**/*.ts
+alwaysApply: false
+---
+
+# Frontend — TypeScript (`.ts`)
+
+Same principles as `.tsx` in this repo: Next.js 14 App Router, `camelCase` / `PascalCase` for types and components, API calls consistent with neighboring files.
+
+- Handlers in `app/**/route.ts` — export `GET` / `POST` / …; request/response types aligned with the backend API.
+- Avoid extra dependencies; Tailwind belongs in components — `.ts` files are usually logic and fetch calls.

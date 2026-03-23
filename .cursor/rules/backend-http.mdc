@@ -1,0 +1,13 @@
+---
+description: FastAPI routers, request/response shapes, API errors
+globs: backend/**/routes.py
+alwaysApply: false
+---
+
+# Backend — HTTP layer
+
+- Router: `APIRouter`, export `*_router`; prefixes and `include_router` — `backend/main.py`.
+- Bodies and responses — Pydantic schemas from the domain `schemas.py` (or local models in `routes.py` if that pattern already exists nearby).
+- Errors — `HTTPException` with a clear `detail`; do not leak internal exceptions to clients.
+- DB access — only via `Depends(get_db)` and passing `db` into `service`.
+- Rate limits — use `limiter` from `backend.core.limiter` when appropriate, same as sibling endpoints in the domain.

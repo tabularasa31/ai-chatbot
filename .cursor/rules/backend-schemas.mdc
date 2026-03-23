@@ -1,0 +1,11 @@
+---
+description: Per-domain Pydantic API schemas (backend)
+globs: backend/**/schemas.py
+alwaysApply: false
+---
+
+# Backend — Pydantic (`schemas.py`)
+
+- Request/response schemas colocated with the domain (`ChatRequest`, `*Response`, `*Item`, etc.) — follow neighboring domains.
+- Fields aligned with SQLAlchemy models and the actual JSON API; keep names consistent with `routes.py` endpoints.
+- Validation via types and `Field`; reuse existing enums from `backend.models` when they already represent the same values.

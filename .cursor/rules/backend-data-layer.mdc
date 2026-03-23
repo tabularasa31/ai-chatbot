@@ -1,0 +1,15 @@
+---
+description: SQLAlchemy, DB sessions, models, migrations (backend Python)
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Backend — data layer
+
+- **Models** — only in `backend/models.py` (single `Base`). New entity: class + `__tablename__` (plural, `snake_case`) + relationships.
+- **HTTP** — `from backend.core.db import get_db`; endpoint param `db: Annotated[Session, Depends(get_db)]`.
+- **Services** — take `db: Session` as an argument; for normal request handling do not open a second session inside the service.
+- **Scripts / background** — `SessionLocal` from `backend.core.db`, `try` / `finally: db.close()`, `commit` when needed.
+- **Migrations** — Alembic from the **repo root** (`alembic.ini` → `backend/migrations`). New revisions in `backend/migrations/versions/`. Do not change production schema by hand without a migration.
+- **Queries** — ORM in the same style as neighboring domain code; raw SQL only if the ORM is insufficient (briefly say why).
+- **pgvector / SQLite** — `Vector` type and SQLite compilers in `models.py`; when changing vector columns, keep test SQLite compatibility in mind.

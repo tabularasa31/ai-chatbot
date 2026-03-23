@@ -65,7 +65,10 @@ def test_verify_email_success(
         json={"token": token},
     )
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert "token" in data
+    assert "expires_in" in data
+    assert data["expires_in"] == 24 * 60 * 60
 
     db_session.refresh(user)
     assert user.is_verified is True

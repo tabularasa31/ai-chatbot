@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Generator
+from typing import Generator, Optional
 import json
 import os
 import sys
@@ -169,7 +169,7 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
     def _apply(
         *,
         message_to_user: str = "A support ticket was created for you.",
-        followup_decision: str | None = None,
+        followup_decision: Optional[str] = None,
         tokens_used: int = 15,
     ) -> Mock:
         esc_client = Mock()

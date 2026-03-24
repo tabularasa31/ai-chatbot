@@ -136,7 +136,7 @@ pytest --cov=backend --cov-min-percentage=80
 ---
 
 Developer commands for local/CI test groups were moved to:
-`docs/06_developer-test-runbook.md`
+`docs/06-developer-test-runbook.md`
 
 ---
 

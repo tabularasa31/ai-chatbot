@@ -686,7 +686,7 @@ def test_get_sessions_sorted_by_last_activity_desc(
     )
     client_id = uuid.UUID(cl.json()["id"])
 
-    base_time = datetime.utcnow()
+    base_time = datetime.now(timezone.utc)
     chat1 = Chat(client_id=client_id, session_id=uuid.uuid4())
     chat2 = Chat(client_id=client_id, session_id=uuid.uuid4())
     db_session.add_all([chat1, chat2])

@@ -505,6 +505,30 @@ def test_search_openai_unavailable_returns_503(
     assert response.status_code == 503
 
 
+def test_search_openai_timeout_returns_503(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from openai import APITimeoutError
+
+    token = register_and_verify_user(client, db_session, email="search-timeout@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Search Timeout Client"},
+    )
+    set_client_openai_key(client, token)
+    mock_openai_client.embeddings.create.side_effect = APITimeoutError(request=Mock())
+
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "hello", "top_k": 3},
+    )
+    assert response.status_code == 503
+
+
 def test_search_skips_malformed_metadata_vectors(
     mock_openai_client: Mock,
     client: TestClient,

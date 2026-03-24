@@ -83,4 +83,4 @@ In short: models live only in `backend/models.py`; HTTP handlers use `Depends(ge
 ## Other editing guidelines
 
 See `.cursor/rules/project-basics.mdc` (always applied). Feature details and regression scenarios — `docs/` (`docs/04-features.md`, `docs/qa/`).
-Developer test command groups for local/CI runs are documented in `docs/06_developer-test-runbook.md`.
+Developer test command groups for local/CI runs are documented in `docs/06-developer-test-runbook.md`.

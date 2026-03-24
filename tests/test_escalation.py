@@ -35,7 +35,7 @@ from backend.models import (
     UserSession,
     User,
 )
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def test_should_escalate_low_similarity() -> None:

@@ -124,7 +124,10 @@ def test_get_me_invalid_token(client: TestClient) -> None:
 def test_get_me_expired_token(client: TestClient) -> None:
     """Protected route returns 401 when token is expired."""
     expired_token = jwt.encode(
-        {"sub": "00000000-0000-0000-0000-000000000001", "exp": dt.datetime.utcnow() - dt.timedelta(hours=1)},
+        {
+            "sub": "00000000-0000-0000-0000-000000000001",
+            "exp": dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1),
+        },
         settings.jwt_secret,
         algorithm=ALGORITHM,
     )
@@ -139,18 +142,15 @@ def test_get_me_expired_token(client: TestClient) -> None:
 def test_token_expiration(client: TestClient, db_session) -> None:
     """Token expires after 24 hours (expires_in is 86400 seconds)."""
     from tests.conftest import register_and_verify_user
-    from unittest.mock import patch
-
-    with patch("backend.auth.routes.send_email"):
-        client.post(
-            "/auth/register",
-            json={"email": "exp@example.com", "password": "SecurePass1!"},
-        )
+    register_and_verify_user(client, db_session, email="exp@example.com")
     from backend.models import User
 
     user = db_session.query(User).filter(User.email == "exp@example.com").first()
     assert user is not None
-    response = client.post("/auth/verify-email", json={"token": user.verification_token})
+    response = client.post(
+        "/auth/login",
+        json={"email": "exp@example.com", "password": "SecurePass1!"},
+    )
     assert response.status_code == 200
     assert response.json()["expires_in"] == 24 * 60 * 60
 
@@ -270,7 +270,7 @@ def test_reset_password_expired_token_returns_400(
     user = db_session.query(User).filter(User.email == "reset-expired@example.com").first()
     assert user is not None
     assert user.reset_password_token is not None
-    user.reset_password_expires_at = dt.datetime.utcnow() - dt.timedelta(minutes=1)
+    user.reset_password_expires_at = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
     db_session.add(user)
     db_session.commit()
 

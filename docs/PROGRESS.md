@@ -5,6 +5,14 @@
 
 ---
 
+## ✅ COMPLETED (2026-03-24) — Coverage hardening + dev test runbook
+
+- ✅ **Coverage hardening (high-risk zones):** added regression tests for escalation state machine transitions, manual escalation endpoint (`/chat/{session_id}/escalate`), auth forgot/reset flow, and RAG retrieval edge/error paths.
+- ✅ **Search API error contract:** `POST /search` now returns `503` when OpenAI embeddings call fails (`APIError`) instead of leaking an internal failure mode.
+- ✅ **Developer runbook:** added `docs/06-developer-test-runbook.md` with grouped local/CI commands (`P0 smoke`, `auth reset`, `escalation`, `RAG edge`, `pgvector`, coverage snapshot) and linked from core docs.
+
+---
+
 ## ✅ COMPLETED (2026-03-23) — Landing live demo chat
 
 ### Live chat demo on landing page (feature/landing-demo-chat)
@@ -288,6 +296,7 @@ CI: GitHub Actions — `.github/workflows/ci.yml` on push/PR to `main` + `deploy
 
 | File | Contents |
 |------|---------|
+| `06-developer-test-runbook.md` | Developer-focused test command groups (P0 smoke, auth reset, escalation, RAG edge cases, pgvector, coverage) |
 | **`IMPLEMENTED_FEATURES.md`** | **Implemented features registry** (English, by area, links to code/API); extend on major releases |
 | `BACKLOG_PRODUCT.md` | Product features (FI-xxx), RICE scored |
 | `BACKLOG_TECH_DEBT.md` | Tech improvements |

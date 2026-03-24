@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from openai import APIError
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user
@@ -16,6 +18,7 @@ from backend.search.schemas import SearchRequest, SearchResponse, SearchResultIt
 from backend.search.service import search_similar_chunks
 
 search_router = APIRouter(tags=["search"])
+logger = logging.getLogger(__name__)
 
 
 @limiter.limit("30/minute")
@@ -30,7 +33,7 @@ def search_route(
     Vector similarity search over embeddings (protected JWT).
 
     Embeds the query, searches across client's embeddings, returns top_k results.
-    Errors: 401 (no/invalid JWT), 404 (user has no client).
+    Errors: 401 (no/invalid JWT), 404 (user has no client), 503 (OpenAI unavailable).
     """
     client = get_client_by_user(current_user.id, db)
     if not client:
@@ -41,13 +44,20 @@ def search_route(
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
         )
 
-    results_tuples = search_similar_chunks(
-        client_id=client.id,
-        query=body.query,
-        top_k=body.top_k,
-        db=db,
-        api_key=client.openai_api_key,
-    )
+    try:
+        results_tuples = search_similar_chunks(
+            client_id=client.id,
+            query=body.query,
+            top_k=body.top_k,
+            db=db,
+            api_key=client.openai_api_key,
+        )
+    except APIError as exc:
+        logger.warning("OpenAI API error during search: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAI service unavailable",
+        )
 
     items = [
         SearchResultItem(

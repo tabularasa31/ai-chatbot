@@ -427,7 +427,9 @@ def process_chat_message(
             db.add(chat)
             db.commit()
         else:
-            email = parse_contact_email(redacted_question)
+            # Parse contact email from original user text, not redacted text.
+            # Redaction replaces addresses with placeholders and would break capture.
+            email = parse_contact_email(question)
             if email:
                 apply_collected_contact_email(ticket.id, chat.id, email, db)
                 db.refresh(ticket)

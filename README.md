@@ -100,6 +100,8 @@ npm run dev
 
 On every **push** and **pull request** to **`main`** and **`deploy`**, GitHub runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): **Ruff** + **pytest** for the backend (from the repo root, suite in `tests/`) and **ESLint** + **`next build`** for the frontend.
 
+For grouped developer-focused test commands (P0 smoke, auth reset, escalation, RAG edge cases, pgvector), see [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md).
+
 **Local checks** (after `pip install -r backend/requirements.txt`):
 
 ```bash
@@ -178,7 +180,7 @@ pytest tests/ -q
 ### Other
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/search` | Vector search (JWT) |
+| POST | `/search` | Vector search (JWT); returns `503` when OpenAI is unavailable |
 | GET | `/health` | Health check |
 | GET | `/embed.js` | Widget script |
 

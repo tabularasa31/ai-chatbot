@@ -135,6 +135,11 @@ pytest --cov=backend --cov-min-percentage=80
 
 ---
 
+Developer commands for local/CI test groups were moved to:
+`docs/06-developer-test-runbook.md`
+
+---
+
 ### Rule #5: Code Review Checklist
 
 Before merge, I check:

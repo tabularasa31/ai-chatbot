@@ -11,18 +11,29 @@ from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import Session
 
 from backend.escalation.service import (
+    _clear_escalation_clarify_flag,
+    _escalation_clarify_already_asked,
+    _set_escalation_clarify_flag,
+    apply_collected_contact_email,
     compute_priority,
     create_escalation_ticket,
     detect_human_request,
     generate_ticket_number,
     parse_contact_email,
+    perform_manual_escalation,
     should_escalate,
 )
 from backend.models import (
+    Chat,
+    Client,
     EscalationPriority,
     EscalationTicket,
     EscalationTrigger,
     EscalationStatus,
+    Message,
+    MessageRole,
+    UserSession,
+    User,
 )
 from tests.conftest import register_and_verify_user
 
@@ -186,3 +197,172 @@ def test_create_escalation_ticket_raises_after_max_retries(
                 EscalationTrigger.low_similarity,
                 db_session,
             )
+
+
+def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
+    from backend.core.security import hash_password
+
+    user = User(email="clarify@example.com", password_hash=hash_password("SecurePass1!"))
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    cl = Client(user_id=user.id, name="Clarify Client", api_key="clarify-key")
+    db_session.add(cl)
+    db_session.commit()
+    db_session.refresh(cl)
+
+    chat = Chat(client_id=cl.id, session_id=uuid.uuid4(), user_context={})
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    assert _escalation_clarify_already_asked(chat) is False
+    _set_escalation_clarify_flag(chat)
+    assert _escalation_clarify_already_asked(chat) is True
+    _clear_escalation_clarify_flag(chat)
+    assert _escalation_clarify_already_asked(chat) is False
+
+
+def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="apply-email@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Apply Email Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    assert cl is not None
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-123", "email": None},
+        escalation_followup_pending=False,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+
+    row = UserSession(client_id=client_id, user_id="u-123", email=None)
+    db_session.add(row)
+    db_session.commit()
+
+    apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
+
+    db_session.refresh(ticket)
+    db_session.refresh(chat)
+    db_session.refresh(row)
+    assert ticket.user_email == "user@example.com"
+    assert chat.user_context.get("email") == "user@example.com"
+    assert chat.escalation_awaiting_ticket_id is None
+    assert chat.escalation_followup_pending is True
+    assert row.email == "user@example.com"
+
+
+def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="manual-missing@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Missing Email"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(client, token)
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={"email": None})
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    assert cl is not None
+    msg, tnum = perform_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="please escalate",
+        trigger=EscalationTrigger.user_request,
+    )
+
+    assert tnum.startswith("ESC-")
+    assert isinstance(msg, str) and msg != ""
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_ticket_id is not None
+    assert chat.escalation_followup_pending is False
+
+    ticket = db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).first()
+    assert ticket is not None
+    assert ticket.trigger == EscalationTrigger.user_request
+    messages = db_session.query(Message).filter(Message.chat_id == chat.id).all()
+    assert len(messages) == 1
+    assert messages[0].role == MessageRole.assistant
+
+
+def test_perform_manual_escalation_sets_followup_when_email_known(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="manual-known@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Known Email"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(client, token)
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "known@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    assert cl is not None
+    _msg, tnum = perform_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="answer rejected",
+        trigger=EscalationTrigger.answer_rejected,
+    )
+    assert tnum.startswith("ESC-")
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_ticket_id is None
+    assert chat.escalation_followup_pending is True
+    ticket = db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).first()
+    assert ticket is not None
+    assert ticket.trigger == EscalationTrigger.answer_rejected

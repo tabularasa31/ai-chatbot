@@ -162,6 +162,41 @@ def mock_openai_client():
         yield mock_client
 
 
+@pytest.fixture
+def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
+    """Override escalation LLM response for tests that need specific decisions."""
+
+    def _apply(
+        *,
+        message_to_user: str = "A support ticket was created for you.",
+        followup_decision: str | None = None,
+        tokens_used: int = 15,
+    ) -> Mock:
+        esc_client = Mock()
+        esc_client.chat.completions.create.return_value = Mock(
+            choices=[
+                Mock(
+                    message=Mock(
+                        content=json.dumps(
+                            {
+                                "message_to_user": message_to_user,
+                                "followup_decision": followup_decision,
+                            }
+                        )
+                    )
+                )
+            ],
+            usage=Mock(total_tokens=tokens_used),
+        )
+        monkeypatch.setattr(
+            "backend.escalation.openai_escalation.get_openai_client",
+            lambda _api_key: esc_client,
+        )
+        return esc_client
+
+    return _apply
+
+
 @pytest.fixture(autouse=True)
 def _reset_widget_rate_limit_key_override():
     """Clear widget rate-limit test hook so a failed test cannot leak state."""

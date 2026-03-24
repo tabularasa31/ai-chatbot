@@ -288,6 +288,7 @@ CI: GitHub Actions — `.github/workflows/ci.yml` on push/PR to `main` + `deploy
 
 | File | Contents |
 |------|---------|
+| `06_developer-test-runbook.md` | Developer-focused test command groups (P0 smoke, auth reset, escalation, RAG edge cases, pgvector, coverage) |
 | **`IMPLEMENTED_FEATURES.md`** | **Implemented features registry** (English, by area, links to code/API); extend on major releases |
 | `BACKLOG_PRODUCT.md` | Product features (FI-xxx), RICE scored |
 | `BACKLOG_TECH_DEBT.md` | Tech improvements |

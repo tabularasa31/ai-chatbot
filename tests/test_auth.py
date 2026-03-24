@@ -160,3 +160,153 @@ def test_health(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_forgot_password_returns_same_message_for_existing_and_missing_email(
+    client: TestClient,
+) -> None:
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "forgot-existing@example.com", "password": "SecurePass1!"},
+        )
+
+    existing = client.post(
+        "/auth/forgot-password",
+        json={"email": "forgot-existing@example.com"},
+    )
+    missing = client.post(
+        "/auth/forgot-password",
+        json={"email": "forgot-missing@example.com"},
+    )
+    assert existing.status_code == 200
+    assert missing.status_code == 200
+    assert existing.json() == missing.json()
+
+
+def test_forgot_password_creates_token_only_for_existing_user(
+    client: TestClient,
+    db_session,
+) -> None:
+    from backend.models import User
+
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "forgot-token@example.com", "password": "SecurePass1!"},
+        )
+
+    client.post("/auth/forgot-password", json={"email": "forgot-token@example.com"})
+    client.post("/auth/forgot-password", json={"email": "does-not-exist@example.com"})
+
+    existing_user = db_session.query(User).filter(User.email == "forgot-token@example.com").first()
+    assert existing_user is not None
+    assert existing_user.reset_password_token is not None
+    assert existing_user.reset_password_expires_at is not None
+    missing_user = db_session.query(User).filter(User.email == "does-not-exist@example.com").first()
+    assert missing_user is None
+
+
+def test_reset_password_success_updates_password_and_verifies_user(
+    client: TestClient,
+    db_session,
+) -> None:
+    from backend.models import User
+
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "reset-success@example.com", "password": "SecurePass1!"},
+        )
+
+    forgot = client.post("/auth/forgot-password", json={"email": "reset-success@example.com"})
+    assert forgot.status_code == 200
+    user = db_session.query(User).filter(User.email == "reset-success@example.com").first()
+    assert user is not None
+    token = user.reset_password_token
+    assert token is not None
+
+    reset = client.post(
+        "/auth/reset-password",
+        json={"token": token, "new_password": "NewSecurePass1!"},
+    )
+    assert reset.status_code == 200
+
+    db_session.refresh(user)
+    assert user.reset_password_token is None
+    assert user.reset_password_expires_at is None
+    assert user.is_verified is True
+    assert user.verification_token is None
+    assert user.verification_expires_at is None
+
+    login = client.post(
+        "/auth/login",
+        json={"email": "reset-success@example.com", "password": "NewSecurePass1!"},
+    )
+    assert login.status_code == 200
+
+
+def test_reset_password_invalid_token_returns_400(client: TestClient) -> None:
+    response = client.post(
+        "/auth/reset-password",
+        json={"token": "not-valid-token", "new_password": "NewSecurePass1!"},
+    )
+    assert response.status_code == 400
+
+
+def test_reset_password_expired_token_returns_400(
+    client: TestClient,
+    db_session,
+) -> None:
+    from backend.models import User
+
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "reset-expired@example.com", "password": "SecurePass1!"},
+        )
+
+    client.post("/auth/forgot-password", json={"email": "reset-expired@example.com"})
+    user = db_session.query(User).filter(User.email == "reset-expired@example.com").first()
+    assert user is not None
+    assert user.reset_password_token is not None
+    user.reset_password_expires_at = dt.datetime.utcnow() - dt.timedelta(minutes=1)
+    db_session.add(user)
+    db_session.commit()
+
+    response = client.post(
+        "/auth/reset-password",
+        json={"token": user.reset_password_token, "new_password": "NewSecurePass1!"},
+    )
+    assert response.status_code == 400
+
+
+def test_reset_password_token_cannot_be_reused(
+    client: TestClient,
+    db_session,
+) -> None:
+    from backend.models import User
+
+    with patch("backend.auth.routes.send_email"):
+        client.post(
+            "/auth/register",
+            json={"email": "reset-reuse@example.com", "password": "SecurePass1!"},
+        )
+
+    client.post("/auth/forgot-password", json={"email": "reset-reuse@example.com"})
+    user = db_session.query(User).filter(User.email == "reset-reuse@example.com").first()
+    assert user is not None
+    token = user.reset_password_token
+    assert token is not None
+
+    r1 = client.post(
+        "/auth/reset-password",
+        json={"token": token, "new_password": "NewSecurePass1!"},
+    )
+    assert r1.status_code == 200
+
+    r2 = client.post(
+        "/auth/reset-password",
+        json={"token": token, "new_password": "AnotherPass1!"},
+    )
+    assert r2.status_code == 400

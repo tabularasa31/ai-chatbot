@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from unittest.mock import Mock
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1439,3 +1440,429 @@ def test_chat_openai_unavailable_503(
     )
     assert response.status_code == 503
     assert "OpenAI" in response.json()["detail"]
+
+
+def test_chat_awaiting_email_valid_email_transitions_to_followup(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    token = register_and_verify_user(client, db_session, email="await-valid@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Await Valid Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-await"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="Need human support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "reach me at user@example.com"},
+    )
+    assert response.status_code == 200
+
+    db_session.refresh(chat)
+    db_session.refresh(ticket)
+    assert ticket.user_email == "user@example.com"
+    assert chat.escalation_awaiting_ticket_id is None
+    assert chat.escalation_followup_pending is True
+
+
+def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    token = register_and_verify_user(client, db_session, email="await-invalid@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Await Invalid Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "my email is not provided"},
+    )
+    assert response.status_code == 200
+    db_session.refresh(chat)
+    db_session.refresh(ticket)
+    assert chat.escalation_awaiting_ticket_id == ticket.id
+    assert ticket.user_email is None
+
+
+def test_chat_followup_no_ends_chat(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    token = register_and_verify_user(client, db_session, email="follow-no@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow No Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Understood, closing chat.",
+            followup_decision="no",
+            tokens_used=3,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "no thanks"},
+    )
+    assert response.status_code == 200
+    assert response.json()["chat_ended"] is True
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert chat.ended_at is not None
+
+
+def test_chat_followup_unclear_twice_falls_back_to_yes(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    token = register_and_verify_user(client, db_session, email="follow-unclear@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow Unclear Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Could you clarify?",
+            followup_decision="unclear",
+            tokens_used=2,
+        ),
+    )
+
+    r1 = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "maybe"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["chat_ended"] is False
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is True
+    assert (chat.user_context or {}).get("escalation_followup_clarify") is True
+
+    r2 = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "still not sure"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["chat_ended"] is False
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert (chat.user_context or {}).get("escalation_followup_clarify") is None
+
+
+def test_chat_when_already_closed_uses_closed_phase(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="closed@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Closed Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        ended_at=datetime.now(timezone.utc),
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Chat already ended.",
+            followup_decision=None,
+            tokens_used=1,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "hello again"},
+    )
+    assert response.status_code == 200
+    assert response.json()["chat_ended"] is True
+    assert "Chat already ended" in response.json()["answer"]
+
+
+def test_manual_escalate_requires_api_key(client: TestClient) -> None:
+    response = client.post(
+        f"/chat/{uuid.uuid4()}/escalate",
+        json={"trigger": "user_request"},
+    )
+    assert response.status_code == 401
+
+
+def test_manual_escalate_invalid_api_key(client: TestClient) -> None:
+    response = client.post(
+        f"/chat/{uuid.uuid4()}/escalate",
+        headers={"X-API-Key": "bad-key"},
+        json={"trigger": "user_request"},
+    )
+    assert response.status_code == 401
+
+
+def test_manual_escalate_without_openai_key_returns_400(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="manual-nokey@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual NoKey"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    db_session.add(chat)
+    db_session.commit()
+
+    response = client.post(
+        f"/chat/{chat.session_id}/escalate",
+        headers={"X-API-Key": api_key},
+        json={"trigger": "user_request"},
+    )
+    assert response.status_code == 400
+
+
+def test_manual_escalate_missing_session_returns_404(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="manual-404@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual 404"},
+    )
+    set_client_openai_key(client, token)
+    api_key = cl_resp.json()["api_key"]
+
+    response = client.post(
+        f"/chat/{uuid.uuid4()}/escalate",
+        headers={"X-API-Key": api_key},
+        json={"trigger": "user_request"},
+    )
+    assert response.status_code == 404
+
+
+def test_manual_escalate_openai_error_returns_503(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+    from openai import APIError
+
+    token = register_and_verify_user(client, db_session, email="manual-503@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual 503"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    db_session.add(chat)
+    db_session.commit()
+
+    def _raise_api_error(*args, **kwargs):
+        raise APIError("Service unavailable", request=Mock(), body=None)
+
+    monkeypatch.setattr("backend.chat.routes.perform_manual_escalation", _raise_api_error)
+
+    response = client.post(
+        f"/chat/{chat.session_id}/escalate",
+        headers={"X-API-Key": api_key},
+        json={"trigger": "user_request"},
+    )
+    assert response.status_code == 503
+
+
+def test_manual_escalate_success_for_both_triggers(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="manual-success@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Manual Success"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    db_session.add(chat)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.routes.perform_manual_escalation",
+        lambda *args, **kwargs: ("Escalated.", "ESC-0009"),
+    )
+
+    r1 = client.post(
+        f"/chat/{chat.session_id}/escalate",
+        headers={"X-API-Key": api_key},
+        json={"trigger": "user_request"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["ticket_number"] == "ESC-0009"
+
+    r2 = client.post(
+        f"/chat/{chat.session_id}/escalate",
+        headers={"X-API-Key": api_key},
+        json={"trigger": "answer_rejected"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["ticket_number"] == "ESC-0009"

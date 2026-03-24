@@ -475,3 +475,132 @@ def test_search_low_vector_similarity_still_returns_chunk(
     assert len(data["results"]) == 1
     assert "CORS" in data["results"][0]["chunk_text"]
     assert data["results"][0]["document_id"] == str(doc.id)
+
+
+def test_search_openai_unavailable_returns_503(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from openai import APIError
+
+    token = register_and_verify_user(client, db_session, email="search503@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Search 503 Client"},
+    )
+    set_client_openai_key(client, token)
+    mock_openai_client.embeddings.create.side_effect = APIError(
+        "Service unavailable",
+        request=Mock(),
+        body=None,
+    )
+
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "hello", "top_k": 3},
+    )
+    assert response.status_code == 503
+
+
+def test_search_skips_malformed_metadata_vectors(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    token = register_and_verify_user(client, db_session, email="malformedvec@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Malformed Vec Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="badvec.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    db_session.add_all(
+        [
+            Embedding(
+                document_id=doc.id,
+                chunk_text="bad vector string",
+                vector=None,
+                metadata_json={"chunk_index": 0, "vector": "not-a-list"},
+            ),
+            Embedding(
+                document_id=doc.id,
+                chunk_text="bad vector empty",
+                vector=None,
+                metadata_json={"chunk_index": 1, "vector": []},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "content", "top_k": 5},
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+
+
+def test_search_skips_vector_with_wrong_dimension(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    token = register_and_verify_user(client, db_session, email="wrongdim@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Wrong Dim Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="wrongdim.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="wrong dim chunk",
+        vector=None,
+        metadata_json={"chunk_index": 0, "vector": [0.1] * 10},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "anything", "top_k": 3},
+    )
+    assert response.status_code == 200
+    assert response.json()["results"] == []

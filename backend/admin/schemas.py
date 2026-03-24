@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -25,7 +26,7 @@ class AdminClientMetricsItem(BaseModel):
 
     client_id: UUID
     public_id: str
-    owner_email: str | None
+    owner_email: Optional[str]
     users_count: int
     documents_count: int
     embedded_documents_count: int

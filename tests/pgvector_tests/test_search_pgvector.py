@@ -240,6 +240,34 @@ def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     assert "unrelated words xyz qrs" in result_texts
 
 
+@pytest.mark.pgvector
+def test_hybrid_search_limits_results_with_mixed_candidates(
+    mock_openai_client: Mock,
+    pg_db_session: Session,
+) -> None:
+    """Hybrid search keeps top_k when candidates mix keyword and weak/noisy chunks."""
+    from tests.test_models import _create_client, _create_user
+    from backend.search.service import search_similar_chunks
+
+    user = _create_user(pg_db_session, email="hybrid_mixed@example.com")
+    cl = _create_client(pg_db_session, user, name="Hybrid Mixed")
+    doc_id = _make_document(pg_db_session, cl.id)
+
+    query_vec = [1.0] + [0.0] * 1535
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
+
+    _insert_embedding(pg_db_session, doc_id, "cors origin setting in dashboard", [0.95, 0.1] + [0.0] * 1534)
+    _insert_embedding(pg_db_session, doc_id, "random unrelated payload alpha beta", [0.6, 0.6] + [0.0] * 1534)
+    _insert_embedding(pg_db_session, doc_id, "another noisy chunk", [0.2, 0.95] + [0.0] * 1534)
+
+    results = search_similar_chunks(
+        cl.id, "cors setting", top_k=2, db=pg_db_session, api_key="sk-test"
+    )
+    assert len(results) == 2
+    texts = [emb.chunk_text for emb, _ in results]
+    assert any("cors" in t for t in texts)
+
+
 # ---------------------------------------------------------------------------
 # Full HTTP path on real PostgreSQL
 # ---------------------------------------------------------------------------

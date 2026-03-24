@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Generator
+from typing import Generator, Optional
 import json
 import os
 import sys
@@ -160,6 +160,41 @@ def mock_openai_client():
              return_value=mock_esc_client,
          ):
         yield mock_client
+
+
+@pytest.fixture
+def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
+    """Override escalation LLM response for tests that need specific decisions."""
+
+    def _apply(
+        *,
+        message_to_user: str = "A support ticket was created for you.",
+        followup_decision: Optional[str] = None,
+        tokens_used: int = 15,
+    ) -> Mock:
+        esc_client = Mock()
+        esc_client.chat.completions.create.return_value = Mock(
+            choices=[
+                Mock(
+                    message=Mock(
+                        content=json.dumps(
+                            {
+                                "message_to_user": message_to_user,
+                                "followup_decision": followup_decision,
+                            }
+                        )
+                    )
+                )
+            ],
+            usage=Mock(total_tokens=tokens_used),
+        )
+        monkeypatch.setattr(
+            "backend.escalation.openai_escalation.get_openai_client",
+            lambda _api_key: esc_client,
+        )
+        return esc_client
+
+    return _apply
 
 
 @pytest.fixture(autouse=True)

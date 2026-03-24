@@ -6,7 +6,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from openai import APIError, APITimeoutError
+from openai import APIError
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user
@@ -52,7 +52,7 @@ def search_route(
             db=db,
             api_key=client.openai_api_key,
         )
-    except (APIError, APITimeoutError) as exc:
+    except APIError as exc:
         logger.warning("OpenAI API error during search: %s", exc)
         raise HTTPException(
             status_code=503,

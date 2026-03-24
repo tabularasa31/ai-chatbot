@@ -171,14 +171,15 @@ def test_forgot_password_returns_same_message_for_existing_and_missing_email(
             json={"email": "forgot-existing@example.com", "password": "SecurePass1!"},
         )
 
-    existing = client.post(
-        "/auth/forgot-password",
-        json={"email": "forgot-existing@example.com"},
-    )
-    missing = client.post(
-        "/auth/forgot-password",
-        json={"email": "forgot-missing@example.com"},
-    )
+    with patch("backend.auth.routes.send_email"):
+        existing = client.post(
+            "/auth/forgot-password",
+            json={"email": "forgot-existing@example.com"},
+        )
+        missing = client.post(
+            "/auth/forgot-password",
+            json={"email": "forgot-missing@example.com"},
+        )
     assert existing.status_code == 200
     assert missing.status_code == 200
     assert existing.json() == missing.json()
@@ -196,8 +197,9 @@ def test_forgot_password_creates_token_only_for_existing_user(
             json={"email": "forgot-token@example.com", "password": "SecurePass1!"},
         )
 
-    client.post("/auth/forgot-password", json={"email": "forgot-token@example.com"})
-    client.post("/auth/forgot-password", json={"email": "does-not-exist@example.com"})
+    with patch("backend.auth.routes.send_email"):
+        client.post("/auth/forgot-password", json={"email": "forgot-token@example.com"})
+        client.post("/auth/forgot-password", json={"email": "does-not-exist@example.com"})
 
     existing_user = db_session.query(User).filter(User.email == "forgot-token@example.com").first()
     assert existing_user is not None
@@ -219,7 +221,8 @@ def test_reset_password_success_updates_password_and_verifies_user(
             json={"email": "reset-success@example.com", "password": "SecurePass1!"},
         )
 
-    forgot = client.post("/auth/forgot-password", json={"email": "reset-success@example.com"})
+    with patch("backend.auth.routes.send_email"):
+        forgot = client.post("/auth/forgot-password", json={"email": "reset-success@example.com"})
     assert forgot.status_code == 200
     user = db_session.query(User).filter(User.email == "reset-success@example.com").first()
     assert user is not None
@@ -266,7 +269,8 @@ def test_reset_password_expired_token_returns_400(
             json={"email": "reset-expired@example.com", "password": "SecurePass1!"},
         )
 
-    client.post("/auth/forgot-password", json={"email": "reset-expired@example.com"})
+    with patch("backend.auth.routes.send_email"):
+        client.post("/auth/forgot-password", json={"email": "reset-expired@example.com"})
     user = db_session.query(User).filter(User.email == "reset-expired@example.com").first()
     assert user is not None
     assert user.reset_password_token is not None
@@ -293,7 +297,8 @@ def test_reset_password_token_cannot_be_reused(
             json={"email": "reset-reuse@example.com", "password": "SecurePass1!"},
         )
 
-    client.post("/auth/forgot-password", json={"email": "reset-reuse@example.com"})
+    with patch("backend.auth.routes.send_email"):
+        client.post("/auth/forgot-password", json={"email": "reset-reuse@example.com"})
     user = db_session.query(User).filter(User.email == "reset-reuse@example.com").first()
     assert user is not None
     token = user.reset_password_token

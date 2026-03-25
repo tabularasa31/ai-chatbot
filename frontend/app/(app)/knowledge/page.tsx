@@ -71,10 +71,34 @@ function HealthCell({
     else dotClass = "bg-red-500";
   }
 
+  const warnings = health?.warnings ?? [];
+  const checkedAt = health?.checked_at ? new Date(health.checked_at).toLocaleString() : null;
+  const tooltipLines =
+    health == null
+      ? ["Health check is still running."]
+      : health.error
+        ? ["Health check is currently unavailable."]
+        : warnings.length > 0
+          ? warnings.map((warning) => warning.message)
+          : ["No issues found."];
+  const tooltipText = [...tooltipLines, checkedAt ? `Checked: ${checkedAt}` : null].filter(Boolean).join("\n");
+
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+    <span
+      className="group relative inline-flex items-center gap-1.5 text-xs text-slate-600"
+      tabIndex={0}
+      title={tooltipText}
+    >
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
+      <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block group-focus-visible:block">
+        {tooltipLines.map((line) => (
+          <span key={line} className="block">
+            {line}
+          </span>
+        ))}
+        {checkedAt && <span className="mt-2 block text-[10px] text-slate-300">Checked: {checkedAt}</span>}
+      </span>
     </span>
   );
 }
@@ -392,7 +416,7 @@ export default function KnowledgePage() {
       )}
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+        <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">

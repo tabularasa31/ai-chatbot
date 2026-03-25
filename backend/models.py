@@ -55,6 +55,7 @@ class DocumentType(str, enum.Enum):
     pdf = "pdf"
     markdown = "markdown"
     swagger = "swagger"
+    url = "url"
 
 
 class DocumentStatus(str, enum.Enum):
@@ -62,6 +63,21 @@ class DocumentStatus(str, enum.Enum):
     ready = "ready"
     embedding = "embedding"
     error = "error"
+
+
+class SourceStatus(str, enum.Enum):
+    queued = "queued"
+    indexing = "indexing"
+    ready = "ready"
+    stale = "stale"
+    error = "error"
+    paused = "paused"
+
+
+class SourceSchedule(str, enum.Enum):
+    daily = "daily"
+    weekly = "weekly"
+    manual = "manual"
 
 
 class MessageRole(str, enum.Enum):
@@ -211,6 +227,12 @@ class Client(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    url_sources = relationship(
+        "UrlSource",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     chats = relationship(
         "Chat",
         back_populates="client",
@@ -239,7 +261,14 @@ class Document(Base):
         nullable=False,
         index=True,
     )
+    source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("url_sources.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     filename = Column(String(255), nullable=False)
+    source_url = Column(Text, nullable=True)
     file_type = Column(
         Enum(DocumentType, native_enum=False),
         nullable=False,
@@ -265,12 +294,109 @@ class Document(Base):
     )
 
     client = relationship("Client", back_populates="documents")
+    source = relationship("UrlSource", back_populates="documents")
     embeddings = relationship(
         "Embedding",
         back_populates="document",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class UrlSource(Base):
+    __tablename__ = "url_sources"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    client_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(255), nullable=True)
+    url = Column(Text, nullable=False)
+    normalized_domain = Column(String(255), nullable=False, index=True)
+    status = Column(
+        Enum(SourceStatus, native_enum=False),
+        nullable=False,
+        default=SourceStatus.queued,
+        server_default=SourceStatus.queued.value,
+        index=True,
+    )
+    crawl_schedule = Column(
+        Enum(SourceSchedule, native_enum=False),
+        nullable=False,
+        default=SourceSchedule.weekly,
+        server_default=SourceSchedule.weekly.value,
+    )
+    exclusion_patterns = Column(JSON, nullable=True, default=None)
+    pages_found = Column(Integer, nullable=True)
+    pages_indexed = Column(Integer, nullable=False, default=0, server_default="0")
+    chunks_created = Column(Integer, nullable=False, default=0, server_default="0")
+    tokens_used = Column(Integer, nullable=False, default=0, server_default="0")
+    last_crawled_at = Column(DateTime, nullable=True)
+    next_crawl_at = Column(DateTime, nullable=True)
+    last_refresh_requested_at = Column(DateTime, nullable=True)
+    error_message = Column(Text, nullable=True)
+    warning_message = Column(Text, nullable=True)
+    metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+    client = relationship("Client", back_populates="url_sources")
+    documents = relationship(
+        "Document",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    runs = relationship(
+        "UrlSourceRun",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class UrlSourceRun(Base):
+    __tablename__ = "url_source_runs"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("url_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status = Column(String(32), nullable=False)
+    pages_found = Column(Integer, nullable=True)
+    pages_indexed = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_urls = Column(JSON, nullable=False, default=list)
+    duration_seconds = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+    finished_at = Column(DateTime, nullable=True)
+
+    source = relationship("UrlSource", back_populates="runs")
 
 
 class Embedding(Base):
@@ -509,4 +635,3 @@ Index(
 # Note: pgvector HNSW index is created via migration, not here
 # CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);
 # document_id already has index=True on the column
-

@@ -139,6 +139,60 @@ export type DocumentHealthStatus = {
   error?: string;
 };
 
+export type DocumentListItem = {
+  id: string;
+  filename: string;
+  file_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  health_status?: DocumentHealthStatus | null;
+};
+
+export type UrlSourceRun = {
+  id: string;
+  status: string;
+  pages_found: number | null;
+  pages_indexed: number;
+  failed_urls: Array<{ url: string; reason: string }>;
+  duration_seconds: number | null;
+  error_message?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+};
+
+export type UrlSourcePage = {
+  id: string;
+  title: string;
+  url: string;
+  chunk_count: number;
+  updated_at: string;
+};
+
+export type UrlSource = {
+  id: string;
+  name: string;
+  url: string;
+  source_type: "url";
+  status: string;
+  schedule: string;
+  pages_found: number | null;
+  pages_indexed: number;
+  chunks_created: number;
+  last_crawled_at?: string | null;
+  next_crawl_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  warning_message?: string | null;
+  error_message?: string | null;
+  exclusion_patterns: string[];
+};
+
+export type UrlSourceDetail = UrlSource & {
+  recent_runs: UrlSourceRun[];
+  pages: UrlSourcePage[];
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -330,6 +384,12 @@ export const api = {
       };
       return list.documents;
     },
+    async listSources(): Promise<{ documents: DocumentListItem[]; url_sources: UrlSource[] }> {
+      const res = await authFetch(`${BASE_URL}/documents/sources`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load sources"));
+      return data as { documents: DocumentListItem[]; url_sources: UrlSource[] };
+    },
     async upload(file: File) {
       const formData = new FormData();
       formData.append("file", file);
@@ -348,6 +408,55 @@ export const api = {
         status: string;
         created_at: string;
       };
+    },
+    async createUrlSource(input: {
+      url: string;
+      name?: string;
+      schedule?: string;
+      exclusions?: string[];
+    }): Promise<UrlSource> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create URL source"));
+      return data as UrlSource;
+    },
+    async getSourceById(id: string): Promise<UrlSourceDetail> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load source details"));
+      return data as UrlSourceDetail;
+    },
+    async updateSource(
+      id: string,
+      input: { name?: string; schedule?: string; exclusions?: string[] }
+    ): Promise<UrlSource> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to update source"));
+      return data as UrlSource;
+    },
+    async refreshSource(id: string): Promise<UrlSource> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/${id}/refresh`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to refresh source"));
+      return data as UrlSource;
+    },
+    async deleteSource(id: string): Promise<void> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`, { method: "DELETE" });
+      if (res.status !== 204 && !res.ok) {
+        const data = await res.json();
+        throw new Error(getErrorMessage(data, "Failed to delete source"));
+      }
     },
     async getById(id: string) {
       const res = await authFetch(`${BASE_URL}/documents/${id}`);

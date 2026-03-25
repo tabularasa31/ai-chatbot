@@ -32,12 +32,13 @@
 
 - **Multi-tenant** — one platform, many clients, full data isolation
 - **Document upload** — PDF, Markdown, Swagger (JSON/YAML), plain text
+- **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
-- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`), chat logs, feedback, admin metrics
+- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, chat logs, feedback, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
 - **Email verification** — signup link via Brevo HTTP API
@@ -172,6 +173,12 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |--------|------|-------------|
 | POST | `/documents` | Upload document (JWT, verified only) |
 | GET | `/documents` | List documents (JWT) |
+| GET | `/documents/sources` | List Knowledge sources: uploaded files + URL sources (JWT) |
+| POST | `/documents/sources/url` | Create URL source and start background indexing (JWT, verified only) |
+| GET | `/documents/sources/{source_id}` | Get URL source detail: recent runs + indexed pages (JWT) |
+| PATCH | `/documents/sources/{source_id}` | Update URL source name, schedule, exclusions (JWT, verified only) |
+| POST | `/documents/sources/{source_id}/refresh` | Re-crawl a URL source on demand (JWT, verified only) |
+| DELETE | `/documents/sources/{source_id}` | Delete a URL source and its indexed pages (JWT) |
 | DELETE | `/documents/{id}` | Delete document (JWT) |
 | POST | `/embeddings/documents/{id}` | Re-trigger embeddings generation (force re-index, JWT) |
 

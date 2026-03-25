@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-22  
+**Last updated:** 2026-03-25  
 **Status:** Production (getchat9.live)
 
 ---
@@ -111,6 +111,57 @@ After embedding, the system runs a GPT-based quality analysis on the document:
 - Visible in the dashboard as a colored dot (green / amber / red) next to each document
 - User can manually trigger a re-check at any time via the **Re-check** button
 - API: `GET /documents/{id}/health`, `POST /documents/{id}/health/run`
+
+### URL knowledge sources (FI-URL v1)
+
+The Knowledge hub can also index a documentation website from a root URL.
+
+How it works:
+
+1. User adds a root URL in **Knowledge**
+2. Backend validates the URL and runs a preflight reachability check
+3. The crawler discovers pages on the same domain (sitemap + HTML links)
+4. Each readable page is extracted into text, chunked, embedded, and stored as `DocumentType.url`
+5. The source keeps crawl metadata and a run history for the dashboard
+
+Current v1 limits and rules:
+
+- Only `http` / `https`
+- Same-domain crawling only
+- Maximum **50 pages** per source
+- Maximum discovery depth of **3**
+- Schedules: `daily`, `weekly`, `manual`
+- Optional exclusion patterns to skip paths
+
+Security hardening in v1:
+
+- The crawler rejects localhost, loopback, private, link-local, multicast, reserved, and unspecified IP ranges
+- Redirects are validated hop-by-hop instead of being followed automatically
+- Requests ignore environment proxy variables (`trust_env=False`)
+- Oversized responses are rejected before indexing
+
+User-visible states:
+
+- `queued` — ready to start
+- `indexing` — crawl in progress
+- `ready` — successfully indexed
+- `paused` — blocked until the client config is fixed (for example, missing OpenAI key)
+- `error` — crawl failed
+
+API:
+
+- `GET /documents/sources`
+- `POST /documents/sources/url`
+- `GET /documents/sources/{source_id}`
+- `PATCH /documents/sources/{source_id}`
+- `POST /documents/sources/{source_id}/refresh`
+- `DELETE /documents/sources/{source_id}`
+
+Contract notes:
+
+- `exclusions` accepts up to `50` patterns, each up to `255` characters.
+- `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
+- Mutating URL source actions (`create`, `edit`, `refresh`, `delete`) require a verified user.
 
 ---
 
@@ -319,7 +370,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | Page / route | What it shows |
 |--------------|---------------|
 | **Dashboard** (`/dashboard`) | **API key** (server-to-server `X-Api-Key`), **embed code** snippet (`public_id` / `ch_…`); banner linking to Agents if OpenAI key is missing |
-| **Knowledge** (`/knowledge`) | Upload, trigger embeddings, health indicators, delete; external source cards + unified indexed sources table (replaces legacy `/documents`) |
+| **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
 | **Agents** (`/settings`) | Per-tenant **OpenAI API key** (encrypted), save/update/remove |
 | **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |
 | **Review** (`/review`) | Bad answers (thumbs down) with ideal answer input |

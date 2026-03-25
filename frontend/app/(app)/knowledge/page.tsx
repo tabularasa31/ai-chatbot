@@ -1,43 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type DocumentHealthStatus } from "@/lib/api";
-
-type Document = {
-  id: string;
-  filename: string;
-  file_type: string;
-  status: string;
-  created_at: string;
-  updated_at?: string;
-  health_status?: DocumentHealthStatus | null;
-};
-
-type ExternalSource = {
-  id: string;
-  name: string;
-  type: "git" | "url";
-  label: string;
-  meta: string;
-  chunks: number;
-  indexedAt: string;
-  health: "good";
-};
-
-const COMING_SOON_INTEGRATIONS = [
-  { key: "confluence", name: "Confluence", icon: "📘" },
-  { key: "notion", name: "Notion", icon: "◻" },
-  { key: "url", name: "URL Crawler", icon: "🔗" },
-];
+import {
+  api,
+  type DocumentHealthStatus,
+  type DocumentListItem,
+  type UrlSource,
+  type UrlSourceDetail,
+} from "@/lib/api";
 
 function TypeBadge({ type }: { type: string }) {
   const styles: Record<string, string> = {
-    file: "bg-indigo-400/10 text-indigo-400",
-    git:  "bg-emerald-400/10 text-emerald-400",
-    url:  "bg-amber-400/10 text-amber-400",
+    file: "bg-indigo-400/10 text-indigo-500",
+    url: "bg-amber-400/15 text-amber-600",
   };
   return (
-    <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-medium ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
+    <span className={`rounded px-2 py-0.5 text-[10px] font-mono font-medium ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
       {type}
     </span>
   );
@@ -46,12 +24,16 @@ function TypeBadge({ type }: { type: string }) {
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     processing: "bg-yellow-100 text-yellow-800",
-    embedding:  "bg-blue-100 text-blue-800",
-    ready:      "bg-green-100 text-green-800",
-    error:      "bg-red-100 text-red-800",
+    embedding: "bg-blue-100 text-blue-800",
+    ready: "bg-green-100 text-green-800",
+    error: "bg-red-100 text-red-800",
+    queued: "bg-amber-100 text-amber-800",
+    indexing: "bg-sky-100 text-sky-800",
+    paused: "bg-orange-100 text-orange-800",
+    stale: "bg-yellow-100 text-yellow-800",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-800"}`}>
+    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-800"}`}>
       {status}
     </span>
   );
@@ -65,11 +47,17 @@ function healthLabel(health: DocumentHealthStatus | null | undefined): string {
   return "Needs attention";
 }
 
-function HealthCell({ health, isEmbedding }: { health: DocumentHealthStatus | null | undefined; isEmbedding?: boolean }) {
+function HealthCell({
+  health,
+  isEmbedding,
+}: {
+  health: DocumentHealthStatus | null | undefined;
+  isEmbedding?: boolean;
+}) {
   if (isEmbedding) {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-        <span className="w-2 h-2 rounded-full bg-slate-300 animate-pulse" />
+        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-300" />
         Pending
       </span>
     );
@@ -83,47 +71,44 @@ function HealthCell({ health, isEmbedding }: { health: DocumentHealthStatus | nu
     else dotClass = "bg-red-500";
   }
 
-  const warnings = health?.warnings ?? [];
-
   return (
-    <div className="relative group inline-flex flex-col items-start gap-1">
-      <span className="inline-flex items-center gap-1.5 text-xs text-slate-600 cursor-default">
-        <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />
-        <span className="font-medium">{label}</span>
-      </span>
-      {warnings.length > 0 && (
-        <div className="hidden group-hover:block absolute z-20 left-0 top-full mt-1 min-w-[240px] max-w-sm p-3 rounded-md border border-slate-200 bg-white shadow-lg text-left">
-          <p className="text-xs font-semibold text-slate-700 mb-2">Warnings</p>
-          <ul className="text-xs text-slate-600 space-y-2">
-            {warnings.map((w, i) => (
-              <li key={i}>
-                <span className="text-slate-400 uppercase tracking-wide">{w.severity}</span>
-                {": "}
-                {w.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
+    <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+      <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+      <span className="font-medium">{label}</span>
+    </span>
   );
 }
 
+type MixedRow =
+  | { kind: "file"; item: DocumentListItem }
+  | { kind: "url"; item: UrlSource };
+
+const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
+
 export default function KnowledgePage() {
-  const [documents, setDocuments] = useState<Document[]>([]);
+  const [documents, setDocuments] = useState<DocumentListItem[]>([]);
+  const [sources, setSources] = useState<UrlSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [submittingUrl, setSubmittingUrl] = useState(false);
   const [error, setError] = useState("");
   const [uploadError, setUploadError] = useState("");
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
+  const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-
-  const externalSources: ExternalSource[] = [];
+  const [detail, setDetail] = useState<UrlSourceDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [showUrlForm, setShowUrlForm] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
+  const [nameInput, setNameInput] = useState("");
+  const [scheduleInput, setScheduleInput] = useState("weekly");
+  const [exclusionsInput, setExclusionsInput] = useState("");
 
   async function load() {
     try {
-      const docs = await api.documents.list();
-      setDocuments(docs);
+      const data = await api.documents.listSources();
+      setDocuments(data.documents);
+      setSources(data.url_sources);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load");
     } finally {
@@ -131,7 +116,33 @@ export default function KnowledgePage() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
+
+  useEffect(() => {
+    const shouldPoll = sources.some((source) => POLLABLE_SOURCE_STATUSES.has(source.status));
+    if (!shouldPoll) return;
+    const timer = window.setInterval(() => {
+      void load();
+      if (detail && POLLABLE_SOURCE_STATUSES.has(detail.status)) {
+        void openDetail(detail.id);
+      }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [sources, detail]);
+
+  async function openDetail(sourceId: string) {
+    try {
+      setDetailLoading(true);
+      const next = await api.documents.getSourceById(sourceId);
+      setDetail(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load source details");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
 
   async function pollUntilEmbedded(docId: string, timeoutMs = 120_000) {
     const interval = 2_000;
@@ -140,7 +151,7 @@ export default function KnowledgePage() {
       await new Promise((r) => setTimeout(r, interval));
       const updated = await api.documents.getById(docId);
       setDocuments((prev) =>
-        prev.map((d) => (d.id === docId ? { ...d, status: updated.status } : d))
+        prev.map((d) => (d.id === docId ? { ...d, status: updated.status, health_status: updated.health_status } : d))
       );
       if (updated.status === "ready" || updated.status === "error") return updated.status;
     }
@@ -154,7 +165,7 @@ export default function KnowledgePage() {
     setUploading(true);
     try {
       const doc = await api.documents.upload(file);
-      setDocuments((prev) => [doc, ...prev]);
+      setDocuments((prev) => [doc as DocumentListItem, ...prev]);
       await api.embeddings.create(doc.id);
       await pollUntilEmbedded(doc.id);
       await load();
@@ -166,8 +177,35 @@ export default function KnowledgePage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this source?")) return;
+  async function handleCreateUrlSource() {
+    setSubmittingUrl(true);
+    setError("");
+    try {
+      const source = await api.documents.createUrlSource({
+        url: urlInput,
+        name: nameInput || undefined,
+        schedule: scheduleInput,
+        exclusions: exclusionsInput
+          .split("\n")
+          .map((item) => item.trim())
+          .filter(Boolean),
+      });
+      setSources((prev) => [source, ...prev]);
+      setShowUrlForm(false);
+      setUrlInput("");
+      setNameInput("");
+      setExclusionsInput("");
+      setScheduleInput("weekly");
+      await openDetail(source.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create source");
+    } finally {
+      setSubmittingUrl(false);
+    }
+  }
+
+  async function handleDeleteFile(id: string) {
+    if (!confirm("Delete this file?")) return;
     try {
       await api.documents.delete(id);
       setDocuments((prev) => prev.filter((d) => d.id !== id));
@@ -176,13 +214,35 @@ export default function KnowledgePage() {
     }
   }
 
+  async function handleDeleteSource(id: string) {
+    if (!confirm("Delete this URL source and all indexed pages?")) return;
+    try {
+      await api.documents.deleteSource(id);
+      setSources((prev) => prev.filter((source) => source.id !== id));
+      if (detail?.id === id) setDetail(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  }
+
+  async function handleRefreshSource(id: string) {
+    setRefreshingSourceId(id);
+    try {
+      const source = await api.documents.refreshSource(id);
+      setSources((prev) => prev.map((item) => (item.id === id ? source : item)));
+      if (detail?.id === id) await openDetail(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Refresh failed");
+    } finally {
+      setRefreshingSourceId(null);
+    }
+  }
+
   async function handleRecheckHealth(docId: string) {
     setRecheckingId(docId);
     try {
       const hs = await api.documents.runHealth(docId);
-      setDocuments((prev) =>
-        prev.map((d) => (d.id === docId ? { ...d, health_status: hs } : d))
-      );
+      setDocuments((prev) => prev.map((d) => (d.id === docId ? { ...d, health_status: hs } : d)));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Health re-check failed");
     } finally {
@@ -190,163 +250,242 @@ export default function KnowledgePage() {
     }
   }
 
-  const filteredDocs = documents.filter((d) =>
-    d.filename.toLowerCase().includes(filter.toLowerCase())
-  );
-
-  const allRows = [
-    ...filteredDocs.map((d) => ({ kind: "file" as const, doc: d })),
-    ...externalSources
-      .filter((s) => s.name.toLowerCase().includes(filter.toLowerCase()))
-      .map((s) => ({ kind: "external" as const, source: s })),
-  ];
+  const rows = (() => {
+    const text = filter.trim().toLowerCase();
+    const mixed: MixedRow[] = [
+      ...documents.map((item) => ({ kind: "file" as const, item })),
+      ...sources.map((item) => ({ kind: "url" as const, item })),
+    ];
+    return mixed.filter((row) => {
+      if (!text) return true;
+      if (row.kind === "file") return row.item.filename.toLowerCase().includes(text);
+      return (
+        row.item.name.toLowerCase().includes(text) ||
+        row.item.url.toLowerCase().includes(text)
+      );
+    });
+  })();
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
+        <div className="animate-pulse text-sm text-slate-500">Loading…</div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
-        <p className="text-sm text-slate-500 mt-1">Everything your bot knows</p>
-      </div>
-
-      {/* External source cards */}
-      <div>
-        <p className="text-[11px] uppercase tracking-widest text-slate-400 mb-3">External sources</p>
-        <div className="flex gap-3 flex-wrap">
-          {/* GitHub — connected placeholder (wired when real integration exists) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 w-44 opacity-40 cursor-not-allowed select-none">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-base">⬡</span>
-              <span className="text-sm font-semibold text-slate-700">GitHub</span>
-            </div>
-            <p className="text-xs text-slate-400">Coming soon</p>
-          </div>
-          {COMING_SOON_INTEGRATIONS.map((itg) => (
-            <div
-              key={itg.key}
-              className="bg-white border border-slate-200 rounded-xl p-4 w-44 opacity-40 cursor-not-allowed select-none"
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-base">{itg.icon}</span>
-                <span className="text-sm font-semibold text-slate-700">{itg.name}</span>
-              </div>
-              <p className="text-xs text-slate-400">Coming soon</p>
-            </div>
-          ))}
+    <div className="max-w-6xl space-y-6">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
+          <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="inline-flex items-center gap-2">
+            <span className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700">
+              {uploading ? "Processing…" : "Upload file"}
+            </span>
+            <input
+              type="file"
+              accept=".pdf,.md,.json,.yaml,.yml"
+              onChange={handleUpload}
+              disabled={uploading}
+              className="sr-only"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowUrlForm((prev) => !prev)}
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+          >
+            + Add from URL
+          </button>
         </div>
       </div>
 
-      {/* Table controls */}
+      {showUrlForm && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">URL</span>
+              <input
+                type="url"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                placeholder="https://docs.yourproduct.com"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Name</span>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                placeholder="Optional display name"
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Schedule</span>
+              <select
+                value={scheduleInput}
+                onChange={(e) => setScheduleInput(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="manual">Manual only</option>
+              </select>
+            </label>
+            <label className="block md:col-span-2">
+              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Exclusions</span>
+              <textarea
+                value={exclusionsInput}
+                onChange={(e) => setExclusionsInput(e.target.value)}
+                placeholder={"/blog/*\n/changelog/*"}
+                rows={4}
+                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+              />
+            </label>
+          </div>
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => void handleCreateUrlSource()}
+              disabled={submittingUrl || !urlInput.trim()}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {submittingUrl ? "Checking and starting…" : "Add and start indexing"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowUrlForm(false)}
+              className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-4">
-        <label className="inline-flex items-center gap-2">
-          <span className="inline-flex items-center gap-2 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg cursor-pointer transition-colors">
-            {uploading ? (
-              <span className="animate-pulse">Processing…</span>
-            ) : (
-              <>
-                <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
-                  <path d="M6.5 1v8M3 4.5L6.5 1 10 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M1 10.5v1a.5.5 0 00.5.5h10a.5.5 0 00.5-.5v-1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-                </svg>
-                Upload file
-              </>
-            )}
-          </span>
-          <input
-            type="file"
-            accept=".pdf,.md,.json,.yaml,.yml"
-            onChange={handleUpload}
-            disabled={uploading}
-            className="sr-only"
-          />
-        </label>
         <input
           type="text"
           placeholder="Filter sources…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          className="px-3 py-2 text-sm border border-slate-200 rounded-lg outline-none focus:border-slate-400 text-slate-700 placeholder:text-slate-400 w-52"
+          className="w-60 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
         />
       </div>
 
       {uploadError && (
-        <div className="text-red-600 text-sm bg-red-50 px-3 py-2 rounded-lg border border-red-100">
+        <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
           {uploadError}
         </div>
       )}
       {error && (
-        <div className="text-red-700 text-sm bg-red-50 px-4 py-3 rounded-lg">{error}</div>
+        <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
       )}
 
-      {/* Unified table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-slate-100 bg-slate-50">
-              <th className="text-left px-5 py-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">Name</th>
-              <th className="text-left px-4 py-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">Type</th>
-              <th className="text-left px-4 py-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">Status</th>
-              <th className="text-left px-4 py-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">Indexed</th>
-              <th className="text-left px-4 py-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">Health</th>
-              <th className="px-4 py-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {allRows.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="text-center text-slate-500 text-sm py-12">
-                  {filter ? "No sources match your filter." : "No sources yet. Upload a file above."}
-                </td>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-slate-100 bg-slate-50">
+                <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Pages / Updated</th>
+                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
+                <th className="px-4 py-3" />
               </tr>
-            ) : (
-              allRows.map((row) => {
-                if (row.kind === "file") {
-                  const doc = row.doc;
-                  const isEmbedding = doc.status === "processing" || doc.status === "embedding";
-                  return (
-                    <tr key={doc.id} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="px-5 py-3.5 text-sm font-medium text-slate-800 max-w-[220px] truncate">
-                        {doc.filename}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <TypeBadge type="file" />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <StatusBadge status={doc.status} />
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        {isEmbedding
-                          ? <span className="text-slate-400 font-mono text-[11px] animate-pulse">embedding…</span>
-                          : new Date(doc.created_at).toLocaleDateString()
-                        }
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <HealthCell health={doc.health_status} isEmbedding={isEmbedding} />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center gap-2 justify-end">
-                          {!isEmbedding && (
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {rows.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-sm text-slate-500">
+                    {filter ? "No sources match your filter." : "No sources yet. Upload a file or add a docs URL."}
+                  </td>
+                </tr>
+              ) : (
+                rows.map((row) => {
+                  if (row.kind === "file") {
+                    const doc = row.item;
+                    const isEmbedding = doc.status === "processing" || doc.status === "embedding";
+                    return (
+                      <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
+                        <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">{doc.filename}</td>
+                        <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
+                        <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
+                        <td className="px-4 py-3.5 text-xs text-slate-500">
+                          {isEmbedding ? "embedding…" : new Date(doc.updated_at || doc.created_at).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
+                        <td className="px-4 py-3.5">
+                          <div className="flex items-center justify-end gap-2">
+                            {!isEmbedding && (
+                              <button
+                                type="button"
+                                onClick={() => void handleRecheckHealth(doc.id)}
+                                disabled={recheckingId === doc.id}
+                                className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
+                              >
+                                {recheckingId === doc.id ? "…" : "Re-check"}
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => handleRecheckHealth(doc.id)}
-                              disabled={recheckingId === doc.id}
-                              className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
+                              onClick={() => void handleDeleteFile(doc.id)}
+                              className="text-xs text-red-400 hover:text-red-600"
                             >
-                              {recheckingId === doc.id ? "…" : "Re-check"}
+                              Delete
                             </button>
-                          )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  const source = row.item;
+                  const pageMeta = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
+                  const note = source.warning_message || source.error_message || "—";
+                  return (
+                    <tr key={source.id} className="transition-colors hover:bg-slate-50/60">
+                      <td className="px-5 py-3.5">
+                        <button
+                          type="button"
+                          onClick={() => void openDetail(source.id)}
+                          className="max-w-[320px] truncate text-left text-sm font-medium text-slate-800 hover:text-violet-700"
+                        >
+                          {source.name}
+                        </button>
+                        <div className="mt-1 max-w-[320px] truncate text-xs text-slate-400">{source.url}</div>
+                      </td>
+                      <td className="px-4 py-3.5"><TypeBadge type="url" /></td>
+                      <td className="px-4 py-3.5"><StatusBadge status={source.status} /></td>
+                      <td className="px-4 py-3.5 text-xs text-slate-500">
+                        <div>{pageMeta} pages</div>
+                        <div className="mt-1">{new Date(source.updated_at).toLocaleString()}</div>
+                      </td>
+                      <td className="max-w-[220px] px-4 py-3.5 text-xs text-slate-500">{note}</td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center justify-end gap-2">
                           <button
                             type="button"
-                            onClick={() => handleDelete(doc.id)}
-                            disabled={isEmbedding}
-                            className="text-xs text-red-400 hover:text-red-600 disabled:opacity-30"
+                            onClick={() => void handleRefreshSource(source.id)}
+                            disabled={refreshingSourceId === source.id}
+                            className="text-xs text-indigo-400 hover:text-indigo-600 disabled:opacity-40"
+                          >
+                            {refreshingSourceId === source.id ? "…" : "Refresh"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteSource(source.id)}
+                            className="text-xs text-red-400 hover:text-red-600"
                           >
                             Delete
                           </button>
@@ -354,34 +493,102 @@ export default function KnowledgePage() {
                       </td>
                     </tr>
                   );
-                }
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
-                const src = row.source;
-                return (
-                  <tr key={src.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="px-5 py-3.5 text-sm font-medium text-slate-800">{src.label}</td>
-                    <td className="px-4 py-3.5"><TypeBadge type={src.type} /></td>
-                    <td className="px-4 py-3.5"><span className="text-xs text-slate-400">—</span></td>
-                    <td className="px-4 py-3.5 text-xs text-slate-500">{src.indexedAt}</td>
-                    <td className="px-4 py-3.5">
-                      <span className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                        Good
-                      </span>
-                    </td>
-                    <td className="px-4 py-3.5">
-                      <div className="flex items-center gap-2 justify-end">
-                        <button type="button" className="text-xs text-indigo-400 hover:text-indigo-600">
-                          Sync
-                        </button>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          {!detail ? (
+            <div className="text-sm text-slate-500">Select a URL source to see crawl history, failed URLs, and indexed pages.</div>
+          ) : detailLoading ? (
+            <div className="text-sm text-slate-500">Loading source details…</div>
+          ) : (
+            <div className="space-y-5">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-lg font-semibold text-slate-800">{detail.name}</h2>
+                  <StatusBadge status={detail.status} />
+                </div>
+                <p className="mt-1 break-all text-xs text-slate-500">{detail.url}</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Schedule</div>
+                  <div className="mt-1 font-medium text-slate-700">{detail.schedule}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3">
+                  <div className="text-xs uppercase tracking-wide text-slate-400">Indexed</div>
+                  <div className="mt-1 font-medium text-slate-700">{detail.pages_indexed} pages</div>
+                </div>
+              </div>
+
+              {detail.warning_message && (
+                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {detail.warning_message}
+                </div>
+              )}
+              {detail.error_message && (
+                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {detail.error_message}
+                </div>
+              )}
+
+              <div>
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
+                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                  {detail.exclusion_patterns.length ? detail.exclusion_patterns.join(", ") : "No exclusions"}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>
+                <div className="space-y-2">
+                  {detail.recent_runs.length === 0 ? (
+                    <div className="text-sm text-slate-500">No crawl runs yet.</div>
+                  ) : (
+                    detail.recent_runs.map((run) => (
+                      <div key={run.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                        <div className="flex items-center justify-between gap-3">
+                          <StatusBadge status={run.status} />
+                          <span className="text-xs text-slate-400">{new Date(run.created_at).toLocaleString()}</span>
+                        </div>
+                        <div className="mt-2 text-slate-600">
+                          {run.pages_indexed}
+                          {run.pages_found ? ` / ${run.pages_found}` : ""} pages indexed
+                        </div>
+                        {run.failed_urls.length > 0 && (
+                          <div className="mt-2 text-xs text-slate-500">
+                            Failed: {run.failed_urls.slice(0, 2).map((item) => item.url).join(", ")}
+                          </div>
+                        )}
                       </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Indexed pages</div>
+                <div className="space-y-2">
+                  {detail.pages.length === 0 ? (
+                    <div className="text-sm text-slate-500">Pages will appear here after indexing starts.</div>
+                  ) : (
+                    detail.pages.map((page) => (
+                      <div key={page.id} className="rounded-lg border border-slate-200 p-3">
+                        <div className="text-sm font-medium text-slate-700">{page.title}</div>
+                        <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
+                        <div className="mt-2 text-xs text-slate-500">{page.chunk_count} chunks</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
+from backend.models import SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
 from tests.conftest import register_and_verify_user
 
 
@@ -164,6 +167,19 @@ def test_list_documents_empty(client: TestClient, db_session: Session) -> None:
     assert data["documents"] == []
 
 
+def test_list_knowledge_sources_requires_client(client: TestClient, db_session: Session) -> None:
+    """Knowledge sources should match other document routes and 404 without a client."""
+    token = register_and_verify_user(client, db_session, email="sources-noclient@example.com")
+
+    response = client.get(
+        "/documents/sources",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Client not found"
+
+
 def test_list_documents(client: TestClient, db_session: Session) -> None:
     """Upload 2 docs, get list → 2 items."""
     token = register_and_verify_user(client, db_session, email="list@example.com")
@@ -246,6 +262,59 @@ def test_get_document_wrong_user(client: TestClient, db_session: Session) -> Non
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
+
+
+def test_get_url_source_detail_returns_latest_five_runs(
+    client: TestClient, db_session: Session
+) -> None:
+    """Source detail should return the five newest runs ordered in SQL."""
+    token = register_and_verify_user(client, db_session, email="source-runs@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Source Runs Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.weekly,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    base_time = datetime.now(timezone.utc)
+    expected_statuses: list[str] = []
+    for index in range(7):
+        run = UrlSourceRun(
+            source_id=source.id,
+            status=f"run-{index}",
+            pages_indexed=index,
+            failed_urls=[],
+            created_at=base_time + timedelta(minutes=index),
+        )
+        db_session.add(run)
+        if index >= 2:
+            expected_statuses.insert(0, run.status)
+    db_session.commit()
+
+    response = client.get(
+        f"/documents/sources/{source.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    recent_runs = response.json()["recent_runs"]
+    assert len(recent_runs) == 5
+    assert [run["status"] for run in recent_runs] == expected_statuses
 
 
 def test_delete_document_success(client: TestClient, db_session: Session) -> None:

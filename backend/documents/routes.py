@@ -164,6 +164,143 @@ def list_documents_route(
     return DocumentListResponse(documents=[_document_response(d) for d in docs])
 
 
+@documents_router.get("/sources", response_model=KnowledgeSourcesResponse)
+def list_knowledge_sources_route(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeSourcesResponse:
+    """List file documents and URL sources for the Knowledge page."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    payload = list_knowledge_sources(client.id, db)
+    return KnowledgeSourcesResponse(
+        documents=[_document_response(doc) for doc in payload["documents"]],
+        url_sources=[_url_source_response(source) for source in payload["url_sources"]],
+    )
+
+
+@documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
+def create_url_source_route(
+    payload: UrlSourceCreateRequest,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UrlSourceResponse:
+    """Create a new URL source and start indexing in the background."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    source, _ = create_url_source(
+        client=client,
+        url=str(payload.url),
+        name=payload.name,
+        schedule=payload.schedule,
+        exclusions=payload.exclusions,
+        db=db,
+    )
+    if client.openai_api_key:
+        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
+    return _url_source_response(source)
+
+
+@documents_router.get("/sources/{source_id}", response_model=UrlSourceDetailResponse)
+def get_url_source_route(
+    source_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UrlSourceDetailResponse:
+    """Return detail, recent crawl history, and indexed pages for one URL source."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    source = get_url_source(source_id, client.id, db)
+    docs = (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.source_id == source.id)
+        .order_by(Document.updated_at.desc())
+        .limit(50)
+        .all()
+    )
+    recent_runs = (
+        db.query(UrlSourceRun)
+        .filter(UrlSourceRun.source_id == source.id)
+        .order_by(UrlSourceRun.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    return UrlSourceDetailResponse(
+        **_url_source_response(source).model_dump(),
+        recent_runs=[_url_source_run_response(run) for run in recent_runs],
+        pages=[
+            SourcePageResponse(
+                id=doc.id,
+                title=doc.filename,
+                url=doc.source_url or "",
+                chunk_count=len(doc.embeddings),
+                updated_at=doc.updated_at,
+            )
+            for doc in docs
+        ],
+    )
+
+
+@documents_router.patch("/sources/{source_id}", response_model=UrlSourceResponse)
+def update_url_source_route(
+    source_id: uuid.UUID,
+    payload: UrlSourceUpdateRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UrlSourceResponse:
+    """Update editable URL source settings."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    source = update_url_source(
+        source_id=source_id,
+        client_id=client.id,
+        name=payload.name,
+        schedule=payload.schedule,
+        exclusions=payload.exclusions,
+        db=db,
+    )
+    return _url_source_response(source)
+
+
+@documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
+def refresh_url_source_route(
+    source_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> UrlSourceResponse:
+    """Trigger an immediate re-crawl for a URL source."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    source = trigger_refresh(source_id=source_id, client=client, db=db)
+    if client.openai_api_key:
+        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
+    return _url_source_response(source)
+
+
+@documents_router.delete("/sources/{source_id}", status_code=204, response_model=None)
+def delete_url_source_route(
+    source_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Delete a URL source and all indexed pages/chunks associated with it."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    delete_url_source(source_id, client.id, db)
+
+
 @documents_router.get("/{document_id}/health", response_model=DocumentHealthStatusResponse)
 def get_document_health_route(
     document_id: uuid.UUID,
@@ -261,135 +398,3 @@ def delete_document_route(
         raise HTTPException(status_code=404, detail="Client not found")
     delete_document(document_id, client.id, db)
 
-
-@documents_router.get("/sources", response_model=KnowledgeSourcesResponse)
-def list_knowledge_sources_route(
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> KnowledgeSourcesResponse:
-    """List file documents and URL sources for the Knowledge page."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        return KnowledgeSourcesResponse(documents=[], url_sources=[])
-
-    payload = list_knowledge_sources(client.id, db)
-    return KnowledgeSourcesResponse(
-        documents=[_document_response(doc) for doc in payload["documents"]],
-        url_sources=[_url_source_response(source) for source in payload["url_sources"]],
-    )
-
-
-@documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
-def create_url_source_route(
-    payload: UrlSourceCreateRequest,
-    background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> UrlSourceResponse:
-    """Create a new URL source and start indexing in the background."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-
-    source, _ = create_url_source(
-        client=client,
-        url=str(payload.url),
-        name=payload.name,
-        schedule=payload.schedule,
-        exclusions=payload.exclusions,
-        db=db,
-    )
-    if client.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
-    return _url_source_response(source)
-
-
-@documents_router.get("/sources/{source_id}", response_model=UrlSourceDetailResponse)
-def get_url_source_route(
-    source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> UrlSourceDetailResponse:
-    """Return detail, recent crawl history, and indexed pages for one URL source."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-
-    source = get_url_source(source_id, client.id, db)
-    docs = (
-        db.query(Document)
-        .options(selectinload(Document.embeddings))
-        .filter(Document.source_id == source.id)
-        .order_by(Document.updated_at.desc())
-        .limit(50)
-        .all()
-    )
-    return UrlSourceDetailResponse(
-        **_url_source_response(source).model_dump(),
-        recent_runs=[
-            _url_source_run_response(run)
-            for run in sorted(source.runs, key=lambda item: item.created_at, reverse=True)[:5]
-        ],
-        pages=[
-            SourcePageResponse(
-                id=doc.id,
-                title=doc.filename,
-                url=doc.source_url or "",
-                chunk_count=len(doc.embeddings),
-                updated_at=doc.updated_at,
-            )
-            for doc in docs
-        ],
-    )
-
-
-@documents_router.patch("/sources/{source_id}", response_model=UrlSourceResponse)
-def update_url_source_route(
-    source_id: uuid.UUID,
-    payload: UrlSourceUpdateRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> UrlSourceResponse:
-    """Update editable URL source settings."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    source = update_url_source(
-        source_id=source_id,
-        client_id=client.id,
-        name=payload.name,
-        schedule=payload.schedule,
-        exclusions=payload.exclusions,
-        db=db,
-    )
-    return _url_source_response(source)
-
-
-@documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
-def refresh_url_source_route(
-    source_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> UrlSourceResponse:
-    """Trigger an immediate re-crawl for a URL source."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    source = trigger_refresh(source_id=source_id, client=client, db=db)
-    if client.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
-    return _url_source_response(source)
-
-
-@documents_router.delete("/sources/{source_id}", status_code=204, response_model=None)
-def delete_url_source_route(
-    source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> None:
-    """Delete a URL source and all indexed pages/chunks associated with it."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    delete_url_source(source_id, client.id, db)

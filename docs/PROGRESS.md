@@ -1,7 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-22 (UTC) — FI-026 CI on `main`/`deploy`  
+**Last updated:** 2026-03-25 (UTC) — URL sources v1 hardening + docs sync  
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-25) — URL sources v1 hardening + documentation sync
+
+- ✅ **FI-URL v1 hardening:** URL-source crawler now validates public hostnames/IPs, blocks SSRF targets (localhost, private, loopback, link-local, reserved ranges), validates redirects hop-by-hop, ignores env proxies, and returns clearer upstream error messages for `404`, auth-protected URLs, `5xx`, and oversized responses.
+- ✅ **API contract tightening:** URL source schemas now validate `url` as `AnyHttpUrl`; schedule is restricted to `daily | weekly | manual`; route layer normalizes typed URLs before handing them to the service.
+- ✅ **Knowledge routes cleanup:** `GET /documents/sources` now matches before UUID document routes and returns `404 Client not found` consistently; URL-source detail loads the latest 5 runs via SQL instead of Python-side sorting.
+- ✅ **Regression coverage:** added tests for SSRF blocking, redirect-to-localhost protection, stricter schema validation, knowledge-source route access, and recent-run ordering.
+- ✅ **Docs + QA:** added a dedicated QA checklist for URL sources at `docs/qa/FI-URL-url-sources-v1.md` and synced core product docs.
 
 ---
 

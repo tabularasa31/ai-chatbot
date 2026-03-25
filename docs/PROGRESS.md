@@ -64,7 +64,7 @@
   - [`backend/requirements.txt`](../backend/requirements.txt): `ruff>=0.3.0`, `pgvector>=0.2.0` (импорт `backend.models` в тестах)
   - [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — `public_id` / `owner_email` / `has_openai_key`; мелкий фикс `f`-string в `backend/documents/service.py`
   - [`.gitignore`](../.gitignore): `.venv-ci/`
-  - Доки: `TOMORROW_PLAN`, `BACKLOG_TECH_DEBT`, `IMPLEMENTED_FEATURES`; [`cursor_prompts/ci-cd-github-actions.md`](../cursor_prompts/ci-cd-github-actions.md)
+  - Доки: `TOMORROW_PLAN`, `BACKLOG_TECH_DEBT`, `IMPLEMENTED_FEATURES`, [`README.md`](../README.md#ci-github-actions) (локальные тесты: [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md))
   - **Релиз:** PR **`main` → `deploy`** после зелёного CI; опционально GitHub **ruleset** на `deploy` (PR + required checks)
 
 - ✅ **TD-033: Per-document-type chunking config**
@@ -288,7 +288,7 @@ CI: GitHub Actions — `.github/workflows/ci.yml` on push/PR to `main` + `deploy
 
 Реализованные промпты удаляются из каталога после merge; описание фичи остаётся здесь и в `BACKLOG_*`.
 
-**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `FI-007-per-client-system-prompt.md`; `FI-ESC-escalation-tickets.md` (архив спеки; реализация — блок **L2 escalation (FI-ESC)** выше); `ci-cd-github-actions.md`; `FIX-ticket-number-race-condition.md` (реализовано и смержено — можно удалить). Промпт FI-DISC удалён после внедрения — описание: блок **Disclosure controls (FI-DISC)** выше и `docs/IMPLEMENTED_FEATURES.md`.
+**Сейчас в репозитории:** `_TEMPLATE_cursor-prompt.md`; `RULES-database-migrations.md`. Описания реализованных промптов (FI-007, FI-ESC, FI-DISC и др.) — в блоках выше и в `docs/IMPLEMENTED_FEATURES.md`. `ci-cd-github-actions.md` и `FIX-ticket-number-race-condition.md` намеренно не хранятся в репозитории — CI: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml); локальный runbook: [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md).
 
 ---
 

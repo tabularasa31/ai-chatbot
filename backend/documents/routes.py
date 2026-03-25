@@ -226,13 +226,11 @@ def get_url_source_route(
         .limit(50)
         .all()
     )
-    recent_runs = (
-        db.query(UrlSourceRun)
-        .filter(UrlSourceRun.source_id == source.id)
-        .order_by(UrlSourceRun.created_at.desc())
-        .limit(5)
-        .all()
-    )
+    recent_runs = sorted(
+        source.runs,
+        key=lambda run: run.created_at or run.updated_at,
+        reverse=True,
+    )[:5]
     return UrlSourceDetailResponse(
         **_url_source_response(source).model_dump(),
         recent_runs=[_url_source_run_response(run) for run in recent_runs],
@@ -291,7 +289,7 @@ def refresh_url_source_route(
 @documents_router.delete("/sources/{source_id}", status_code=204, response_model=None)
 def delete_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete a URL source and all indexed pages/chunks associated with it."""
@@ -397,4 +395,3 @@ def delete_document_route(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     delete_document(document_id, client.id, db)
-

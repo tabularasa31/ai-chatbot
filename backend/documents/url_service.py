@@ -13,6 +13,7 @@ import socket
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from urllib import robotparser
@@ -132,7 +133,7 @@ def _log_fetch(level: int, message: str, context: FetchContext, **extra: Any) ->
     logger.log(level, "%s [%s] %s", message, context.stage, context.url, extra=extra)
 
 
-def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
+def _is_forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(
         (
             ip.is_private,
@@ -145,7 +146,7 @@ def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
     )
 
 
-def _resolve_hostname(hostname: str) -> set[ipaddress._BaseAddress]:
+def _resolve_hostname(hostname: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
     try:
         infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
@@ -154,11 +155,9 @@ def _resolve_hostname(hostname: str) -> set[ipaddress._BaseAddress]:
             detail="Couldn't resolve this URL. Check the address and try again.",
         ) from exc
 
-    resolved: set[ipaddress._BaseAddress] = set()
+    resolved: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
     for family, _, _, _, sockaddr in infos:
-        if family == socket.AF_INET:
-            resolved.add(ipaddress.ip_address(sockaddr[0]))
-        elif family == socket.AF_INET6:
+        if family in (socket.AF_INET, socket.AF_INET6):
             resolved.add(ipaddress.ip_address(sockaddr[0]))
     if not resolved:
         raise HTTPException(
@@ -410,10 +409,10 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
     if len(ordered) >= page_cap:
         return ordered
 
-    queue: list[tuple[str, int]] = [(normalized_root, 0)]
+    queue: deque[tuple[str, int]] = deque([(normalized_root, 0)])
     with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
         while queue and len(ordered) < page_cap:
-            current_url, depth = queue.pop(0)
+            current_url, depth = queue.popleft()
             if depth >= MAX_DISCOVERY_DEPTH:
                 continue
             context = FetchContext(stage="crawl:discover", url=current_url)
@@ -521,17 +520,18 @@ def create_url_source(
 ) -> tuple[UrlSource, UrlPreflightResult]:
     cleaned_exclusions = _clean_exclusions(exclusions)
     preflight = preflight_url_source(client=client, url=url, exclusions=cleaned_exclusions, db=db)
+    cleaned_schedule = _clean_schedule(schedule)
     source = UrlSource(
         client_id=client.id,
         name=(name or preflight.title or preflight.normalized_domain).strip()[:255],
         url=preflight.normalized_url,
         normalized_domain=preflight.normalized_domain,
         status=SourceStatus.paused if not client.openai_api_key else SourceStatus.queued,
-        crawl_schedule=_clean_schedule(schedule),
+        crawl_schedule=cleaned_schedule,
         exclusion_patterns=cleaned_exclusions or None,
         pages_found=preflight.estimated_pages,
         warning_message="\n".join(preflight.warnings) if preflight.warnings else None,
-        next_crawl_at=_schedule_next_run(_clean_schedule(schedule)),
+        next_crawl_at=_schedule_next_run(cleaned_schedule),
         metadata_json={"auto_title": preflight.title},
     )
     if not client.openai_api_key:
@@ -727,7 +727,7 @@ def _upsert_page_document(
         .first()
     )
     content_hash = _content_hash(page.text)
-    if existing and existing.parsed_text == page.text:
+    if existing and _content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = page.title[:255]
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.url

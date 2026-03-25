@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Annotated, Literal, Optional
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 SOURCE_TYPE_URL = "url"
 UrlSourceSchedule = Literal["daily", "weekly", "manual"]
 UrlSourceType = Literal["url"]
+ExclusionPattern = Annotated[str, Field(max_length=255)]
 
 
 class DocumentResponse(BaseModel):
@@ -61,13 +62,18 @@ class UrlSourceCreateRequest(BaseModel):
     url: AnyHttpUrl
     name: Optional[str] = None
     schedule: UrlSourceSchedule = "weekly"
-    exclusions: list[str] = Field(default_factory=list)
+    exclusions: list[ExclusionPattern] = Field(default_factory=list, max_length=50)
 
 
 class UrlSourceUpdateRequest(BaseModel):
     name: Optional[str] = None
     schedule: Optional[UrlSourceSchedule] = None
-    exclusions: Optional[list[str]] = None
+    exclusions: Optional[list[ExclusionPattern]] = Field(default=None, max_length=50)
+
+
+class UrlSourceFailureResponse(BaseModel):
+    url: str
+    reason: str
 
 
 class UrlSourceRunResponse(BaseModel):
@@ -77,7 +83,7 @@ class UrlSourceRunResponse(BaseModel):
     status: str
     pages_found: Optional[int] = None
     pages_indexed: int
-    failed_urls: list[dict[str, Any]]
+    failed_urls: list[UrlSourceFailureResponse]
     duration_seconds: Optional[int] = None
     error_message: Optional[str] = None
     created_at: datetime

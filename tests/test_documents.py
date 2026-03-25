@@ -5,12 +5,16 @@ from __future__ import annotations
 import io
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
+from backend.auth.service import create_token_for_user
+from backend.clients.service import create_client
+from backend.core.security import hash_password
 from backend.models import SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
 from tests.conftest import register_and_verify_user
 
@@ -22,6 +26,21 @@ def _make_minimal_pdf() -> bytes:
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def _get_unverified_user_token(db_session: Session, email: str) -> str:
+    from backend.models import User
+
+    user = User(
+        email=email,
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=False,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    token, _ = create_token_for_user(user)
+    return token
 
 
 def test_upload_pdf_success(client: TestClient, db_session: Session) -> None:
@@ -315,6 +334,116 @@ def test_get_url_source_detail_returns_latest_five_runs(
     recent_runs = response.json()["recent_runs"]
     assert len(recent_runs) == 5
     assert [run["status"] for run in recent_runs] == expected_statuses
+
+
+@patch("backend.auth.routes.send_email")
+def test_delete_url_source_requires_verified_user(
+    mock_send_email, client: TestClient, db_session: Session
+) -> None:
+    token = _get_unverified_user_token(db_session, "unverified-source-delete@example.com")
+    from backend.models import User
+
+    user = db_session.query(User).filter(User.email == "unverified-source-delete@example.com").first()
+    assert user is not None
+    owner_client = create_client(user.id, "Unverified Client", db_session)
+
+    source = UrlSource(
+        client_id=owner_client.id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.weekly,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    response = client.delete(
+        f"/documents/sources/{source.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Email not verified."
+
+
+def test_create_url_source_rejects_duplicate_normalized_domain(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = register_and_verify_user(client, db_session, email="source-dup@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Source Dup Client"},
+    )
+
+    monkeypatch.setattr(
+        "backend.documents.url_service._fetch_reachable_page",
+        lambda url, timeout_seconds: ("<html></html>", "Docs"),
+    )
+    monkeypatch.setattr("backend.documents.url_service._validate_public_hostname", lambda hostname: None)
+    monkeypatch.setattr("backend.documents.url_service._load_robots_warning", lambda url: None)
+    monkeypatch.setattr(
+        "backend.documents.url_service._discover_urls",
+        lambda root_url, exclusions, page_cap: [root_url],
+    )
+
+    first_response = client.post(
+        "/documents/sources/url",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"url": "https://docs.example.com/start", "schedule": "manual"},
+    )
+    second_response = client.post(
+        "/documents/sources/url",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"url": "https://docs.example.com/another", "schedule": "manual"},
+    )
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+    assert "already have a source from this domain" in second_response.json()["detail"].lower()
+
+
+def test_refresh_url_source_returns_429_inside_cooldown(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = register_and_verify_user(client, db_session, email="source-refresh@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Source Refresh Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.weekly,
+        last_refresh_requested_at=datetime.utcnow(),
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    monkeypatch.setattr("backend.documents.url_service._utcnow", lambda: datetime.utcnow())
+
+    response = client.post(
+        f"/documents/sources/{source.id}/refresh",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 429
+    assert "refresh available in" in response.json()["detail"].lower()
 
 
 def test_delete_document_success(client: TestClient, db_session: Session) -> None:

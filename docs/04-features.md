@@ -157,6 +157,12 @@ API:
 - `POST /documents/sources/{source_id}/refresh`
 - `DELETE /documents/sources/{source_id}`
 
+Contract notes:
+
+- `exclusions` accepts up to `50` patterns, each up to `255` characters.
+- `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
+- Mutating URL source actions (`create`, `edit`, `refresh`, `delete`) require a verified user.
+
 ---
 
 ## 4. Search & Retrieval

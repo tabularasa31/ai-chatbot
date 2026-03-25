@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
+
+SOURCE_TYPE_URL = "url"
+UrlSourceSchedule = Literal["daily", "weekly", "manual"]
+UrlSourceType = Literal["url"]
 
 
 class DocumentResponse(BaseModel):
@@ -54,15 +58,15 @@ class DocumentHealthStatusResponse(BaseModel):
 
 
 class UrlSourceCreateRequest(BaseModel):
-    url: str
+    url: AnyHttpUrl
     name: Optional[str] = None
-    schedule: str = "weekly"
+    schedule: UrlSourceSchedule = "weekly"
     exclusions: list[str] = Field(default_factory=list)
 
 
 class UrlSourceUpdateRequest(BaseModel):
     name: Optional[str] = None
-    schedule: Optional[str] = None
+    schedule: Optional[UrlSourceSchedule] = None
     exclusions: Optional[list[str]] = None
 
 
@@ -94,9 +98,9 @@ class UrlSourceResponse(BaseModel):
     id: uuid.UUID
     name: str
     url: str
-    source_type: str = "url"
+    source_type: UrlSourceType = SOURCE_TYPE_URL
     status: str
-    schedule: str
+    schedule: UrlSourceSchedule
     pages_found: Optional[int] = None
     pages_indexed: int
     chunks_created: int

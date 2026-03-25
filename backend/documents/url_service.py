@@ -5,9 +5,11 @@ from __future__ import annotations
 import datetime as dt
 import fnmatch
 import hashlib
+import ipaddress
 import logging
 import math
 import re
+import socket
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -44,6 +46,7 @@ EMBED_BATCH_SIZE = 100
 FETCH_TIMEOUT_SECONDS = 10.0
 PREFLIGHT_TIMEOUT_SECONDS = 5.0
 MAX_HTML_BYTES = 5 * 1024 * 1024
+MAX_REDIRECTS = 5
 USER_AGENT = "Chat9Bot/1.0 (+https://getchat9.live)"
 ALLOWED_SCHEDULES = {
     SourceSchedule.daily.value,
@@ -70,6 +73,12 @@ class ExtractedPage:
     chunks: list[dict[str, Any]]
 
 
+@dataclass
+class FetchContext:
+    stage: str
+    url: str
+
+
 def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
@@ -81,6 +90,8 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
             status_code=400,
             detail="Please enter a valid URL starting with https://",
         )
+    if parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="URLs with credentials are not allowed.")
     normalized = urlunparse(
         (
             parsed.scheme.lower(),
@@ -91,6 +102,8 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
             "",
         )
     )
+    hostname = parsed.hostname.lower() if parsed.hostname else ""
+    _validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
 
 
@@ -109,8 +122,163 @@ def _normalize_page_url(url: str, base_domain: str) -> str | None:
 def _http_client(timeout_seconds: float) -> httpx.Client:
     return httpx.Client(
         timeout=timeout_seconds,
-        follow_redirects=True,
+        follow_redirects=False,
+        trust_env=False,
         headers={"User-Agent": USER_AGENT},
+    )
+
+
+def _log_fetch(level: int, message: str, context: FetchContext, **extra: Any) -> None:
+    logger.log(level, "%s [%s] %s", message, context.stage, context.url, extra=extra)
+
+
+def _is_forbidden_ip(ip: ipaddress._BaseAddress) -> bool:
+    return any(
+        (
+            ip.is_private,
+            ip.is_loopback,
+            ip.is_link_local,
+            ip.is_multicast,
+            ip.is_reserved,
+            ip.is_unspecified,
+        )
+    )
+
+
+def _resolve_hostname(hostname: str) -> set[ipaddress._BaseAddress]:
+    try:
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Couldn't resolve this URL. Check the address and try again.",
+        ) from exc
+
+    resolved: set[ipaddress._BaseAddress] = set()
+    for family, _, _, _, sockaddr in infos:
+        if family == socket.AF_INET:
+            resolved.add(ipaddress.ip_address(sockaddr[0]))
+        elif family == socket.AF_INET6:
+            resolved.add(ipaddress.ip_address(sockaddr[0]))
+    if not resolved:
+        raise HTTPException(
+            status_code=400,
+            detail="Couldn't resolve this URL. Check the address and try again.",
+        )
+    return resolved
+
+
+def _validate_public_hostname(hostname: str) -> None:
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Please enter a valid public URL.")
+
+    try:
+        parsed_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        candidates = _resolve_hostname(hostname)
+    else:
+        candidates = {parsed_ip}
+
+    if any(_is_forbidden_ip(candidate) for candidate in candidates):
+        raise HTTPException(
+            status_code=400,
+            detail="Private, local, and reserved network addresses are not allowed.",
+        )
+
+
+def _request_with_safe_redirects(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    *,
+    context: FetchContext,
+    max_redirects: int = MAX_REDIRECTS,
+) -> httpx.Response:
+    current_url = url
+    for _ in range(max_redirects + 1):
+        parsed = urlparse(current_url)
+        hostname = parsed.hostname.lower() if parsed.hostname else ""
+        _validate_public_hostname(hostname)
+        try:
+            response = client.request(method, current_url)
+        except httpx.TimeoutException as exc:
+            _log_fetch(logging.WARNING, "Request timed out", context, method=method)
+            raise HTTPException(
+                status_code=400,
+                detail="Couldn't reach this URL. Check the address and try again.",
+            ) from exc
+        except httpx.HTTPError as exc:
+            _log_fetch(logging.WARNING, "Request failed", context, method=method, error=str(exc))
+            raise HTTPException(
+                status_code=400,
+                detail="Couldn't reach this URL. Check the address and try again.",
+            ) from exc
+
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            _enforce_response_size_limit(response, context)
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            _log_fetch(logging.WARNING, "Redirect missing location header", context, method=method)
+            raise HTTPException(status_code=400, detail="URL redirect is missing a target.")
+        current_url = urljoin(current_url, location)
+        _log_fetch(logging.INFO, "Following validated redirect", context, method=method, location=current_url)
+
+    raise HTTPException(status_code=400, detail="Too many redirects while fetching this URL.")
+
+
+def _enforce_response_size_limit(response: httpx.Response, context: FetchContext) -> None:
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_HTML_BYTES:
+                _log_fetch(
+                    logging.WARNING,
+                    "Response rejected by content-length",
+                    context,
+                    status_code=response.status_code,
+                    content_length=content_length,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
+                )
+        except ValueError:
+            pass
+
+    if len(response.content) > MAX_HTML_BYTES:
+        _log_fetch(
+            logging.WARNING,
+            "Response rejected by downloaded size",
+            context,
+            status_code=response.status_code,
+            size=len(response.content),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
+        )
+
+
+def _raise_for_upstream_status(response: httpx.Response, context: FetchContext) -> None:
+    status_code = response.status_code
+    if status_code < 400:
+        return
+
+    _log_fetch(logging.WARNING, "Upstream returned error status", context, status_code=status_code)
+    if status_code == 404:
+        raise HTTPException(status_code=404, detail="The URL returned 404 Not Found.")
+    if status_code in {401, 403}:
+        raise HTTPException(status_code=400, detail="The URL requires access and can't be indexed.")
+    if 400 <= status_code < 500:
+        raise HTTPException(
+            status_code=400,
+            detail=f"The URL returned HTTP {status_code}. Check the address and try again.",
+        )
+    raise HTTPException(
+        status_code=502,
+        detail=f"The website is temporarily unavailable (HTTP {status_code}). Try again later.",
     )
 
 
@@ -118,9 +286,16 @@ def _load_robots_warning(root_url: str) -> str | None:
     parsed = urlparse(root_url)
     robots_url = urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
     rp = robotparser.RobotFileParser()
+    context = FetchContext(stage="preflight:robots", url=robots_url)
+    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+        try:
+            response = _request_with_safe_redirects(client, "GET", robots_url, context=context)
+        except HTTPException:
+            return None
+    if response.status_code >= 400 or not response.text.strip():
+        return None
     try:
-        rp.set_url(robots_url)
-        rp.read()
+        rp.parse(response.text.splitlines())
     except Exception:
         return None
     if not rp.can_fetch(USER_AGENT, root_url):
@@ -129,31 +304,18 @@ def _load_robots_warning(root_url: str) -> str | None:
 
 
 def _fetch_reachable_page(url: str, timeout_seconds: float) -> tuple[str, str | None]:
+    context = FetchContext(stage="preflight:page", url=url)
     with _http_client(timeout_seconds) as client:
-        try:
-            response = client.head(url)
-            if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
-                response = client.get(url)
-        except httpx.TimeoutException as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Couldn't reach this URL. Check the address and try again.",
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail="Couldn't reach this URL. Check the address and try again.",
-            ) from exc
+        response = _request_with_safe_redirects(client, "HEAD", url, context=context)
+        if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
+            response = _request_with_safe_redirects(client, "GET", url, context=context)
 
-        if response.status_code >= 400:
-            raise HTTPException(
-                status_code=400,
-                detail="Couldn't reach this URL. Check the address and try again.",
-            )
+        _raise_for_upstream_status(response, context)
 
         content_type = response.headers.get("content-type", "")
         if "text/html" not in content_type and response.request.method != "GET":
-            response = client.get(url)
+            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            _raise_for_upstream_status(response, context)
             content_type = response.headers.get("content-type", "")
 
         text = response.text
@@ -189,15 +351,23 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
     urls: list[str] = []
     with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
         for candidate in candidates:
+            context = FetchContext(stage="preflight:sitemap", url=candidate)
             try:
-                response = client.get(candidate)
-            except httpx.HTTPError:
+                response = _request_with_safe_redirects(client, "GET", candidate, context=context)
+            except HTTPException:
                 continue
             if response.status_code >= 400 or not response.text.strip():
+                _log_fetch(
+                    logging.INFO,
+                    "Skipping sitemap candidate",
+                    context,
+                    status_code=response.status_code,
+                )
                 continue
             try:
                 root = ET.fromstring(response.text)
             except ET.ParseError:
+                _log_fetch(logging.INFO, "Skipping invalid sitemap XML", context)
                 continue
             for loc in root.findall(".//{*}loc"):
                 if loc.text:
@@ -246,11 +416,19 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
             current_url, depth = queue.pop(0)
             if depth >= MAX_DISCOVERY_DEPTH:
                 continue
+            context = FetchContext(stage="crawl:discover", url=current_url)
             try:
-                response = client.get(current_url)
-            except httpx.HTTPError:
+                response = _request_with_safe_redirects(client, "GET", current_url, context=context)
+            except HTTPException:
                 continue
             if response.status_code >= 400 or not _is_html_like(response):
+                _log_fetch(
+                    logging.INFO,
+                    "Skipping non-indexable discovery page",
+                    context,
+                    status_code=response.status_code,
+                    content_type=response.headers.get("content-type"),
+                )
                 continue
             links = _extract_links(response.text, current_url, domain)
             links = _apply_exclusions(links, normalized_root, exclusions)
@@ -499,14 +677,22 @@ def _build_chunk_text(chunk_text: str, page_title: str, section: str) -> str:
 
 
 def _fetch_page_html(url: str) -> str | None:
+    context = FetchContext(stage="crawl:page", url=url)
     with _http_client(FETCH_TIMEOUT_SECONDS) as client:
         try:
-            response = client.get(url)
-        except httpx.HTTPError:
+            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            _raise_for_upstream_status(response, context)
+        except HTTPException as exc:
+            _log_fetch(logging.INFO, "Skipping page after fetch failure", context, detail=exc.detail)
             return None
     if response.status_code >= 400 or not _is_html_like(response):
-        return None
-    if len(response.content) > MAX_HTML_BYTES:
+        _log_fetch(
+            logging.INFO,
+            "Skipping page with unsupported response",
+            context,
+            status_code=response.status_code,
+            content_type=response.headers.get("content-type"),
+        )
         return None
     return response.text
 

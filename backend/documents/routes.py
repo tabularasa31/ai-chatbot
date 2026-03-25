@@ -293,7 +293,7 @@ def create_url_source_route(
 
     source, _ = create_url_source(
         client=client,
-        url=payload.url,
+        url=str(payload.url),
         name=payload.name,
         schedule=payload.schedule,
         exclusions=payload.exclusions,

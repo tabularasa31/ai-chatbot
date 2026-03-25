@@ -1,7 +1,5 @@
 """FastAPI document and URL source management endpoints."""
 
-from __future__ import annotations
-
 import uuid
 from typing import Annotated, Optional
 

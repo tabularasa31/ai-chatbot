@@ -5,6 +5,12 @@ Use these command groups for fast local checks and CI job partitioning.
 ## P0 Smoke (critical regressions)
 
 ```bash
+make smoke
+```
+
+Direct pytest equivalent:
+
+```bash
 pytest -q \
   tests/test_chat.py \
   tests/test_escalation.py \
@@ -17,10 +23,22 @@ pytest -q \
 ## Auth Reset Flow
 
 ```bash
+make auth-reset
+```
+
+Direct pytest equivalent:
+
+```bash
 pytest -q tests/test_auth.py -k "forgot_password or reset_password"
 ```
 
 ## Escalation State Machine + Manual Escalation
+
+```bash
+make escalation
+```
+
+Direct pytest equivalent:
 
 ```bash
 pytest -q \
@@ -32,6 +50,12 @@ pytest -q \
 ## RAG Edge Cases (SQLite path)
 
 ```bash
+make rag-edge
+```
+
+Direct pytest equivalent:
+
+```bash
 pytest -q \
   tests/test_search.py \
   tests/test_chat.py \
@@ -39,6 +63,12 @@ pytest -q \
 ```
 
 ## pgvector Integration (PostgreSQL only)
+
+```bash
+make test-pgvector
+```
+
+Direct pytest equivalent (requires Docker Postgres + correct PG_* creds):
 
 ```bash
 pytest -q -m pgvector tests/pgvector_tests/
@@ -50,10 +80,22 @@ Optional targeted pgvector hybrid retrieval checks:
 pytest -q -m pgvector tests/pgvector_tests/test_search_pgvector.py -k "hybrid or isolation"
 ```
 
-## Coverage Snapshot (backend)
+## Coverage Snapshot (backend, SQLite-only)
+
+```bash
+make coverage
+```
+
+Direct pytest equivalent:
 
 ```bash
 pytest --cov=backend --cov-report=term-missing --cov-report=xml
+```
+
+## Coverage Snapshot (full suite: SQLite + pgvector)
+
+```bash
+make coverage-all
 ```
 
 ## Recommended CI Order

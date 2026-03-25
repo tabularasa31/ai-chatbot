@@ -14,7 +14,7 @@
 ## P1 — Технический долг (делать первым)
 
 ### ~~1. FIX: race condition в generate_ticket_number~~ ✅ Done (2026-03-22)
-- ~~Промпт: `cursor_prompts/FIX-ticket-number-race-condition.md`~~
+- Промпт-файл удалён после merge (см. `PROGRESS.md`).
 - Смержено в `main`; `generate_ticket_number` + `create_escalation_ticket` с retry-циклом
 
 ### ~~2. FI-021: Background embeddings (async)~~ ✅ Done (2026-03-22)
@@ -25,7 +25,7 @@
 - `.github/workflows/ci.yml`: `main` + `deploy` — backend **Ruff** + **pytest** из корня (`tests/`), frontend **eslint** + **next build**
 - `backend/ruff.toml`; в `backend/requirements.txt`: **ruff**, **pgvector**
 - Промот в прод: PR **`main` → `deploy`** после зелёного CI (опционально ruleset на `deploy`)
-- Справка: `cursor_prompts/ci-cd-github-actions.md`
+- Справка: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md)
 
 ---
 

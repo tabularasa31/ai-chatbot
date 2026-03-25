@@ -66,12 +66,10 @@ User → Vercel (Next.js) → Railway (FastAPI) → PostgreSQL + pgvector → Op
 ### Database
 
 ```bash
-docker run --name postgres-chat9 \
-  -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=ai_chatbot \
-  -p 5432:5432 \
-  -d pgvector/pgvector:pg15
+docker compose up -d db
 ```
+
+The local `docker-compose.yml` provides a PostgreSQL + pgvector instance for development and pgvector integration tests.
 
 ### Backend
 
@@ -106,7 +104,31 @@ For grouped developer-focused test commands (P0 smoke, auth reset, escalation, R
 
 ```bash
 ruff check backend
-pytest tests/ -q
+make smoke
+make test-sqlite
+
+# With Docker Postgres (pgvector integration):
+make test-pgvector
+```
+
+### Full local test run + coverage
+
+Run the full suite (SQLite tests + pgvector tests) and show combined coverage at the end:
+
+```bash
+make test
+make coverage-all
+```
+
+### pgvector test credentials (local)
+
+`tests/pgvector_tests/` connects to Postgres using `PG_HOST/PG_PORT/PG_USER/PG_PASSWORD`.
+Defaults match [`docker-compose.yml`](docker-compose.yml): `postgres` / `password` on `chatbot`.
+
+If you still have an older data volume created with a different role (e.g. `user`), either run `docker compose down -v` and recreate, or override:
+
+```bash
+PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ```
 
 ---

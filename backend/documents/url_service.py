@@ -210,7 +210,6 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
 def _apply_exclusions(urls: list[str], root_url: str, exclusions: list[str]) -> list[str]:
     if not exclusions:
         return urls
-    root = urlparse(root_url)
     filtered: list[str] = []
     for url in urls:
         parsed = urlparse(url)

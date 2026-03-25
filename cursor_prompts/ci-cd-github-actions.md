@@ -36,6 +36,21 @@ ruff check backend
 pytest tests/ -q --cov=backend --cov-report=term-missing
 ```
 
+Упрощённые локальные команды (DevEx) — через `Makefile`:
+
+```bash
+make test-sqlite
+make smoke
+make coverage
+```
+
+pgvector интеграция (требует `docker compose up -d db`):
+
+```bash
+make test-pgvector
+make coverage-all
+```
+
 Frontend:
 
 ```bash

@@ -154,12 +154,12 @@ export default function KnowledgePage() {
     if (!shouldPoll) return;
     const timer = window.setInterval(() => {
       void load();
-      if (detail && POLLABLE_SOURCE_STATUSES.has(detail.status)) {
+      if (detail && POLLABLE_SOURCE_STATUSES.has(detail.status) && !isEditing) {
         void openDetail(detail.id);
       }
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [sources, detail]);
+  }, [sources, detail, isEditing]);
 
   async function openDetail(sourceId: string) {
     setIsEditing(false);
@@ -281,7 +281,7 @@ export default function KnowledgePage() {
     setIsSaving(true);
     try {
       await api.documents.updateSource(detail.id, {
-        name: editName.trim() || undefined,
+        name: editName.trim(),
         schedule: editSchedule,
         exclusions: editExclusions.split("\n").map((s) => s.trim()).filter(Boolean),
       });

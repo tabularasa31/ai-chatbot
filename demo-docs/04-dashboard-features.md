@@ -55,8 +55,10 @@ Set the tenant-wide **response detail level** (Detailed / Standard / Corporate) 
 
 ## Widget API (`/settings/widget`)
 
-- Manage **KYC signing secret** (generate, rotate) for optional **identified** widget sessions.
-- Server-side token example (Node.js) with copy-to-clipboard on the snippet block.
+- Manage **signing secret** (generate, rotate) for optional **identified** widget sessions.
+- Generating a new secret immediately invalidates the previous one — all in-flight tokens signed with the old secret will be rejected.
+- Server-side token example (Python) with copy-to-clipboard on the snippet block.
+- See [Embedding the Widget → Identified sessions](./03-embedding-the-widget.md#identified-sessions-optional) for the full integration guide and SDK reference.
 
 ## Escalations (`/escalations`)
 

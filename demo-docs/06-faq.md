@@ -64,6 +64,35 @@ No. The bot only answers based on the documents you upload. It will not use gene
 
 ---
 
+## Identified sessions and the SDK
+
+**What is an identified session?**
+By default the chat widget is anonymous. An identified session lets your server attach a verified user identity (user id, email, plan, etc.) to a conversation. This information appears in Chat Logs and can be used for routing and personalisation.
+
+**Do I have to use identified sessions?**
+No. The basic anonymous embed works without any SDK or server-side code. Identified sessions are optional and intended for teams that want to link chat conversations to their own users.
+
+**Is the token encrypted?**
+No. The payload is Base64-encoded, not encrypted — it can be decoded by anyone who intercepts it. Do not include passwords, payment data, or sensitive personal information. The token is signed with HMAC-SHA256, so it cannot be tampered with without knowing your signing secret.
+
+**Where do I get the signing secret?**
+In the Dashboard, go to **Settings → Widget API** and click **Generate secret**. Store the value in a server-side environment variable. Never put it in client-side JavaScript.
+
+**What languages does the SDK support?**
+Phase 1 ships Python. A PyPI release is coming soon — until then install directly from GitHub:
+```bash
+pip install git+https://github.com/tabularasa31/chat9-sdks.git#subdirectory=python
+```
+Node.js, Go, and PHP packages follow the same interface and are in progress. Until they are released you can generate the token manually — see the [token specification](https://github.com/tabularasa31/chat9-sdks/blob/main/docs/token-spec.md).
+
+**What exception does the Python SDK raise?**
+`chat9.Chat9Error`. It has a `.code` attribute with a machine-readable error code (e.g. `MISSING_USER_ID`, `INVALID_FIELD`) and a `.message` attribute with a human-readable description.
+
+**What happens if the token is expired or tampered with?**
+The widget falls back to an anonymous session. Your users still see the chat — they just won't have an identified identity attached to the conversation.
+
+---
+
 ## Security and privacy
 
 **Is my data safe?**

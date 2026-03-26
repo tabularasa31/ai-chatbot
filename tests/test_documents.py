@@ -29,6 +29,10 @@ def _make_minimal_pdf() -> bytes:
     return buf.getvalue()
 
 
+def _fake_embedding_vector() -> list[float]:
+    return [0.1] * 1536
+
+
 def _get_unverified_user_token(db_session: Session, email: str) -> str:
     from backend.models import User
 
@@ -535,7 +539,7 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
@@ -620,7 +624,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     FALLBACK_LOW_CONFIDENCE_ANSWER,
+    RetrievalContext,
     build_rag_prompt,
     generate_answer,
     validate_answer,
@@ -351,6 +352,60 @@ def test_chat_uses_context(
     messages = call_args.kwargs["messages"]
     assert len(messages) == 1
     assert "The secret number is 99" in messages[0]["content"]
+
+
+def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="hybridsafe@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Hybrid Safe Client"},
+    )
+    set_client_openai_key(client, token)
+    api_key = cl_resp.json()["api_key"]
+    doc_id = uuid.uuid4()
+
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=["Maximum 100 documents per account."],
+            document_ids=[doc_id],
+            scores=[0.0328],
+            mode="hybrid",
+            best_rank_score=0.0328,
+            best_confidence_score=0.94,
+            confidence_source="vector_similarity",
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: ("Максимум 100 документов можно загрузить на аккаунт.", 8),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.validate_answer",
+        lambda *args, **kwargs: {"is_valid": True, "confidence": 0.99, "reason": "grounded"},
+    )
+
+    def _unexpected_ticket(*args, **kwargs):
+        raise AssertionError("create_escalation_ticket should not be called for grounded hybrid answers")
+
+    monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _unexpected_ticket)
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "сколько максимум документов можно загрузить?"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "Максимум 100 документов можно загрузить на аккаунт."
+    assert "[[escalation_ticket:" not in data["answer"]
+    assert data["source_documents"] == [str(doc_id)]
 
 
 def test_chat_session_continuity(

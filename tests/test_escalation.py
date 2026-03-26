@@ -56,6 +56,16 @@ def test_should_escalate_ok() -> None:
     assert trig is None
 
 
+def test_should_not_escalate_when_answer_is_valid() -> None:
+    esc, trig = should_escalate(
+        0.03,
+        2,
+        validation={"is_valid": True, "confidence": 0.98, "reason": "grounded"},
+    )
+    assert esc is False
+    assert trig is None
+
+
 def test_detect_human_request_english() -> None:
     assert detect_human_request("I need to talk to a human please") is True
     assert detect_human_request("connect me to support, this is useless") is True

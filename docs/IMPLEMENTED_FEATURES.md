@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-26 (Knowledge inline source detail + shared capacity 100)
+**Last updated:** 2026-03-27 (Docs sync: shared capacity 100 + debug UI wording)
 
 ---
 
@@ -32,7 +32,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| Upload / parse | PDF (pypdf), MD, Swagger, text | `backend/documents/`, `POST /documents` |
+| Upload / parse | PDF (pypdf), MD, Swagger/OpenAPI | `backend/documents/`, `POST /documents` |
 | **FI-009** | Sentence-aware chunking, chunk metadata | `backend/embeddings/service.py` (`chunk_text`), migrations |
 | **TD-033** | Per-doc-type chunking: `swagger` 500 chars/0 overlap, `markdown` 700/1, `pdf` 1000/1; `CHUNKING_CONFIG` dict — tune in one place, no client UI | `backend/embeddings/service.py` |
 | **FI-021** | Async embeddings: `202 Accepted` immediately, `BackgroundTasks` with own DB session, status `ready → embedding → ready/error`; frontend polls every 2 s | `backend/embeddings/routes.py`, `service.py`, `frontend/app/(app)/knowledge/page.tsx` |

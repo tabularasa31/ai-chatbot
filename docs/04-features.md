@@ -64,7 +64,6 @@ Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM 
 | PDF | pypdf | Text extraction, multi-page |
 | Markdown | markdown lib | CommonMark |
 | Swagger / OpenAPI | PyYAML / json | Paths, descriptions, schemas |
-| Plain text | — | `.txt` files |
 
 Upload endpoint: `POST /documents` (multipart/form-data, max 50 MB).
 
@@ -375,7 +374,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |
 | **Review** (`/review`) | Bad answers (thumbs down) with ideal answer input |
 | **Escalations** (`/escalations`) | L2 ticket inbox; resolve tickets |
-| **Debug** (`/debug`) | Run RAG debug; answer + retrieval table (code blocks use inline copy) |
+| **Debug** (`/debug`) | Run RAG debug; answer + retrieval table with chunk previews and scores (code blocks use inline copy) |
 | **Response controls** (`/settings/disclosure`) | Disclosure level (Detailed / Standard / Corporate) |
 | **Widget API** (`/settings/widget`) | Generate / rotate KYC signing secret; Node.js token example |
 | **Admin** (`/admin/metrics`, admins only) | Platform-wide metrics |

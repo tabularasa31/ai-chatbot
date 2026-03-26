@@ -31,7 +31,7 @@
 ## Features
 
 - **Multi-tenant** — one platform, many clients, full data isolation
-- **Document upload** — PDF, Markdown, Swagger (JSON/YAML), plain text
+- **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML)
 - **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only

@@ -81,15 +81,14 @@ function HealthCell({
         : warnings.length > 0
           ? warnings.map((warning) => warning.message)
           : ["No issues found."];
-
   return (
     <span
-      className="group relative inline-flex items-center gap-1.5 text-xs text-slate-600"
+      className="group relative z-10 inline-flex items-center gap-1.5 text-xs text-slate-600"
       tabIndex={0}
     >
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
-      <span className="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block group-focus-visible:block">
+      <span className="pointer-events-none absolute bottom-full right-0 z-[60] mb-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block group-focus-visible:block">
         {tooltipLines.map((line) => (
           <span key={line} className="block">
             {line}
@@ -133,11 +132,11 @@ function SourceHealthCell({
   }
 
   return (
-    <div className="group relative inline-flex max-w-[240px] items-center gap-1.5 text-xs text-slate-600">
+    <div className="group relative z-10 inline-flex max-w-[240px] items-center gap-1.5 text-xs text-slate-600">
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
       {(warning || error) && <span className="truncate text-slate-400">{warning || error}</span>}
-      <span className="pointer-events-none absolute left-0 top-full z-50 mt-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block">
+      <span className="pointer-events-none absolute bottom-full left-0 z-[60] mb-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block group-focus-visible:block">
         {note}
       </span>
     </div>
@@ -517,7 +516,7 @@ export default function KnowledgePage() {
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">

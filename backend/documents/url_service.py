@@ -822,7 +822,7 @@ def update_url_source(
 ) -> UrlSource:
     source = get_url_source(source_id, client_id, db)
     if name is not None:
-        source.name = name.strip()[:255] or source.name
+        source.name = name.strip()[:255] or None
     if schedule is not None:
         source.crawl_schedule = _clean_schedule(schedule)
         source.next_crawl_at = _schedule_next_run(source.crawl_schedule)

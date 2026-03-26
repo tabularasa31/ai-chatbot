@@ -483,7 +483,10 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """URL pages should consume the same shared capacity pool as uploaded files."""
-    from backend.documents.url_service import crawl_url_source
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
 
     token = register_and_verify_user(client, db_session, email="shared-capacity@example.com")
     create_client_response = client.post(
@@ -520,10 +523,11 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     db_session.commit()
 
     discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(60)]
-    monkeypatch.setattr("backend.documents.url_service._discover_urls", lambda *_args, **_kwargs: discovered_urls)
-    monkeypatch.setattr("backend.documents.url_service._fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
     monkeypatch.setattr(
-        "backend.documents.url_service._extract_page",
+        url_service,
+        "_extract_page",
         lambda url, html: type("Page", (), {
             "url": url,
             "title": url.rsplit("/", 1)[-1],
@@ -531,9 +535,9 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr("backend.documents.url_service._embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
 
-    crawl_url_source(source.id, api_key="test-key")
+    url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
 
     refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
@@ -551,7 +555,10 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Refresh should update existing source pages and only add new pages while capacity remains."""
-    from backend.documents.url_service import crawl_url_source
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
 
     token = register_and_verify_user(client, db_session, email="refresh-capacity@example.com")
     create_client_response = client.post(
@@ -601,10 +608,11 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     db_session.commit()
 
     discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(70)]
-    monkeypatch.setattr("backend.documents.url_service._discover_urls", lambda *_args, **_kwargs: discovered_urls)
-    monkeypatch.setattr("backend.documents.url_service._fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
     monkeypatch.setattr(
-        "backend.documents.url_service._extract_page",
+        url_service,
+        "_extract_page",
         lambda url, html: type("Page", (), {
             "url": url,
             "title": url.rsplit("/", 1)[-1],
@@ -612,9 +620,9 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr("backend.documents.url_service._embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1, 0.2, 0.3] for _ in chunks])
 
-    crawl_url_source(source.id, api_key="test-key")
+    url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
 
     refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()

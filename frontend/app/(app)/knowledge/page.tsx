@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   api,
   type DocumentHealthStatus,
@@ -103,11 +103,63 @@ function HealthCell({
   );
 }
 
+function SourceHealthCell({
+  status,
+  warning,
+  error,
+}: {
+  status: string;
+  warning?: string | null;
+  error?: string | null;
+}) {
+  let label = "Pending";
+  let dotClass = "bg-slate-300";
+  let note = "Source processing is still in progress.";
+
+  if (error) {
+    label = "Needs attention";
+    dotClass = "bg-red-500";
+    note = error;
+  } else if (warning) {
+    label = "Warning";
+    dotClass = "bg-amber-400";
+    note = warning;
+  } else if (status === "ready") {
+    label = "Good";
+    dotClass = "bg-emerald-500";
+    note = "No active warnings.";
+  } else if (status === "paused" || status === "error") {
+    label = "Needs attention";
+    dotClass = "bg-red-500";
+    note = "Source requires action before indexing can continue.";
+  }
+
+  return (
+    <div className="group relative inline-flex max-w-[240px] items-center gap-1.5 text-xs text-slate-600" title={note}>
+      <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+      <span className="font-medium">{label}</span>
+      {(warning || error) && <span className="truncate text-slate-400">{warning || error}</span>}
+      <span className="pointer-events-none absolute left-0 top-full z-50 mt-2 hidden w-72 rounded-lg bg-slate-900 px-3 py-2 text-left text-[11px] leading-5 text-white shadow-xl group-hover:block">
+        {note}
+      </span>
+    </div>
+  );
+}
+
 type MixedRow =
   | { kind: "file"; item: DocumentListItem }
   | { kind: "url"; item: UrlSource };
 
 const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
+
+function formatSchedule(value: string) {
+  if (value === "manual") return "Manual only";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function stopRowClick(event: React.MouseEvent<HTMLElement>) {
+  event.stopPropagation();
+}
 
 export default function KnowledgePage() {
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
@@ -120,6 +172,7 @@ export default function KnowledgePage() {
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null);
   const [detail, setDetail] = useState<UrlSourceDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [showUrlForm, setShowUrlForm] = useState(false);
@@ -146,7 +199,7 @@ export default function KnowledgePage() {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   useEffect(() => {
@@ -154,24 +207,37 @@ export default function KnowledgePage() {
     if (!shouldPoll) return;
     const timer = window.setInterval(() => {
       void load();
-      if (detail && POLLABLE_SOURCE_STATUSES.has(detail.status) && !isEditing) {
-        void openDetail(detail.id);
+      if (expandedSourceId && detail && detail.id === expandedSourceId && POLLABLE_SOURCE_STATUSES.has(detail.status) && !isEditing) {
+        void loadDetail(expandedSourceId);
       }
     }, 10000);
     return () => window.clearInterval(timer);
-  }, [sources, detail, isEditing]);
+  }, [sources, expandedSourceId, detail, isEditing]);
 
-  async function openDetail(sourceId: string) {
-    setIsEditing(false);
+  async function loadDetail(sourceId: string) {
     try {
       setDetailLoading(true);
       const next = await api.documents.getSourceById(sourceId);
       setDetail(next);
+      return next;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load source details");
+      return null;
     } finally {
       setDetailLoading(false);
     }
+  }
+
+  async function toggleDetail(sourceId: string) {
+    if (expandedSourceId === sourceId) {
+      setExpandedSourceId(null);
+      setDetail(null);
+      setIsEditing(false);
+      return;
+    }
+    setExpandedSourceId(sourceId);
+    setIsEditing(false);
+    await loadDetail(sourceId);
   }
 
   async function pollUntilEmbedded(docId: string, timeoutMs = 120_000) {
@@ -226,7 +292,8 @@ export default function KnowledgePage() {
       setNameInput("");
       setExclusionsInput("");
       setScheduleInput("weekly");
-      await openDetail(source.id);
+      setExpandedSourceId(source.id);
+      await loadDetail(source.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create source");
     } finally {
@@ -249,7 +316,11 @@ export default function KnowledgePage() {
     try {
       await api.documents.deleteSource(id);
       setSources((prev) => prev.filter((source) => source.id !== id));
-      if (detail?.id === id) setDetail(null);
+      if (expandedSourceId === id) {
+        setExpandedSourceId(null);
+        setDetail(null);
+        setIsEditing(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");
     }
@@ -260,7 +331,7 @@ export default function KnowledgePage() {
     try {
       const source = await api.documents.refreshSource(id);
       setSources((prev) => prev.map((item) => (item.id === id ? source : item)));
-      if (detail?.id === id) await openDetail(id);
+      if (expandedSourceId === id) await loadDetail(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Refresh failed");
     } finally {
@@ -268,26 +339,29 @@ export default function KnowledgePage() {
     }
   }
 
-  function openEdit() {
-    if (!detail) return;
-    setEditName(detail.name ?? "");
-    setEditSchedule(detail.schedule);
-    setEditExclusions((detail.exclusion_patterns ?? []).join("\n"));
+  function openEdit(source: UrlSource) {
+    setExpandedSourceId(source.id);
+    setEditName(source.name ?? "");
+    setEditSchedule(source.schedule);
+    setEditExclusions((detail?.id === source.id ? detail.exclusion_patterns : source.exclusion_patterns).join("\n"));
     setIsEditing(true);
+    if (detail?.id !== source.id) {
+      void loadDetail(source.id);
+    }
   }
 
   async function handleSaveEdit() {
-    if (!detail) return;
+    if (!expandedSourceId) return;
     setIsSaving(true);
     try {
-      await api.documents.updateSource(detail.id, {
+      await api.documents.updateSource(expandedSourceId, {
         name: editName.trim(),
         schedule: editSchedule,
         exclusions: editExclusions.split("\n").map((s) => s.trim()).filter(Boolean),
       });
       setIsEditing(false);
       await load();
-      await openDetail(detail.id);
+      await loadDetail(expandedSourceId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -316,10 +390,7 @@ export default function KnowledgePage() {
     return mixed.filter((row) => {
       if (!text) return true;
       if (row.kind === "file") return row.item.filename.toLowerCase().includes(text);
-      return (
-        row.item.name.toLowerCase().includes(text) ||
-        row.item.url.toLowerCase().includes(text)
-      );
+      return row.item.name.toLowerCase().includes(text) || row.item.url.toLowerCase().includes(text);
     });
   })();
 
@@ -332,7 +403,7 @@ export default function KnowledgePage() {
   }
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="max-w-7xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
@@ -448,78 +519,80 @@ export default function KnowledgePage() {
         </div>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50">
-                <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Pages / Updated</th>
-                <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
-                <th className="px-4 py-3" />
+      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="border-b border-slate-100 bg-slate-50">
+              <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Indexed / Updated</th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Scheduled</th>
+              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
+              <th className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-wider text-slate-400">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={7} className="py-12 text-center text-sm text-slate-500">
+                  {filter ? "No sources match your filter." : "No sources yet. Upload a file or add a docs URL."}
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-sm text-slate-500">
-                    {filter ? "No sources match your filter." : "No sources yet. Upload a file or add a docs URL."}
-                  </td>
-                </tr>
-              ) : (
-                rows.map((row) => {
-                  if (row.kind === "file") {
-                    const doc = row.item;
-                    const isEmbedding = doc.status === "processing" || doc.status === "embedding";
-                    return (
-                      <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
-                        <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">{doc.filename}</td>
-                        <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
-                        <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
-                        <td className="px-4 py-3.5 text-xs text-slate-500">
-                          {isEmbedding ? "embedding…" : new Date(doc.updated_at || doc.created_at).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center justify-end gap-2">
-                            {!isEmbedding && (
-                              <button
-                                type="button"
-                                onClick={() => void handleRecheckHealth(doc.id)}
-                                disabled={recheckingId === doc.id}
-                                className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
-                              >
-                                {recheckingId === doc.id ? "…" : "Re-check"}
-                              </button>
-                            )}
+            ) : (
+              rows.map((row) => {
+                if (row.kind === "file") {
+                  const doc = row.item;
+                  const isEmbedding = doc.status === "processing" || doc.status === "embedding";
+                  return (
+                    <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
+                      <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">{doc.filename}</td>
+                      <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
+                      <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
+                      <td className="px-4 py-3.5 text-xs text-slate-500">
+                        <div>—</div>
+                        <div className="mt-1">{isEmbedding ? "embedding…" : new Date(doc.updated_at || doc.created_at).toLocaleString()}</div>
+                      </td>
+                      <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
+                      <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center justify-end gap-2">
+                          {!isEmbedding && (
                             <button
                               type="button"
-                              onClick={() => void handleDeleteFile(doc.id)}
-                              className="text-xs text-red-400 hover:text-red-600"
+                              onClick={() => void handleRecheckHealth(doc.id)}
+                              disabled={recheckingId === doc.id}
+                              className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
                             >
-                              Delete
+                              {recheckingId === doc.id ? "…" : "Re-check"}
                             </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  }
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => void handleDeleteFile(doc.id)}
+                            className="text-xs text-red-400 hover:text-red-600"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
 
-                  const source = row.item;
-                  const pageMeta = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
-                  const note = source.warning_message || source.error_message || "—";
-                  return (
-                    <tr key={source.id} className="transition-colors hover:bg-slate-50/60">
+                const source = row.item;
+                const isExpanded = expandedSourceId === source.id;
+                const currentDetail = detail?.id === source.id ? detail : null;
+                const pageMeta = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
+
+                return (
+                  <Fragment key={source.id}>
+                    <tr
+                      className={`cursor-pointer transition-colors hover:bg-slate-50/60 ${isExpanded ? "bg-violet-50/40" : ""}`}
+                      onClick={() => void toggleDetail(source.id)}
+                    >
                       <td className="px-5 py-3.5">
-                        <button
-                          type="button"
-                          onClick={() => void openDetail(source.id)}
-                          className="max-w-[320px] truncate text-left text-sm font-medium text-slate-800 hover:text-violet-700"
-                        >
-                          {source.name}
-                        </button>
+                        <div className="max-w-[320px] text-sm font-medium text-slate-800">{source.name}</div>
                         <div className="mt-1 max-w-[320px] truncate text-xs text-slate-400">{source.url}</div>
                       </td>
                       <td className="px-4 py-3.5"><TypeBadge type="url" /></td>
@@ -528,9 +601,24 @@ export default function KnowledgePage() {
                         <div>{pageMeta} pages</div>
                         <div className="mt-1">{new Date(source.updated_at).toLocaleString()}</div>
                       </td>
-                      <td className="max-w-[220px] px-4 py-3.5 text-xs text-slate-500">{note}</td>
+                      <td className="px-4 py-3.5 text-xs text-slate-500">
+                        <div>{formatSchedule(source.schedule)}</div>
+                        <div className="mt-1 text-slate-400">
+                          {source.next_crawl_at ? new Date(source.next_crawl_at).toLocaleString() : "No next run"}
+                        </div>
+                      </td>
                       <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2">
+                        <SourceHealthCell status={source.status} warning={source.warning_message} error={source.error_message} />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center justify-end gap-2" onClick={stopRowClick}>
+                          <button
+                            type="button"
+                            onClick={() => openEdit(source)}
+                            className="text-xs text-slate-500 hover:text-slate-700"
+                          >
+                            Edit
+                          </button>
                           <button
                             type="button"
                             onClick={() => void handleRefreshSource(source.id)}
@@ -549,171 +637,133 @@ export default function KnowledgePage() {
                         </div>
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                    {isExpanded && (
+                      <tr className="bg-slate-50/60">
+                        <td colSpan={7} className="px-5 py-4">
+                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                            {detailLoading && !currentDetail ? (
+                              <div className="text-sm text-slate-500">Loading source details…</div>
+                            ) : (
+                              <div className="space-y-5">
+                                {isEditing && (
+                                  <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                    <label className="block">
+                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Name</span>
+                                      <input
+                                        type="text"
+                                        value={editName}
+                                        onChange={(e) => setEditName(e.target.value)}
+                                        placeholder="Display name"
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                                      />
+                                    </label>
+                                    <label className="block">
+                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Schedule</span>
+                                      <select
+                                        value={editSchedule}
+                                        onChange={(e) => setEditSchedule(e.target.value)}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                                      >
+                                        <option value="daily">Daily</option>
+                                        <option value="weekly">Weekly</option>
+                                        <option value="manual">Manual only</option>
+                                      </select>
+                                    </label>
+                                    <label className="block">
+                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</span>
+                                      <textarea
+                                        value={editExclusions}
+                                        onChange={(e) => setEditExclusions(e.target.value)}
+                                        placeholder={"/blog/*\n/changelog/*"}
+                                        rows={4}
+                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                                      />
+                                    </label>
+                                    <div className="flex items-center gap-2 pt-1">
+                                      <button
+                                        type="button"
+                                        onClick={() => void handleSaveEdit()}
+                                        disabled={isSaving}
+                                        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        {isSaving ? "Saving…" : "Save"}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setIsEditing(false)}
+                                        disabled={isSaving}
+                                        className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                                      >
+                                        Cancel
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          {!detail ? (
-            <div className="text-sm text-slate-500">Select a URL source to see crawl history, failed URLs, and indexed pages.</div>
-          ) : detailLoading ? (
-            <div className="text-sm text-slate-500">Loading source details…</div>
-          ) : (
-            <div className="space-y-5">
-              <div>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-semibold text-slate-800">{detail.name}</h2>
-                    <StatusBadge status={detail.status} />
-                  </div>
-                  {!isEditing && (
-                    <button
-                      type="button"
-                      onClick={openEdit}
-                      className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-300 hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-                  )}
-                </div>
-                <p className="mt-1 break-all text-xs text-slate-500">{detail.url}</p>
-              </div>
+                                {(currentDetail?.warning_message || currentDetail?.error_message) && (
+                                  <div className="space-y-2">
+                                    {currentDetail.warning_message && (
+                                      <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                        {currentDetail.warning_message}
+                                      </div>
+                                    )}
+                                    {currentDetail.error_message && (
+                                      <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                        {currentDetail.error_message}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
 
-              {isEditing ? (
-                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Name</span>
-                    <input
-                      type="text"
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      placeholder="Display name"
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Schedule</span>
-                    <select
-                      value={editSchedule}
-                      onChange={(e) => setEditSchedule(e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                    >
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="manual">Manual only</option>
-                    </select>
-                  </label>
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</span>
-                    <textarea
-                      value={editExclusions}
-                      onChange={(e) => setEditExclusions(e.target.value)}
-                      placeholder={"/blog/*\n/changelog/*"}
-                      rows={4}
-                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                    />
-                  </label>
-                  <div className="flex items-center gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => void handleSaveEdit()}
-                      disabled={isSaving}
-                      className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isSaving ? "Saving…" : "Save"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditing(false)}
-                      disabled={isSaving}
-                      className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-lg bg-slate-50 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">Schedule</div>
-                      <div className="mt-1 font-medium text-slate-700">{detail.schedule}</div>
-                    </div>
-                    <div className="rounded-lg bg-slate-50 p-3">
-                      <div className="text-xs uppercase tracking-wide text-slate-400">Indexed</div>
-                      <div className="mt-1 font-medium text-slate-700">{detail.pages_indexed} pages</div>
-                    </div>
-                  </div>
+                                <div className="grid gap-5 lg:grid-cols-2">
+                                  <div>
+                                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>
+                                    <div className="space-y-2">
+                                      {!currentDetail || currentDetail.recent_runs.length === 0 ? (
+                                        <div className="text-sm text-slate-500">No crawl runs yet.</div>
+                                      ) : (
+                                        currentDetail.recent_runs.map((run) => (
+                                          <div key={run.id} className="rounded-lg border border-slate-200 p-3 text-sm">
+                                            <div className="flex items-center justify-between gap-3">
+                                              <StatusBadge status={run.status} />
+                                              <span className="text-xs text-slate-400">{new Date(run.created_at).toLocaleString()}</span>
+                                            </div>
+                                            <div className="mt-2 text-slate-600">
+                                              {run.pages_indexed}
+                                              {run.pages_found ? ` / ${run.pages_found}` : ""} pages indexed
+                                            </div>
+                                            {run.failed_urls.length > 0 && (
+                                              <div className="mt-2 text-xs text-slate-500">
+                                                Failed: {run.failed_urls.slice(0, 2).map((item) => item.url).join(", ")}
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))
+                                      )}
+                                    </div>
+                                  </div>
 
-                  {detail.warning_message && (
-                    <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                      {detail.warning_message}
-                    </div>
-                  )}
-                  {detail.error_message && (
-                    <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
-                      {detail.error_message}
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
-                    <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-                      {detail.exclusion_patterns.length ? detail.exclusion_patterns.join(", ") : "No exclusions"}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              <div>
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>
-                <div className="space-y-2">
-                  {detail.recent_runs.length === 0 ? (
-                    <div className="text-sm text-slate-500">No crawl runs yet.</div>
-                  ) : (
-                    detail.recent_runs.map((run) => (
-                      <div key={run.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                        <div className="flex items-center justify-between gap-3">
-                          <StatusBadge status={run.status} />
-                          <span className="text-xs text-slate-400">{new Date(run.created_at).toLocaleString()}</span>
-                        </div>
-                        <div className="mt-2 text-slate-600">
-                          {run.pages_indexed}
-                          {run.pages_found ? ` / ${run.pages_found}` : ""} pages indexed
-                        </div>
-                        {run.failed_urls.length > 0 && (
-                          <div className="mt-2 text-xs text-slate-500">
-                            Failed: {run.failed_urls.slice(0, 2).map((item) => item.url).join(", ")}
+                                  <div>
+                                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                                      {currentDetail && currentDetail.exclusion_patterns.length
+                                        ? currentDetail.exclusion_patterns.join(", ")
+                                        : "No exclusions"}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Indexed pages</div>
-                <div className="space-y-2">
-                  {detail.pages.length === 0 ? (
-                    <div className="text-sm text-slate-500">Pages will appear here after indexing starts.</div>
-                  ) : (
-                    detail.pages.map((page) => (
-                      <div key={page.id} className="rounded-lg border border-slate-200 p-3">
-                        <div className="text-sm font-medium text-slate-700">{page.title}</div>
-                        <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
-                        <div className="mt-2 text-xs text-slate-500">{page.chunk_count} chunks</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

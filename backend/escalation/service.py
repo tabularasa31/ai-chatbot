@@ -34,12 +34,16 @@ _CLARIFY_KEY = "escalation_followup_clarify"
 def should_escalate(
     best_similarity_score: float | None,
     chunk_count: int,
+    *,
+    validation: dict[str, Any] | None = None,
     trigger_override: EscalationTrigger | None = None,
 ) -> tuple[bool, EscalationTrigger | None]:
     if trigger_override is not None:
         return True, trigger_override
     if chunk_count == 0:
         return True, EscalationTrigger.no_documents
+    if validation and validation.get("is_valid") is True:
+        return False, None
     if best_similarity_score is None or best_similarity_score < ESCALATION_THRESHOLD:
         return True, EscalationTrigger.low_similarity
     return False, None

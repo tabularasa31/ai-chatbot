@@ -234,9 +234,6 @@ function BadAnswerCard({
               )}
               {showDebug && debugState && !debugState.loading && "data" in debugState && (
                 <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 text-sm">
-                  <div className="mb-1 font-medium text-slate-700">
-                    Retrieval mode: {debugState.data.debug.mode}
-                  </div>
                   {debugState.data.debug.chunks.length === 0 ? (
                     <div className="text-slate-500 text-xs">No chunks retrieved.</div>
                   ) : (

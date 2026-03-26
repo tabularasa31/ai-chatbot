@@ -37,6 +37,9 @@ export type ChatDebugResponse = {
   tokens_used: number;
   debug: {
     mode: "vector" | "keyword" | "hybrid" | "none";
+    best_rank_score: number | null;
+    best_confidence_score: number | null;
+    confidence_source: "vector_similarity" | "rank_score" | "none" | null;
     chunks: Array<{
       document_id: string;
       score: number;

@@ -18,11 +18,11 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 
 ## Step 3: Upload your documents
 
-1. Go to Dashboard → Documents.
+1. Go to Dashboard → Knowledge.
 2. Click "Upload document".
-3. Supported formats: PDF, Markdown (.md), plain text (.txt), Swagger/OpenAPI (.json, .yaml). Maximum file size: 50 MB.
+3. Supported formats: PDF, Markdown (.md), Swagger/OpenAPI (.json, .yaml, .yml). Maximum file size: 50 MB.
 4. After upload, the document will be processed automatically for AI search.
-5. Wait until the status shows "Embedded" — this may take a few seconds to a minute depending on document size.
+5. Wait until the status returns to "Ready" — this may take a few seconds to a minute depending on document size.
 
 ## Step 4: Get your embed code
 

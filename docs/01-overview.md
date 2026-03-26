@@ -112,7 +112,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ✅ User authentication (email/password + JWT + email verification)  
 ✅ Forgot password flow (Brevo email + token reset)  
 ✅ Multi-tenant client management (API keys)  
-✅ Document upload (PDF, Markdown, Swagger, Text)  
+✅ Document upload (PDF, Markdown, Swagger/OpenAPI)  
 ✅ RAG-powered chat API (gpt-4o-mini)  
 ✅ pgvector native search with HNSW index + BM25 hybrid (RRF) on PostgreSQL  
 ✅ Zero-config embeddable widget (iframe, no CORS issues)

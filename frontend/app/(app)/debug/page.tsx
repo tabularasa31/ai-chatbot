@@ -84,12 +84,20 @@ export default function DebugPage() {
             <h2 className="text-base font-semibold text-slate-800 mb-2">
               Debug info
             </h2>
-            <p className="text-slate-600 text-sm mb-3">
-              Mode:{" "}
-              <span className="font-mono font-medium text-slate-800">
-                {result.debug.mode}
-              </span>
-            </p>
+            <div className="mb-3 space-y-1 text-slate-600 text-sm">
+              <p>
+                Top match score:{" "}
+                <span className="font-mono font-medium text-slate-800">
+                  {result.debug.best_rank_score?.toFixed(4) ?? "n/a"}
+                </span>
+              </p>
+              <p>
+                Confidence score:{" "}
+                <span className="font-mono font-medium text-slate-800">
+                  {result.debug.best_confidence_score?.toFixed(4) ?? "n/a"}
+                </span>
+              </p>
+            </div>
             {result.debug.chunks.length === 0 ? (
               <p className="text-slate-500 text-sm">No chunks retrieved.</p>
             ) : (

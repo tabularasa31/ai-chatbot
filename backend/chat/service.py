@@ -41,7 +41,7 @@ from backend.models import (
     MessageFeedback,
     MessageRole,
 )
-from backend.search.service import search_similar_chunks
+from backend.search.service import search_similar_chunks_detailed
 
 logger = logging.getLogger(__name__)
 
@@ -100,46 +100,80 @@ def retrieve_context(
     db: Session,
     api_key: str,
     top_k: int = 5,
-) -> tuple[list[str], list[uuid.UUID], list[float], Literal["vector", "keyword", "hybrid", "none"]]:
+) -> "RetrievalContext":
     """
-    Retrieve context chunks for RAG (pgvector + BM25 + RRF on PostgreSQL; Python cosine on SQLite tests).
+    Retrieve context chunks for RAG plus a separate confidence signal for escalation.
 
-    Uses search_similar_chunks for tenant-scoped retrieval.
+    Uses tenant-scoped search with:
+    - rank scores for ordering/debug
+    - vector similarity for escalation confidence on PostgreSQL
     client_id filtering enforced at DB level.
-
-    Returns:
-        chunk_texts: List of chunk text strings.
-        document_ids: List of document UUIDs (order matches chunk_texts).
-        scores: Cosine similarity (SQLite) or RRF fusion scores (PostgreSQL hybrid).
-        mode: "vector" | "keyword" | "hybrid" | "none".
     """
-    results = search_similar_chunks(
+    bundle = search_similar_chunks_detailed(
         client_id=client_id,
         query=question,
         top_k=top_k,
         db=db,
         api_key=api_key,
     )
+    results = bundle.results
 
     if not results:
-        return ([], [], [], "none")
+        return RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+        )
 
-    best_score = results[0][1]
+    best_rank_score = results[0][1]
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
         # Tests: Python cosine only; same thresholds as before keyword→BM25 swap.
-        if best_score >= RETRIEVAL_VECTOR_CONFIDENCE:
+        if best_rank_score >= RETRIEVAL_VECTOR_CONFIDENCE:
             mode: Literal["vector", "keyword", "hybrid", "none"] = "vector"
         else:
             mode = "keyword"
+        best_confidence_score = best_rank_score
+        confidence_source: Literal["vector_similarity", "rank_score", "none"] = "rank_score"
+    elif bundle.best_keyword_score is None:
+        mode = "vector"
+        best_confidence_score = bundle.best_vector_similarity
+        confidence_source = "vector_similarity"
     else:
         mode = "hybrid"
+        best_confidence_score = bundle.best_vector_similarity
+        confidence_source = "vector_similarity"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]
     scores = [r[1] for r in results]
 
-    return (chunk_texts, document_ids, scores, mode)
+    return RetrievalContext(
+        chunk_texts=chunk_texts,
+        document_ids=document_ids,
+        scores=scores,
+        mode=mode,
+        best_rank_score=best_rank_score,
+        best_confidence_score=best_confidence_score,
+        confidence_source=confidence_source,
+    )
+
+
+@dataclass
+class RetrievalContext:
+    """Retrieved chunks plus the confidence signal used outside ranking."""
+
+    chunk_texts: list[str]
+    document_ids: list[uuid.UUID]
+    scores: list[float]
+    mode: Literal["vector", "keyword", "hybrid", "none"]
+    best_rank_score: float | None
+    best_confidence_score: float | None
+    confidence_source: Literal["vector_similarity", "rank_score", "none"]
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -531,11 +565,10 @@ def process_chat_message(
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
     # --- Normal RAG ---
-    chunk_texts, doc_ids, scores, _mode = retrieve_context(
-        client_id, redacted_question, db, api_key, top_k=5
-    )
-    document_ids = list(dict.fromkeys(doc_ids))
-    best_score = scores[0] if scores else None
+    retrieval = retrieve_context(client_id, redacted_question, db, api_key, top_k=5)
+    chunk_texts = retrieval.chunk_texts
+    scores = retrieval.scores
+    document_ids = list(dict.fromkeys(retrieval.document_ids))
 
     answer, tokens_used = generate_answer(
         redacted_question,
@@ -554,7 +587,11 @@ def process_chat_message(
     ):
         answer = FALLBACK_LOW_CONFIDENCE_ANSWER
 
-    escalate, esc_trigger = should_escalate(best_score, len(chunk_texts))
+    escalate, esc_trigger = should_escalate(
+        retrieval.best_confidence_score,
+        len(chunk_texts),
+        validation=validation,
+    )
     if escalate and esc_trigger is not None:
         try:
             preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
@@ -565,7 +602,7 @@ def process_chat_message(
                 db,
                 chat_id=chat.id,
                 session_id=session_id,
-                best_similarity_score=best_score,
+                best_similarity_score=retrieval.best_confidence_score,
                 retrieved_chunks=preview,
                 user_context=effective_user_ctx,
             )
@@ -611,9 +648,11 @@ def run_debug(
         debug_dict: {"mode": str, "chunks": [{"document_id": str, "score": float, "preview": str}]}
     """
     redacted_question, _was_redacted = redact(question)
-    chunk_texts, document_ids, scores, mode = retrieve_context(
-        client_id, redacted_question, db, api_key, top_k=5
-    )
+    retrieval = retrieve_context(client_id, redacted_question, db, api_key, top_k=5)
+    chunk_texts = retrieval.chunk_texts
+    document_ids = retrieval.document_ids
+    scores = retrieval.scores
+    mode = retrieval.mode
     client_row = db.query(Client).filter(Client.id == client_id).first()
     disclosure_cfg: dict[str, Any] | None = None
     if client_row and isinstance(client_row.disclosure_config, dict):
@@ -636,6 +675,9 @@ def run_debug(
 
     debug = {
         "mode": mode,
+        "best_rank_score": retrieval.best_rank_score,
+        "best_confidence_score": retrieval.best_confidence_score,
+        "confidence_source": retrieval.confidence_source,
         "chunks": chunks_debug,
         "validation": validate_answer(
             redacted_question, answer, chunk_texts, api_key=api_key

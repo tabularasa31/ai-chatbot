@@ -12,7 +12,7 @@ The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **
 
 Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
-- **Supported formats:** PDF, Markdown, plain text, Swagger/OpenAPI JSON/YAML.
+- **Supported formats:** PDF, Markdown, Swagger/OpenAPI JSON/YAML.
 - **Limits:** e.g. max file size 50 MB (see product limits); embedding runs asynchronously after upload/trigger.
 - **Status:** Documents move through `ready` → `embedding` → `ready` or `error`; the UI polls the API until embedding finishes.
 - **Health:** After embedding, health indicators and re-check actions (see FI-032).
@@ -46,7 +46,7 @@ A dedicated page showing answers marked with 👎.
 
 Test your bot directly in the dashboard.
 
-- Ask a question and see retrieval debug (mode, chunks, scores on Postgres).
+- Ask a question and inspect the retrieved chunks plus matching scores.
 - **Answer** is shown in a code-style block with an inline **copy** icon.
 
 ## Response controls (`/settings/disclosure`)

@@ -6,7 +6,7 @@ Chat9 is currently **free to use** during the early access period.
 
 ## Document limits
 
-- Maximum **20 documents** per account.
+- Maximum **100 documents** per account.
 - Maximum **50 MB** per document.
 
 ## API costs

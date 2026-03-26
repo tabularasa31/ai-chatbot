@@ -14,8 +14,9 @@ from sqlalchemy.orm import Session
 
 from backend.auth.service import create_token_for_user
 from backend.clients.service import create_client
+from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.core.security import hash_password
-from backend.models import SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
+from backend.models import Document, DocumentStatus, DocumentType, SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
 from tests.conftest import register_and_verify_user
 
 
@@ -26,6 +27,10 @@ def _make_minimal_pdf() -> bytes:
     buf = io.BytesIO()
     writer.write(buf)
     return buf.getvalue()
+
+
+def _fake_embedding_vector() -> list[float]:
+    return [0.1] * 1536
 
 
 def _get_unverified_user_token(db_session: Session, email: str) -> str:
@@ -156,6 +161,38 @@ def test_upload_no_client(client: TestClient, db_session: Session) -> None:
     )
     assert response.status_code == 404
     assert "client" in response.json()["detail"].lower()
+
+
+def test_upload_document_limit_is_shared_capacity_100(client: TestClient, db_session: Session) -> None:
+    """The client-wide document capacity should allow 100 docs and reject the 101st."""
+    token = register_and_verify_user(client, db_session, email="limit100@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Limit Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    for index in range(KNOWLEDGE_DOCUMENT_CAPACITY):
+        db_session.add(
+            Document(
+                client_id=client_id,
+                filename=f"existing-{index}.md",
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.ready,
+                parsed_text=f"doc {index}",
+            )
+        )
+    db_session.commit()
+
+    response = client.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("overflow.md", b"# Overflow", "text/markdown")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == f"Document limit reached (max {KNOWLEDGE_DOCUMENT_CAPACITY})"
 
 
 def test_upload_unauthenticated(client: TestClient) -> None:
@@ -444,6 +481,163 @@ def test_refresh_url_source_returns_429_inside_cooldown(
 
     assert response.status_code == 429
     assert "refresh available in" in response.json()["detail"].lower()
+
+
+def test_url_source_crawl_uses_remaining_shared_capacity(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """URL pages should consume the same shared capacity pool as uploaded files."""
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    token = register_and_verify_user(client, db_session, email="shared-capacity@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Shared Capacity Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    for index in range(60):
+        db_session.add(
+            Document(
+                client_id=client_id,
+                filename=f"file-{index}.md",
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.ready,
+                parsed_text=f"file {index}",
+            )
+        )
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.queued,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(60)]
+    monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(
+        url_service,
+        "_extract_page",
+        lambda url, html: type("Page", (), {
+            "url": url,
+            "title": url.rsplit("/", 1)[-1],
+            "text": html,
+            "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
+        })(),
+    )
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+
+    url_service.crawl_url_source(source.id, api_key="test-key")
+    db_session.expire_all()
+
+    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    source_docs = db_session.query(Document).filter(Document.source_id == source.id).all()
+
+    assert refreshed_source is not None
+    assert len(source_docs) == 40
+    assert refreshed_source.pages_indexed == 40
+    assert refreshed_source.warning_message is not None
+    assert "Knowledge capacity reached" in refreshed_source.warning_message
+    assert db_session.query(Document).filter(Document.client_id == client_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
+
+
+def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capacity(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refresh should update existing source pages and only add new pages while capacity remains."""
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    token = register_and_verify_user(client, db_session, email="refresh-capacity@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Refresh Capacity Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=60,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    for index in range(40):
+        db_session.add(
+            Document(
+                client_id=client_id,
+                filename=f"other-{index}.md",
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.ready,
+                parsed_text=f"other {index}",
+            )
+        )
+    for index in range(60):
+        db_session.add(
+            Document(
+                client_id=client_id,
+                source_id=source.id,
+                source_url=f"https://docs.example.com/page-{index}",
+                filename=f"page-{index}",
+                file_type=DocumentType.url,
+                status=DocumentStatus.ready,
+                parsed_text=f"old {index}",
+            )
+        )
+    db_session.commit()
+
+    discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(70)]
+    monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(
+        url_service,
+        "_extract_page",
+        lambda url, html: type("Page", (), {
+            "url": url,
+            "title": url.rsplit("/", 1)[-1],
+            "text": f"updated {url}",
+            "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
+        })(),
+    )
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+
+    url_service.crawl_url_source(source.id, api_key="test-key")
+    db_session.expire_all()
+
+    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    source_docs = db_session.query(Document).filter(Document.source_id == source.id).all()
+
+    assert refreshed_source is not None
+    assert len(source_docs) == 60
+    assert refreshed_source.pages_indexed == 60
+    assert refreshed_source.warning_message is not None
+    assert "Knowledge capacity reached" in refreshed_source.warning_message
+    assert db_session.query(Document).filter(Document.client_id == client_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
 
 
 def test_delete_document_success(client: TestClient, db_session: Session) -> None:

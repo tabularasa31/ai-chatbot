@@ -1,7 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-25 (UTC) — URL sources v1 hardening + docs sync  
+**Last updated:** 2026-03-26 (UTC) — Knowledge inline source detail + shared capacity 100  
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-26) — Knowledge inline source detail + shared capacity 100
+
+- ✅ **Knowledge UI refinement:** URL-source details moved out of the narrow right sidebar into an inline expandable row under the selected source. The main list row now carries the key operational fields: status, indexed progress, schedule, health / warnings, and row actions (`Edit`, `Refresh`, `Delete`).
+- ✅ **Simplified source detail:** the expanded source panel now focuses on recent runs and exclusions instead of duplicating primary metadata in a separate side panel.
+- ✅ **Shared knowledge capacity:** the old split assumptions (`max 20` uploaded files, fixed per-source page cap) were replaced with a single client-wide capacity of `100` documents across uploaded files and indexed URL pages together.
+- ✅ **Crawler capacity semantics:** URL-source indexing now respects remaining client capacity while still allowing refreshes to update already indexed pages for the same source.
+- ✅ **Docs + QA sync:** updated product docs and QA checklists to match the inline Knowledge UX and the new shared-capacity behavior.
 
 ---
 

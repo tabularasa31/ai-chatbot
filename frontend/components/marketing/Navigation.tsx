@@ -15,12 +15,14 @@ export function Navigation() {
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center gap-8">
-            <Link
-              href="/docs"
+            <a
+              href="https://chat9.gitbook.io/chat9-docs"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
             >
               Docs
-            </Link>
+            </a>
             <a
               href="https://github.com/tabularasa31/ai-chatbot"
               target="_blank"
@@ -67,12 +69,14 @@ export function Navigation() {
               className="md:hidden overflow-hidden"
             >
               <div className="flex flex-col gap-4 py-6">
-                <Link
-                  href="/docs"
+                <a
+                  href="https://chat9.gitbook.io/chat9-docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors text-left"
                 >
                   Docs
-                </Link>
+                </a>
                 <a
                   href="https://github.com/tabularasa31/ai-chatbot"
                   target="_blank"

@@ -9,7 +9,9 @@ export function Footer() {
           {/* Links */}
           <div className="flex items-center gap-8">
             <a
-              href="/docs"
+              href="https://chat9.gitbook.io/chat9-docs"
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#38BDF8] transition-colors"
             >
               Docs

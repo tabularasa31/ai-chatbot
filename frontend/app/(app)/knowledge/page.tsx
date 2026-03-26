@@ -81,13 +81,11 @@ function HealthCell({
         : warnings.length > 0
           ? warnings.map((warning) => warning.message)
           : ["No issues found."];
-  const tooltipText = [...tooltipLines, checkedAt ? `Checked: ${checkedAt}` : null].filter(Boolean).join("\n");
 
   return (
     <span
       className="group relative inline-flex items-center gap-1.5 text-xs text-slate-600"
       tabIndex={0}
-      title={tooltipText}
     >
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
@@ -135,7 +133,7 @@ function SourceHealthCell({
   }
 
   return (
-    <div className="group relative inline-flex max-w-[240px] items-center gap-1.5 text-xs text-slate-600" title={note}>
+    <div className="group relative inline-flex max-w-[240px] items-center gap-1.5 text-xs text-slate-600">
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
       {(warning || error) && <span className="truncate text-slate-400">{warning || error}</span>}

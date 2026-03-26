@@ -127,6 +127,11 @@ export default function KnowledgePage() {
   const [nameInput, setNameInput] = useState("");
   const [scheduleInput, setScheduleInput] = useState("weekly");
   const [exclusionsInput, setExclusionsInput] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editSchedule, setEditSchedule] = useState("");
+  const [editExclusions, setEditExclusions] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   async function load() {
     try {
@@ -157,6 +162,7 @@ export default function KnowledgePage() {
   }, [sources, detail]);
 
   async function openDetail(sourceId: string) {
+    setIsEditing(false);
     try {
       setDetailLoading(true);
       const next = await api.documents.getSourceById(sourceId);
@@ -259,6 +265,33 @@ export default function KnowledgePage() {
       setError(err instanceof Error ? err.message : "Refresh failed");
     } finally {
       setRefreshingSourceId(null);
+    }
+  }
+
+  function openEdit() {
+    if (!detail) return;
+    setEditName(detail.name ?? "");
+    setEditSchedule(detail.schedule);
+    setEditExclusions((detail.exclusion_patterns ?? []).join("\n"));
+    setIsEditing(true);
+  }
+
+  async function handleSaveEdit() {
+    if (!detail) return;
+    setIsSaving(true);
+    try {
+      await api.documents.updateSource(detail.id, {
+        name: editName.trim() || undefined,
+        schedule: editSchedule,
+        exclusions: editExclusions.split("\n").map((s) => s.trim()).filter(Boolean),
+      });
+      setIsEditing(false);
+      await load();
+      await openDetail(detail.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -531,41 +564,109 @@ export default function KnowledgePage() {
           ) : (
             <div className="space-y-5">
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-lg font-semibold text-slate-800">{detail.name}</h2>
-                  <StatusBadge status={detail.status} />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-semibold text-slate-800">{detail.name}</h2>
+                    <StatusBadge status={detail.status} />
+                  </div>
+                  {!isEditing && (
+                    <button
+                      type="button"
+                      onClick={openEdit}
+                      className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                    >
+                      Edit
+                    </button>
+                  )}
                 </div>
                 <p className="mt-1 break-all text-xs text-slate-500">{detail.url}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs uppercase tracking-wide text-slate-400">Schedule</div>
-                  <div className="mt-1 font-medium text-slate-700">{detail.schedule}</div>
+              {isEditing ? (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Name</span>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      placeholder="Display name"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Schedule</span>
+                    <select
+                      value={editSchedule}
+                      onChange={(e) => setEditSchedule(e.target.value)}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                    >
+                      <option value="daily">Daily</option>
+                      <option value="weekly">Weekly</option>
+                      <option value="manual">Manual only</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</span>
+                    <textarea
+                      value={editExclusions}
+                      onChange={(e) => setEditExclusions(e.target.value)}
+                      placeholder={"/blog/*\n/changelog/*"}
+                      rows={4}
+                      className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
+                    />
+                  </label>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => void handleSaveEdit()}
+                      disabled={isSaving}
+                      className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isSaving ? "Saving…" : "Save"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditing(false)}
+                      disabled={isSaving}
+                      className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <div className="text-xs uppercase tracking-wide text-slate-400">Indexed</div>
-                  <div className="mt-1 font-medium text-slate-700">{detail.pages_indexed} pages</div>
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="rounded-lg bg-slate-50 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Schedule</div>
+                      <div className="mt-1 font-medium text-slate-700">{detail.schedule}</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-50 p-3">
+                      <div className="text-xs uppercase tracking-wide text-slate-400">Indexed</div>
+                      <div className="mt-1 font-medium text-slate-700">{detail.pages_indexed} pages</div>
+                    </div>
+                  </div>
 
-              {detail.warning_message && (
-                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  {detail.warning_message}
-                </div>
-              )}
-              {detail.error_message && (
-                <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  {detail.error_message}
-                </div>
-              )}
+                  {detail.warning_message && (
+                    <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                      {detail.warning_message}
+                    </div>
+                  )}
+                  {detail.error_message && (
+                    <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {detail.error_message}
+                    </div>
+                  )}
 
-              <div>
-                <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
-                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-                  {detail.exclusion_patterns.length ? detail.exclusion_patterns.join(", ") : "No exclusions"}
-                </div>
-              </div>
+                  <div>
+                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
+                    <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
+                      {detail.exclusion_patterns.length ? detail.exclusion_patterns.join(", ") : "No exclusions"}
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div>
                 <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>

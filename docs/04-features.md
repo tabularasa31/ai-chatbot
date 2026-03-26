@@ -128,7 +128,7 @@ Current v1 limits and rules:
 
 - Only `http` / `https`
 - Same-domain crawling only
-- Maximum **50 pages** per source
+- Shared knowledge capacity: maximum **100 documents per client** across uploaded files and indexed URL pages
 - Maximum discovery depth of **3**
 - Schedules: `daily`, `weekly`, `manual`
 - Optional exclusion patterns to skip paths

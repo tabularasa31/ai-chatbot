@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
+from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 
@@ -224,13 +225,13 @@ def upload_document(
 
     Validates file_type (pdf, markdown, swagger only) and size (max 50MB).
     Saves document with status=processing, parses, then updates to ready or error.
-    Enforces max 20 documents per client.
+    Enforces a shared client-wide document capacity.
     """
     existing_count = db.query(Document).filter(Document.client_id == client_id).count()
-    if existing_count >= 20:
+    if existing_count >= KNOWLEDGE_DOCUMENT_CAPACITY:
         raise HTTPException(
             status_code=400,
-            detail="Document limit reached (max 20)",
+            detail=f"Document limit reached (max {KNOWLEDGE_DOCUMENT_CAPACITY})",
         )
 
     if file_type not in ALLOWED_TYPES:

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
+from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.models import (
     Client,
     Document,
@@ -40,7 +41,6 @@ from backend.models import (
 
 logger = logging.getLogger(__name__)
 
-MAX_SOURCE_PAGES = 50
 MAX_DISCOVERY_DEPTH = 3
 DISCOVERY_ESTIMATE_CAP = 200
 EMBED_BATCH_SIZE = 100
@@ -106,6 +106,39 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
+
+
+def _count_client_documents(db: Session, client_id: uuid.UUID) -> int:
+    return db.query(Document).filter(Document.client_id == client_id).count()
+
+
+def _count_source_documents(db: Session, source_id: uuid.UUID) -> int:
+    return db.query(Document).filter(Document.source_id == source_id).count()
+
+
+def _allowed_source_document_total(
+    db: Session,
+    *,
+    client_id: uuid.UUID,
+    source_id: uuid.UUID | None = None,
+) -> tuple[int, int]:
+    total_documents = _count_client_documents(db, client_id)
+    source_documents = _count_source_documents(db, source_id) if source_id else 0
+    documents_outside_source = max(0, total_documents - source_documents)
+    allowed_total = max(0, KNOWLEDGE_DOCUMENT_CAPACITY - documents_outside_source)
+    return allowed_total, max(0, KNOWLEDGE_DOCUMENT_CAPACITY - total_documents)
+
+
+def _capacity_warning(available_slots: int) -> str:
+    if available_slots <= 0:
+        return (
+            f"Knowledge capacity reached. This client already uses all "
+            f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
+        )
+    return (
+        f"Knowledge capacity allows only {available_slots} more document"
+        f"{'' if available_slots == 1 else 's'} for this client."
+    )
 
 
 def _normalize_page_url(url: str, base_domain: str) -> str | None:
@@ -449,6 +482,15 @@ def preflight_url_source(
     db: Session,
 ) -> UrlPreflightResult:
     normalized_url, normalized_domain = _normalize_source_url(url)
+    _, remaining_capacity = _allowed_source_document_total(db, client_id=client.id)
+    if remaining_capacity <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Knowledge capacity reached. This client already uses all "
+                f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
+            ),
+        )
     duplicate = (
         db.query(UrlSource)
         .filter(UrlSource.client_id == client.id)
@@ -469,14 +511,8 @@ def preflight_url_source(
 
     estimate_urls = _discover_urls(normalized_url, exclusions, DISCOVERY_ESTIMATE_CAP)
     estimated_pages = len(estimate_urls)
-    if estimated_pages > MAX_SOURCE_PAGES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"We found about {estimated_pages} pages, but the current limit is "
-                f"{MAX_SOURCE_PAGES}. Add exclusion patterns to narrow the crawl."
-            ),
-        )
+    if estimated_pages > remaining_capacity:
+        warnings.append(_capacity_warning(remaining_capacity))
 
     return UrlPreflightResult(
         normalized_url=normalized_url,
@@ -860,6 +896,7 @@ def trigger_refresh(
         source.error_message = "Indexing paused — check your OpenAI key."
     else:
         source.error_message = None
+        source.warning_message = None
     db.commit()
     db.refresh(source)
     return source
@@ -903,9 +940,23 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
         db.refresh(run)
 
         started = time.monotonic()
-        urls = _discover_urls(source.url, _clean_exclusions(source.exclusion_patterns), MAX_SOURCE_PAGES)
-        source.pages_found = len(urls)
-        run.pages_found = len(urls)
+        existing_docs = (
+            db.query(Document)
+            .filter(Document.source_id == source.id)
+            .all()
+        )
+        existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
+        allowed_total, remaining_capacity = _allowed_source_document_total(
+            db,
+            client_id=source.client_id,
+            source_id=source.id,
+        )
+        discovered_urls = _discover_urls(source.url, _clean_exclusions(source.exclusion_patterns), DISCOVERY_ESTIMATE_CAP)
+        prioritized_existing_urls = [url for url in discovered_urls if url in existing_urls]
+        new_urls = [url for url in discovered_urls if url not in existing_urls]
+        urls = prioritized_existing_urls + new_urls[: max(0, allowed_total - len(prioritized_existing_urls))]
+        source.pages_found = len(discovered_urls)
+        run.pages_found = len(discovered_urls)
         db.commit()
 
         indexed_urls: set[str] = set()
@@ -963,11 +1014,23 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
         source.chunks_created = chunks_created
         source.warning_message = None
         source.error_message = None
-        if len(urls) >= MAX_SOURCE_PAGES:
+        if len(discovered_urls) > len(urls):
             source.warning_message = (
-                f"Page limit reached. Indexed the first {MAX_SOURCE_PAGES} pages only."
+                f"Knowledge capacity reached. Indexed {len(urls)} of about {len(discovered_urls)} discovered pages."
             )
-            source.metadata_json = {**(source.metadata_json or {}), "limit_reached": True}
+            source.metadata_json = {
+                **(source.metadata_json or {}),
+                "limit_reached": True,
+                "capacity_limited": True,
+                "remaining_capacity": remaining_capacity,
+            }
+        else:
+            source.metadata_json = {
+                **(source.metadata_json or {}),
+                "limit_reached": False,
+                "capacity_limited": False,
+                "remaining_capacity": remaining_capacity,
+            }
 
         if failure_ratio > 0.3:
             source.status = SourceStatus.error

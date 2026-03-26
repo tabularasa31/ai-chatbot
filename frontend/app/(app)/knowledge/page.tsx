@@ -715,7 +715,7 @@ export default function KnowledgePage() {
                                   </div>
                                 )}
 
-                                <div className="grid gap-5 lg:grid-cols-2">
+                                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
                                   <div>
                                     <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>
                                     <div className="space-y-2">
@@ -751,6 +751,25 @@ export default function KnowledgePage() {
                                         : "No exclusions"}
                                     </div>
                                   </div>
+                                </div>
+
+                                <div>
+                                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Indexed pages</div>
+                                  {!currentDetail || currentDetail.pages.length === 0 ? (
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                                      Pages will appear here after indexing starts.
+                                    </div>
+                                  ) : (
+                                    <div className="grid gap-3 xl:grid-cols-2">
+                                      {currentDetail.pages.map((page) => (
+                                        <div key={page.id} className="rounded-lg border border-slate-200 p-3">
+                                          <div className="text-sm font-medium text-slate-700">{page.title}</div>
+                                          <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
+                                          <div className="mt-2 text-xs text-slate-500">{page.chunk_count} chunks</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             )}

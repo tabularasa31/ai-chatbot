@@ -248,7 +248,7 @@
 
 ## 📊 FEATURES LIVE IN PRODUCTION
 
-- ✅ Document upload (PDF, Markdown, Swagger, Text)
+- ✅ Document upload (PDF, Markdown, Swagger/OpenAPI)
 - ✅ **Async embedding** (FI-021): `202 Accepted` + background task, polling по статусу `embedding → ready|error`
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)

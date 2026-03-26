@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
@@ -16,6 +17,15 @@ EMBEDDING_DIM = 1536
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all client chunks.
 BM25_CANDIDATE_POOL = 200
+
+
+@dataclass
+class SearchResultBundle:
+    """Ranked retrieval results plus raw signals used for confidence decisions."""
+
+    results: list[tuple[Embedding, float]]
+    best_vector_similarity: float | None = None
+    best_keyword_score: float | None = None
 
 
 def embed_query(query: str, *, api_key: str) -> list[float]:
@@ -143,6 +153,24 @@ def search_similar_chunks(
     *,
     api_key: str,
 ) -> list[tuple[Embedding, float]]:
+    """Compatibility wrapper returning ranked results only."""
+    return search_similar_chunks_detailed(
+        client_id=client_id,
+        query=query,
+        top_k=top_k,
+        db=db,
+        api_key=api_key,
+    ).results
+
+
+def search_similar_chunks_detailed(
+    client_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: Session,
+    *,
+    api_key: str,
+) -> SearchResultBundle:
     """
     Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
 
@@ -152,23 +180,37 @@ def search_similar_chunks(
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
-        return _python_cosine_search(client_id, query_vector, top_k, db)
+        results = _python_cosine_search(client_id, query_vector, top_k, db)
+        return SearchResultBundle(
+            results=results,
+            best_vector_similarity=results[0][1] if results else None,
+        )
 
     # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
     # BM25 then re-ranks only these candidates — no separate full-table scan.
     vector_candidates = _pgvector_search(client_id, query_vector, BM25_CANDIDATE_POOL, db)
 
     if not vector_candidates:
-        return []
+        return SearchResultBundle(results=[])
 
     vector_embs = [emb for emb, _ in vector_candidates]
     bm25_results = _bm25_score_candidates(vector_embs, query, top_k * 2)
     vector_for_rrf = vector_candidates[:top_k * 2]
+    best_vector_similarity = vector_candidates[0][1] if vector_candidates else None
+    best_keyword_score = bm25_results[0][1] if bm25_results else None
 
     if not bm25_results:
-        return vector_for_rrf[:top_k]
+        return SearchResultBundle(
+            results=vector_for_rrf[:top_k],
+            best_vector_similarity=best_vector_similarity,
+            best_keyword_score=best_keyword_score,
+        )
 
-    return reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k)
+    return SearchResultBundle(
+        results=reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k),
+        best_vector_similarity=best_vector_similarity,
+        best_keyword_score=best_keyword_score,
+    )
 
 
 def _python_cosine_search(

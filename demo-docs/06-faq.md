@@ -22,10 +22,10 @@ Chat9 responds in the language the user writes in. Best results when your docume
 Typically 5–10 minutes: create account, verify email, add OpenAI key, upload docs, embed widget.
 
 **What document formats are supported?**
-PDF, Markdown (.md), plain text (.txt), and Swagger/OpenAPI files (.json, .yaml).
+PDF, Markdown (.md), and Swagger/OpenAPI files (.json, .yaml, .yml).
 
 **How many documents can I upload?**
-Up to 20 documents per account.
+Up to 100 documents per account.
 
 **What if my document didn't embed correctly?**
 Check the document status in the Dashboard. If it shows "Error", try deleting and re-uploading. If the issue persists, contact support.

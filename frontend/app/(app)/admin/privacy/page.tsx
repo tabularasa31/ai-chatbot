@@ -11,6 +11,41 @@ function formatDateTime(iso: string): string {
   });
 }
 
+function csvCell(value: string | number | null | undefined): string {
+  const stringValue = value == null ? "" : String(value);
+  return `"${stringValue.replaceAll('"', '""')}"`;
+}
+
+function buildCsv(events: AdminPiiEventItem[]): string {
+  const header = [
+    "time",
+    "direction",
+    "entity_type",
+    "count",
+    "client_id",
+    "actor_user_id",
+    "action_path",
+    "chat_id",
+    "message_id",
+  ];
+  const rows = events.map((event) =>
+    [
+      event.created_at,
+      event.direction,
+      event.entity_type,
+      event.count,
+      event.client_id,
+      event.actor_user_id,
+      event.action_path,
+      event.chat_id,
+      event.message_id,
+    ]
+      .map((cell) => csvCell(cell))
+      .join(",")
+  );
+  return [header.join(","), ...rows].join("\n");
+}
+
 const DIRECTION_OPTIONS = [
   { value: "", label: "All directions" },
   { value: "message_storage", label: "Message storage" },
@@ -30,6 +65,7 @@ export default function AdminPrivacyPage() {
   const [retentionDays, setRetentionDays] = useState("365");
   const [cleaning, setCleaning] = useState(false);
   const [cleanupMessage, setCleanupMessage] = useState("");
+  const [exportMessage, setExportMessage] = useState("");
 
   const totalCount = useMemo(
     () => events.reduce((sum, event) => sum + event.count, 0),
@@ -38,6 +74,7 @@ export default function AdminPrivacyPage() {
 
   const load = useCallback(async () => {
     setError("");
+    setExportMessage("");
     setLoading(true);
     try {
       const client = await api.clients.getMe().catch(() => null);
@@ -73,6 +110,26 @@ export default function AdminPrivacyPage() {
       router.replace("/dashboard");
     }
   }, [isAdmin, loading, router]);
+
+  function handleExportCsv() {
+    setExportMessage("");
+    if (events.length === 0) {
+      setExportMessage("Nothing to export for the current filter.");
+      return;
+    }
+    const csv = buildCsv(events);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const directionLabel = direction || "all";
+    link.href = url;
+    link.download = `privacy-log-${directionLabel}-${sinceDays}d.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setExportMessage(`Exported ${events.length} privacy log row(s) as CSV.`);
+  }
 
   async function handleCleanup() {
     setCleaning(true);
@@ -168,6 +225,25 @@ export default function AdminPrivacyPage() {
             {cleanupMessage}
           </div>
         )}
+        {exportMessage && (
+          <div className="rounded-lg bg-sky-50 text-sky-700 text-sm px-3 py-2 border border-sky-100">
+            {exportMessage}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-500">
+            Export uses the same filters and rows currently loaded in the table.
+          </p>
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={loading || events.length === 0}
+            className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50 disabled:opacity-50"
+          >
+            Export CSV
+          </button>
+        </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-sm">
@@ -180,6 +256,7 @@ export default function AdminPrivacyPage() {
                 <th className="px-4 py-3 font-medium">Client</th>
                 <th className="px-4 py-3 font-medium">Actor</th>
                 <th className="px-4 py-3 font-medium">Path</th>
+                <th className="px-4 py-3 font-medium">Refs</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -192,11 +269,15 @@ export default function AdminPrivacyPage() {
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">{event.client_id}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">{event.actor_user_id ?? "—"}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">{event.action_path ?? "—"}</td>
+                  <td className="px-4 py-3 text-slate-500 font-mono text-xs">
+                    <div>{event.chat_id ? `chat:${event.chat_id}` : "chat:—"}</div>
+                    <div>{event.message_id ? `message:${event.message_id}` : "message:—"}</div>
+                  </td>
                 </tr>
               ))}
               {events.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan={8} className="px-4 py-8 text-center text-slate-500">
                     No privacy events for this filter.
                   </td>
                 </tr>

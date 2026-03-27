@@ -461,6 +461,15 @@ export const api = {
         throw new Error(getErrorMessage(data, "Failed to delete source"));
       }
     },
+    async deleteSourcePage(sourceId: string, documentId: string): Promise<void> {
+      const res = await authFetch(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, {
+        method: "DELETE",
+      });
+      if (res.status !== 204 && !res.ok) {
+        const data = await res.json();
+        throw new Error(getErrorMessage(data, "Failed to delete source page"));
+      }
+    },
     async getById(id: string) {
       const res = await authFetch(`${BASE_URL}/documents/${id}`);
       const data = await res.json();

@@ -16,7 +16,7 @@ from backend.auth.service import create_token_for_user
 from backend.clients.service import create_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.core.security import hash_password
-from backend.models import Document, DocumentStatus, DocumentType, SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
+from backend.models import Document, DocumentStatus, DocumentType, Embedding, SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
 from tests.conftest import register_and_verify_user
 
 
@@ -692,3 +692,220 @@ def test_delete_document_wrong_user(client: TestClient, db_session: Session) -> 
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
+
+
+def test_delete_source_page_success_persists_exclusion(client: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(client, db_session, email="delete-source-page@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Delete Source Page Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/start",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_found=1,
+        pages_indexed=1,
+        chunks_created=1,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    doc = Document(
+        client_id=client_id,
+        source_id=source.id,
+        filename="Getting Started",
+        file_type=DocumentType.url,
+        status=DocumentStatus.ready,
+        parsed_text="hello",
+        source_url="https://docs.example.com/start",
+    )
+    db_session.add(doc)
+    db_session.flush()
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="hello",
+            vector=_fake_embedding_vector(),
+            metadata_json={},
+        )
+    )
+    db_session.commit()
+
+    response = client.delete(
+        f"/documents/sources/{source.id}/pages/{doc.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 204
+    assert db_session.query(Document).filter(Document.id == doc.id).first() is None
+    assert db_session.query(Embedding).filter(Embedding.document_id == doc.id).count() == 0
+
+    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    assert refreshed_source is not None
+    assert refreshed_source.pages_indexed == 0
+    assert refreshed_source.chunks_created == 0
+    assert refreshed_source.metadata_json["manually_excluded_page_urls"] == ["https://docs.example.com/start"]
+
+
+def test_delete_source_page_rejects_document_from_another_source(client: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(client, db_session, email="delete-source-page-wrong-source@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Delete Source Page Wrong Source Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    first_source = UrlSource(
+        client_id=client_id,
+        name="Docs A",
+        url="https://docs.example.com/a",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=1,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    second_source = UrlSource(
+        client_id=client_id,
+        name="Docs B",
+        url="https://docs.example.com/b",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add_all([first_source, second_source])
+    db_session.flush()
+
+    doc = Document(
+        client_id=client_id,
+        source_id=first_source.id,
+        filename="Page A",
+        file_type=DocumentType.url,
+        status=DocumentStatus.ready,
+        parsed_text="A",
+        source_url="https://docs.example.com/a",
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    response = client.delete(
+        f"/documents/sources/{second_source.id}/pages/{doc.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+    assert db_session.query(Document).filter(Document.id == doc.id).first() is not None
+
+
+def test_manually_deleted_source_page_is_not_recreated_on_refresh(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    token = register_and_verify_user(client, db_session, email="delete-source-page-refresh@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Delete Source Page Refresh Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/start",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_found=1,
+        pages_indexed=1,
+        chunks_created=1,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    doc = Document(
+        client_id=client_id,
+        source_id=source.id,
+        filename="Getting Started",
+        file_type=DocumentType.url,
+        status=DocumentStatus.ready,
+        parsed_text="hello",
+        source_url="https://docs.example.com/start",
+    )
+    db_session.add(doc)
+    db_session.flush()
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="hello",
+            vector=_fake_embedding_vector(),
+            metadata_json={},
+        )
+    )
+    db_session.commit()
+
+    delete_response = client.delete(
+        f"/documents/sources/{source.id}/pages/{doc.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert delete_response.status_code == 204
+
+    monkeypatch.setattr(url_service, "_discover_urls", lambda root_url, exclusions, page_cap: ["https://docs.example.com/start"])
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: "<html><body>start</body></html>")
+    monkeypatch.setattr(
+        url_service,
+        "_extract_page",
+        lambda url, html: type(
+            "Page",
+            (),
+            {
+                "url": url,
+                "title": "Start",
+                "text": "start",
+                "chunks": [
+                    {
+                        "chunk_text": "start",
+                        "chunk_index": 0,
+                        "section_title": None,
+                        "token_count": 1,
+                        "content_hash": url,
+                        "raw_text": html,
+                    }
+                ],
+            },
+        )(),
+    )
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+
+    url_service.crawl_url_source(source.id, api_key="test-key")
+    db_session.expire_all()
+
+    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    source_docs = db_session.query(Document).filter(Document.source_id == source.id).all()
+
+    assert refreshed_source is not None
+    assert refreshed_source.pages_indexed == 0
+    assert refreshed_source.pages_found == 0
+    assert source_docs == []

@@ -168,6 +168,7 @@ export default function KnowledgePage() {
   const [uploadError, setUploadError] = useState("");
   const [recheckingId, setRecheckingId] = useState<string | null>(null);
   const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(null);
+  const [deletingPageId, setDeletingPageId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [expandedSourceId, setExpandedSourceId] = useState<string | null>(null);
   const [detail, setDetail] = useState<UrlSourceDetail | null>(null);
@@ -333,6 +334,22 @@ export default function KnowledgePage() {
       setError(err instanceof Error ? err.message : "Refresh failed");
     } finally {
       setRefreshingSourceId(null);
+    }
+  }
+
+  async function handleDeleteSourcePage(sourceId: string, documentId: string) {
+    if (!confirm("Delete this indexed page from Knowledge and exclude it from future refreshes?")) return;
+    setDeletingPageId(documentId);
+    try {
+      await api.documents.deleteSourcePage(sourceId, documentId);
+      await load();
+      if (expandedSourceId === sourceId) {
+        await loadDetail(sourceId);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingPageId(null);
     }
   }
 
@@ -760,8 +777,20 @@ export default function KnowledgePage() {
                                     <div className="grid gap-3 xl:grid-cols-2">
                                       {currentDetail.pages.map((page) => (
                                         <div key={page.id} className="rounded-lg border border-slate-200 p-3">
-                                          <div className="text-sm font-medium text-slate-700">{page.title}</div>
-                                          <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                              <div className="text-sm font-medium text-slate-700">{page.title}</div>
+                                              <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
+                                            </div>
+                                            <button
+                                              type="button"
+                                              onClick={() => void handleDeleteSourcePage(source.id, page.id)}
+                                              disabled={deletingPageId === page.id}
+                                              className="shrink-0 text-xs text-red-400 hover:text-red-600 disabled:opacity-40"
+                                            >
+                                              {deletingPageId === page.id ? "Deleting…" : "Delete"}
+                                            </button>
+                                          </div>
                                           <div className="mt-2 text-xs text-slate-500">{page.chunk_count} chunks</div>
                                         </div>
                                       ))}

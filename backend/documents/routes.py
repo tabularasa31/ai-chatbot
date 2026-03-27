@@ -33,6 +33,7 @@ from backend.documents.service import (
 from backend.documents.url_service import (
     crawl_url_source,
     create_url_source,
+    delete_source_document,
     delete_url_source,
     get_url_source,
     list_knowledge_sources,
@@ -297,6 +298,25 @@ def delete_url_source_route(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     delete_url_source(source_id, client.id, db)
+
+
+@documents_router.delete("/sources/{source_id}/pages/{document_id}", status_code=204, response_model=None)
+def delete_source_page_route(
+    source_id: uuid.UUID,
+    document_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> None:
+    """Delete one indexed page from a URL source and exclude it from future refreshes."""
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    delete_source_document(
+        source_id=source_id,
+        document_id=document_id,
+        client_id=client.id,
+        db=db,
+    )
 
 
 @documents_router.get("/{document_id}/health", response_model=DocumentHealthStatusResponse)

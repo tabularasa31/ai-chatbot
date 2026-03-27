@@ -17,6 +17,8 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 - **Status:** Documents move through `ready` → `embedding` → `ready` or `error`; the UI polls the API until embedding finishes.
 - **Health:** After embedding, health indicators and re-check actions (see FI-032).
 - **Delete:** Removes the document and its embeddings.
+- **URL sources:** Add a documentation website by URL, track crawl/index status, review recent runs, and manage exclusions.
+- **Indexed pages:** Inside a URL source, you can remove one indexed page without deleting the whole source. Removed pages stay excluded from future refreshes for that source.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
 
 ## Agents (`/settings`)

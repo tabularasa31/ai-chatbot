@@ -1,16 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 function truncateSessionId(id: string): string {
   if (id.length <= 11) return id;
@@ -73,7 +66,18 @@ function MessageBubble({
         <p className="text-sm font-medium opacity-90">
           {msg.role === "user" ? "User" : "Assistant"}
         </p>
+        {msg.content_original_available && (
+          <p className="text-[11px] uppercase tracking-wide mt-1 opacity-70">
+            {msg.content_original ? "Original view" : "Safe view only"}
+          </p>
+        )}
         <p className="whitespace-pre-wrap text-sm mt-0.5">{msg.content}</p>
+        {msg.content_original && (
+          <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-slate-800">
+            <p className="text-[11px] uppercase tracking-wide text-amber-800">Original content</p>
+            <p className="whitespace-pre-wrap text-sm mt-1">{msg.content_original}</p>
+          </div>
+        )}
         <p className="text-xs opacity-75 mt-1">
           {formatDateTime(msg.created_at)}
         </p>
@@ -147,13 +151,30 @@ function LogsPageContent() {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(sessionFromUrl);
   const [logs, setLogs] = useState<ChatSessionLogs | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLoaded, setAdminLoaded] = useState(false);
+  const [includeOriginal, setIncludeOriginal] = useState(false);
+  const [deletingOriginal, setDeletingOriginal] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [error, setError] = useState("");
+  const skipNextLogsReload = useRef(false);
 
   useEffect(() => {
     if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
   }, [sessionFromUrl]);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setAdminLoaded(true);
+      }
+    }
+    load();
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -171,31 +192,63 @@ function LogsPageContent() {
     load();
   }, []);
 
-  useEffect(() => {
-    const sid = selectedSessionId;
-    if (!sid) {
-      setLogs(null);
-      return;
-    }
-    const sessionId: string = sid;
-    async function load() {
+  const loadSessionLogs = useCallback(
+    async (sessionId: string, includeOriginalValue: boolean) => {
       setError("");
       setLoadingLogs(true);
       setLogs(null);
       try {
-        const data = await api.chat.getSessionLogs(sessionId);
+        const data = await api.chat.getSessionLogs(sessionId, {
+          includeOriginal: isAdmin && includeOriginalValue,
+        });
         setLogs(data);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load logs");
       } finally {
         setLoadingLogs(false);
       }
+    },
+    [isAdmin]
+  );
+
+  useEffect(() => {
+    if (!adminLoaded) return;
+    if (skipNextLogsReload.current) {
+      skipNextLogsReload.current = false;
+      return;
     }
-    load();
-  }, [selectedSessionId]);
+    const sid = selectedSessionId;
+    if (!sid) {
+      setLogs(null);
+      return;
+    }
+    void loadSessionLogs(sid, includeOriginal);
+  }, [selectedSessionId, includeOriginal, adminLoaded, loadSessionLogs]);
 
   const selectedSession = sessions.find((s) => s.session_id === selectedSessionId);
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
+  const hasOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original_available));
+
+  async function handleDeleteOriginal() {
+    if (!selectedSessionId) return;
+    if (!window.confirm("Delete the stored original content for this session? This cannot be undone.")) {
+      return;
+    }
+    setDeletingOriginal(true);
+    setError("");
+    try {
+      await api.chat.deleteSessionOriginal(selectedSessionId);
+      skipNextLogsReload.current = includeOriginal;
+      if (includeOriginal) {
+        setIncludeOriginal(false);
+      }
+      await loadSessionLogs(selectedSessionId, false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete original content");
+    } finally {
+      setDeletingOriginal(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -258,6 +311,26 @@ function LogsPageContent() {
                     <> · Last activity: {formatDateTime(lastActivity)}</>
                   )}
                 </p>
+                {isAdmin && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={includeOriginal}
+                        onChange={(e) => setIncludeOriginal(e.target.checked)}
+                      />
+                      Show original content
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleDeleteOriginal}
+                      disabled={deletingOriginal || !hasOriginalContent}
+                      className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-50"
+                    >
+                      {deletingOriginal ? "Deleting…" : "Delete original content"}
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="p-4 max-h-[400px] overflow-y-auto">
                 {error && (
@@ -277,7 +350,9 @@ function LogsPageContent() {
                         msg={msg}
                         onFeedbackUpdate={async (m, feedback, idealAnswer) => {
                           await api.chat.setFeedback(m.id, feedback, idealAnswer);
-                          const data = await api.chat.getSessionLogs(selectedSessionId!);
+                          const data = await api.chat.getSessionLogs(selectedSessionId!, {
+                            includeOriginal: isAdmin && includeOriginal,
+                          });
                           setLogs(data);
                         }}
                       />

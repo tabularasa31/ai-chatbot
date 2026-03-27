@@ -107,6 +107,16 @@ const settingsNav: NavItem[] = [
       </svg>
     ),
   },
+  {
+    href: "/settings/privacy",
+    label: "Privacy",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M7.5 1.5L12 3.2V6.9C12 9.52 10.28 11.88 7.5 13.5C4.72 11.88 3 9.52 3 6.9V3.2L7.5 1.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        <path d="M5.35 7.7L6.75 9.1L9.85 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
 ];
 
 const adminNav: NavItem[] = [
@@ -117,6 +127,17 @@ const adminNav: NavItem[] = [
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M7.5 1l1.545 3.13L12.5 4.635l-2.5 2.435.59 3.43L7.5 8.885 4.41 10.5l.59-3.43-2.5-2.435 3.455-.505L7.5 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
+    href: "/admin/privacy",
+    label: "Privacy log",
+    adminOnly: true,
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M3 2.5h6l3 3v7A1.5 1.5 0 0 1 10.5 14h-7A1.5 1.5 0 0 1 2 12.5v-8A2 2 0 0 1 4 2.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        <path d="M9 2.5v3h3M4.5 8h6M4.5 10.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },

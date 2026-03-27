@@ -17,6 +17,8 @@ export type ChatSessionLogs = {
     session_id: string;
     role: "user" | "assistant";
     content: string;
+    content_original: string | null;
+    content_original_available: boolean;
     feedback: "none" | "up" | "down";
     ideal_answer: string | null;
     created_at: string;
@@ -81,10 +83,16 @@ export type DisclosureConfigResponse = {
   level: DisclosureLevel;
 };
 
+export type PrivacyConfigResponse = {
+  optional_entity_types: Array<"ID_DOC" | "IP" | "URL_TOKEN">;
+};
+
 export type EscalationTicket = {
   id: string;
   ticket_number: string;
   primary_question: string;
+  primary_question_original: string | null;
+  primary_question_original_available: boolean;
   conversation_summary: string | null;
   trigger: string;
   best_similarity_score: number | null;
@@ -127,6 +135,19 @@ export type AdminClientMetricsItem = {
   messages_assistant_count: number;
   tokens_used_chat: number;
   has_openai_key: boolean;
+};
+
+export type AdminPiiEventItem = {
+  id: string;
+  client_id: string;
+  chat_id: string | null;
+  message_id: string | null;
+  actor_user_id: string | null;
+  direction: string;
+  entity_type: string;
+  count: number;
+  action_path: string | null;
+  created_at: string;
 };
 
 export type DocumentHealthWarning = {
@@ -369,6 +390,24 @@ export const api = {
       return data as DisclosureConfigResponse;
     },
   },
+  privacy: {
+    async get(): Promise<PrivacyConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/privacy`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load privacy settings"));
+      return data as PrivacyConfigResponse;
+    },
+    async update(config: PrivacyConfigResponse): Promise<PrivacyConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/privacy`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save privacy settings"));
+      return data as PrivacyConfigResponse;
+    },
+  },
   documents: {
     async list() {
       const res = await authFetch(`${BASE_URL}/documents`);
@@ -524,12 +563,24 @@ export const api = {
       const list = data as { sessions: ChatSessionSummary[] };
       return list.sessions;
     },
-    async getSessionLogs(sessionId: string): Promise<ChatSessionLogs> {
-      const res = await authFetch(`${BASE_URL}/chat/logs/session/${sessionId}`);
+    async getSessionLogs(
+      sessionId: string,
+      options?: { includeOriginal?: boolean }
+    ): Promise<ChatSessionLogs> {
+      const query = options?.includeOriginal ? "?include_original=true" : "";
+      const res = await authFetch(`${BASE_URL}/chat/logs/session/${sessionId}${query}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get session logs"));
       const log = data as { messages: ChatSessionLogs["messages"] };
       return { session_id: sessionId, messages: log.messages };
+    },
+    async deleteSessionOriginal(sessionId: string): Promise<{ deleted_count: number }> {
+      const res = await authFetch(`${BASE_URL}/chat/logs/session/${sessionId}/delete-original`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to delete original content"));
+      return data as { deleted_count: number };
     },
     async setFeedback(
       messageId: string,
@@ -630,18 +681,21 @@ export const api = {
     },
   },
   escalations: {
-    async list(params?: { status?: string }): Promise<EscalationTicket[]> {
-      const q = params?.status
-        ? `?status=${encodeURIComponent(params.status)}`
-        : "";
+    async list(params?: { status?: string; includeOriginal?: boolean }): Promise<EscalationTicket[]> {
+      const query = new URLSearchParams();
+      if (params?.status) query.set("status", params.status);
+      if (params?.includeOriginal) query.set("include_original", "true");
+      const qs = query.toString();
+      const q = qs ? `?${qs}` : "";
       const res = await authFetch(`${BASE_URL}/escalations${q}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list tickets"));
       const list = data as { tickets: EscalationTicket[] };
       return list.tickets;
     },
-    async get(id: string): Promise<EscalationTicket> {
-      const res = await authFetch(`${BASE_URL}/escalations/${id}`);
+    async get(id: string, options?: { includeOriginal?: boolean }): Promise<EscalationTicket> {
+      const q = options?.includeOriginal ? "?include_original=true" : "";
+      const res = await authFetch(`${BASE_URL}/escalations/${id}${q}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load ticket"));
       return data as EscalationTicket;
@@ -656,6 +710,14 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to resolve ticket"));
       return data as EscalationTicket;
     },
+    async deleteOriginal(id: string): Promise<{ deleted_count: number }> {
+      const res = await authFetch(`${BASE_URL}/escalations/${id}/delete-original`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to delete original ticket content"));
+      return data as { deleted_count: number };
+    },
   },
   admin: {
     async getSummary(): Promise<AdminMetricsSummary> {
@@ -668,6 +730,39 @@ export const api = {
       if (!res.ok) throw new Error("Failed to load admin client metrics");
       const data = await res.json();
       return data.items;
+    },
+    async getPiiEvents(params?: {
+      direction?: string;
+      clientId?: string;
+      actorUserId?: string;
+      sinceDays?: number;
+      limit?: number;
+      offset?: number;
+    }): Promise<AdminPiiEventItem[]> {
+      const query = new URLSearchParams();
+      if (params?.direction) query.set("direction", params.direction);
+      if (params?.clientId) query.set("client_id", params.clientId);
+      if (params?.actorUserId) query.set("actor_user_id", params.actorUserId);
+      if (typeof params?.sinceDays === "number") query.set("since_days", String(params.sinceDays));
+      if (typeof params?.limit === "number") query.set("limit", String(params.limit));
+      if (typeof params?.offset === "number") query.set("offset", String(params.offset));
+      const qs = query.toString();
+      const q = qs ? `?${qs}` : "";
+      const res = await authFetch(`${BASE_URL}/admin/privacy/pii-events${q}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load PII events"));
+      return (data as { items: AdminPiiEventItem[] }).items;
+    },
+    async cleanupPiiEvents(retentionDays: number): Promise<{ deleted_count: number }> {
+      const query = new URLSearchParams();
+      query.set("retention_days", String(retentionDays));
+      const res = await authFetch(
+        `${BASE_URL}/admin/privacy/pii-events/retention?${query.toString()}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to clean up PII events"));
+      return data as { deleted_count: number };
     },
   },
 };

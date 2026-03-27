@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, type EscalationTicket } from "@/lib/api";
-import { getOriginalContentLabel, getOriginalContentStatus } from "@/lib/privacy-ui";
+import {
+  getOriginalContentBadgeClassName,
+  getOriginalContentStatus,
+} from "@/lib/privacy-ui";
 import { formatDateTime } from "@/lib/format";
 
 const STATUS_OPTIONS = [
@@ -213,17 +216,12 @@ function TicketRow({
     originalAvailable: ticket.primary_question_original_available,
   });
   const originalLifecycle = {
-    label: getOriginalContentLabel(originalLifecycleStatus, {
+    label: {
       shown: "Original shown",
       available: "Original available",
       removed: "Original removed",
-    }),
-    className:
-      originalLifecycleStatus === "shown"
-        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-        : originalLifecycleStatus === "available"
-          ? "bg-amber-50 text-amber-800 border-amber-200"
-          : "bg-slate-100 text-slate-600 border-slate-200",
+    }[originalLifecycleStatus],
+    className: getOriginalContentBadgeClassName(originalLifecycleStatus),
   };
 
   useEffect(() => {

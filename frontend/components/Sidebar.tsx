@@ -113,7 +113,7 @@ const settingsNav: NavItem[] = [
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M7.5 1.5L12 3.2V6.9C12 9.52 10.28 11.88 7.5 13.5C4.72 11.88 3 9.52 3 6.9V3.2L7.5 1.5Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-        <path d="M7.5 5V8.2M7.5 10.25V10.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        <path d="M5.35 7.7L6.75 9.1L9.85 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },

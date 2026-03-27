@@ -754,8 +754,10 @@ export const api = {
       return (data as { items: AdminPiiEventItem[] }).items;
     },
     async cleanupPiiEvents(retentionDays: number): Promise<{ deleted_count: number }> {
+      const query = new URLSearchParams();
+      query.set("retention_days", String(retentionDays));
       const res = await authFetch(
-        `${BASE_URL}/admin/privacy/pii-events/retention?retention_days=${retentionDays}`,
+        `${BASE_URL}/admin/privacy/pii-events/retention?${query.toString()}`,
         { method: "DELETE" }
       );
       const data = await res.json();

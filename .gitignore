@@ -23,6 +23,7 @@ env/
 *.swp
 *.swo
 .claude/worktrees/
+frontend/.test-dist/
 
 # Environment variables
 .env

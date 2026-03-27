@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -23,6 +23,7 @@ function MessageBubble({
   const [saved, setSaved] = useState(false);
   const [showIdeal, setShowIdeal] = useState(false);
   const [idealText, setIdealText] = useState(msg.ideal_answer ?? "");
+  const hasOriginalLifecycleState = Boolean(msg.content_original || msg.content_original_available);
 
   const handleFeedback = useCallback(
     async (fb: MessageFeedbackValue) => {
@@ -53,6 +54,20 @@ function MessageBubble({
   }, [msg, idealText, onFeedbackUpdate]);
 
   const isAssistant = msg.role === "assistant";
+  const originalState = msg.content_original
+    ? {
+        label: "Original shown",
+        className: "text-emerald-700",
+      }
+    : msg.content_original_available
+      ? {
+          label: "Original available",
+          className: "text-amber-700",
+        }
+      : {
+          label: "Original removed",
+          className: "text-slate-500",
+        };
 
   return (
     <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -66,9 +81,9 @@ function MessageBubble({
         <p className="text-sm font-medium opacity-90">
           {msg.role === "user" ? "User" : "Assistant"}
         </p>
-        {msg.content_original_available && (
-          <p className="text-[11px] uppercase tracking-wide mt-1 opacity-70">
-            {msg.content_original ? "Original view" : "Safe view only"}
+        {hasOriginalLifecycleState && (
+          <p className={`text-[11px] uppercase tracking-wide mt-1 ${originalState.className}`}>
+            {originalState.label}
           </p>
         )}
         <p className="whitespace-pre-wrap text-sm mt-0.5">{msg.content}</p>
@@ -155,14 +170,41 @@ function LogsPageContent() {
   const [adminLoaded, setAdminLoaded] = useState(false);
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [deletingOriginal, setDeletingOriginal] = useState(false);
+  const [confirmDeleteOriginal, setConfirmDeleteOriginal] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [error, setError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
+  const selectedSessionRef = useRef<string | null>(selectedSessionId);
+  const confirmDeleteTitleId = useId();
+  const confirmDeleteDescriptionId = useId();
+  const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
   const skipNextLogsReload = useRef(false);
 
   useEffect(() => {
     if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
   }, [sessionFromUrl]);
+
+  useEffect(() => {
+    setConfirmDeleteOriginal(false);
+    setActionMessage("");
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    selectedSessionRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timeout = window.setTimeout(() => setActionMessage(""), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [actionMessage]);
+
+  useEffect(() => {
+    if (confirmDeleteOriginal) {
+      confirmDeleteButtonRef.current?.focus();
+    }
+  }, [confirmDeleteOriginal]);
 
   useEffect(() => {
     async function load() {
@@ -228,21 +270,42 @@ function LogsPageContent() {
   const selectedSession = sessions.find((s) => s.session_id === selectedSessionId);
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
   const hasOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original_available));
+  const hasVisibleOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original));
+  const showOriginalLifecycle = hasOriginalContent || hasVisibleOriginalContent;
+  const originalLifecycle = hasVisibleOriginalContent
+    ? {
+        label: "Original content visible",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      }
+    : hasOriginalContent
+      ? {
+          label: "Original content available",
+          className: "bg-amber-50 text-amber-800 border-amber-200",
+        }
+      : {
+          label: "Original content removed",
+          className: "bg-slate-100 text-slate-600 border-slate-200",
+        };
 
   async function handleDeleteOriginal() {
     if (!selectedSessionId) return;
-    if (!window.confirm("Delete the stored original content for this session? This cannot be undone.")) {
-      return;
-    }
+    const sessionId = selectedSessionId;
     setDeletingOriginal(true);
     setError("");
+    setActionMessage("");
     try {
-      await api.chat.deleteSessionOriginal(selectedSessionId);
+      const result = await api.chat.deleteSessionOriginal(sessionId);
+      const data = await api.chat.getSessionLogs(sessionId, { includeOriginal: false });
+      if (sessionId !== selectedSessionRef.current) return;
       skipNextLogsReload.current = includeOriginal;
-      if (includeOriginal) {
-        setIncludeOriginal(false);
-      }
-      await loadSessionLogs(selectedSessionId, false);
+      setIncludeOriginal(false);
+      setLogs(data);
+      setConfirmDeleteOriginal(false);
+      setActionMessage(
+        (result.deleted_count ?? 0) > 0
+          ? `Original content deleted from ${result.deleted_count ?? 0} message(s).`
+          : "Original content was already removed."
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete original content");
     } finally {
@@ -311,6 +374,15 @@ function LogsPageContent() {
                     <> · Last activity: {formatDateTime(lastActivity)}</>
                   )}
                 </p>
+                {logs && logs.messages.length > 0 && showOriginalLifecycle && (
+                  <div className="mt-3">
+                    <span
+                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${originalLifecycle.className}`}
+                    >
+                      {originalLifecycle.label}
+                    </span>
+                  </div>
+                )}
                 {isAdmin && (
                   <div className="mt-3 flex flex-wrap items-center gap-3">
                     <label className="inline-flex items-center gap-2 text-sm text-slate-600">
@@ -321,14 +393,55 @@ function LogsPageContent() {
                       />
                       Show original content
                     </label>
-                    <button
-                      type="button"
-                      onClick={handleDeleteOriginal}
-                      disabled={deletingOriginal || !hasOriginalContent}
-                      className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-50"
-                    >
-                      {deletingOriginal ? "Deleting…" : "Delete original content"}
-                    </button>
+                    {hasOriginalContent ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteOriginal(true)}
+                        disabled={deletingOriginal}
+                        className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-50"
+                      >
+                        Delete original content
+                      </button>
+                    ) : (
+                      <span className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
+                        Original already removed
+                      </span>
+                    )}
+                  </div>
+                )}
+                {isAdmin && confirmDeleteOriginal && hasOriginalContent && (
+                  <div
+                    className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-labelledby={confirmDeleteTitleId}
+                    aria-describedby={confirmDeleteDescriptionId}
+                  >
+                    <p id={confirmDeleteTitleId} className="text-sm font-medium text-amber-900">
+                      Delete remaining original content for this session?
+                    </p>
+                    <p id={confirmDeleteDescriptionId} className="mt-1 text-sm text-amber-800">
+                      This keeps the redacted chat history visible but removes the stored original text.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        ref={confirmDeleteButtonRef}
+                        type="button"
+                        onClick={handleDeleteOriginal}
+                        disabled={deletingOriginal}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        {deletingOriginal ? "Deleting…" : "Confirm delete"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteOriginal(false)}
+                        disabled={deletingOriginal}
+                        className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white text-amber-900 text-sm hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -336,6 +449,16 @@ function LogsPageContent() {
                 {error && (
                   <div className="mb-4 text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
                     {error}
+                  </div>
+                )}
+                {actionMessage && (
+                  <div className="mb-4 text-emerald-700 text-sm bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
+                    {actionMessage}
+                  </div>
+                )}
+                {logs && logs.messages.length > 0 && !actionMessage && showOriginalLifecycle && !hasOriginalContent && (
+                  <div className="mb-4 text-slate-600 text-sm bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
+                    Original content is no longer available for this session. The redacted transcript remains available.
                   </div>
                 )}
                 {loadingLogs ? (

@@ -48,7 +48,7 @@ function csvCell(value: string | number | null | undefined): string {
 
 export function buildPrivacyLogCsv(events: PrivacyLogEvent[]): string {
   const header = [
-    "time",
+    "created_at_iso",
     "direction",
     "entity_type",
     "count",
@@ -73,10 +73,10 @@ export function buildPrivacyLogCsv(events: PrivacyLogEvent[]): string {
       .map((cell) => csvCell(cell))
       .join(",")
   );
-  return [header.join(","), ...rows].join("\n");
+  return [header.join(","), ...rows].join("\r\n");
 }
 
 export function getPrivacyLogExportFilename(direction: string, sinceDays: string): string {
-  const directionLabel = direction || "all";
+  const directionLabel = (direction || "all").replace(/[^a-z0-9_-]/gi, "_");
   return `privacy-log-${directionLabel}-${sinceDays}d.csv`;
 }

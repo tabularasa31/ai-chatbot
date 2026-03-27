@@ -122,6 +122,7 @@ How it works:
 3. The crawler discovers pages on the same domain (sitemap + HTML links)
 4. Each readable page is extracted into text, chunked, embedded, and stored as `DocumentType.url`
 5. The source keeps crawl metadata and a run history for the dashboard
+6. Users can delete a single indexed page from a source; that page is removed from Knowledge and excluded from future refreshes for the same source
 
 Current v1 limits and rules:
 
@@ -154,13 +155,15 @@ API:
 - `GET /documents/sources/{source_id}`
 - `PATCH /documents/sources/{source_id}`
 - `POST /documents/sources/{source_id}/refresh`
+- `DELETE /documents/sources/{source_id}/pages/{document_id}`
 - `DELETE /documents/sources/{source_id}`
 
 Contract notes:
 
 - `exclusions` accepts up to `50` patterns, each up to `255` characters.
+- Deleting a single URL-derived page adds its `source_url` to a persistent manual exclusion list for that source, so the crawler does not recreate it on later refreshes.
 - `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
-- Mutating URL source actions (`create`, `edit`, `refresh`, `delete`) require a verified user.
+- Mutating URL source actions (`create`, `edit`, `refresh`, `delete`, `delete page`) require a verified user.
 
 ---
 

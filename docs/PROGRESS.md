@@ -1,7 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-26 (UTC) — Knowledge inline source detail + shared capacity 100  
+**Last updated:** 2026-03-27 (UTC) — URL-source page deletion in Knowledge
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-27) — URL-source page deletion in Knowledge
+
+- ✅ **Granular source-page deletion:** users can now delete a single indexed URL-derived page from an expanded Knowledge source without deleting the whole source.
+- ✅ **Persistent refresh protection:** manually deleted page URLs are stored on the source and skipped by later crawler refreshes, so removed pages do not silently come back.
+- ✅ **Backend contract:** added `DELETE /documents/sources/{source_id}/pages/{document_id}` with ownership/source validation and source aggregate recalculation after deletion.
+- ✅ **Regression coverage:** added API tests for successful page deletion, source mismatch rejection, and “deleted page does not reappear on refresh”.
+- ✅ **Docs + QA sync:** updated feature docs and QA checklists to cover per-page deletion behavior.
 
 ---
 

@@ -18,6 +18,13 @@ def _message_optional_entity_types(message: Message) -> set[str] | None:
     return set(cfg["optional_entity_types"])
 
 
+def _ticket_optional_entity_types(ticket: EscalationTicket) -> set[str] | None:
+    if not ticket.client or not isinstance(ticket.client.settings, dict):
+        return None
+    cfg = public_redaction_config_dict(ticket.client.settings)
+    return set(cfg["optional_entity_types"])
+
+
 def run(db: Session) -> None:
     messages = db.query(Message).all()
     for message in messages:
@@ -36,7 +43,10 @@ def run(db: Session) -> None:
         if not ticket.primary_question_original_encrypted:
             ticket.primary_question_original_encrypted = encrypt_value(ticket.primary_question)
         if not ticket.primary_question_redacted:
-            ticket.primary_question_redacted = redact(ticket.primary_question).redacted_text
+            ticket.primary_question_redacted = redact(
+                ticket.primary_question,
+                optional_entity_types=_ticket_optional_entity_types(ticket),
+            ).redacted_text
         if ticket.primary_question_redacted:
             ticket.primary_question = ticket.primary_question_redacted
     db.commit()

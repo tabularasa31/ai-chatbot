@@ -30,8 +30,13 @@ export default function AdminPrivacyPage() {
   const [sinceDays, setSinceDays] = useState("30");
   const [retentionDays, setRetentionDays] = useState("365");
   const [cleaning, setCleaning] = useState(false);
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
   const [cleanupMessage, setCleanupMessage] = useState("");
   const [exportMessage, setExportMessage] = useState("");
+  const parsedSinceDays = Number(sinceDays);
+  const parsedRetentionDays = Number(retentionDays);
+  const sinceDaysValid = Number.isFinite(parsedSinceDays) && parsedSinceDays >= 1;
+  const retentionDaysValid = Number.isFinite(parsedRetentionDays) && parsedRetentionDays >= 1;
 
   const totalCount = useMemo(
     () => events.reduce((sum, event) => sum + event.count, 0),
@@ -41,6 +46,11 @@ export default function AdminPrivacyPage() {
   const load = useCallback(async () => {
     setError("");
     setExportMessage("");
+    if (!sinceDaysValid) {
+      setLoading(false);
+      setEvents([]);
+      return;
+    }
     setLoading(true);
     try {
       const client = await api.clients.getMe().catch(() => null);
@@ -51,7 +61,7 @@ export default function AdminPrivacyPage() {
       setIsAdmin(true);
       const rows = await api.admin.getPiiEvents({
         direction: direction || undefined,
-        sinceDays: Number(sinceDays),
+        sinceDays: parsedSinceDays,
         limit: 100,
       });
       setEvents(rows);
@@ -65,7 +75,7 @@ export default function AdminPrivacyPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, sinceDays]);
+  }, [direction, parsedSinceDays, sinceDaysValid]);
 
   useEffect(() => {
     load();
@@ -96,12 +106,25 @@ export default function AdminPrivacyPage() {
     setExportMessage(`Exported ${events.length} privacy log row(s) as CSV.`);
   }
 
+  function handleResetFilters() {
+    setDirection("");
+    setSinceDays("30");
+    setError("");
+    setExportMessage("");
+    setConfirmCleanup(false);
+  }
+
   async function handleCleanup() {
+    if (!retentionDaysValid) {
+      setError("Retention days must be 1 or greater.");
+      return;
+    }
     setCleaning(true);
+    setConfirmCleanup(false);
     setCleanupMessage("");
     setError("");
     try {
-      const result = await api.admin.cleanupPiiEvents(Number(retentionDays));
+      const result = await api.admin.cleanupPiiEvents(parsedRetentionDays);
       setCleanupMessage(`Deleted ${result.deleted_count} old audit event(s).`);
       await load();
     } catch (e) {
@@ -174,11 +197,24 @@ export default function AdminPrivacyPage() {
           <button
             type="button"
             onClick={load}
+            disabled={!sinceDaysValid}
             className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700"
           >
             Refresh
           </button>
+          <button
+            type="button"
+            onClick={handleResetFilters}
+            className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+          >
+            Reset filters
+          </button>
         </div>
+        {!sinceDaysValid && (
+          <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
+            Since days must be 1 or greater.
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
@@ -198,7 +234,7 @@ export default function AdminPrivacyPage() {
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-slate-500">
-            Export uses the same filters and rows currently loaded in the table.
+            Export uses the same filters and rows currently loaded in the table. The table currently loads up to 100 rows.
           </p>
           <button
             type="button"
@@ -272,13 +308,46 @@ export default function AdminPrivacyPage() {
           </label>
           <button
             type="button"
-            onClick={handleCleanup}
-            disabled={cleaning}
+            onClick={() => setConfirmCleanup(true)}
+            disabled={cleaning || !retentionDaysValid}
             className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800"
           >
             {cleaning ? "Cleaning…" : "Run cleanup"}
           </button>
         </div>
+        {!retentionDaysValid && (
+          <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
+            Retention days must be 1 or greater.
+          </div>
+        )}
+        {confirmCleanup && retentionDaysValid && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <p className="text-sm font-medium text-amber-900">
+              Delete privacy audit rows older than {parsedRetentionDays} days?
+            </p>
+            <p className="mt-1 text-sm text-amber-800">
+              This removes older audit history permanently and keeps only newer privacy events.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleCleanup}
+                disabled={cleaning}
+                className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
+              >
+                {cleaning ? "Cleaning…" : "Confirm cleanup"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmCleanup(false)}
+                disabled={cleaning}
+                className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white text-amber-900 text-sm hover:bg-amber-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     </div>
   );

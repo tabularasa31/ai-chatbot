@@ -22,6 +22,7 @@ env/
 .idea/
 *.swp
 *.swo
+.claude/worktrees/
 
 # Environment variables
 .env
@@ -39,4 +40,3 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
-

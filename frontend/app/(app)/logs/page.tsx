@@ -1,16 +1,9 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 function truncateSessionId(id: string): string {
   if (id.length <= 11) return id;
@@ -30,6 +23,7 @@ function MessageBubble({
   const [saved, setSaved] = useState(false);
   const [showIdeal, setShowIdeal] = useState(false);
   const [idealText, setIdealText] = useState(msg.ideal_answer ?? "");
+  const hasOriginalLifecycleState = Boolean(msg.content_original || msg.content_original_available);
 
   const handleFeedback = useCallback(
     async (fb: MessageFeedbackValue) => {
@@ -87,9 +81,11 @@ function MessageBubble({
         <p className="text-sm font-medium opacity-90">
           {msg.role === "user" ? "User" : "Assistant"}
         </p>
-        <p className={`text-[11px] uppercase tracking-wide mt-1 ${originalState.className}`}>
-          {originalState.label}
-        </p>
+        {hasOriginalLifecycleState && (
+          <p className={`text-[11px] uppercase tracking-wide mt-1 ${originalState.className}`}>
+            {originalState.label}
+          </p>
+        )}
         <p className="whitespace-pre-wrap text-sm mt-0.5">{msg.content}</p>
         {msg.content_original && (
           <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-slate-800">
@@ -171,6 +167,7 @@ function LogsPageContent() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(sessionFromUrl);
   const [logs, setLogs] = useState<ChatSessionLogs | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLoaded, setAdminLoaded] = useState(false);
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [deletingOriginal, setDeletingOriginal] = useState(false);
   const [confirmDeleteOriginal, setConfirmDeleteOriginal] = useState(false);
@@ -178,6 +175,11 @@ function LogsPageContent() {
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [error, setError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const selectedSessionRef = useRef<string | null>(selectedSessionId);
+  const confirmDeleteTitleId = useId();
+  const confirmDeleteDescriptionId = useId();
+  const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
+  const skipNextLogsReload = useRef(false);
 
   useEffect(() => {
     if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
@@ -189,15 +191,39 @@ function LogsPageContent() {
   }, [selectedSessionId]);
 
   useEffect(() => {
+    selectedSessionRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!actionMessage) return;
+    const timeout = window.setTimeout(() => setActionMessage(""), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [actionMessage]);
+
+  useEffect(() => {
+    if (confirmDeleteOriginal) {
+      confirmDeleteButtonRef.current?.focus();
+    }
+  }, [confirmDeleteOriginal]);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setAdminLoaded(true);
+      }
+    }
+    load();
+  }, []);
+
+  useEffect(() => {
     async function load() {
       setError("");
       setLoadingSessions(true);
       try {
-        const [client, list] = await Promise.all([
-          api.clients.getMe().catch(() => null),
-          api.chat.listSessions(),
-        ]);
-        setIsAdmin(Boolean(client?.is_admin));
+        const list = await api.chat.listSessions();
         setSessions(list);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load sessions");
@@ -208,20 +234,14 @@ function LogsPageContent() {
     load();
   }, []);
 
-  useEffect(() => {
-    const sid = selectedSessionId;
-    if (!sid) {
-      setLogs(null);
-      return;
-    }
-    const sessionId: string = sid;
-    async function load() {
+  const loadSessionLogs = useCallback(
+    async (sessionId: string, includeOriginalValue: boolean) => {
       setError("");
       setLoadingLogs(true);
       setLogs(null);
       try {
         const data = await api.chat.getSessionLogs(sessionId, {
-          includeOriginal: isAdmin && includeOriginal,
+          includeOriginal: isAdmin && includeOriginalValue,
         });
         setLogs(data);
       } catch (err) {
@@ -229,14 +249,29 @@ function LogsPageContent() {
       } finally {
         setLoadingLogs(false);
       }
+    },
+    [isAdmin]
+  );
+
+  useEffect(() => {
+    if (!adminLoaded) return;
+    if (skipNextLogsReload.current) {
+      skipNextLogsReload.current = false;
+      return;
     }
-    load();
-  }, [selectedSessionId, includeOriginal, isAdmin]);
+    const sid = selectedSessionId;
+    if (!sid) {
+      setLogs(null);
+      return;
+    }
+    void loadSessionLogs(sid, includeOriginal);
+  }, [selectedSessionId, includeOriginal, adminLoaded, loadSessionLogs]);
 
   const selectedSession = sessions.find((s) => s.session_id === selectedSessionId);
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
   const hasOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original_available));
   const hasVisibleOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original));
+  const showOriginalLifecycle = hasOriginalContent || hasVisibleOriginalContent;
   const originalLifecycle = hasVisibleOriginalContent
     ? {
         label: "Original content visible",
@@ -254,18 +289,21 @@ function LogsPageContent() {
 
   async function handleDeleteOriginal() {
     if (!selectedSessionId) return;
+    const sessionId = selectedSessionId;
     setDeletingOriginal(true);
     setError("");
     setActionMessage("");
     try {
-      const result = await api.chat.deleteSessionOriginal(selectedSessionId);
-      const data = await api.chat.getSessionLogs(selectedSessionId, { includeOriginal: false });
+      const result = await api.chat.deleteSessionOriginal(sessionId);
+      const data = await api.chat.getSessionLogs(sessionId, { includeOriginal: false });
+      if (sessionId !== selectedSessionRef.current) return;
+      skipNextLogsReload.current = includeOriginal;
       setIncludeOriginal(false);
       setLogs(data);
       setConfirmDeleteOriginal(false);
       setActionMessage(
-        result.deleted_count > 0
-          ? `Original content deleted from ${result.deleted_count} message(s).`
+        (result.deleted_count ?? 0) > 0
+          ? `Original content deleted from ${result.deleted_count ?? 0} message(s).`
           : "Original content was already removed."
       );
     } catch (err) {
@@ -336,7 +374,7 @@ function LogsPageContent() {
                     <> · Last activity: {formatDateTime(lastActivity)}</>
                   )}
                 </p>
-                {logs && logs.messages.length > 0 && (
+                {logs && logs.messages.length > 0 && showOriginalLifecycle && (
                   <div className="mt-3">
                     <span
                       className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${originalLifecycle.className}`}
@@ -355,26 +393,39 @@ function LogsPageContent() {
                       />
                       Show original content
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteOriginal(true)}
-                      disabled={deletingOriginal || !hasOriginalContent}
-                      className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-50"
-                    >
-                      {hasOriginalContent ? "Delete original content" : "Original already removed"}
-                    </button>
+                    {hasOriginalContent ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteOriginal(true)}
+                        disabled={deletingOriginal}
+                        className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 disabled:opacity-40 hover:bg-slate-50"
+                      >
+                        Delete original content
+                      </button>
+                    ) : (
+                      <span className="text-sm px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-500">
+                        Original already removed
+                      </span>
+                    )}
                   </div>
                 )}
                 {isAdmin && confirmDeleteOriginal && hasOriginalContent && (
-                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                    <p className="text-sm font-medium text-amber-900">
+                  <div
+                    className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+                    role="alertdialog"
+                    aria-modal="true"
+                    aria-labelledby={confirmDeleteTitleId}
+                    aria-describedby={confirmDeleteDescriptionId}
+                  >
+                    <p id={confirmDeleteTitleId} className="text-sm font-medium text-amber-900">
                       Delete remaining original content for this session?
                     </p>
-                    <p className="mt-1 text-sm text-amber-800">
+                    <p id={confirmDeleteDescriptionId} className="mt-1 text-sm text-amber-800">
                       This keeps the redacted chat history visible but removes the stored original text.
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
+                        ref={confirmDeleteButtonRef}
                         type="button"
                         onClick={handleDeleteOriginal}
                         disabled={deletingOriginal}
@@ -405,7 +456,7 @@ function LogsPageContent() {
                     {actionMessage}
                   </div>
                 )}
-                {logs && logs.messages.length > 0 && !hasOriginalContent && (
+                {logs && logs.messages.length > 0 && !actionMessage && showOriginalLifecycle && !hasOriginalContent && (
                   <div className="mb-4 text-slate-600 text-sm bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
                     Original content is no longer available for this session. The redacted transcript remains available.
                   </div>

@@ -61,7 +61,3 @@ class AdminPiiEventItem(BaseModel):
 
 class AdminPiiEventList(BaseModel):
     items: list[AdminPiiEventItem]
-
-
-class AdminPiiEventCleanupResponse(BaseModel):
-    deleted_count: int

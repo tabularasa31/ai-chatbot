@@ -14,13 +14,13 @@ from backend.admin.schemas import (
     AdminClientMetricsItem,
     AdminClientMetricsList,
     AdminMetricsSummary,
-    AdminPiiEventCleanupResponse,
     AdminPiiEventItem,
     AdminPiiEventList,
 )
 from backend.auth.middleware import get_current_user, require_admin_user
 from backend.core.db import get_db
 from backend.models import Chat, Client, Document, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.privacy_schemas import DeletedCountResponse
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -180,12 +180,12 @@ def list_pii_events(
     )
 
 
-@admin_router.delete("/privacy/pii-events/retention", response_model=AdminPiiEventCleanupResponse)
+@admin_router.delete("/privacy/pii-events/retention", response_model=DeletedCountResponse)
 def cleanup_pii_events(
     _: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
     retention_days: Annotated[int, Query(ge=1)] = 365,
-) -> AdminPiiEventCleanupResponse:
+) -> DeletedCountResponse:
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted_count = (
         db.query(PiiEvent)
@@ -193,4 +193,4 @@ def cleanup_pii_events(
         .delete(synchronize_session=False)
     )
     db.commit()
-    return AdminPiiEventCleanupResponse(deleted_count=int(deleted_count or 0))
+    return DeletedCountResponse(deleted_count=int(deleted_count or 0))

@@ -9,7 +9,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from backend.chat.pii import redact
 from backend.core.config import settings
+from backend.core.crypto import decrypt_value, encrypt_value
 from backend.email.service import send_email
 from backend.models import (
     Chat,
@@ -20,15 +22,44 @@ from backend.models import (
     EscalationTrigger,
     Message,
     MessageRole,
+    PiiEvent,
+    PiiEventDirection,
     User,
     UserSession,
 )
+from backend.privacy_config import public_redaction_config_dict
 
 logger = logging.getLogger(__name__)
 
 ESCALATION_THRESHOLD = 0.45
 
 _CLARIFY_KEY = "escalation_followup_clarify"
+
+
+def _client_optional_entity_types(client: Client | None) -> set[str] | None:
+    if not client:
+        return None
+    raw = client.settings if isinstance(client.settings, dict) else None
+    cfg = public_redaction_config_dict(raw)
+    return set(cfg["optional_entity_types"])
+
+
+def _safe_message_content(message: Message) -> str:
+    return message.content_redacted or message.content
+
+
+def _safe_ticket_question(ticket: EscalationTicket) -> str:
+    return ticket.primary_question_redacted or ticket.primary_question
+
+
+def _decrypt_optional(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return decrypt_value(value)
+    except RuntimeError:
+        logger.warning("Failed to decrypt stored escalation original content")
+        return None
 
 
 def should_escalate(
@@ -140,7 +171,7 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
     lines: list[str] = []
     for m in msgs:
         role = "user" if m.role == MessageRole.user else "assistant"
-        lines.append(f"{role}: {m.content[:500]}")
+        lines.append(f"{role}: {_safe_message_content(m)[:500]}")
     return "\n".join(lines)
 
 
@@ -153,13 +184,13 @@ def _notify_tenant_new_ticket(client: Client, ticket: EscalationTicket, db: Sess
     body = (
         f"A user question couldn't be answered by your bot.\n\n"
         f"Ticket: {ticket.ticket_number}\n"
-        f"Question: {ticket.primary_question[:500]}\n"
+        f"Question: {_safe_ticket_question(ticket)[:500]}\n"
         f"Trigger: {ticket.trigger.value}\n"
         f"Priority: {ticket.priority.value}\n"
         f"User: {ticket.user_email or 'anonymous'}\n\n"
         f"View in dashboard: {base}/escalations/{ticket.id}"
     )
-    subject = f"[Chat9] New support ticket #{ticket.ticket_number} — {ticket.primary_question[:60]}"
+    subject = f"[Chat9] New support ticket #{ticket.ticket_number} — {_safe_ticket_question(ticket)[:60]}"
     try:
         send_email(user.email, subject, body)
     except Exception as e:  # noqa: BLE001
@@ -179,12 +210,15 @@ def create_escalation_ticket(
     conversation_turns: list[str] | None = None,
     user_context: dict | None = None,
     user_note: str | None = None,
+    optional_entity_types: set[str] | None = None,
 ) -> EscalationTicket:
     from sqlalchemy.exc import IntegrityError
 
     client = db.query(Client).filter(Client.id == client_id).first()
     if not client:
         raise ValueError("client not found")
+    if optional_entity_types is None:
+        optional_entity_types = _client_optional_entity_types(client)
 
     summary: str | None = None
     if chat_id:
@@ -198,6 +232,7 @@ def create_escalation_ticket(
     plan = (user_context or {}).get("plan_tier")
 
     priority = compute_priority(trigger, plan, user_context)
+    redaction = redact(primary_question, optional_entity_types=optional_entity_types)
 
     ticket: EscalationTicket | None = None
     for attempt in range(3):
@@ -205,7 +240,9 @@ def create_escalation_ticket(
         ticket = EscalationTicket(
             client_id=client_id,
             ticket_number=ticket_number,
-            primary_question=primary_question[:8000],
+            primary_question=redaction.redacted_text[:8000],
+            primary_question_original_encrypted=encrypt_value(primary_question[:8000]),
+            primary_question_redacted=redaction.redacted_text[:8000],
             conversation_summary=summary,
             trigger=trigger,
             best_similarity_score=best_similarity_score,
@@ -232,6 +269,20 @@ def create_escalation_ticket(
 
     assert ticket is not None
     db.refresh(ticket)
+    if redaction.was_redacted:
+        for entity in redaction.entities_found:
+            db.add(
+                PiiEvent(
+                    client_id=client_id,
+                    chat_id=chat_id,
+                    message_id=None,
+                    direction=PiiEventDirection.escalation_ticket,
+                    entity_type=entity.type,
+                    count=entity.count,
+                )
+            )
+        db.commit()
+        db.refresh(ticket)
 
     try:
         _notify_tenant_new_ticket(client, ticket, db)
@@ -344,7 +395,7 @@ def transcript_messages_for_openai(chat: Chat) -> list[dict[str, str]]:
     msgs: list[dict[str, str]] = []
     for m in sorted(chat.messages, key=lambda x: x.created_at or x.id):
         role = "user" if m.role == MessageRole.user else "assistant"
-        msgs.append({"role": role, "content": m.content})
+        msgs.append({"role": role, "content": _safe_message_content(m)})
     return msgs
 
 
@@ -395,6 +446,7 @@ def perform_manual_escalation(
         raise ValueError("session not found")
 
     effective = dict(chat.user_context) if chat.user_context else {}
+    optional_entity_types = _client_optional_entity_types(client)
     ticket = create_escalation_ticket(
         client.id,
         user_note or "(manual escalation)",
@@ -404,6 +456,7 @@ def perform_manual_escalation(
         session_id=session_id,
         user_context=effective,
         user_note=user_note,
+        optional_entity_types=optional_entity_types,
     )
     phase = (
         EscalationPhase.handoff_ask_email
@@ -429,7 +482,15 @@ def perform_manual_escalation(
         Message(
             chat_id=chat.id,
             role=MessageRole.assistant,
-            content=out.message_to_user,
+            content=redact(
+                out.message_to_user,
+                optional_entity_types=optional_entity_types,
+            ).redacted_text,
+            content_original_encrypted=encrypt_value(out.message_to_user),
+            content_redacted=redact(
+                out.message_to_user,
+                optional_entity_types=optional_entity_types,
+            ).redacted_text,
             source_documents=None,
         )
     )

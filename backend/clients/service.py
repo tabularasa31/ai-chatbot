@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
+from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.models import Chat, Client, User
 
 
@@ -106,6 +107,29 @@ def update_disclosure_config_for_user(
     db.commit()
     db.refresh(client)
     return public_config_dict(client.disclosure_config)
+
+
+def get_redaction_config_for_user(user_id: uuid.UUID, db: Session) -> dict[str, list[str]]:
+    client = get_client_by_user(user_id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    raw = client.settings if isinstance(client.settings, dict) else None
+    return public_redaction_config_dict(raw)
+
+
+def update_redaction_config_for_user(
+    user_id: uuid.UUID,
+    optional_entity_types: list[str],
+    db: Session,
+) -> dict[str, list[str]]:
+    client = get_client_by_user(user_id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    config = {"optional_entity_types": sorted(set(optional_entity_types))}
+    client.settings = with_redaction_config(client.settings if isinstance(client.settings, dict) else None, config)
+    db.commit()
+    db.refresh(client)
+    return public_redaction_config_dict(client.settings if isinstance(client.settings, dict) else None)
 
 
 def update_client(

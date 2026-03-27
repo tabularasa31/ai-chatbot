@@ -55,6 +55,7 @@ ALLOWED_SCHEDULES = {
     SourceSchedule.manual.value,
 }
 _SECTION_SPLIT_RE = re.compile(r"(?<=[.?!])\s+|\n{2,}")
+MANUAL_EXCLUDED_PAGE_URLS_KEY = "manually_excluded_page_urls"
 
 
 @dataclass
@@ -538,6 +539,56 @@ def _clean_exclusions(exclusions: list[str] | None) -> list[str]:
     return [item.strip() for item in exclusions if item and item.strip()]
 
 
+def _manual_excluded_page_urls(source: UrlSource) -> list[str]:
+    metadata = source.metadata_json or {}
+    raw_urls = metadata.get(MANUAL_EXCLUDED_PAGE_URLS_KEY)
+    if not isinstance(raw_urls, list):
+        return []
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in raw_urls:
+        if not isinstance(item, str):
+            continue
+        normalized = _normalize_page_url(item, source.normalized_domain)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned
+
+
+def _store_manual_excluded_page_urls(source: UrlSource, urls: list[str]) -> None:
+    source.metadata_json = {
+        **(source.metadata_json or {}),
+        MANUAL_EXCLUDED_PAGE_URLS_KEY: urls,
+    }
+
+
+def _exclude_url_from_future_crawls(source: UrlSource, url: str | None) -> None:
+    if not url:
+        return
+    normalized = _normalize_page_url(url, source.normalized_domain)
+    if not normalized:
+        return
+
+    excluded_urls = _manual_excluded_page_urls(source)
+    if normalized not in excluded_urls:
+        excluded_urls.append(normalized)
+    _store_manual_excluded_page_urls(source, excluded_urls)
+
+
+def _recalculate_source_counts(source: UrlSource, db: Session) -> None:
+    docs = (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.source_id == source.id)
+        .all()
+    )
+    source.pages_indexed = len(docs)
+    source.chunks_created = sum(len(doc.embeddings) for doc in docs)
+
+
 def _clean_schedule(schedule: str | None) -> SourceSchedule:
     raw = (schedule or SourceSchedule.weekly.value).strip().lower()
     if raw not in ALLOWED_SCHEDULES:
@@ -875,6 +926,30 @@ def delete_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -
     db.commit()
 
 
+def delete_source_document(
+    *,
+    source_id: uuid.UUID,
+    document_id: uuid.UUID,
+    client_id: uuid.UUID,
+    db: Session,
+) -> None:
+    source = get_url_source(source_id, client_id, db)
+    doc = (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.id == document_id)
+        .first()
+    )
+    if not doc or doc.client_id != client_id or doc.source_id != source.id:
+        raise HTTPException(status_code=404, detail="Page not found")
+
+    _exclude_url_from_future_crawls(source, doc.source_url)
+    db.delete(doc)
+    db.flush()
+    _recalculate_source_counts(source, db)
+    db.commit()
+
+
 def trigger_refresh(
     *,
     source_id: uuid.UUID,
@@ -952,6 +1027,8 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             source_id=source.id,
         )
         discovered_urls = _discover_urls(source.url, _clean_exclusions(source.exclusion_patterns), DISCOVERY_ESTIMATE_CAP)
+        manually_excluded_urls = set(_manual_excluded_page_urls(source))
+        discovered_urls = [url for url in discovered_urls if url not in manually_excluded_urls]
         prioritized_existing_urls = [url for url in discovered_urls if url in existing_urls]
         new_urls = [url for url in discovered_urls if url not in existing_urls]
         urls = prioritized_existing_urls + new_urls[: max(0, allowed_total - len(prioritized_existing_urls))]

@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-27 (Docs sync: shared capacity 100 + debug UI wording)
+**Last updated:** 2026-03-27 (URL-source page deletion in Knowledge)
 
 ---
 
@@ -38,7 +38,7 @@
 | **FI-021** | Async embeddings: `202 Accepted` immediately, `BackgroundTasks` with own DB session, status `ready → embedding → ready/error`; frontend polls every 2 s | `backend/embeddings/routes.py`, `service.py`, `frontend/app/(app)/knowledge/page.tsx` |
 | Embeddings | text-embedding-3-small, pgvector / SQLite test fallback | `backend/embeddings/`, `POST /embeddings/documents/{id}` |
 | **FI-032 ph.1** | Document health check (GPT), `health_status`, re-check | `GET`/`POST /documents/{id}/health*`, `docs/qa/FI-032-document-health-check.md` |
-| **FI-URL v1** | URL documentation source ingestion: preflight, same-domain crawl, background indexing, refresh, run history, inline source detail, and shared client-wide knowledge capacity (files + URL pages) | `backend/documents/url_service.py`, `GET/POST/PATCH/DELETE /documents/sources*`, `docs/qa/FI-URL-url-sources-v1.md` |
+| **FI-URL v1** | URL documentation source ingestion: preflight, same-domain crawl, background indexing, refresh, run history, inline source detail, shared client-wide knowledge capacity (files + URL pages), and per-page deletion that persists across refreshes | `backend/documents/url_service.py`, `GET/POST/PATCH/DELETE /documents/sources*`, `DELETE /documents/sources/{source_id}/pages/{document_id}`, `docs/qa/FI-URL-url-sources-v1.md` |
 
 ---
 
@@ -74,7 +74,7 @@
 |-----------|--------------|-------|
 | **FI-UI** | Dark brand, navbar, auth pages, post-login transition | `frontend/components/Navbar.tsx`, auth pages, `AuthTransition` |
 | **UI-NAV** | Persistent sidebar (icons, active state, Settings/Admin sections); slim fixed navbar (brand + email + logout only) | `frontend/components/Sidebar.tsx`, `frontend/components/Navbar.tsx`, `frontend/app/(app)/layout.tsx` |
-| **Knowledge hub** | `/knowledge` (replaces `/documents`): file upload + URL source ingestion, unified indexed sources table with type badges, status, schedule, indexed counts, health, row actions, and inline expandable source detail | `frontend/app/(app)/knowledge/page.tsx` |
+| **Knowledge hub** | `/knowledge` (replaces `/documents`): file upload + URL source ingestion, unified indexed sources table with type badges, status, schedule, indexed counts, health, row actions, inline expandable source detail, and per-page deletion for indexed URL pages | `frontend/app/(app)/knowledge/page.tsx` |
 | **Code snippets UX** | Inline copy icon on embed / Node.js / debug answer blocks (shared component, light/dark tone) | `frontend/components/ui/code-block-with-copy.tsx` |
 | **Agents** | `/settings`: OpenAI API key management (moved from Dashboard); status banners; save/update/remove flow | `frontend/app/(app)/settings/page.tsx` |
 | Dashboard, **Knowledge**, Logs, Review, Debug, **Escalations** | Main app sections | `frontend/app/(app)/` |

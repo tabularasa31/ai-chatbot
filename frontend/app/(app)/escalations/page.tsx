@@ -40,6 +40,8 @@ function statusClass(s: string): string {
 export default function EscalationsPage() {
   const [tickets, setTickets] = useState<EscalationTicket[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [includeOriginal, setIncludeOriginal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -48,8 +50,12 @@ export default function EscalationsPage() {
     setError("");
     setLoading(true);
     try {
+      const client = await api.clients.getMe().catch(() => null);
+      setIsAdmin(Boolean(client?.is_admin));
       const list = await api.escalations.list(
-        statusFilter ? { status: statusFilter } : undefined
+        statusFilter || includeOriginal
+          ? { status: statusFilter || undefined, includeOriginal: Boolean(client?.is_admin && includeOriginal) }
+          : undefined
       );
       setTickets(list);
     } catch (err) {
@@ -57,7 +63,7 @@ export default function EscalationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, includeOriginal]);
 
   useEffect(() => {
     load();
@@ -93,6 +99,16 @@ export default function EscalationsPage() {
         >
           Refresh
         </button>
+        {isAdmin && (
+          <label className="inline-flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={includeOriginal}
+              onChange={(e) => setIncludeOriginal(e.target.checked)}
+            />
+            Show original content
+          </label>
+        )}
       </div>
 
       {error && (
@@ -125,6 +141,7 @@ export default function EscalationsPage() {
                     key={t.id}
                     ticket={t}
                     expanded={expandedId === t.id}
+                    isAdmin={isAdmin}
                     onToggle={() =>
                       setExpandedId((id) => (id === t.id ? null : t.id))
                     }
@@ -143,16 +160,19 @@ export default function EscalationsPage() {
 function TicketRow({
   ticket,
   expanded,
+  isAdmin,
   onToggle,
   onResolved,
 }: {
   ticket: EscalationTicket;
   expanded: boolean;
+  isAdmin: boolean;
   onToggle: () => void;
   onResolved: () => void;
 }) {
   const [resolution, setResolution] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deletingOriginal, setDeletingOriginal] = useState(false);
   const [localError, setLocalError] = useState("");
 
   const userLabel =
@@ -176,6 +196,19 @@ function TicketRow({
       setLocalError(e instanceof Error ? e.message : "Failed to resolve");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteOriginal = async () => {
+    setLocalError("");
+    setDeletingOriginal(true);
+    try {
+      await api.escalations.deleteOriginal(ticket.id);
+      onResolved();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : "Failed to delete original content");
+    } finally {
+      setDeletingOriginal(false);
     }
   };
 
@@ -225,6 +258,12 @@ function TicketRow({
               <p className="text-sm">{ticket.trigger}</p>
               <p className="text-xs uppercase tracking-wide text-slate-400">Primary question</p>
               <p className="text-sm whitespace-pre-wrap">{ticket.primary_question}</p>
+              {ticket.primary_question_original && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
+                  <p className="text-xs uppercase tracking-wide text-amber-800">Original content</p>
+                  <p className="text-sm whitespace-pre-wrap mt-1">{ticket.primary_question_original}</p>
+                </div>
+              )}
               {ticket.conversation_summary && (
                 <>
                   <p className="text-xs uppercase tracking-wide text-slate-400">
@@ -263,6 +302,18 @@ function TicketRow({
                   <p className="text-xs uppercase tracking-wide text-slate-400">Resolution</p>
                   <p className="text-sm whitespace-pre-wrap">{ticket.resolution_text}</p>
                 </>
+              )}
+              {isAdmin && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={deleteOriginal}
+                    disabled={deletingOriginal || !ticket.primary_question_original_available}
+                    className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {deletingOriginal ? "Deleting…" : "Delete original content"}
+                  </button>
+                </div>
               )}
               {ticket.status !== "resolved" && (
                 <div className="pt-2 space-y-2">

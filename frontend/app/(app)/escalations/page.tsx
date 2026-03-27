@@ -173,13 +173,29 @@ function TicketRow({
   const [resolution, setResolution] = useState("");
   const [saving, setSaving] = useState(false);
   const [deletingOriginal, setDeletingOriginal] = useState(false);
+  const [confirmDeleteOriginal, setConfirmDeleteOriginal] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
   const userLabel =
     ticket.user_email ||
     ticket.user_name ||
     ticket.user_id ||
     "anonymous";
+  const originalLifecycle = ticket.primary_question_original
+    ? {
+        label: "Original shown",
+        className: "bg-emerald-50 text-emerald-700 border-emerald-200",
+      }
+    : ticket.primary_question_original_available
+      ? {
+          label: "Original available",
+          className: "bg-amber-50 text-amber-800 border-amber-200",
+        }
+      : {
+          label: "Original removed",
+          className: "bg-slate-100 text-slate-600 border-slate-200",
+        };
 
   const resolve = async () => {
     if (!resolution.trim()) {
@@ -187,6 +203,7 @@ function TicketRow({
       return;
     }
     setLocalError("");
+    setSuccessMessage("");
     setSaving(true);
     try {
       await api.escalations.resolve(ticket.id, resolution.trim());
@@ -201,9 +218,16 @@ function TicketRow({
 
   const deleteOriginal = async () => {
     setLocalError("");
+    setSuccessMessage("");
     setDeletingOriginal(true);
     try {
-      await api.escalations.deleteOriginal(ticket.id);
+      const result = await api.escalations.deleteOriginal(ticket.id);
+      setConfirmDeleteOriginal(false);
+      setSuccessMessage(
+        result.deleted_count > 0
+          ? "Original ticket content deleted. Redacted text remains available."
+          : "Original ticket content was already removed."
+      );
       onResolved();
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : "Failed to delete original content");
@@ -254,6 +278,13 @@ function TicketRow({
         <tr className="bg-slate-50/50 border-t border-slate-100">
           <td colSpan={6} className="px-4 py-4 text-slate-700" onClick={(e) => e.stopPropagation()}>
             <div className="space-y-3 max-w-3xl">
+              <div>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${originalLifecycle.className}`}
+                >
+                  {originalLifecycle.label}
+                </span>
+              </div>
               <p className="text-xs uppercase tracking-wide text-slate-400">Trigger</p>
               <p className="text-sm">{ticket.trigger}</p>
               <p className="text-xs uppercase tracking-wide text-slate-400">Primary question</p>
@@ -262,6 +293,11 @@ function TicketRow({
                 <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3">
                   <p className="text-xs uppercase tracking-wide text-amber-800">Original content</p>
                   <p className="text-sm whitespace-pre-wrap mt-1">{ticket.primary_question_original}</p>
+                </div>
+              )}
+              {!ticket.primary_question_original_available && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                  Original ticket content is no longer available. The redacted version remains visible for support work.
                 </div>
               )}
               {ticket.conversation_summary && (
@@ -305,15 +341,52 @@ function TicketRow({
               )}
               {isAdmin && (
                 <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={deleteOriginal}
-                    disabled={deletingOriginal || !ticket.primary_question_original_available}
-                    className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
-                  >
-                    {deletingOriginal ? "Deleting…" : "Delete original content"}
-                  </button>
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteOriginal(true)}
+                      disabled={deletingOriginal || !ticket.primary_question_original_available}
+                      className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {ticket.primary_question_original_available
+                        ? "Delete original content"
+                        : "Original already removed"}
+                    </button>
+                    {confirmDeleteOriginal && ticket.primary_question_original_available && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                        <p className="text-sm font-medium text-amber-900">
+                          Delete remaining original content for this ticket?
+                        </p>
+                        <p className="mt-1 text-sm text-amber-800">
+                          The ticket will still keep the redacted question and summary used by the support team.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={deleteOriginal}
+                            disabled={deletingOriginal}
+                            className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-sm hover:bg-amber-700 disabled:opacity-50"
+                          >
+                            {deletingOriginal ? "Deleting…" : "Confirm delete"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteOriginal(false)}
+                            disabled={deletingOriginal}
+                            className="px-3 py-1.5 rounded-lg border border-amber-200 bg-white text-amber-900 text-sm hover:bg-amber-100 disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
+              )}
+              {successMessage && (
+                <p className="text-emerald-700 text-sm bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
+                  {successMessage}
+                </p>
               )}
               {ticket.status !== "resolved" && (
                 <div className="pt-2 space-y-2">

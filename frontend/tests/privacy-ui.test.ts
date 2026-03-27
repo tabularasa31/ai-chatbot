@@ -63,11 +63,13 @@ test("buildPrivacyLogCsv emits escaped CSV rows", () => {
     },
   ]);
 
-  assert.match(csv, /^time,direction,entity_type,count,client_id,actor_user_id,action_path,chat_id,message_id/m);
+  assert.match(csv, /^created_at_iso,direction,entity_type,count,client_id,actor_user_id,action_path,chat_id,message_id/m);
   assert.match(csv, /"2026-03-27T09:00:00Z","original_view","EMAIL","2","cl_123","usr_123","\/chat\/logs\/session\/""abc""","chat_123","msg_123"/);
+  assert.match(csv, /\r\n/);
 });
 
 test("getPrivacyLogExportFilename reflects current filter", () => {
   assert.equal(getPrivacyLogExportFilename("original_view", "30"), "privacy-log-original_view-30d.csv");
   assert.equal(getPrivacyLogExportFilename("", "7"), "privacy-log-all-7d.csv");
+  assert.equal(getPrivacyLogExportFilename("foo/bar:baz", "7"), "privacy-log-foo_bar_baz-7d.csv");
 });

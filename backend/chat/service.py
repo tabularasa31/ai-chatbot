@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
+from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
 from backend.disclosure_config import resolve_level
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
@@ -40,7 +41,10 @@ from backend.models import (
     Message,
     MessageFeedback,
     MessageRole,
+    PiiEvent,
+    PiiEventDirection,
 )
+from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import search_similar_chunks_detailed
 
 logger = logging.getLogger(__name__)
@@ -328,28 +332,101 @@ def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid
     return document_ids if "postgresql" in str(db.bind.url) else None
 
 
+def _client_optional_entity_types(client: Client | None) -> set[str] | None:
+    if not client:
+        return None
+    raw = client.settings if isinstance(client.settings, dict) else None
+    cfg = public_redaction_config_dict(raw)
+    return set(cfg["optional_entity_types"])
+
+
+def _decrypt_optional(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return decrypt_value(value)
+    except RuntimeError:
+        logger.warning("Failed to decrypt stored original content")
+        return None
+
+
+def _display_message_content(message: Message, *, include_original: bool) -> str:
+    if include_original:
+        original = _decrypt_optional(message.content_original_encrypted)
+        if original is not None:
+            return original
+    if message.content_redacted:
+        return message.content_redacted
+    return message.content
+
+
+def _message_original_available(message: Message) -> bool:
+    return bool(message.content_original_encrypted)
+
+
+def _create_message(
+    db: Session,
+    *,
+    chat: Chat,
+    client_id: uuid.UUID,
+    role: MessageRole,
+    content: str,
+    source_documents: list[uuid.UUID] | None = None,
+    direction: PiiEventDirection = PiiEventDirection.message_storage,
+    optional_entity_types: set[str] | None = None,
+) -> Message:
+    redaction = redact(content, optional_entity_types=optional_entity_types)
+    message = Message(
+        chat_id=chat.id,
+        role=role,
+        content=content,
+        content_original_encrypted=encrypt_value(content),
+        content_redacted=redaction.redacted_text,
+        source_documents=source_documents,
+    )
+    db.add(message)
+    db.flush()
+    if redaction.was_redacted:
+        for entity in redaction.entities_found:
+            db.add(
+                PiiEvent(
+                    client_id=client_id,
+                    chat_id=chat.id,
+                    message_id=message.id,
+                    direction=direction,
+                    entity_type=entity.type,
+                    count=entity.count,
+                )
+            )
+    return message
+
+
 def _persist_turn(
     db: Session,
     chat: Chat,
+    client_id: uuid.UUID,
     user_content: str,
     assistant_content: str,
     document_ids: list[uuid.UUID],
     extra_tokens: int,
+    optional_entity_types: set[str] | None = None,
 ) -> None:
-    db.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.user,
-            content=user_content,
-        )
+    _create_message(
+        db,
+        chat=chat,
+        client_id=client_id,
+        role=MessageRole.user,
+        content=user_content,
+        optional_entity_types=optional_entity_types,
     )
-    db.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.assistant,
-            content=assistant_content,
-            source_documents=_source_docs_for_db(db, document_ids),
-        )
+    _create_message(
+        db,
+        chat=chat,
+        client_id=client_id,
+        role=MessageRole.assistant,
+        content=assistant_content,
+        source_documents=_source_docs_for_db(db, document_ids),
+        optional_entity_types=optional_entity_types,
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
@@ -359,16 +436,19 @@ def _persist_turn(
 def _persist_assistant_only(
     db: Session,
     chat: Chat,
+    client_id: uuid.UUID,
     assistant_content: str,
     extra_tokens: int,
+    optional_entity_types: set[str] | None = None,
 ) -> None:
-    db.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.assistant,
-            content=assistant_content,
-            source_documents=None,
-        )
+    _create_message(
+        db,
+        chat=chat,
+        client_id=client_id,
+        role=MessageRole.assistant,
+        content=assistant_content,
+        source_documents=None,
+        optional_entity_types=optional_entity_types,
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
@@ -391,7 +471,10 @@ def process_chat_message(
     Returns:
         (answer, document_ids, tokens_used, chat_ended)
     """
-    redacted_question, _was_redacted = redact(question)
+    client_row = db.query(Client).filter(Client.id == client_id).first()
+    optional_entity_types = _client_optional_entity_types(client_row)
+    redaction = redact(question, optional_entity_types=optional_entity_types)
+    redacted_question = redaction.redacted_text
 
     chat = (
         db.query(Chat)
@@ -434,7 +517,6 @@ def process_chat_message(
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
 
-    client_row = db.query(Client).filter(Client.id == client_id).first()
     disclosure_cfg: dict[str, Any] | None = None
     if client_row and isinstance(client_row.disclosure_config, dict):
         disclosure_cfg = client_row.disclosure_config
@@ -450,7 +532,16 @@ def process_chat_message(
             latest_user_text=redacted_question,
             api_key=api_key,
         )
-        _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            out.message_to_user,
+            [],
+            out.tokens_used,
+            optional_entity_types=optional_entity_types,
+        )
         return (out.message_to_user, [], out.tokens_used, True)
 
     # --- Awaiting contact email ---
@@ -480,7 +571,16 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
                 db.add(chat)
                 db.commit()
-                _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+                _persist_turn(
+                    db,
+                    chat,
+                    client_id,
+                    question,
+                    out.message_to_user,
+                    [],
+                    out.tokens_used,
+                    optional_entity_types=optional_entity_types,
+                )
                 return (out.message_to_user, [], out.tokens_used, False)
             out = complete_escalation_openai_turn(
                 phase=EscalationPhase.email_parse_failed,
@@ -489,7 +589,16 @@ def process_chat_message(
                 latest_user_text=redacted_question,
                 api_key=api_key,
             )
-            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            _persist_turn(
+                db,
+                chat,
+                client_id,
+                question,
+                out.message_to_user,
+                [],
+                out.tokens_used,
+                optional_entity_types=optional_entity_types,
+            )
             return (out.message_to_user, [], out.tokens_used, False)
 
     # --- Follow-up yes/no ---
@@ -513,7 +622,16 @@ def process_chat_message(
             _clear_escalation_clarify_flag(chat)
             db.add(chat)
             db.commit()
-            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            _persist_turn(
+                db,
+                chat,
+                client_id,
+                question,
+                out.message_to_user,
+                [],
+                out.tokens_used,
+                optional_entity_types=optional_entity_types,
+            )
             return (out.message_to_user, [], out.tokens_used, False)
         if decision == "no":
             chat.escalation_followup_pending = False
@@ -521,12 +639,30 @@ def process_chat_message(
             chat.ended_at = datetime.now(timezone.utc)
             db.add(chat)
             db.commit()
-            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            _persist_turn(
+                db,
+                chat,
+                client_id,
+                question,
+                out.message_to_user,
+                [],
+                out.tokens_used,
+                optional_entity_types=optional_entity_types,
+            )
             return (out.message_to_user, [], out.tokens_used, True)
         _set_escalation_clarify_flag(chat)
         db.add(chat)
         db.commit()
-        _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            out.message_to_user,
+            [],
+            out.tokens_used,
+            optional_entity_types=optional_entity_types,
+        )
         return (out.message_to_user, [], out.tokens_used, False)
 
     # --- T-3: explicit human request (before RAG) ---
@@ -540,6 +676,7 @@ def process_chat_message(
                 chat_id=chat.id,
                 session_id=session_id,
                 user_context=effective_user_ctx,
+                optional_entity_types=optional_entity_types,
             )
             phase = (
                 EscalationPhase.handoff_ask_email
@@ -559,7 +696,16 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
             db.add(chat)
             db.commit()
-            _persist_turn(db, chat, question, out.message_to_user, [], out.tokens_used)
+            _persist_turn(
+                db,
+                chat,
+                client_id,
+                question,
+                out.message_to_user,
+                [],
+                out.tokens_used,
+                optional_entity_types=optional_entity_types,
+            )
             return (out.message_to_user, [], out.tokens_used, False)
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
@@ -605,6 +751,7 @@ def process_chat_message(
                 best_similarity_score=retrieval.best_confidence_score,
                 retrieved_chunks=preview,
                 user_context=effective_user_ctx,
+                optional_entity_types=optional_entity_types,
             )
             esc_phase = (
                 EscalationPhase.handoff_ask_email
@@ -629,7 +776,16 @@ def process_chat_message(
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
-    _persist_turn(db, chat, question, answer, document_ids, tokens_used)
+    _persist_turn(
+        db,
+        chat,
+        client_id,
+        question,
+        answer,
+        document_ids,
+        tokens_used,
+        optional_entity_types=optional_entity_types,
+    )
     return (answer, document_ids, tokens_used, bool(chat.ended_at))
 
 
@@ -647,13 +803,17 @@ def run_debug(
         Tuple of (answer, tokens_used, debug_dict).
         debug_dict: {"mode": str, "chunks": [{"document_id": str, "score": float, "preview": str}]}
     """
-    redacted_question, _was_redacted = redact(question)
+    client_row = db.query(Client).filter(Client.id == client_id).first()
+    optional_entity_types = _client_optional_entity_types(client_row)
+    redacted_question = redact(
+        question,
+        optional_entity_types=optional_entity_types,
+    ).redacted_text
     retrieval = retrieve_context(client_id, redacted_question, db, api_key, top_k=5)
     chunk_texts = retrieval.chunk_texts
     document_ids = retrieval.document_ids
     scores = retrieval.scores
     mode = retrieval.mode
-    client_row = db.query(Client).filter(Client.id == client_id).first()
     disclosure_cfg: dict[str, Any] | None = None
     if client_row and isinstance(client_row.disclosure_config, dict):
         disclosure_cfg = client_row.disclosure_config
@@ -759,9 +919,9 @@ def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary
             if m.created_at and m.created_at > last_activity:
                 last_activity = m.created_at
             if m.role == MessageRole.user:
-                last_question = m.content
+                last_question = _display_message_content(m, include_original=False)
             elif m.role == MessageRole.assistant:
-                preview = m.content
+                preview = _display_message_content(m, include_original=False)
                 if len(preview) > PREVIEW_MAX_LEN:
                     preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."
                 last_answer_preview = preview
@@ -795,7 +955,9 @@ def get_session_logs(
     session_id: uuid.UUID,
     client_id: uuid.UUID,
     db: Session,
-) -> Optional[list[tuple[uuid.UUID, uuid.UUID, str, str, str, str | None, datetime]]]:
+    *,
+    include_original: bool = False,
+) -> Optional[list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime]]]:
     """
     Get all messages for a session (ownership enforced).
 
@@ -805,8 +967,8 @@ def get_session_logs(
         db: Database session.
 
     Returns:
-        List of (message_id, session_id, role, content, feedback, ideal_answer, created_at)
-        or None if not found.
+        List of tuples with safe content, optional original content, availability,
+        feedback, ideal_answer, created_at or None if not found.
     """
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
@@ -822,6 +984,16 @@ def get_session_logs(
         .all()
     )
     return [
-        (m.id, chat.session_id, m.role.value, m.content, (m.feedback or MessageFeedback.none).value, m.ideal_answer, m.created_at)
+        (
+            m.id,
+            chat.session_id,
+            m.role.value,
+            _display_message_content(m, include_original=False),
+            _display_message_content(m, include_original=True) if include_original else None,
+            _message_original_available(m),
+            (m.feedback or MessageFeedback.none).value,
+            m.ideal_answer,
+            m.created_at,
+        )
         for m in messages
     ]

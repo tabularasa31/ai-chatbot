@@ -111,6 +111,12 @@ class EscalationStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+class PiiEventDirection(str, enum.Enum):
+    message_storage = "message_storage"
+    escalation_ticket = "escalation_ticket"
+    notification_email = "notification_email"
+
+
 class EscalationPhase(str, enum.Enum):
     """OpenAI escalation UX phases (fact_json), not stored on DB."""
 
@@ -506,6 +512,8 @@ class EscalationTicket(Base):
     ticket_number = Column(String(32), nullable=False, index=True)
 
     primary_question = Column(Text, nullable=False)
+    primary_question_original_encrypted = Column(Text, nullable=True)
+    primary_question_redacted = Column(Text, nullable=True)
     conversation_summary = Column(Text, nullable=True)
 
     trigger = Column(
@@ -577,6 +585,8 @@ class Message(Base):
         nullable=False,
     )
     content = Column(Text, nullable=False)
+    content_original_encrypted = Column(Text, nullable=True)
+    content_redacted = Column(Text, nullable=True)
     source_documents = Column(
         ARRAY(PG_UUID(as_uuid=True)),
         nullable=True,
@@ -596,6 +606,42 @@ class Message(Base):
     )
 
     chat = relationship("Chat", back_populates="messages")
+
+
+class PiiEvent(Base):
+    __tablename__ = "pii_events"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    client_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    chat_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    message_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    direction = Column(
+        Enum(PiiEventDirection, native_enum=False),
+        nullable=False,
+        index=True,
+    )
+    entity_type = Column(String(64), nullable=False)
+    count = Column(Integer, nullable=False, server_default="1")
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
 class UserSession(Base):

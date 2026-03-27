@@ -253,6 +253,7 @@ def get_session_logs_route(
     session_id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    include_original: bool = Query(False),
 ) -> ChatMessageLogResponse:
     """
     Get full message log for a session (read-only).
@@ -262,7 +263,7 @@ def get_session_logs_route(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    logs = get_session_logs(session_id, client.id, db)
+    logs = get_session_logs(session_id, client.id, db, include_original=include_original)
     if logs is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -273,11 +274,13 @@ def get_session_logs_route(
                 session_id=sid,
                 role=role,
                 content=content,
+                content_original=content_original,
+                content_original_available=content_original_available,
                 feedback=feedback,
                 ideal_answer=ideal_answer,
                 created_at=created_at,
             )
-            for msg_id, sid, role, content, feedback, ideal_answer, created_at in logs
+            for msg_id, sid, role, content, content_original, content_original_available, feedback, ideal_answer, created_at in logs
         ],
     )
 

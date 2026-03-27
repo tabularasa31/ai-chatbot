@@ -1,90 +1,206 @@
 """
-PII Redaction Layer — Stage 1 (Regex).
+PII redaction helpers for outbound-safe text handling.
 
-Replaces sensitive entities with typed placeholders before
-text is sent to any external API (OpenAI embeddings or completion).
-
-Entities detected:
-  Tier 1A (always redact):
-    - EMAIL        → [EMAIL]
-    - PHONE        → [PHONE]
-    - API_KEY      → [API_KEY]
-    - CREDIT_CARD  → [CREDIT_CARD]
-
-Order of application: most-specific patterns first to avoid partial matches.
+Stage 1 keeps a deterministic regex-only implementation and returns a
+structured result so callers can persist redacted text and audit metadata.
 """
 
+from __future__ import annotations
+
 import re
+from dataclasses import dataclass
 
-# ── Patterns ──────────────────────────────────────────────────────────────────
 
-# API keys: Bearer tokens, sk-* (OpenAI style), hex strings 32+ chars, base64 tokens 40+ chars
-_API_KEY_PATTERNS = [
-    r"Bearer\s+[A-Za-z0-9\-._~+/]+=*",  # Bearer <token>
-    r"\bsk-[A-Za-z0-9]{20,}\b",  # OpenAI-style sk-...
-    r"\b[A-Fa-f0-9]{32,}\b",  # hex 32+ chars (API keys, hashes)
-    r"\b[A-Za-z0-9+/]{40,}={0,2}\b",  # base64 40+ chars
-]
-
-# Credit cards: 13–19 digit sequences with optional spaces/dashes
-_CREDIT_CARD_RE = re.compile(
-    r"\b(?:\d[ -]?){13,18}\d\b"
+MANDATORY_ENTITY_TYPES = frozenset(
+    {
+        "EMAIL",
+        "PHONE",
+        "API_KEY",
+        "PASSWORD",
+        "CARD",
+    }
 )
+OPTIONAL_ENTITY_TYPES = frozenset(
+    {
+        "ID_DOC",
+        "IP",
+        "URL_TOKEN",
+    }
+)
+ALL_ENTITY_TYPES = MANDATORY_ENTITY_TYPES | OPTIONAL_ENTITY_TYPES
+DEFAULT_OPTIONAL_ENTITY_TYPES = frozenset(OPTIONAL_ENTITY_TYPES)
 
-# Phone numbers: RU formats + international
+
+@dataclass(frozen=True)
+class DetectedEntitySummary:
+    type: str
+    count: int
+
+
+@dataclass(frozen=True)
+class RedactionResult:
+    redacted_text: str
+    entities_found: list[DetectedEntitySummary]
+    was_redacted: bool
+
+
+_EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+
 _PHONE_RE = re.compile(
     r"""
     (?:
-        # International: +7, +1, +44, etc. with various separators
         \+\d{1,3}[\s\-.]?\(?\d{1,4}\)?[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}
         |
-        # RU: 8 (XXX) XXX-XX-XX or 8XXXXXXXXXX
         \b8[\s\-.]?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{2}[\s\-.]?\d{2}\b
         |
-        # Compact international without spaces: +79991234567
         \+\d{10,14}\b
     )
     """,
     re.VERBOSE,
 )
 
-# Email: standard RFC-like pattern
-_EMAIL_RE = re.compile(
-    r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"
+_API_KEY_PATTERNS = [
+    r"Bearer\s+[A-Za-z0-9\-._~+/]+=*",
+    r"\bsk-[A-Za-z0-9]{20,}\b",
+    r"(?:token|api[_-]?key)\s*[:=]\s*[A-Za-z0-9\-_]{16,}",
+    r"\b[A-Fa-f0-9]{32,}\b",
+    r"\b[A-Za-z0-9+/]{40,}={0,2}\b",
+]
+_API_KEY_RE = re.compile("|".join(_API_KEY_PATTERNS), re.IGNORECASE)
+
+_PASSWORD_RE = re.compile(
+    r"(?:(?:password|passwd|pass|пароль)\s*(?:is|=|:)?\s+)([^\s,;]{4,})",
+    re.IGNORECASE,
 )
 
-# Compile API key patterns
-_API_KEY_RE = re.compile("|".join(_API_KEY_PATTERNS))
+_CARD_RE = re.compile(r"\b(?:\d[ -]?){13,18}\d\b")
+
+_ID_DOC_PATTERNS = [
+    r"(?:passport)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
+    r"(?:паспорт)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
+    r"(?:инн|снилс)\s*[№:]?\s*[\d\s-]{8,}",
+]
+_ID_DOC_RE = re.compile("|".join(_ID_DOC_PATTERNS), re.IGNORECASE)
+
+_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+_URL_TOKEN_RE = re.compile(
+    r"\bhttps?://[^\s]+?(?:token|api[_-]?key|access[_-]?token|auth|signature|sig)=([^\s&#]+)",
+    re.IGNORECASE,
+)
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
+def _is_luhn_valid(raw: str) -> bool:
+    digits = [int(ch) for ch in raw if ch.isdigit()]
+    if len(digits) < 13 or len(digits) > 19:
+        return False
+    checksum = 0
+    parity = len(digits) % 2
+    for i, digit in enumerate(digits):
+        if i % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        checksum += digit
+    return checksum % 10 == 0
 
 
-def redact(text: str) -> tuple[str, bool]:
+def _mask_cards(text: str) -> tuple[str, int]:
+    count = 0
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal count
+        candidate = match.group(0)
+        if not _is_luhn_valid(candidate):
+            return candidate
+        count += 1
+        return "[CARD]"
+
+    return _CARD_RE.sub(repl, text), count
+
+
+def _mask_urls_with_tokens(text: str) -> tuple[str, int]:
+    count = 0
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal count
+        count += 1
+        return "[URL_TOKEN]"
+
+    return _URL_TOKEN_RE.sub(repl, text), count
+
+
+def _mask_with_pattern(text: str, pattern: re.Pattern[str], placeholder: str) -> tuple[str, int]:
+    matches = list(pattern.finditer(text))
+    if not matches:
+        return text, 0
+    return pattern.sub(placeholder, text), len(matches)
+
+
+def _enabled_entity_types(optional_entity_types: set[str] | None) -> set[str]:
+    enabled = set(MANDATORY_ENTITY_TYPES)
+    if optional_entity_types is None:
+        enabled.update(DEFAULT_OPTIONAL_ENTITY_TYPES)
+    else:
+        enabled.update(entity for entity in optional_entity_types if entity in OPTIONAL_ENTITY_TYPES)
+    return enabled
+
+
+def redact(
+    text: str,
+    *,
+    optional_entity_types: set[str] | None = None,
+) -> RedactionResult:
     """
-    Redact PII from text using regex patterns.
+    Redact PII from text and return structured metadata.
 
-    Applies patterns in order: API keys → credit cards → phones → emails.
-    More specific patterns run first to avoid partial matches.
-
-    Args:
-        text: Original user message.
-
-    Returns:
-        Tuple of (redacted_text, was_redacted).
-        was_redacted is True if any substitution was made.
+    Mandatory entity types are always redacted. Optional entity types can be
+    narrowed by passing `optional_entity_types`.
     """
-    original = text
+    redacted_text = text
+    enabled = _enabled_entity_types(optional_entity_types)
+    counts: dict[str, int] = {}
 
-    text = _API_KEY_RE.sub("[API_KEY]", text)
-    text = _CREDIT_CARD_RE.sub("[CREDIT_CARD]", text)
-    text = _PHONE_RE.sub("[PHONE]", text)
-    text = _EMAIL_RE.sub("[EMAIL]", text)
+    ordered_patterns: list[tuple[str, re.Pattern[str], str]] = [
+        ("URL_TOKEN", _URL_TOKEN_RE, "[URL_TOKEN]"),
+        ("API_KEY", _API_KEY_RE, "[API_KEY]"),
+        ("PASSWORD", _PASSWORD_RE, "[PASSWORD]"),
+        ("ID_DOC", _ID_DOC_RE, "[ID_DOC]"),
+        ("IP", _IP_RE, "[IP]"),
+        ("PHONE", _PHONE_RE, "[PHONE]"),
+        ("EMAIL", _EMAIL_RE, "[EMAIL]"),
+    ]
 
-    return text, text != original
+    for entity_type, pattern, placeholder in ordered_patterns:
+        if entity_type not in enabled:
+            continue
+        if entity_type == "URL_TOKEN":
+            redacted_text, count = _mask_urls_with_tokens(redacted_text)
+        else:
+            redacted_text, count = _mask_with_pattern(redacted_text, pattern, placeholder)
+        if count:
+            counts[entity_type] = counts.get(entity_type, 0) + count
+
+    if "CARD" in enabled:
+        redacted_text, count = _mask_cards(redacted_text)
+        if count:
+            counts["CARD"] = counts.get("CARD", 0) + count
+
+    ordered_entities = [
+        DetectedEntitySummary(type=entity_type, count=count)
+        for entity_type, count in counts.items()
+    ]
+    return RedactionResult(
+        redacted_text=redacted_text,
+        entities_found=ordered_entities,
+        was_redacted=bool(counts),
+    )
 
 
-def redact_text(text: str) -> str:
-    """Convenience wrapper — returns only the redacted string."""
-    redacted, _ = redact(text)
-    return redacted
+def redact_text(
+    text: str,
+    *,
+    optional_entity_types: set[str] | None = None,
+) -> str:
+    """Convenience wrapper returning only the redacted text."""
+    return redact(text, optional_entity_types=optional_entity_types).redacted_text

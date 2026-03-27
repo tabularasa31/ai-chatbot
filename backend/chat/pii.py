@@ -137,6 +137,27 @@ def _mask_with_pattern(text: str, pattern: re.Pattern[str], placeholder: str) ->
     return pattern.sub(placeholder, text), len(matches)
 
 
+def _mask_ips(text: str) -> tuple[str, int]:
+    count = 0
+
+    def repl(match: re.Match[str]) -> str:
+        nonlocal count
+        candidate = match.group(0)
+        parts = candidate.split(".")
+        if all(len(part) == 1 for part in parts):
+            return candidate
+        try:
+            octets = [int(part) for part in parts]
+        except ValueError:
+            return candidate
+        if len(octets) != 4 or any(octet < 0 or octet > 255 for octet in octets):
+            return candidate
+        count += 1
+        return "[IP]"
+
+    return _IP_RE.sub(repl, text), count
+
+
 def _enabled_entity_types(optional_entity_types: set[str] | None) -> set[str]:
     enabled = set(MANDATORY_ENTITY_TYPES)
     if optional_entity_types is None:
@@ -176,6 +197,8 @@ def redact(
             continue
         if entity_type == "URL_TOKEN":
             redacted_text, count = _mask_urls_with_tokens(redacted_text)
+        elif entity_type == "IP":
+            redacted_text, count = _mask_ips(redacted_text)
         else:
             redacted_text, count = _mask_with_pattern(redacted_text, pattern, placeholder)
         if count:

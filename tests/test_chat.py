@@ -871,7 +871,7 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
 ) -> None:
     from backend.chat.pii import redact
     from backend.core.crypto import encrypt_value
-    from backend.models import Chat, Message, MessageRole
+    from backend.models import Chat, Message, MessageRole, User
 
     token = register_and_verify_user(client, db_session, email="logs-original@example.com")
     cl = client.post(
@@ -894,6 +894,11 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
     )
     db_session.add(m1)
     db_session.commit()
+    user = db_session.query(User).filter_by(email="logs-original@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
 
     resp = client.get(
         f"/chat/logs/session/{chat.session_id}?include_original=true",
@@ -904,6 +909,35 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
     assert data["messages"][0]["content"] == "email me at [EMAIL]"
     assert data["messages"][0]["content_original"] == "email me at user@example.com"
     assert data["messages"][0]["content_original_available"] is True
+
+
+def test_get_session_logs_include_original_requires_admin(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Chat, Message, MessageRole
+
+    token = register_and_verify_user(client, db_session, email="logs-no-admin@example.com")
+    cl = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Logs No Admin Client"},
+    )
+    client_id = uuid.UUID(cl.json()["id"])
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.user, content="Hello"))
+    db_session.commit()
+
+    resp = client.get(
+        f"/chat/logs/session/{chat.session_id}?include_original=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
 
 
 def test_get_session_logs_404_wrong_client(

@@ -202,7 +202,7 @@ def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
         db_session,
     )
 
-    assert ticket.primary_question == "my email is user@example.com"
+    assert ticket.primary_question == "my email is [EMAIL]"
     assert ticket.primary_question_redacted == "my email is [EMAIL]"
     assert ticket.primary_question_original_encrypted is not None
 
@@ -453,6 +453,11 @@ def test_escalation_api_can_include_original_question(
         EscalationTrigger.user_request,
         db_session,
     )
+    user = db_session.query(User).filter(User.email == "esc-api-orig@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
 
     resp = client.get(
         f"/escalations/{ticket.id}?include_original=true",
@@ -462,3 +467,30 @@ def test_escalation_api_can_include_original_question(
     data = resp.json()
     assert data["primary_question"] == "contact me at [EMAIL]"
     assert data["primary_question_original"] == "contact me at user@example.com"
+
+
+def test_escalation_api_include_original_requires_admin(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-api-no-admin@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc API No Admin Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+
+    resp = client.get(
+        f"/escalations/{ticket.id}?include_original=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403

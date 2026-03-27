@@ -48,6 +48,7 @@ def test_redact_password_id_doc_ip_and_url_token():
 def test_redact_credit_cards_with_luhn():
     assert "[CARD]" in redact_text("card: 4111 1111 1111 1111")
     assert "[CARD]" in redact_text("4111111111111111")
+    assert "[CARD]" not in redact_text("4111111111111112")
     assert redact_text("number 1234 5678 9012 3456") == "number 1234 5678 9012 3456"
 
 
@@ -58,6 +59,11 @@ def test_optional_entity_types_can_be_disabled():
     )
     assert "[IP]" in result
     assert "[ID_DOC]" not in result
+
+
+def test_ip_redaction_skips_invalid_octets():
+    text = "release 1.2.3.4 and invalid ip 999.999.999.999"
+    assert redact_text(text) == text
 
 
 def test_no_false_positives_on_normal_text():

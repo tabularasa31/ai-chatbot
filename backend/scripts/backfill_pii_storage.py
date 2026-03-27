@@ -28,6 +28,8 @@ def run(db: Session) -> None:
                 message.content,
                 optional_entity_types=_message_optional_entity_types(message),
             ).redacted_text
+        if message.content_redacted:
+            message.content = message.content_redacted
 
     tickets = db.query(EscalationTicket).all()
     for ticket in tickets:
@@ -35,6 +37,8 @@ def run(db: Session) -> None:
             ticket.primary_question_original_encrypted = encrypt_value(ticket.primary_question)
         if not ticket.primary_question_redacted:
             ticket.primary_question_redacted = redact(ticket.primary_question).redacted_text
+        if ticket.primary_question_redacted:
+            ticket.primary_question = ticket.primary_question_redacted
     db.commit()
 
 

@@ -240,7 +240,7 @@ def create_escalation_ticket(
         ticket = EscalationTicket(
             client_id=client_id,
             ticket_number=ticket_number,
-            primary_question=primary_question[:8000],
+            primary_question=redaction.redacted_text[:8000],
             primary_question_original_encrypted=encrypt_value(primary_question[:8000]),
             primary_question_redacted=redaction.redacted_text[:8000],
             conversation_summary=summary,
@@ -482,7 +482,10 @@ def perform_manual_escalation(
         Message(
             chat_id=chat.id,
             role=MessageRole.assistant,
-            content=out.message_to_user,
+            content=redact(
+                out.message_to_user,
+                optional_entity_types=optional_entity_types,
+            ).redacted_text,
             content_original_encrypted=encrypt_value(out.message_to_user),
             content_redacted=redact(
                 out.message_to_user,

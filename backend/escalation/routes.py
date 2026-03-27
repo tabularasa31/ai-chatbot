@@ -18,9 +18,14 @@ from backend.escalation.schemas import (
     EscalationTicketOut,
 )
 from backend.escalation.service import resolve_ticket
-from backend.models import EscalationStatus, EscalationTicket, User
+from backend.models import EscalationStatus, EscalationTicket, PiiEvent, PiiEventDirection, User
 
 escalation_router = APIRouter(prefix="/escalations", tags=["escalations"])
+
+
+def _require_original_access(current_user: User) -> None:
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Original content access requires admin privileges")
 
 
 def _serialize_ticket(ticket: EscalationTicket, *, include_original: bool) -> EscalationTicketOut:
@@ -66,6 +71,8 @@ def list_escalations(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if include_original:
+        _require_original_access(current_user)
 
     q = db.query(EscalationTicket).filter(EscalationTicket.client_id == client.id)
     if status:
@@ -75,6 +82,21 @@ def list_escalations(
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid status")
     tickets = q.order_by(EscalationTicket.created_at.desc()).all()
+    if include_original:
+        for ticket in tickets:
+            if not ticket.primary_question_original_encrypted:
+                continue
+            db.add(
+                PiiEvent(
+                    client_id=client.id,
+                    chat_id=ticket.chat_id,
+                    message_id=None,
+                    direction=PiiEventDirection.original_view,
+                    entity_type="ORIGINAL_VIEW",
+                    count=1,
+                )
+            )
+        db.commit()
     return EscalationListResponse(
         tickets=[_serialize_ticket(t, include_original=include_original) for t in tickets]
     )
@@ -90,6 +112,8 @@ def get_escalation(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if include_original:
+        _require_original_access(current_user)
     t = (
         db.query(EscalationTicket)
         .filter(EscalationTicket.id == ticket_id, EscalationTicket.client_id == client.id)
@@ -97,6 +121,18 @@ def get_escalation(
     )
     if not t:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    if include_original and t.primary_question_original_encrypted:
+        db.add(
+            PiiEvent(
+                client_id=client.id,
+                chat_id=t.chat_id,
+                message_id=None,
+                direction=PiiEventDirection.original_view,
+                entity_type="ORIGINAL_VIEW",
+                count=1,
+            )
+        )
+        db.commit()
     return _serialize_ticket(t, include_original=include_original)
 
 

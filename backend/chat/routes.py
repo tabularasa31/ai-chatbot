@@ -37,6 +37,7 @@ from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.auth.middleware import get_current_user
 from backend.models import Chat, EscalationTrigger, Message, MessageFeedback, MessageRole, User
+from backend.models import PiiEvent, PiiEventDirection
 
 
 class DebugRequest(BaseModel):
@@ -72,6 +73,11 @@ class ChatDebugResponse(BaseModel):
     debug: DebugInfoResponse
 
 chat_router = APIRouter(tags=["chat"])
+
+
+def _require_original_access(current_user: User) -> None:
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Original content access requires admin privileges")
 
 
 @chat_router.post("", response_model=ChatResponse)
@@ -262,10 +268,27 @@ def get_session_logs_route(
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
+    if include_original:
+        _require_original_access(current_user)
 
     logs = get_session_logs(session_id, client.id, db, include_original=include_original)
     if logs is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    if include_original:
+        for msg_id, _sid, _role, _content, content_original, content_original_available, _feedback, _ideal_answer, _created_at in logs:
+            if not content_original_available or content_original is None:
+                continue
+            db.add(
+                PiiEvent(
+                    client_id=client.id,
+                    chat_id=None,
+                    message_id=msg_id,
+                    direction=PiiEventDirection.original_view,
+                    entity_type="ORIGINAL_VIEW",
+                    count=1,
+                )
+            )
+        db.commit()
 
     return ChatMessageLogResponse(
         messages=[

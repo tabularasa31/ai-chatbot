@@ -115,6 +115,7 @@ class PiiEventDirection(str, enum.Enum):
     message_storage = "message_storage"
     escalation_ticket = "escalation_ticket"
     notification_email = "notification_email"
+    original_view = "original_view"
 
 
 class EscalationPhase(str, enum.Enum):

@@ -379,7 +379,7 @@ def _create_message(
     message = Message(
         chat_id=chat.id,
         role=role,
-        content=content,
+        content=redaction.redacted_text,
         content_original_encrypted=encrypt_value(content),
         content_redacted=redaction.redacted_text,
         source_documents=source_documents,

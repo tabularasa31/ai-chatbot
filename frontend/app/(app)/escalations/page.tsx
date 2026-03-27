@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type EscalationTicket } from "@/lib/api";
+import { getOriginalContentLabel, getOriginalContentStatus } from "@/lib/privacy-ui";
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -182,20 +183,23 @@ function TicketRow({
     ticket.user_name ||
     ticket.user_id ||
     "anonymous";
-  const originalLifecycle = ticket.primary_question_original
-    ? {
-        label: "Original shown",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      }
-    : ticket.primary_question_original_available
-      ? {
-          label: "Original available",
-          className: "bg-amber-50 text-amber-800 border-amber-200",
-        }
-      : {
-          label: "Original removed",
-          className: "bg-slate-100 text-slate-600 border-slate-200",
-        };
+  const originalLifecycleStatus = getOriginalContentStatus({
+    original: ticket.primary_question_original,
+    originalAvailable: ticket.primary_question_original_available,
+  });
+  const originalLifecycle = {
+    label: getOriginalContentLabel(originalLifecycleStatus, {
+      shown: "Original shown",
+      available: "Original available",
+      removed: "Original removed",
+    }),
+    className:
+      originalLifecycleStatus === "shown"
+        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+        : originalLifecycleStatus === "available"
+          ? "bg-amber-50 text-amber-800 border-amber-200"
+          : "bg-slate-100 text-slate-600 border-slate-200",
+  };
 
   const resolve = async () => {
     if (!resolution.trim()) {

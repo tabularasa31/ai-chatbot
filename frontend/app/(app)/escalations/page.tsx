@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { api, type EscalationTicket } from "@/lib/api";
 
 function formatDateTime(iso: string): string {
@@ -68,6 +68,20 @@ export default function EscalationsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const handleOriginalDeleted = useCallback((ticketId: string) => {
+    setTickets((current) =>
+      current.map((ticket) =>
+        ticket.id !== ticketId
+          ? ticket
+          : {
+              ...ticket,
+              primary_question_original: null,
+              primary_question_original_available: false,
+            }
+      )
+    );
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -146,6 +160,7 @@ export default function EscalationsPage() {
                       setExpandedId((id) => (id === t.id ? null : t.id))
                     }
                     onResolved={load}
+                    onOriginalDeleted={handleOriginalDeleted}
                   />
                 ))}
               </tbody>
@@ -163,12 +178,14 @@ function TicketRow({
   isAdmin,
   onToggle,
   onResolved,
+  onOriginalDeleted,
 }: {
   ticket: EscalationTicket;
   expanded: boolean;
   isAdmin: boolean;
   onToggle: () => void;
   onResolved: () => void;
+  onOriginalDeleted: (ticketId: string) => void;
 }) {
   const [resolution, setResolution] = useState("");
   const [saving, setSaving] = useState(false);
@@ -176,6 +193,9 @@ function TicketRow({
   const [confirmDeleteOriginal, setConfirmDeleteOriginal] = useState(false);
   const [localError, setLocalError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const confirmDeleteTitleId = useId();
+  const confirmDeleteDescriptionId = useId();
+  const confirmDeleteButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const userLabel =
     ticket.user_email ||
@@ -196,6 +216,16 @@ function TicketRow({
           label: "Original removed",
           className: "bg-slate-100 text-slate-600 border-slate-200",
         };
+
+  useEffect(() => {
+    setSuccessMessage("");
+  }, [expanded]);
+
+  useEffect(() => {
+    if (confirmDeleteOriginal) {
+      confirmDeleteButtonRef.current?.focus();
+    }
+  }, [confirmDeleteOriginal]);
 
   const resolve = async () => {
     if (!resolution.trim()) {
@@ -224,11 +254,11 @@ function TicketRow({
       const result = await api.escalations.deleteOriginal(ticket.id);
       setConfirmDeleteOriginal(false);
       setSuccessMessage(
-        result.deleted_count > 0
+        (result.deleted_count ?? 0) > 0
           ? "Original ticket content deleted. Redacted text remains available."
           : "Original ticket content was already removed."
       );
-      onResolved();
+      onOriginalDeleted(ticket.id);
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : "Failed to delete original content");
     } finally {
@@ -342,26 +372,37 @@ function TicketRow({
               {isAdmin && (
                 <div className="pt-2">
                   <div className="space-y-3">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteOriginal(true)}
-                      disabled={deletingOriginal || !ticket.primary_question_original_available}
-                      className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      {ticket.primary_question_original_available
-                        ? "Delete original content"
-                        : "Original already removed"}
-                    </button>
+                    {ticket.primary_question_original_available ? (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteOriginal(true)}
+                        disabled={deletingOriginal}
+                        className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Delete original content
+                      </button>
+                    ) : (
+                      <span className="inline-flex px-4 py-2 rounded-lg border border-slate-200 bg-slate-50 text-slate-500 text-sm">
+                        Original already removed
+                      </span>
+                    )}
                     {confirmDeleteOriginal && ticket.primary_question_original_available && (
-                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-                        <p className="text-sm font-medium text-amber-900">
+                      <div
+                        className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3"
+                        role="alertdialog"
+                        aria-modal="true"
+                        aria-labelledby={confirmDeleteTitleId}
+                        aria-describedby={confirmDeleteDescriptionId}
+                      >
+                        <p id={confirmDeleteTitleId} className="text-sm font-medium text-amber-900">
                           Delete remaining original content for this ticket?
                         </p>
-                        <p className="mt-1 text-sm text-amber-800">
+                        <p id={confirmDeleteDescriptionId} className="mt-1 text-sm text-amber-800">
                           The ticket will still keep the redacted question and summary used by the support team.
                         </p>
                         <div className="mt-3 flex flex-wrap gap-2">
                           <button
+                            ref={confirmDeleteButtonRef}
                             type="button"
                             onClick={deleteOriginal}
                             disabled={deletingOriginal}

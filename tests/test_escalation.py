@@ -537,4 +537,49 @@ def test_delete_escalation_original_requires_admin_and_removes_original(
 
     db_session.refresh(ticket)
     assert ticket.primary_question_original_encrypted is None
-    assert ticket.primary_question == "contact me at [EMAIL]"
+    assert ticket.primary_question == ticket.primary_question_redacted
+
+
+def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.core.crypto import encrypt_value
+
+    token = register_and_verify_user(client, db_session, email="esc-delete-empty@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc Delete Empty Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="secret@example.com",
+        primary_question_original_encrypted=encrypt_value("secret@example.com"),
+        primary_question_redacted=None,
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    user = db_session.query(User).filter(User.email == "esc-delete-empty@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
+    db_session.refresh(ticket)
+    assert ticket.primary_question_original_encrypted is None
+    assert ticket.primary_question == ""

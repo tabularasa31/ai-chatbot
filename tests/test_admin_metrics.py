@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.models import Chat, Client, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.scripts.cleanup_pii_events import run as cleanup_pii_events_run
 
 from tests.conftest import register_and_verify_user
 
@@ -325,3 +326,56 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
     remaining_ids = {str(row.id) for row in db_session.query(PiiEvent).all()}
     assert old_event_id not in remaining_ids
     assert fresh_event_id in remaining_ids
+
+
+def test_admin_pii_events_reject_invalid_pagination_and_since_days(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="pii-params@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PII Params Client"},
+    )
+
+    user = db_session.query(User).filter(User.email == "pii-params@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    for url in (
+        "/admin/privacy/pii-events?limit=-1",
+        "/admin/privacy/pii-events?offset=-1",
+        "/admin/privacy/pii-events?since_days=0",
+    ):
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 422
+
+
+def test_admin_pii_events_cleanup_rejects_zero_retention(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="pii-cleanup-guard@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PII Cleanup Guard Client"},
+    )
+
+    user = db_session.query(User).filter(User.email == "pii-cleanup-guard@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    resp = client.delete(
+        "/admin/privacy/pii-events/retention?retention_days=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+def test_cleanup_pii_events_script_rejects_zero_retention() -> None:
+    with pytest.raises(ValueError, match="retention_days must be >= 1"):
+        cleanup_pii_events_run(0)

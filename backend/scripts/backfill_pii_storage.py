@@ -35,8 +35,7 @@ def run(db: Session) -> None:
                 message.content,
                 optional_entity_types=_message_optional_entity_types(message),
             ).redacted_text
-        if message.content_redacted:
-            message.content = message.content_redacted
+        message.content = message.content_redacted or ""
 
     tickets = db.query(EscalationTicket).all()
     for ticket in tickets:
@@ -47,8 +46,7 @@ def run(db: Session) -> None:
                 ticket.primary_question,
                 optional_entity_types=_ticket_optional_entity_types(ticket),
             ).redacted_text
-        if ticket.primary_question_redacted:
-            ticket.primary_question = ticket.primary_question_redacted
+        ticket.primary_question = ticket.primary_question_redacted or ""
     db.commit()
 
 

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
@@ -134,12 +134,12 @@ def get_client_metrics(
 def list_pii_events(
     _: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-    limit: int = 100,
-    offset: int = 0,
+    limit: Annotated[int, Query(ge=0, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
     direction: Optional[str] = None,
     client_id: Optional[str] = None,
     actor_user_id: Optional[str] = None,
-    since_days: Optional[int] = None,
+    since_days: Annotated[Optional[int], Query(ge=1)] = None,
 ) -> AdminPiiEventList:
     q = db.query(PiiEvent).order_by(PiiEvent.created_at.desc())
     if direction:
@@ -160,7 +160,7 @@ def list_pii_events(
     if since_days is not None:
         since = datetime.now(timezone.utc) - timedelta(days=since_days)
         q = q.filter(PiiEvent.created_at >= since)
-    rows = q.offset(offset).limit(min(limit, 200)).all()
+    rows = q.offset(offset).limit(limit).all()
     return AdminPiiEventList(
         items=[
             AdminPiiEventItem(
@@ -169,7 +169,7 @@ def list_pii_events(
                 chat_id=row.chat_id,
                 message_id=row.message_id,
                 actor_user_id=row.actor_user_id,
-                direction=row.direction.value,
+                direction=row.direction,
                 entity_type=row.entity_type,
                 count=row.count,
                 action_path=row.action_path,
@@ -184,7 +184,7 @@ def list_pii_events(
 def cleanup_pii_events(
     _: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-    retention_days: int = 365,
+    retention_days: Annotated[int, Query(ge=1)] = 365,
 ) -> AdminPiiEventCleanupResponse:
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted_count = (

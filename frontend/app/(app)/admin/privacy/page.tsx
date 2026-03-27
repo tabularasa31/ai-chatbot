@@ -3,13 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminPiiEventItem } from "@/lib/api";
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 const DIRECTION_OPTIONS = [
   { value: "", label: "All directions" },
@@ -154,9 +148,10 @@ export default function AdminPrivacyPage() {
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <div className="flex flex-wrap gap-3 items-end">
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-direction-filter" className="text-sm text-slate-600">
             Direction
             <select
+              id="privacy-direction-filter"
               value={direction}
               onChange={(e) => setDirection(e.target.value)}
               className="mt-1 block border border-slate-200 rounded-lg px-3 py-2 text-slate-800 bg-white outline-none focus:border-slate-400"
@@ -168,9 +163,10 @@ export default function AdminPrivacyPage() {
               ))}
             </select>
           </label>
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-since-days" className="text-sm text-slate-600">
             Since days
             <input
+              id="privacy-since-days"
               type="number"
               min={1}
               value={sinceDays}
@@ -260,9 +256,10 @@ export default function AdminPrivacyPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-3 items-end">
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-retention-days" className="text-sm text-slate-600">
             Retention days
             <input
+              id="privacy-retention-days"
               type="number"
               min={1}
               value={retentionDays}

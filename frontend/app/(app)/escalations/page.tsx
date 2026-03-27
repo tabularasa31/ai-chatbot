@@ -2,14 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type EscalationTicket } from "@/lib/api";
-
-function formatDateTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 const STATUS_OPTIONS = [
   { value: "", label: "All statuses" },

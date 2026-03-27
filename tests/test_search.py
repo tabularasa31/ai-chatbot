@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.search.service import bm25_search_chunks, cosine_similarity
+from backend.search.service import (
+    bm25_search_chunks,
+    cosine_similarity,
+    expand_query,
+    rerank_candidates,
+)
 
 
 # --- Unit tests for cosine_similarity ---
@@ -98,6 +103,43 @@ def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("model") == "text-embedding-3-small"
     assert call_kwargs.kwargs.get("input") == "test query"
+
+
+def test_expand_query_deduplicates_and_normalizes() -> None:
+    variants = expand_query("Reset-password!!   reset password")
+    assert variants == [
+        "Reset-password!! reset password",
+        "Reset password reset password",
+        "reset password",
+    ]
+
+
+def test_rerank_candidates_boosts_lexical_match() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="how to reset your password in the dashboard",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="billing invoice download instructions",
+        metadata_json={"chunk_index": 1},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(second, 0.9), (first, 0.7)],
+        vector_scores={first.id: 0.7, second.id: 0.9},
+        bm25_scores={first.id: 1.0, second.id: 0.1},
+        top_k=2,
+    )
+
+    assert [item[0].id for item in reranked] == [first.id, second.id]
+    assert reranked[0][1] > reranked[1][1]
 
 
 # --- API tests (all mock OpenAI) ---

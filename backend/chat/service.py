@@ -7,6 +7,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Literal, Optional
 
 from sqlalchemy.orm import Session, joinedload
@@ -44,6 +45,8 @@ from backend.models import (
     PiiEvent,
     PiiEventDirection,
 )
+from backend.observability import TraceHandle, begin_trace
+from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import search_similar_chunks_detailed
 
@@ -98,12 +101,25 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
 )
 
 
+def _safe_int(value: Any) -> int:
+    """Convert SDK usage fields to int without trusting mock-like objects."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def retrieve_context(
     client_id: uuid.UUID,
     question: str,
     db: Session,
     api_key: str,
     top_k: int = 5,
+    trace: TraceHandle | None = None,
 ) -> "RetrievalContext":
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
@@ -119,6 +135,7 @@ def retrieve_context(
         top_k=top_k,
         db=db,
         api_key=api_key,
+        trace=trace,
     )
     results = bundle.results
 
@@ -253,6 +270,7 @@ def generate_answer(
     api_key: str,
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
+    trace: TraceHandle | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI gpt-4o-mini with RAG prompt.
@@ -275,6 +293,19 @@ def generate_answer(
         disclosure_config=disclosure_config,
     )
     openai_client = get_openai_client(api_key)
+    generation = None
+    if trace is not None:
+        generation = trace.generation(
+            name="llm-generation",
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": prompt}],
+            metadata={
+                "temperature": 0.2,
+                "max_tokens": 500,
+                "context_chunk_count": len(context_chunks),
+            },
+        )
+    started_at = perf_counter()
     response = openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -283,6 +314,22 @@ def generate_answer(
     )
     answer_text = response.choices[0].message.content or ""
     total_tokens = response.usage.total_tokens if response.usage else 0
+    if generation is not None:
+        prompt_tokens = _safe_int(getattr(response.usage, "prompt_tokens", 0) if response.usage else 0)
+        completion_tokens = _safe_int(
+            getattr(response.usage, "completion_tokens", 0) if response.usage else 0
+        )
+        generation.end(
+            output=answer_text.strip(),
+            usage={
+                "input": prompt_tokens,
+                "output": completion_tokens,
+            },
+            metadata={
+                "total_tokens": _safe_int(total_tokens),
+                "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+            },
+        )
     return (answer_text.strip(), total_tokens)
 
 
@@ -292,6 +339,7 @@ def validate_answer(
     context_chunks: list[str],
     *,
     api_key: str,
+    trace: TraceHandle | None = None,
 ) -> dict:
     """
     Ask LLM to validate if the answer is grounded in context.
@@ -308,8 +356,20 @@ def validate_answer(
         answer=answer,
     )
 
+    validation_span = None
+    if trace is not None:
+        validation_span = trace.span(
+            name="answer-validation",
+            input={
+                "question": question,
+                "answer_preview": truncate_text(answer),
+                "context_chunk_count": len(context_chunks),
+            },
+        )
+
     try:
         openai_client = get_openai_client(api_key)
+        started_at = perf_counter()
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
@@ -318,13 +378,27 @@ def validate_answer(
         )
         raw = response.choices[0].message.content or ""
         result = json.loads(raw.strip())
-        return {
+        result = {
             "is_valid": bool(result.get("is_valid", True)),
             "confidence": float(result.get("confidence", 1.0)),
             "reason": str(result.get("reason", "")),
         }
+        if validation_span is not None:
+            validation_span.end(
+                output=result,
+                metadata={
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
+        return result
     except Exception as e:
         logger.warning("Answer validation failed (non-blocking): %s", e)
+        if validation_span is not None:
+            validation_span.end(
+                output={"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"},
+                level="WARNING",
+                status_message=str(e),
+            )
         return {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}
 
 
@@ -515,6 +589,21 @@ def process_chat_message(
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
 
+    trace = begin_trace(
+        name="rag-query",
+        session_id=str(session_id),
+        user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
+        metadata={
+            "tenant_id": str(client_id),
+            "session_id": str(session_id),
+            "chat_id": str(chat.id),
+            "browser_locale": browser_locale,
+            "question": redacted_question,
+            "has_user_context": bool(effective_user_ctx),
+        },
+        tags=[f"tenant:{client_id}"],
+    )
+
     user_context_line = _user_context_prompt_line(effective_user_ctx)
 
     disclosure_cfg: dict[str, Any] | None = None
@@ -525,6 +614,12 @@ def process_chat_message(
 
     # --- Chat closed ---
     if chat.ended_at is not None:
+        trace.span(
+            name="chat-state-check",
+            input={"state": "closed"},
+        ).end(
+            output={"chat_ended": True}
+        )
         out = complete_escalation_openai_turn(
             phase=EscalationPhase.chat_already_closed,
             chat_messages=msgs,
@@ -542,15 +637,24 @@ def process_chat_message(
             out.tokens_used,
             optional_entity_types=optional_entity_types,
         )
+        trace.update(
+            output={"answer": out.message_to_user, "source": "chat_closed"},
+            metadata={"chat_ended": True, "escalated": False},
+        )
         return (out.message_to_user, [], out.tokens_used, True)
 
     # --- Awaiting contact email ---
     if chat.escalation_awaiting_ticket_id:
+        awaiting_email_span = trace.span(
+            name="escalation-awaiting-email",
+            input={"ticket_id": str(chat.escalation_awaiting_ticket_id)},
+        )
         ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
         if not ticket:
             chat.escalation_awaiting_ticket_id = None
             db.add(chat)
             db.commit()
+            awaiting_email_span.end(output={"ticket_found": False})
         else:
             # Parse contact email from original user text, not redacted text.
             # Redaction replaces addresses with placeholders and would break capture.
@@ -581,6 +685,13 @@ def process_chat_message(
                     out.tokens_used,
                     optional_entity_types=optional_entity_types,
                 )
+                awaiting_email_span.end(
+                    output={"ticket_found": True, "email_captured": True}
+                )
+                trace.update(
+                    output={"answer": out.message_to_user, "source": "escalation_email_capture"},
+                    metadata={"chat_ended": False, "escalated": True},
+                )
                 return (out.message_to_user, [], out.tokens_used, False)
             out = complete_escalation_openai_turn(
                 phase=EscalationPhase.email_parse_failed,
@@ -599,10 +710,21 @@ def process_chat_message(
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
             )
+            awaiting_email_span.end(
+                output={"ticket_found": True, "email_captured": False}
+            )
+            trace.update(
+                output={"answer": out.message_to_user, "source": "escalation_email_retry"},
+                metadata={"chat_ended": False, "escalated": True},
+            )
             return (out.message_to_user, [], out.tokens_used, False)
 
     # --- Follow-up yes/no ---
     if chat.escalation_followup_pending:
+        followup_span = trace.span(
+            name="escalation-followup",
+            input={"pending": True},
+        )
         ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
         out = complete_escalation_openai_turn(
             phase=EscalationPhase.followup_awaiting_yes_no,
@@ -632,6 +754,11 @@ def process_chat_message(
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
             )
+            followup_span.end(output={"decision": decision, "chat_ended": False})
+            trace.update(
+                output={"answer": out.message_to_user, "source": "escalation_followup"},
+                metadata={"chat_ended": False, "escalated": True},
+            )
             return (out.message_to_user, [], out.tokens_used, False)
         if decision == "no":
             chat.escalation_followup_pending = False
@@ -649,6 +776,11 @@ def process_chat_message(
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
             )
+            followup_span.end(output={"decision": decision, "chat_ended": True})
+            trace.update(
+                output={"answer": out.message_to_user, "source": "escalation_followup"},
+                metadata={"chat_ended": True, "escalated": True},
+            )
             return (out.message_to_user, [], out.tokens_used, True)
         _set_escalation_clarify_flag(chat)
         db.add(chat)
@@ -663,10 +795,21 @@ def process_chat_message(
             out.tokens_used,
             optional_entity_types=optional_entity_types,
         )
+        followup_span.end(output={"decision": decision, "chat_ended": False})
+        trace.update(
+            output={"answer": out.message_to_user, "source": "escalation_followup"},
+            metadata={"chat_ended": False, "escalated": True},
+        )
         return (out.message_to_user, [], out.tokens_used, False)
 
     # --- T-3: explicit human request (before RAG) ---
-    if detect_human_request(redacted_question):
+    human_request_span = trace.span(
+        name="human-request-detection",
+        input={"question": redacted_question},
+    )
+    explicit_human_request = detect_human_request(redacted_question)
+    human_request_span.end(output={"matched": explicit_human_request})
+    if explicit_human_request:
         try:
             ticket = create_escalation_ticket(
                 client_id,
@@ -706,12 +849,23 @@ def process_chat_message(
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
             )
+            trace.update(
+                output={"answer": out.message_to_user, "source": "explicit_handoff"},
+                metadata={"chat_ended": False, "escalated": True},
+            )
             return (out.message_to_user, [], out.tokens_used, False)
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
     # --- Normal RAG ---
-    retrieval = retrieve_context(client_id, redacted_question, db, api_key, top_k=5)
+    retrieval = retrieve_context(
+        client_id,
+        redacted_question,
+        db,
+        api_key,
+        top_k=5,
+        trace=trace,
+    )
     chunk_texts = retrieval.chunk_texts
     scores = retrieval.scores
     document_ids = list(dict.fromkeys(retrieval.document_ids))
@@ -722,10 +876,15 @@ def process_chat_message(
         api_key=api_key,
         user_context_line=user_context_line,
         disclosure_config=disclosure_cfg,
+        trace=trace,
     )
 
     validation = validate_answer(
-        redacted_question, answer, chunk_texts, api_key=api_key
+        redacted_question,
+        answer,
+        chunk_texts,
+        api_key=api_key,
+        trace=trace,
     )
     if (
         not validation["is_valid"]
@@ -733,10 +892,24 @@ def process_chat_message(
     ):
         answer = FALLBACK_LOW_CONFIDENCE_ANSWER
 
+    escalation_decision_span = trace.span(
+        name="escalation-check",
+        input={
+            "best_confidence_score": retrieval.best_confidence_score,
+            "chunk_count": len(chunk_texts),
+            "validation": validation,
+        },
+    )
     escalate, esc_trigger = should_escalate(
         retrieval.best_confidence_score,
         len(chunk_texts),
         validation=validation,
+    )
+    escalation_decision_span.end(
+        output={
+            "escalate": escalate,
+            "trigger": esc_trigger.value if esc_trigger else None,
+        }
     )
     if escalate and esc_trigger is not None:
         try:
@@ -785,6 +958,20 @@ def process_chat_message(
         document_ids,
         tokens_used,
         optional_entity_types=optional_entity_types,
+    )
+    trace.update(
+        output={"answer": answer},
+        metadata={
+            "chat_ended": bool(chat.ended_at),
+            "escalated": bool(escalate),
+            "escalation_trigger": esc_trigger.value if esc_trigger else None,
+            "retrieval_mode": retrieval.mode,
+            "best_rank_score": retrieval.best_rank_score,
+            "best_confidence_score": retrieval.best_confidence_score,
+            "validation": validation,
+            "source_document_ids": [str(document_id) for document_id in document_ids],
+            "tokens_used": int(tokens_used),
+        },
     )
     return (answer, document_ids, tokens_used, bool(chat.ended_at))
 

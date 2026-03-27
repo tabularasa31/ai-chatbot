@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     jwt_secret: str = Field(..., alias="JWT_SECRET")
     openai_api_key: Optional[str] = Field(None, alias="OPENAI_API_KEY")
     encryption_key: Optional[str] = Field(None, alias="ENCRYPTION_KEY")
+    langfuse_host: Optional[str] = Field(None, alias="LANGFUSE_HOST")
+    langfuse_public_key: Optional[str] = Field(None, alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: Optional[str] = Field(None, alias="LANGFUSE_SECRET_KEY")
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")
@@ -31,4 +34,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

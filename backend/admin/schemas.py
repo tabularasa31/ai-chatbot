@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from backend.models import PiiEventDirection
+
 
 class AdminMetricsSummary(BaseModel):
     """Platform-wide metrics summary."""
@@ -50,7 +52,7 @@ class AdminPiiEventItem(BaseModel):
     chat_id: Optional[UUID] = None
     message_id: Optional[UUID] = None
     actor_user_id: Optional[UUID] = None
-    direction: str
+    direction: PiiEventDirection
     entity_type: str
     count: int
     action_path: Optional[str] = None
@@ -59,7 +61,3 @@ class AdminPiiEventItem(BaseModel):
 
 class AdminPiiEventList(BaseModel):
     items: list[AdminPiiEventItem]
-
-
-class AdminPiiEventCleanupResponse(BaseModel):
-    deleted_count: int

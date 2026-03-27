@@ -339,6 +339,7 @@ def delete_session_original_route(
             )
         )
         db.commit()
+        db.refresh(chat)
     return OriginalContentDeleteResponse(deleted_count=deleted_count)
 
 

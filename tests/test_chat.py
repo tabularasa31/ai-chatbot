@@ -992,7 +992,54 @@ def test_delete_session_original_requires_admin_and_removes_original(
 
     db_session.refresh(msg)
     assert msg.content_original_encrypted is None
-    assert msg.content == "[EMAIL]"
+    assert msg.content == msg.content_redacted
+
+
+def test_delete_session_original_clears_legacy_plaintext_when_redacted_missing(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.core.crypto import encrypt_value
+    from backend.models import Chat, Message, MessageRole, User
+
+    token = register_and_verify_user(client, db_session, email="logs-delete-empty@example.com")
+    cl = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Logs Delete Empty Client"},
+    )
+    client_id = uuid.UUID(cl.json()["id"])
+
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(
+        chat_id=chat.id,
+        role=MessageRole.user,
+        content="plaintext@example.com",
+        content_original_encrypted=encrypt_value("plaintext@example.com"),
+        content_redacted=None,
+    )
+    db_session.add(msg)
+    db_session.commit()
+
+    user = db_session.query(User).filter_by(email="logs-delete-empty@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.post(
+        f"/chat/logs/session/{chat.session_id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
+    db_session.refresh(msg)
+    assert msg.content_original_encrypted is None
+    assert msg.content == ""
 
 
 def test_get_session_logs_404_wrong_client(

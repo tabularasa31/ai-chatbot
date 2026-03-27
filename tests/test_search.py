@@ -13,9 +13,11 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
     apply_script_boost,
     bm25_search_chunks,
+    compute_reliability_score,
     cosine_similarity,
     embed_queries,
     detect_query_script_bucket,
+    detect_conflicts,
     expand_query,
     mmr_select,
     rerank_candidates,
@@ -378,6 +380,46 @@ def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candida
 
     assert len(reranked) == 3
     assert reranked[2][1] > 0.0
+
+
+def test_detect_conflicts_flags_duplicate_chunks_from_different_docs() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    conflicts_found, conflict_pairs, reliability_cap = detect_conflicts(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
+
+    assert conflicts_found is True
+    assert reliability_cap == "medium"
+    assert conflict_pairs == [
+        {
+            "chunk_a_id": str(first.id),
+            "chunk_b_id": str(second.id),
+            "similarity": 0.8333,
+            "confirmed_by_llm": False,
+        }
+    ]
+
+
+def test_compute_reliability_score_uses_conflicts_and_top_score() -> None:
+    assert compute_reliability_score(top_score=0.9, conflicts_found=False, result_count=5) == "high"
+    assert compute_reliability_score(top_score=0.9, conflicts_found=True, result_count=5) == "medium"
+    assert compute_reliability_score(top_score=0.2, conflicts_found=False, result_count=5) == "low"
+    assert compute_reliability_score(top_score=None, conflicts_found=False, result_count=0) == "low"
 
 
 # --- API tests (all mock OpenAI) ---

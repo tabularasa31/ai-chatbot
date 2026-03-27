@@ -11,10 +11,13 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
+    apply_language_boost,
     bm25_search_chunks,
     cosine_similarity,
     embed_queries,
+    detect_query_language,
     expand_query,
+    mmr_select,
     rerank_candidates,
 )
 
@@ -159,6 +162,74 @@ def test_rerank_candidates_boosts_lexical_match() -> None:
 
     assert [item[0].id for item in reranked] == [first.id, second.id]
     assert reranked[0][1] > reranked[1][1]
+
+
+def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
+def test_detect_query_language_distinguishes_cyrillic() -> None:
+    assert detect_query_language("как сбросить пароль") == "cyrillic"
+    assert detect_query_language("reset password") == "latin"
+
+
+def test_apply_language_boost_prefers_matching_language() -> None:
+    from backend.models import Embedding
+
+    english = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings",
+        metadata_json={"language": "en"},
+    )
+    russian = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="сброс пароля в настройках",
+        metadata_json={"language": "ru"},
+    )
+
+    boosted = apply_language_boost(
+        "cyrillic",
+        [(english, 0.81), (russian, 0.79)],
+        top_k=2,
+    )
+
+    assert [item[0].id for item in boosted] == [russian.id, english.id]
+
+
+def test_mmr_select_replaces_near_duplicate_chunk() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    duplicate = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+    diverse = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="download billing invoice from account page",
+        metadata_json={"chunk_index": 2},
+    )
+
+    selected, replacements = mmr_select(
+        [(first, 0.95), (duplicate, 0.92), (diverse, 0.7)],
+        top_k=2,
+    )
+
+    assert [item[0].id for item in selected] == [first.id, diverse.id]
+    assert replacements == [
+        {
+            "removed_chunk_id": str(duplicate.id),
+            "replacement_chunk_id": str(diverse.id),
+            "reason": "too_similar_to_existing_chunks:0.000",
+        }
+    ]
 
 
 def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:

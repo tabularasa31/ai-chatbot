@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { api, type AdminPiiEventItem } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 
+const MAX_PRIVACY_DAYS = 3650;
+
 function csvCell(value: string | number | null | undefined): string {
   const stringValue = value == null ? "" : String(value);
   return `"${stringValue.replaceAll('"', '""')}"`;
@@ -12,7 +14,7 @@ function csvCell(value: string | number | null | undefined): string {
 
 function buildCsv(events: AdminPiiEventItem[]): string {
   const header = [
-    "time",
+    "created_at_iso",
     "direction",
     "entity_type",
     "count",
@@ -37,7 +39,11 @@ function buildCsv(events: AdminPiiEventItem[]): string {
       .map((cell) => csvCell(cell))
       .join(",")
   );
-  return [header.join(","), ...rows].join("\n");
+  return [header.join(","), ...rows].join("\r\n");
+}
+
+function sanitizeFilenamePart(value: string): string {
+  return value.replace(/[^a-z0-9_-]/gi, "_");
 }
 
 const DIRECTION_OPTIONS = [
@@ -62,8 +68,10 @@ export default function AdminPrivacyPage() {
   const [exportMessage, setExportMessage] = useState("");
   const parsedSinceDays = Number(sinceDays);
   const parsedRetentionDays = Number(retentionDays);
-  const hasValidSinceDays = Number.isInteger(parsedSinceDays) && parsedSinceDays >= 1;
-  const hasValidRetentionDays = Number.isInteger(parsedRetentionDays) && parsedRetentionDays >= 1;
+  const hasValidSinceDays =
+    Number.isInteger(parsedSinceDays) && parsedSinceDays >= 1 && parsedSinceDays <= MAX_PRIVACY_DAYS;
+  const hasValidRetentionDays =
+    Number.isInteger(parsedRetentionDays) && parsedRetentionDays >= 1 && parsedRetentionDays <= MAX_PRIVACY_DAYS;
 
   const totalCount = useMemo(
     () => events.reduce((sum, event) => sum + event.count, 0),
@@ -129,17 +137,17 @@ export default function AdminPrivacyPage() {
       return;
     }
     const csv = buildCsv(events);
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const directionLabel = direction || "all";
+    const directionLabel = sanitizeFilenamePart(direction || "all");
     link.href = url;
     link.download = `privacy-log-${directionLabel}-${sinceDays}d.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    setExportMessage(`Exported ${events.length} privacy log row(s) as CSV.`);
+    window.setTimeout(() => URL.revokeObjectURL(url), 100);
+    setExportMessage(`Exported ${events.length} row(s) as CSV (up to 100 rows; narrow filters to export a smaller window).`);
   }
 
   async function handleCleanup() {
@@ -227,6 +235,7 @@ export default function AdminPrivacyPage() {
               id="privacy-since-days"
               type="number"
               min={1}
+              max={MAX_PRIVACY_DAYS}
               value={sinceDays}
               onChange={(e) => setSinceDays(e.target.value)}
               className="mt-1 block border border-slate-200 rounded-lg px-3 py-2 text-slate-800 bg-white outline-none focus:border-slate-400"
@@ -250,7 +259,7 @@ export default function AdminPrivacyPage() {
         </div>
         {!hasValidSinceDays && (
           <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
-            Since days must be a whole number greater than 0.
+            Since days must be a whole number between 1 and {MAX_PRIVACY_DAYS}.
           </div>
         )}
 
@@ -265,7 +274,11 @@ export default function AdminPrivacyPage() {
           </div>
         )}
         {exportMessage && (
-          <div className="rounded-lg bg-sky-50 text-sky-700 text-sm px-3 py-2 border border-sky-100">
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg bg-sky-50 text-sky-700 text-sm px-3 py-2 border border-sky-100"
+          >
             {exportMessage}
           </div>
         )}
@@ -313,8 +326,14 @@ export default function AdminPrivacyPage() {
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">{event.actor_user_id ?? "—"}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">{event.action_path ?? "—"}</td>
                   <td className="px-4 py-3 text-slate-500 font-mono text-xs">
-                    <div>{event.chat_id ? `chat:${event.chat_id}` : "chat:—"}</div>
-                    <div>{event.message_id ? `message:${event.message_id}` : "message:—"}</div>
+                    {event.chat_id || event.message_id ? (
+                      <>
+                        {event.chat_id && <div>{`chat:${event.chat_id}`}</div>}
+                        {event.message_id && <div>{`message:${event.message_id}`}</div>}
+                      </>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               ))}
@@ -344,6 +363,7 @@ export default function AdminPrivacyPage() {
               id="privacy-retention-days"
               type="number"
               min={1}
+              max={MAX_PRIVACY_DAYS}
               value={retentionDays}
               onChange={(e) => setRetentionDays(e.target.value)}
               className="mt-1 block border border-slate-200 rounded-lg px-3 py-2 text-slate-800 bg-white outline-none focus:border-slate-400"
@@ -360,7 +380,7 @@ export default function AdminPrivacyPage() {
         </div>
         {!hasValidRetentionDays && (
           <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
-            Retention days must be a whole number greater than 0.
+            Retention days must be a whole number between 1 and {MAX_PRIVACY_DAYS}.
           </div>
         )}
       </section>

@@ -4,13 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminPiiEventItem } from "@/lib/api";
 import { buildPrivacyLogCsv, getPrivacyLogExportFilename } from "@/lib/privacy-ui";
-
-function formatDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: "short",
-    timeStyle: "short",
-  });
-}
+import { formatDateTime } from "@/lib/format";
 
 const DIRECTION_OPTIONS = [
   { value: "", label: "All directions" },
@@ -35,30 +29,36 @@ export default function AdminPrivacyPage() {
   const [exportMessage, setExportMessage] = useState("");
   const parsedSinceDays = Number(sinceDays);
   const parsedRetentionDays = Number(retentionDays);
-  const sinceDaysValid = Number.isFinite(parsedSinceDays) && parsedSinceDays >= 1;
-  const retentionDaysValid = Number.isFinite(parsedRetentionDays) && parsedRetentionDays >= 1;
+  const hasValidSinceDays = Number.isInteger(parsedSinceDays) && parsedSinceDays >= 1;
+  const hasValidRetentionDays = Number.isInteger(parsedRetentionDays) && parsedRetentionDays >= 1;
 
   const totalCount = useMemo(
     () => events.reduce((sum, event) => sum + event.count, 0),
     [events]
   );
 
+  useEffect(() => {
+    async function loadAdmin() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setLoading(false);
+      }
+    }
+    void loadAdmin();
+  }, []);
+
   const load = useCallback(async () => {
     setError("");
     setExportMessage("");
-    if (!sinceDaysValid) {
-      setLoading(false);
+    setLoading(true);
+    if (!hasValidSinceDays) {
       setEvents([]);
+      setLoading(false);
       return;
     }
-    setLoading(true);
     try {
-      const client = await api.clients.getMe().catch(() => null);
-      if (!client?.is_admin) {
-        setIsAdmin(false);
-        return;
-      }
-      setIsAdmin(true);
       const rows = await api.admin.getPiiEvents({
         direction: direction || undefined,
         sinceDays: parsedSinceDays,
@@ -75,11 +75,12 @@ export default function AdminPrivacyPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, parsedSinceDays, sinceDaysValid]);
+  }, [direction, parsedSinceDays, hasValidSinceDays]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (isAdmin !== true) return;
+    void load();
+  }, [isAdmin, load]);
 
   useEffect(() => {
     if (!loading && isAdmin === false) {
@@ -106,17 +107,9 @@ export default function AdminPrivacyPage() {
     setExportMessage(`Exported ${events.length} privacy log row(s) as CSV.`);
   }
 
-  function handleResetFilters() {
-    setDirection("");
-    setSinceDays("30");
-    setError("");
-    setExportMessage("");
-    setConfirmCleanup(false);
-  }
-
   async function handleCleanup() {
-    if (!retentionDaysValid) {
-      setError("Retention days must be 1 or greater.");
+    if (!hasValidRetentionDays) {
+      setError("Retention days must be a whole number greater than 0.");
       return;
     }
     setCleaning(true);
@@ -132,6 +125,14 @@ export default function AdminPrivacyPage() {
     } finally {
       setCleaning(false);
     }
+  }
+
+  function handleResetFilters() {
+    setDirection("");
+    setSinceDays("30");
+    setError("");
+    setExportMessage("");
+    setConfirmCleanup(false);
   }
 
   if (loading) {
@@ -170,23 +171,25 @@ export default function AdminPrivacyPage() {
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
         <div className="flex flex-wrap gap-3 items-end">
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-direction-filter" className="text-sm text-slate-600">
             Direction
             <select
+              id="privacy-direction-filter"
               value={direction}
               onChange={(e) => setDirection(e.target.value)}
               className="mt-1 block border border-slate-200 rounded-lg px-3 py-2 text-slate-800 bg-white outline-none focus:border-slate-400"
             >
               {DIRECTION_OPTIONS.map((option) => (
-                <option key={option.label} value={option.value}>
+                <option key={option.value || "all"} value={option.value}>
                   {option.label}
                 </option>
               ))}
             </select>
           </label>
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-since-days" className="text-sm text-slate-600">
             Since days
             <input
+              id="privacy-since-days"
               type="number"
               min={1}
               value={sinceDays}
@@ -197,7 +200,7 @@ export default function AdminPrivacyPage() {
           <button
             type="button"
             onClick={load}
-            disabled={!sinceDaysValid}
+            disabled={!hasValidSinceDays}
             className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700"
           >
             Refresh
@@ -210,9 +213,9 @@ export default function AdminPrivacyPage() {
             Reset filters
           </button>
         </div>
-        {!sinceDaysValid && (
+        {!hasValidSinceDays && (
           <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
-            Since days must be 1 or greater.
+            Since days must be a whole number greater than 0.
           </div>
         )}
 
@@ -244,6 +247,10 @@ export default function AdminPrivacyPage() {
           >
             Export CSV
           </button>
+        </div>
+
+        <div className="rounded-lg bg-slate-50 text-slate-600 text-sm px-3 py-2 border border-slate-200">
+          Showing the latest 100 events for the current filter.
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
@@ -296,9 +303,10 @@ export default function AdminPrivacyPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-3 items-end">
-          <label className="text-sm text-slate-600">
+          <label htmlFor="privacy-retention-days" className="text-sm text-slate-600">
             Retention days
             <input
+              id="privacy-retention-days"
               type="number"
               min={1}
               value={retentionDays}
@@ -309,18 +317,18 @@ export default function AdminPrivacyPage() {
           <button
             type="button"
             onClick={() => setConfirmCleanup(true)}
-            disabled={cleaning || !retentionDaysValid}
+            disabled={cleaning || !hasValidRetentionDays}
             className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800"
           >
             {cleaning ? "Cleaning…" : "Run cleanup"}
           </button>
         </div>
-        {!retentionDaysValid && (
+        {!hasValidRetentionDays && (
           <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
-            Retention days must be 1 or greater.
+            Retention days must be a whole number greater than 0.
           </div>
         )}
-        {confirmCleanup && retentionDaysValid && (
+        {confirmCleanup && hasValidRetentionDays && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-medium text-amber-900">
               Delete privacy audit rows older than {parsedRetentionDays} days?

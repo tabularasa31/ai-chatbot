@@ -3,7 +3,12 @@
 import { Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
-import { getOriginalContentLabel, getOriginalContentStatus } from "@/lib/privacy-ui";
+import {
+  getOriginalContentBadgeClassName,
+  getOriginalContentStatus,
+  getOriginalContentStatusFromFlags,
+  getOriginalContentTextClassName,
+} from "@/lib/privacy-ui";
 import { formatDateTime } from "@/lib/format";
 
 function truncateSessionId(id: string): string {
@@ -60,17 +65,12 @@ function MessageBubble({
     originalAvailable: msg.content_original_available,
   });
   const originalState = {
-    label: getOriginalContentLabel(originalStatus, {
+    label: {
       shown: "Original shown",
       available: "Original available",
       removed: "Original removed",
-    }),
-    className:
-      originalStatus === "shown"
-        ? "text-emerald-700"
-        : originalStatus === "available"
-          ? "text-amber-700"
-          : "text-slate-500",
+    }[originalStatus],
+    className: getOriginalContentTextClassName(originalStatus),
   };
 
   return (
@@ -275,23 +275,18 @@ function LogsPageContent() {
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
   const hasOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original_available));
   const hasVisibleOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original));
-  const originalLifecycleStatus = getOriginalContentStatus({
-    original: hasVisibleOriginalContent ? "visible" : null,
-    originalAvailable: hasOriginalContent,
-  });
+  const originalLifecycleStatus = getOriginalContentStatusFromFlags(
+    hasVisibleOriginalContent,
+    hasOriginalContent
+  );
   const showOriginalLifecycle = hasOriginalContent || hasVisibleOriginalContent;
   const originalLifecycle = {
-    label: getOriginalContentLabel(originalLifecycleStatus, {
+    label: {
       shown: "Original content visible",
       available: "Original content available",
       removed: "Original content removed",
-    }),
-    className:
-      originalLifecycleStatus === "shown"
-        ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-        : originalLifecycleStatus === "available"
-          ? "bg-amber-50 text-amber-800 border-amber-200"
-          : "bg-slate-100 text-slate-600 border-slate-200",
+    }[originalLifecycleStatus],
+    className: getOriginalContentBadgeClassName(originalLifecycleStatus),
   };
 
   async function handleDeleteOriginal() {

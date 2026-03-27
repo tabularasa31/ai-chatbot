@@ -102,6 +102,11 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
 )
 
 
+def match_quick_answer(question: str, client: Client | None = None) -> str | None:
+    """Placeholder for a future quick-answers layer from the observability spec."""
+    return None
+
+
 def _safe_int(value: Any) -> int:
     """Convert SDK usage fields to int without trusting mock-like objects."""
     if isinstance(value, bool):
@@ -276,6 +281,27 @@ def build_rag_prompt(
     )
 
 
+def build_rag_messages(
+    question: str,
+    context_chunks: list[str],
+    *,
+    user_context_line: str | None = None,
+    disclosure_config: dict[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Build system and user messages for generation and tracing."""
+    prompt = build_rag_prompt(
+        question,
+        context_chunks,
+        user_context_line=user_context_line,
+        disclosure_config=disclosure_config,
+    )
+    if "\n\nContext:\n" not in prompt:
+        return prompt, f"Question: {question}"
+
+    system_prompt, remainder = prompt.split("\n\nContext:\n", 1)
+    return system_prompt, remainder
+
+
 def generate_answer(
     question: str,
     context_chunks: list[str],
@@ -299,18 +325,23 @@ def generate_answer(
     if not context_chunks:
         return ("I don't have information about this.", 0)
 
-    prompt = build_rag_prompt(
+    system_prompt, user_message = build_rag_messages(
         question,
         context_chunks,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
     )
+    prompt = f"{system_prompt}\n\nContext:\n{user_message}"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
     openai_client = get_openai_client(api_key)
     generation = None
     if trace is not None:
         generation_input: Any
         if settings.observability_capture_full_prompts:
-            generation_input = [{"role": "user", "content": prompt}]
+            generation_input = messages
         else:
             generation_input = {
                 "question_preview": truncate_text(question),
@@ -325,13 +356,20 @@ def generate_answer(
                 "max_tokens": 500,
                 "context_chunk_count": len(context_chunks),
                 "captures_full_prompt": settings.observability_capture_full_prompts,
+                "finish_reason_expected": "stop_or_length",
+                "system_prompt": (
+                    system_prompt if settings.observability_capture_full_prompts else None
+                ),
+                "context_chunks": (
+                    context_chunks if settings.observability_capture_full_prompts else None
+                ),
             },
         )
     started_at = perf_counter()
     try:
         response = openai_client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             temperature=0.2,
             max_tokens=500,
         )
@@ -352,6 +390,10 @@ def generate_answer(
                 },
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
+                    "finish_reason": (
+                        getattr(response.choices[0], "finish_reason", None) if response.choices else None
+                    ),
+                    "cost_usd": round((_safe_int(total_tokens) / 1_000_000) * 0.30, 6),
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                 },
             )
@@ -650,6 +692,31 @@ def process_chat_message(
         disclosure_cfg = client_row.disclosure_config
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
+
+    quick_answer_span = trace.span(
+        name="quick-answers-check",
+        input={"query": redacted_question},
+    )
+    quick_answer = match_quick_answer(redacted_question, client_row)
+    quick_answer_span.end(
+        output={"matched": bool(quick_answer), "answer": quick_answer}
+    )
+    if quick_answer:
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            quick_answer,
+            [],
+            0,
+            optional_entity_types=optional_entity_types,
+        )
+        trace.update(
+            output={"answer": quick_answer, "source": "quick_answers"},
+            metadata={"chat_ended": False, "escalated": False, "quick_answer": True},
+        )
+        return (quick_answer, [], 0, False)
 
     # --- Chat closed ---
     if chat.ended_at is not None:

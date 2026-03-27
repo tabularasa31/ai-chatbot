@@ -361,6 +361,29 @@ def resolve_ticket(
     return ticket
 
 
+def delete_ticket_original_content(
+    ticket_id: uuid.UUID,
+    client_id: uuid.UUID,
+    db: Session,
+) -> tuple[EscalationTicket | None, int]:
+    ticket = (
+        db.query(EscalationTicket)
+        .filter(EscalationTicket.id == ticket_id, EscalationTicket.client_id == client_id)
+        .first()
+    )
+    if not ticket:
+        return None, 0
+    if ticket.primary_question_original_encrypted is None:
+        return ticket, 0
+    ticket.primary_question_original_encrypted = None
+    if ticket.primary_question_redacted:
+        ticket.primary_question = ticket.primary_question_redacted
+    db.add(ticket)
+    db.commit()
+    db.refresh(ticket)
+    return ticket, 1
+
+
 def get_latest_escalation_ticket_for_chat(chat_id: uuid.UUID, db: Session) -> EscalationTicket:
     ticket = (
         db.query(EscalationTicket)

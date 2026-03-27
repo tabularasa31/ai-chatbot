@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
@@ -41,3 +42,24 @@ class AdminClientMetricsList(BaseModel):
     """List of per-client metrics."""
 
     items: list[AdminClientMetricsItem]
+
+
+class AdminPiiEventItem(BaseModel):
+    id: UUID
+    client_id: UUID
+    chat_id: Optional[UUID] = None
+    message_id: Optional[UUID] = None
+    actor_user_id: Optional[UUID] = None
+    direction: str
+    entity_type: str
+    count: int
+    action_path: Optional[str] = None
+    created_at: datetime
+
+
+class AdminPiiEventList(BaseModel):
+    items: list[AdminPiiEventItem]
+
+
+class AdminPiiEventCleanupResponse(BaseModel):
+    deleted_count: int

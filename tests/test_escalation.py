@@ -494,3 +494,47 @@ def test_escalation_api_include_original_requires_admin(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
+
+
+def test_delete_escalation_original_requires_admin_and_removes_original(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-delete@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc Delete Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+
+    denied = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert denied.status_code == 403
+
+    user = db_session.query(User).filter(User.email == "esc-delete@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 1
+
+    db_session.refresh(ticket)
+    assert ticket.primary_question_original_encrypted is None
+    assert ticket.primary_question == "contact me at [EMAIL]"

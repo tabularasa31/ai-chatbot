@@ -997,3 +997,33 @@ def get_session_logs(
         )
         for m in messages
     ]
+
+
+def delete_session_original_content(
+    session_id: uuid.UUID,
+    client_id: uuid.UUID,
+    db: Session,
+) -> tuple[Chat | None, int]:
+    chat = db.query(Chat).filter(
+        Chat.session_id == session_id,
+        Chat.client_id == client_id,
+    ).first()
+    if not chat:
+        return None, 0
+
+    messages = (
+        db.query(Message)
+        .filter(Message.chat_id == chat.id)
+        .all()
+    )
+    deleted_count = 0
+    for message in messages:
+        if message.content_original_encrypted is None:
+            continue
+        message.content_original_encrypted = None
+        if message.content_redacted:
+            message.content = message.content_redacted
+        db.add(message)
+        deleted_count += 1
+    db.commit()
+    return chat, deleted_count

@@ -116,6 +116,7 @@ class PiiEventDirection(str, enum.Enum):
     escalation_ticket = "escalation_ticket"
     notification_email = "notification_email"
     original_view = "original_view"
+    original_delete = "original_delete"
 
 
 class EscalationPhase(str, enum.Enum):
@@ -635,6 +636,12 @@ class PiiEvent(Base):
         nullable=True,
         index=True,
     )
+    actor_user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     direction = Column(
         Enum(PiiEventDirection, native_enum=False),
         nullable=False,
@@ -642,6 +649,7 @@ class PiiEvent(Base):
     )
     entity_type = Column(String(64), nullable=False)
     count = Column(Integer, nullable=False, server_default="1")
+    action_path = Column(String(255), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 

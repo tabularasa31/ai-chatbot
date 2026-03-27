@@ -8,7 +8,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_admin_user
 from backend.clients.service import get_client_by_user
 from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
@@ -17,8 +17,9 @@ from backend.escalation.schemas import (
     EscalationResolveRequest,
     EscalationTicketOut,
 )
-from backend.escalation.service import resolve_ticket
+from backend.escalation.service import delete_ticket_original_content, resolve_ticket
 from backend.models import EscalationStatus, EscalationTicket, PiiEvent, PiiEventDirection, User
+from backend.privacy_schemas import OriginalContentDeleteResponse
 
 escalation_router = APIRouter(prefix="/escalations", tags=["escalations"])
 
@@ -91,9 +92,11 @@ def list_escalations(
                     client_id=client.id,
                     chat_id=ticket.chat_id,
                     message_id=None,
+                    actor_user_id=current_user.id,
                     direction=PiiEventDirection.original_view,
                     entity_type="ORIGINAL_VIEW",
                     count=1,
+                    action_path="/escalations",
                 )
             )
         db.commit()
@@ -127,9 +130,11 @@ def get_escalation(
                 client_id=client.id,
                 chat_id=t.chat_id,
                 message_id=None,
+                actor_user_id=current_user.id,
                 direction=PiiEventDirection.original_view,
                 entity_type="ORIGINAL_VIEW",
                 count=1,
+                action_path=f"/escalations/{ticket_id}",
             )
         )
         db.commit()
@@ -151,3 +156,33 @@ def resolve_escalation(
     except ValueError:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return _serialize_ticket(t, include_original=False)
+
+
+@escalation_router.post("/{ticket_id}/delete-original", response_model=OriginalContentDeleteResponse)
+def delete_escalation_original(
+    ticket_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OriginalContentDeleteResponse:
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    ticket, deleted_count = delete_ticket_original_content(ticket_id, client.id, db)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if deleted_count:
+        db.add(
+            PiiEvent(
+                client_id=client.id,
+                chat_id=ticket.chat_id,
+                message_id=None,
+                actor_user_id=current_user.id,
+                direction=PiiEventDirection.original_delete,
+                entity_type="ORIGINAL_DELETE",
+                count=deleted_count,
+                action_path=f"/escalations/{ticket_id}/delete-original",
+            )
+        )
+        db.commit()
+        db.refresh(ticket)
+    return OriginalContentDeleteResponse(deleted_count=deleted_count)

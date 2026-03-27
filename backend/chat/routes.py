@@ -27,6 +27,7 @@ from backend.chat.schemas import (
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.chat.service import (
+    delete_session_original_content,
     get_chat_history,
     get_session_logs,
     list_chat_sessions,
@@ -35,9 +36,10 @@ from backend.chat.service import (
 )
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_admin_user
 from backend.models import Chat, EscalationTrigger, Message, MessageFeedback, MessageRole, User
 from backend.models import PiiEvent, PiiEventDirection
+from backend.privacy_schemas import OriginalContentDeleteResponse
 
 
 class DebugRequest(BaseModel):
@@ -283,9 +285,11 @@ def get_session_logs_route(
                     client_id=client.id,
                     chat_id=None,
                     message_id=msg_id,
+                    actor_user_id=current_user.id,
                     direction=PiiEventDirection.original_view,
                     entity_type="ORIGINAL_VIEW",
                     count=1,
+                    action_path=f"/chat/logs/session/{session_id}",
                 )
             )
         db.commit()
@@ -306,6 +310,37 @@ def get_session_logs_route(
             for msg_id, sid, role, content, content_original, content_original_available, feedback, ideal_answer, created_at in logs
         ],
     )
+
+
+@chat_router.post("/logs/session/{session_id}/delete-original", response_model=OriginalContentDeleteResponse)
+def delete_session_original_route(
+    session_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> OriginalContentDeleteResponse:
+    client = get_client_by_user(current_user.id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    chat, deleted_count = delete_session_original_content(session_id, client.id, db)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if deleted_count:
+        db.add(
+            PiiEvent(
+                client_id=client.id,
+                chat_id=chat.id,
+                message_id=None,
+                actor_user_id=current_user.id,
+                direction=PiiEventDirection.original_delete,
+                entity_type="ORIGINAL_DELETE",
+                count=deleted_count,
+                action_path=f"/chat/logs/session/{session_id}/delete-original",
+            )
+        )
+        db.commit()
+        db.refresh(chat)
+    return OriginalContentDeleteResponse(deleted_count=deleted_count)
 
 
 @chat_router.post("/messages/{message_id}/feedback", response_model=MessageFeedbackResponse)

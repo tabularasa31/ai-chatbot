@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
 
@@ -159,11 +159,13 @@ function LogsPageContent() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(sessionFromUrl);
   const [logs, setLogs] = useState<ChatSessionLogs | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLoaded, setAdminLoaded] = useState(false);
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [deletingOriginal, setDeletingOriginal] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [error, setError] = useState("");
+  const skipNextLogsReload = useRef(false);
 
   useEffect(() => {
     if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
@@ -171,14 +173,22 @@ function LogsPageContent() {
 
   useEffect(() => {
     async function load() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setAdminLoaded(true);
+      }
+    }
+    load();
+  }, []);
+
+  useEffect(() => {
+    async function load() {
       setError("");
       setLoadingSessions(true);
       try {
-        const [client, list] = await Promise.all([
-          api.clients.getMe().catch(() => null),
-          api.chat.listSessions(),
-        ]);
-        setIsAdmin(Boolean(client?.is_admin));
+        const list = await api.chat.listSessions();
         setSessions(list);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load sessions");
@@ -189,20 +199,14 @@ function LogsPageContent() {
     load();
   }, []);
 
-  useEffect(() => {
-    const sid = selectedSessionId;
-    if (!sid) {
-      setLogs(null);
-      return;
-    }
-    const sessionId: string = sid;
-    async function load() {
+  const loadSessionLogs = useCallback(
+    async (sessionId: string, includeOriginalValue: boolean) => {
       setError("");
       setLoadingLogs(true);
       setLogs(null);
       try {
         const data = await api.chat.getSessionLogs(sessionId, {
-          includeOriginal: isAdmin && includeOriginal,
+          includeOriginal: isAdmin && includeOriginalValue,
         });
         setLogs(data);
       } catch (err) {
@@ -210,9 +214,23 @@ function LogsPageContent() {
       } finally {
         setLoadingLogs(false);
       }
+    },
+    [isAdmin]
+  );
+
+  useEffect(() => {
+    if (!adminLoaded) return;
+    if (skipNextLogsReload.current) {
+      skipNextLogsReload.current = false;
+      return;
     }
-    load();
-  }, [selectedSessionId, includeOriginal, isAdmin]);
+    const sid = selectedSessionId;
+    if (!sid) {
+      setLogs(null);
+      return;
+    }
+    void loadSessionLogs(sid, includeOriginal);
+  }, [selectedSessionId, includeOriginal, adminLoaded, loadSessionLogs]);
 
   const selectedSession = sessions.find((s) => s.session_id === selectedSessionId);
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
@@ -220,13 +238,18 @@ function LogsPageContent() {
 
   async function handleDeleteOriginal() {
     if (!selectedSessionId) return;
+    if (!window.confirm("Delete the stored original content for this session? This cannot be undone.")) {
+      return;
+    }
     setDeletingOriginal(true);
     setError("");
     try {
       await api.chat.deleteSessionOriginal(selectedSessionId);
-      const data = await api.chat.getSessionLogs(selectedSessionId, { includeOriginal: false });
-      setIncludeOriginal(false);
-      setLogs(data);
+      skipNextLogsReload.current = includeOriginal;
+      if (includeOriginal) {
+        setIncludeOriginal(false);
+      }
+      await loadSessionLogs(selectedSessionId, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete original content");
     } finally {

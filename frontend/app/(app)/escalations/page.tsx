@@ -41,20 +41,31 @@ export default function EscalationsPage() {
   const [tickets, setTickets] = useState<EscalationTicket[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [adminLoaded, setAdminLoaded] = useState(false);
   const [includeOriginal, setIncludeOriginal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  useEffect(() => {
+    async function loadAdmin() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setAdminLoaded(true);
+      }
+    }
+    void loadAdmin();
+  }, []);
+
   const load = useCallback(async () => {
     setError("");
     setLoading(true);
     try {
-      const client = await api.clients.getMe().catch(() => null);
-      setIsAdmin(Boolean(client?.is_admin));
       const list = await api.escalations.list(
         statusFilter || includeOriginal
-          ? { status: statusFilter || undefined, includeOriginal: Boolean(client?.is_admin && includeOriginal) }
+          ? { status: statusFilter || undefined, includeOriginal: Boolean(isAdmin && includeOriginal) }
           : undefined
       );
       setTickets(list);
@@ -63,11 +74,12 @@ export default function EscalationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [statusFilter, includeOriginal]);
+  }, [statusFilter, includeOriginal, isAdmin]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!adminLoaded) return;
+    void load();
+  }, [adminLoaded, load]);
 
   return (
     <div className="space-y-6">
@@ -146,6 +158,7 @@ export default function EscalationsPage() {
                       setExpandedId((id) => (id === t.id ? null : t.id))
                     }
                     onResolved={load}
+                    onOriginalDeleted={load}
                   />
                 ))}
               </tbody>
@@ -163,12 +176,14 @@ function TicketRow({
   isAdmin,
   onToggle,
   onResolved,
+  onOriginalDeleted,
 }: {
   ticket: EscalationTicket;
   expanded: boolean;
   isAdmin: boolean;
   onToggle: () => void;
   onResolved: () => void;
+  onOriginalDeleted: () => void;
 }) {
   const [resolution, setResolution] = useState("");
   const [saving, setSaving] = useState(false);
@@ -200,11 +215,14 @@ function TicketRow({
   };
 
   const deleteOriginal = async () => {
+    if (!window.confirm("Delete the stored original content for this ticket? This cannot be undone.")) {
+      return;
+    }
     setLocalError("");
     setDeletingOriginal(true);
     try {
       await api.escalations.deleteOriginal(ticket.id);
-      onResolved();
+      onOriginalDeleted();
     } catch (e) {
       setLocalError(e instanceof Error ? e.message : "Failed to delete original content");
     } finally {

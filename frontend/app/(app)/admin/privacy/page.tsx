@@ -30,25 +30,40 @@ export default function AdminPrivacyPage() {
   const [retentionDays, setRetentionDays] = useState("365");
   const [cleaning, setCleaning] = useState(false);
   const [cleanupMessage, setCleanupMessage] = useState("");
+  const parsedSinceDays = Number(sinceDays);
+  const parsedRetentionDays = Number(retentionDays);
+  const hasValidSinceDays = Number.isInteger(parsedSinceDays) && parsedSinceDays >= 1;
+  const hasValidRetentionDays = Number.isInteger(parsedRetentionDays) && parsedRetentionDays >= 1;
 
   const totalCount = useMemo(
     () => events.reduce((sum, event) => sum + event.count, 0),
     [events]
   );
 
-  const load = useCallback(async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const client = await api.clients.getMe().catch(() => null);
-      if (!client?.is_admin) {
-        setIsAdmin(false);
-        return;
+  useEffect(() => {
+    async function loadAdmin() {
+      try {
+        const client = await api.clients.getMe().catch(() => null);
+        setIsAdmin(Boolean(client?.is_admin));
+      } finally {
+        setLoading(false);
       }
-      setIsAdmin(true);
+    }
+    void loadAdmin();
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    if (!hasValidSinceDays) {
+      setEvents([]);
+      setLoading(false);
+      return;
+    }
+    setError("");
+    try {
       const rows = await api.admin.getPiiEvents({
         direction: direction || undefined,
-        sinceDays: Number(sinceDays),
+        sinceDays: parsedSinceDays,
         limit: 100,
       });
       setEvents(rows);
@@ -62,11 +77,12 @@ export default function AdminPrivacyPage() {
     } finally {
       setLoading(false);
     }
-  }, [direction, sinceDays]);
+  }, [direction, parsedSinceDays, hasValidSinceDays]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    if (isAdmin !== true) return;
+    void load();
+  }, [isAdmin, load]);
 
   useEffect(() => {
     if (!loading && isAdmin === false) {
@@ -75,11 +91,18 @@ export default function AdminPrivacyPage() {
   }, [isAdmin, loading, router]);
 
   async function handleCleanup() {
+    if (!hasValidRetentionDays) {
+      setError("Retention days must be a whole number greater than 0.");
+      return;
+    }
+    if (!window.confirm(`Delete privacy audit rows older than ${parsedRetentionDays} days? This cannot be undone.`)) {
+      return;
+    }
     setCleaning(true);
     setCleanupMessage("");
     setError("");
     try {
-      const result = await api.admin.cleanupPiiEvents(Number(retentionDays));
+      const result = await api.admin.cleanupPiiEvents(parsedRetentionDays);
       setCleanupMessage(`Deleted ${result.deleted_count} old audit event(s).`);
       await load();
     } catch (e) {
@@ -87,6 +110,12 @@ export default function AdminPrivacyPage() {
     } finally {
       setCleaning(false);
     }
+  }
+
+  function handleResetFilters() {
+    setDirection("");
+    setSinceDays("30");
+    setError("");
   }
 
   if (loading) {
@@ -133,7 +162,7 @@ export default function AdminPrivacyPage() {
               className="mt-1 block border border-slate-200 rounded-lg px-3 py-2 text-slate-800 bg-white outline-none focus:border-slate-400"
             >
               {DIRECTION_OPTIONS.map((option) => (
-                <option key={option.label} value={option.value}>
+                <option key={option.value || "all"} value={option.value}>
                   {option.label}
                 </option>
               ))}
@@ -152,11 +181,24 @@ export default function AdminPrivacyPage() {
           <button
             type="button"
             onClick={load}
+            disabled={!hasValidSinceDays}
             className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700"
           >
             Refresh
           </button>
+          <button
+            type="button"
+            onClick={handleResetFilters}
+            className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium hover:bg-slate-50"
+          >
+            Reset filters
+          </button>
         </div>
+        {!hasValidSinceDays && (
+          <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
+            Since days must be a whole number greater than 0.
+          </div>
+        )}
 
         {error && (
           <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
@@ -168,6 +210,10 @@ export default function AdminPrivacyPage() {
             {cleanupMessage}
           </div>
         )}
+
+        <div className="rounded-lg bg-slate-50 text-slate-600 text-sm px-3 py-2 border border-slate-200">
+          Showing the latest 100 events for the current filter.
+        </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="min-w-full text-sm">
@@ -227,12 +273,17 @@ export default function AdminPrivacyPage() {
           <button
             type="button"
             onClick={handleCleanup}
-            disabled={cleaning}
+            disabled={cleaning || !hasValidRetentionDays}
             className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm font-medium disabled:opacity-50 hover:bg-slate-800"
           >
             {cleaning ? "Cleaning…" : "Run cleanup"}
           </button>
         </div>
+        {!hasValidRetentionDays && (
+          <div className="rounded-lg bg-amber-50 text-amber-800 text-sm px-3 py-2 border border-amber-100">
+            Retention days must be a whole number greater than 0.
+          </div>
+        )}
       </section>
     </div>
   );

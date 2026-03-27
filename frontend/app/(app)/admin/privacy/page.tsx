@@ -3,49 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, type AdminPiiEventItem } from "@/lib/api";
+import { buildPrivacyLogCsv, getPrivacyLogExportFilename } from "@/lib/privacy-ui";
 import { formatDateTime } from "@/lib/format";
 
 const MAX_PRIVACY_DAYS = 3650;
-
-function csvCell(value: string | number | null | undefined): string {
-  const stringValue = value == null ? "" : String(value);
-  return `"${stringValue.replaceAll('"', '""')}"`;
-}
-
-function buildCsv(events: AdminPiiEventItem[]): string {
-  const header = [
-    "created_at_iso",
-    "direction",
-    "entity_type",
-    "count",
-    "client_id",
-    "actor_user_id",
-    "action_path",
-    "chat_id",
-    "message_id",
-  ];
-  const rows = events.map((event) =>
-    [
-      event.created_at,
-      event.direction,
-      event.entity_type,
-      event.count,
-      event.client_id,
-      event.actor_user_id,
-      event.action_path,
-      event.chat_id,
-      event.message_id,
-    ]
-      .map((cell) => csvCell(cell))
-      .join(",")
-  );
-  return [header.join(","), ...rows].join("\r\n");
-}
-
-function sanitizeFilenamePart(value: string): string {
-  return value.replace(/[^a-z0-9_-]/gi, "_");
-}
-
 const DIRECTION_OPTIONS = [
   { value: "", label: "All directions" },
   { value: "message_storage", label: "Message storage" },
@@ -136,13 +97,12 @@ export default function AdminPrivacyPage() {
       setExportMessage("Nothing to export for the current filter.");
       return;
     }
-    const csv = buildCsv(events);
+    const csv = buildPrivacyLogCsv(events);
     const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
-    const directionLabel = sanitizeFilenamePart(direction || "all");
     link.href = url;
-    link.download = `privacy-log-${directionLabel}-${sinceDays}d.csv`;
+    link.download = getPrivacyLogExportFilename(direction, sinceDays);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "npm run test:unit",
+    "test:unit": "tsc -p tsconfig.test.json && node --test .test-dist/tests/privacy-ui.test.js"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1",

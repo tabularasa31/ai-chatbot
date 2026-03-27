@@ -40,3 +40,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Local Codex / frontend test output
+.claude/worktrees/
+frontend/.test-dist/

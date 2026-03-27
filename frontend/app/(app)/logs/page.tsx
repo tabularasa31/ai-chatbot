@@ -3,6 +3,12 @@
 import { Suspense, useCallback, useEffect, useId, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
+import {
+  getOriginalContentBadgeClassName,
+  getOriginalContentStatus,
+  getOriginalContentStatusFromFlags,
+  getOriginalContentTextClassName,
+} from "@/lib/privacy-ui";
 import { formatDateTime } from "@/lib/format";
 
 function truncateSessionId(id: string): string {
@@ -54,20 +60,18 @@ function MessageBubble({
   }, [msg, idealText, onFeedbackUpdate]);
 
   const isAssistant = msg.role === "assistant";
-  const originalState = msg.content_original
-    ? {
-        label: "Original shown",
-        className: "text-emerald-700",
-      }
-    : msg.content_original_available
-      ? {
-          label: "Original available",
-          className: "text-amber-700",
-        }
-      : {
-          label: "Original removed",
-          className: "text-slate-500",
-        };
+  const originalStatus = getOriginalContentStatus({
+    original: msg.content_original,
+    originalAvailable: msg.content_original_available,
+  });
+  const originalState = {
+    label: {
+      shown: "Original shown",
+      available: "Original available",
+      removed: "Original removed",
+    }[originalStatus],
+    className: getOriginalContentTextClassName(originalStatus),
+  };
 
   return (
     <div className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
@@ -271,21 +275,19 @@ function LogsPageContent() {
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
   const hasOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original_available));
   const hasVisibleOriginalContent = Boolean(logs?.messages.some((msg) => msg.content_original));
+  const originalLifecycleStatus = getOriginalContentStatusFromFlags(
+    hasVisibleOriginalContent,
+    hasOriginalContent
+  );
   const showOriginalLifecycle = hasOriginalContent || hasVisibleOriginalContent;
-  const originalLifecycle = hasVisibleOriginalContent
-    ? {
-        label: "Original content visible",
-        className: "bg-emerald-50 text-emerald-700 border-emerald-200",
-      }
-    : hasOriginalContent
-      ? {
-          label: "Original content available",
-          className: "bg-amber-50 text-amber-800 border-amber-200",
-        }
-      : {
-          label: "Original content removed",
-          className: "bg-slate-100 text-slate-600 border-slate-200",
-        };
+  const originalLifecycle = {
+    label: {
+      shown: "Original content visible",
+      available: "Original content available",
+      removed: "Original content removed",
+    }[originalLifecycleStatus],
+    className: getOriginalContentBadgeClassName(originalLifecycleStatus),
+  };
 
   async function handleDeleteOriginal() {
     if (!selectedSessionId) return;

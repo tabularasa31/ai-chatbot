@@ -1,4 +1,5 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "";
+let authRedirectInProgress = false;
 
 export type ChatSessionSummary = {
   session_id: string;
@@ -222,7 +223,28 @@ export function saveToken(token: string): void {
 export function removeToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem("token");
-  document.cookie = "token=; path=/; max-age=0";
+  document.cookie = "token=; path=/; max-age=0; samesite=lax";
+}
+
+function handleUnauthorized(): void {
+  if (typeof window === "undefined") return;
+
+  removeToken();
+
+  if (authRedirectInProgress) return;
+  authRedirectInProgress = true;
+
+  if (window.location.pathname !== "/login") {
+    window.location.replace("/login?error=session_expired");
+    return;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("error") !== "session_expired") {
+    params.set("error", "session_expired");
+    const nextUrl = `/login?${params.toString()}`;
+    window.location.replace(nextUrl);
+  }
 }
 
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
@@ -233,7 +255,13 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  return fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, headers });
+
+  if (response.status === 401) {
+    handleUnauthorized();
+  }
+
+  return response;
 }
 
 export const api = {

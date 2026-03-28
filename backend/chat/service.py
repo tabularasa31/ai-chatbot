@@ -149,6 +149,10 @@ def retrieve_context(
             best_rank_score=None,
             best_confidence_score=None,
             confidence_source="none",
+            conflicts_found=bundle.conflicts_found,
+            conflict_pairs=bundle.conflict_pairs,
+            reliability_score=bundle.reliability_score,
+            reliability_cap_reason=bundle.reliability_cap_reason,
         )
 
     best_rank_score = results[0][1]
@@ -182,6 +186,10 @@ def retrieve_context(
         best_rank_score=best_rank_score,
         best_confidence_score=best_confidence_score,
         confidence_source=confidence_source,
+        conflicts_found=bundle.conflicts_found,
+        conflict_pairs=bundle.conflict_pairs,
+        reliability_score=bundle.reliability_score,
+        reliability_cap_reason=bundle.reliability_cap_reason,
     )
 
 
@@ -196,6 +204,10 @@ class RetrievalContext:
     best_rank_score: float | None
     best_confidence_score: float | None
     confidence_source: Literal["vector_similarity", "rank_score", "none"]
+    conflicts_found: bool = False
+    conflict_pairs: list[dict[str, object]] | None = None
+    reliability_score: Literal["low", "medium", "high"] | None = None
+    reliability_cap_reason: Literal["source_overlap"] | None = None
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -925,11 +937,13 @@ def process_chat_message(
         api_key=api_key,
         trace=trace,
     )
+    reliability_score = retrieval.reliability_score or "low"
     if (
         not validation["is_valid"]
         and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
     ):
         answer = FALLBACK_LOW_CONFIDENCE_ANSWER
+        reliability_score = "low"
 
     escalation_decision_span = trace.span(
         name="escalation-check",
@@ -937,6 +951,7 @@ def process_chat_message(
             "best_confidence_score": retrieval.best_confidence_score,
             "chunk_count": len(chunk_texts),
             "validation": validation,
+            "reliability_score": reliability_score,
         },
     )
     escalate, esc_trigger = should_escalate(
@@ -948,6 +963,7 @@ def process_chat_message(
         output={
             "escalate": escalate,
             "trigger": esc_trigger.value if esc_trigger else None,
+            "reliability_score": reliability_score,
         }
     )
     if escalate and esc_trigger is not None:
@@ -1007,6 +1023,11 @@ def process_chat_message(
             "retrieval_mode": retrieval.mode,
             "best_rank_score": retrieval.best_rank_score,
             "best_confidence_score": retrieval.best_confidence_score,
+            "reliability_score": reliability_score,
+            "reliability_cap_reason": retrieval.reliability_cap_reason,
+            "semantic_conflict_detection": False,
+            "conflicts_found": retrieval.conflicts_found,
+            "conflict_pairs": retrieval.conflict_pairs,
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
@@ -1064,6 +1085,11 @@ def run_debug(
         "best_rank_score": retrieval.best_rank_score,
         "best_confidence_score": retrieval.best_confidence_score,
         "confidence_source": retrieval.confidence_source,
+        "reliability_score": retrieval.reliability_score,
+        "reliability_cap_reason": retrieval.reliability_cap_reason,
+        "semantic_conflict_detection": False,
+        "conflicts_found": retrieval.conflicts_found,
+        "conflict_pairs": retrieval.conflict_pairs,
         "chunks": chunks_debug,
         "validation": validate_answer(
             redacted_question, answer, chunk_texts, api_key=api_key

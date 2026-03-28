@@ -16,6 +16,7 @@ from backend.chat.service import (
     RetrievalContext,
     build_rag_prompt,
     generate_answer,
+    retrieve_context,
     process_chat_message,
     validate_answer,
 )
@@ -605,6 +606,51 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     assert data["answer"] == "Максимум 100 документов можно загрузить на аккаунт."
     assert "[[escalation_ticket:" not in data["answer"]
     assert data["source_documents"] == [str(doc_id)]
+
+
+def test_retrieve_context_propagates_reliability_cap_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import SearchResultBundle
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.search_similar_chunks_detailed",
+        lambda *args, **kwargs: SearchResultBundle(
+            results=[(embedding, 0.88)],
+            best_vector_similarity=0.88,
+            query_variants=["reset password"],
+            conflicts_found=True,
+            conflict_pairs=[{"chunk_a_id": "a", "chunk_b_id": "b"}],
+            reliability_score="medium",
+            reliability_cap_reason="source_overlap",
+        ),
+    )
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    context = retrieve_context(
+        client_id=uuid.uuid4(),
+        question="reset password",
+        db=FakeDB(),
+        api_key="sk-test",
+    )
+
+    assert context.conflicts_found is True
+    assert context.conflict_pairs == [{"chunk_a_id": "a", "chunk_b_id": "b"}]
+    assert context.reliability_score == "medium"
+    assert context.reliability_cap_reason == "source_overlap"
 
 
 def test_chat_session_continuity(

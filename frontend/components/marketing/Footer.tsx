@@ -17,7 +17,7 @@ export function Footer() {
               Docs
             </a>
             <a
-              href="https://github.com/tabularasa31/ai-chatbot"
+              href="https://github.com/tabularasa31/chat9-sdks"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#38BDF8] transition-colors"

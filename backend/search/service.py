@@ -12,12 +12,14 @@ from typing import Literal
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, Embedding
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
     format_embedding_results,
     format_query_embedding_preview,
+    truncate_text,
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -36,10 +38,12 @@ MMR_LAMBDA = 0.7
 CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
 LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
 MAX_OVERLAP_CHECK_CANDIDATES = 5
+BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap"]
 VariantMode = Literal["single", "multi"]
+BM25ExpansionMode = Literal["asymmetric", "symmetric_variants"]
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +71,12 @@ class SearchResultBundle:
     extra_embedding_api_requests: int = 0
     vector_search_call_count: int = 0
     extra_vector_search_calls: int = 0
+    bm25_expansion_mode: BM25ExpansionMode = "asymmetric"
+    bm25_query_variant_count: int = 1
+    bm25_variant_eval_count: int = 1
+    extra_bm25_variant_evals: int = 0
+    bm25_merged_hit_count_before_cap: int = 0
+    bm25_merged_hit_count_after_cap: int = 0
     retrieval_duration_ms: float = 0.0
     query_embedding_duration_ms: float = 0.0
     vector_search_duration_ms: float = 0.0
@@ -88,6 +98,36 @@ class VectorCandidateSet:
     candidates: list[tuple[Embedding, float]]
     call_count: int
     duration_ms: float
+
+
+@dataclass
+class PreparedBM25Corpus:
+    """Reusable BM25 scorer over the shared in-memory candidate corpus."""
+
+    candidates: list[Embedding]
+    scorer: BM25Okapi | None
+
+
+@dataclass
+class BM25Winner:
+    """Winning lexical-safe variant provenance for one merged BM25 hit."""
+
+    variant_index: int
+    variant_query: str
+    score: float
+
+
+@dataclass
+class BM25SearchBundle:
+    """Merged BM25 branch output plus explicit expansion/debug metadata."""
+
+    results: list[tuple[Embedding, float]]
+    has_lexical_signal: bool
+    variant_queries: list[str]
+    variant_eval_count: int
+    merged_hit_count_before_cap: int
+    merged_hit_count_after_cap: int
+    winner_by_id: dict[uuid.UUID, BM25Winner]
 
 
 def _embedding_tiebreak_key(embedding: Embedding) -> tuple[str, int, str]:
@@ -121,6 +161,12 @@ def build_variant_trace_metadata(bundle: SearchResultBundle) -> dict[str, object
         "extra_embedded_queries": bundle.extra_embedded_queries,
         "extra_embedding_api_requests": bundle.extra_embedding_api_requests,
         "extra_vector_search_calls": bundle.extra_vector_search_calls,
+        "bm25_expansion_mode": bundle.bm25_expansion_mode,
+        "bm25_query_variant_count": bundle.bm25_query_variant_count,
+        "bm25_variant_eval_count": bundle.bm25_variant_eval_count,
+        "extra_bm25_variant_evals": bundle.extra_bm25_variant_evals,
+        "bm25_merged_hit_count_before_cap": bundle.bm25_merged_hit_count_before_cap,
+        "bm25_merged_hit_count_after_cap": bundle.bm25_merged_hit_count_after_cap,
         "retrieval_duration_ms": bundle.retrieval_duration_ms,
     }
 
@@ -155,17 +201,9 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
 def expand_query(query: str) -> list[str]:
     """Generate lightweight query variants without changing user intent."""
     variants: list[str] = []
-    seen: set[str] = set()
 
     def _push(value: str) -> None:
-        normalized = " ".join(value.split())
-        if not normalized:
-            return
-        key = normalized.casefold()
-        if key in seen:
-            return
-        seen.add(key)
-        variants.append(normalized)
+        variants[:] = _normalize_query_variants([*variants, value])
 
     _push(query)
 
@@ -177,6 +215,40 @@ def expand_query(query: str) -> list[str]:
         unique_tokens = list(dict.fromkeys(tokens))
         _push(" ".join(unique_tokens))
 
+    return variants or [query]
+
+
+def _normalize_query_variants(values: list[str]) -> list[str]:
+    """Normalize and dedupe query variants while preserving first-seen order."""
+    variants: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = " ".join(value.split())
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        variants.append(normalized)
+    return variants
+
+
+def lexical_safe_query_variants(
+    query: str,
+    *,
+    base_variants: list[str] | None = None,
+) -> list[str]:
+    """
+    Return only normalization-safe variants suitable for lexical BM25 scoring.
+
+    Today this mirrors the deterministic normalized variants used for vector
+    retrieval. If expand_query() ever grows to include freer rewrites or
+    paraphrases, BM25 must continue consuming only the lexical-safe subset
+    unless the lexical branch contract is explicitly revisited.
+    """
+    source_variants = base_variants if base_variants is not None else expand_query(query)
+    variants = _normalize_query_variants(source_variants)
     return variants or [query]
 
 
@@ -231,44 +303,9 @@ def _bm25_score_candidates_with_signal(
     No DB access — operates on objects already in memory.
     Returns normalized scores in [0, 1].
     """
-    query_tokens = query.lower().split()
-    if not query_tokens or not candidates:
-        return [], False
-
-    corpus = [(emb.chunk_text or "").lower().split() for emb in candidates]
-    bm25 = BM25Okapi(corpus)
-    raw_scores = [float(s) for s in bm25.get_scores(query_tokens)]
-    scored = list(zip(candidates, raw_scores))
-    scored = _sort_scored_embeddings(scored)[:top_k]
-    if not scored:
-        return [], False
-
-    # Signal detection is intentionally separate from ranking features. We use
-    # token overlap only to decide whether a lexical branch participated at all;
-    # downstream reranking still applies its own lexical feature weighting.
-    lexical_overlap_scored = [
-        (embedding, _lexical_overlap_score(query, embedding.chunk_text or ""))
-        for embedding in candidates
-    ]
-    lexical_overlap_scored = [
-        (embedding, score)
-        for embedding, score in lexical_overlap_scored
-        if score > 0.0
-    ]
-    lexical_overlap_scored = _sort_scored_embeddings(lexical_overlap_scored)[:top_k]
-    has_lexical_signal = bool(lexical_overlap_scored)
-    if not has_lexical_signal:
-        return [], False
-
-    distinct_raw_scores = len({round(score, 12) for _, score in scored}) > 1
-    if not distinct_raw_scores:
-        scored = lexical_overlap_scored
-
-    max_s = scored[0][1]
-    min_s = scored[-1][1]
-    if max_s == min_s:
-        return ([(emb, 1.0) for emb, _ in scored], True)
-    return ([(emb, (s - min_s) / (max_s - min_s)) for emb, s in scored], True)
+    prepared_corpus = _prepare_bm25_corpus(candidates)
+    scored = _score_prepared_bm25_corpus(prepared_corpus, query, top_k)
+    return scored, _has_lexical_signal(scored, query, top_k)
 
 
 def _bm25_score_candidates(
@@ -330,6 +367,192 @@ def bm25_search_chunks(
         .all()
     )
     return _bm25_score_candidates(embeddings, query, top_k)
+
+
+def _prepare_bm25_corpus(candidates: list[Embedding]) -> PreparedBM25Corpus:
+    """Build the shared in-memory BM25 scorer once for a candidate pool."""
+    if not candidates:
+        return PreparedBM25Corpus(candidates=[], scorer=None)
+    corpus = [(emb.chunk_text or "").lower().split() for emb in candidates]
+    return PreparedBM25Corpus(candidates=candidates, scorer=BM25Okapi(corpus))
+
+
+def _lexical_overlap_results(
+    candidates: list[Embedding],
+    query: str,
+    top_k: int,
+) -> list[tuple[Embedding, float]]:
+    """Current lexical branch participation criteria over a ranked output list."""
+    lexical_overlap_scored = [
+        (embedding, _lexical_overlap_score(query, embedding.chunk_text or ""))
+        for embedding in candidates
+    ]
+    lexical_overlap_scored = [
+        (embedding, score)
+        for embedding, score in lexical_overlap_scored
+        if score > 0.0
+    ]
+    return _sort_scored_embeddings(lexical_overlap_scored)[:top_k]
+
+
+def _normalize_scored_results(
+    scored: list[tuple[Embedding, float]],
+) -> list[tuple[Embedding, float]]:
+    """Normalize descending scores into [0, 1] while preserving ordering."""
+    if not scored:
+        return []
+    max_s = scored[0][1]
+    min_s = scored[-1][1]
+    if max_s == min_s:
+        return [(emb, 1.0) for emb, _ in scored]
+    return [(emb, (s - min_s) / (max_s - min_s)) for emb, s in scored]
+
+
+def _score_prepared_bm25_corpus(
+    prepared_corpus: PreparedBM25Corpus,
+    query: str,
+    top_k: int,
+) -> list[tuple[Embedding, float]]:
+    """
+    BM25 scoring over a shared in-memory corpus.
+
+    One corpus is built per request-stage candidate pool; repeated variant
+    evaluation is only repeated lexical scoring over that already-built corpus.
+    """
+    query_tokens = query.lower().split()
+    if not query_tokens or not prepared_corpus.candidates or prepared_corpus.scorer is None:
+        return []
+
+    raw_scores = [float(score) for score in prepared_corpus.scorer.get_scores(query_tokens)]
+    scored = _sort_scored_embeddings(list(zip(prepared_corpus.candidates, raw_scores)))[:top_k]
+    if not scored:
+        return []
+
+    distinct_raw_scores = len({round(score, 12) for _, score in scored}) > 1
+    if not distinct_raw_scores:
+        scored = _lexical_overlap_results(prepared_corpus.candidates, query, top_k)
+        if not scored:
+            return []
+
+    return _normalize_scored_results(scored)
+
+
+def _has_lexical_signal(
+    results: list[tuple[Embedding, float]],
+    query: str,
+    top_k: int,
+) -> bool:
+    """
+    Preserve lexical participation semantics over the final lexical branch output.
+
+    Symmetric BM25 expansion changes lexical input generation only. This signal
+    must be derived from the final merged lexical list handed downstream, not
+    from a raw OR across per-variant scoring attempts.
+    """
+    return bool(_lexical_overlap_results([embedding for embedding, _ in results], query, top_k))
+
+
+def _resolve_bm25_expansion_mode() -> BM25ExpansionMode:
+    """Return the effective BM25 lexical expansion mode with a safe default."""
+    if settings.bm25_expansion_mode == "symmetric_variants":
+        return "symmetric_variants"
+    return "asymmetric"
+
+
+def _format_bm25_trace_results(
+    results: list[tuple[Embedding, float]],
+    *,
+    winner_by_id: dict[uuid.UUID, BM25Winner],
+) -> list[dict[str, object]]:
+    """Add compact winner provenance to BM25 trace payloads."""
+    payload = format_embedding_results(results, score_name="bm25_score")
+    for (embedding, _), item in zip(results, payload):
+        winner = winner_by_id.get(embedding.id)
+        if winner is None:
+            continue
+        item["winner_variant_index"] = winner.variant_index
+        if len(winner.variant_query) <= BM25_DEBUG_VARIANT_TEXT_MAX_LEN:
+            item["winner_variant_text"] = truncate_text(winner.variant_query)
+    return payload
+
+
+def _run_bm25_search(
+    candidates: list[Embedding],
+    *,
+    query: str,
+    query_variants: list[str],
+    top_k: int,
+    expansion_mode: BM25ExpansionMode,
+) -> BM25SearchBundle:
+    """Evaluate BM25 over one shared corpus using asymmetric or symmetric policy."""
+    variant_queries = (
+        [query]
+        if expansion_mode == "asymmetric"
+        else lexical_safe_query_variants(query, base_variants=query_variants)
+    )
+    prepared_corpus = _prepare_bm25_corpus(candidates)
+    variant_eval_count = len(variant_queries)
+    if not candidates or not variant_queries:
+        return BM25SearchBundle(
+            results=[],
+            has_lexical_signal=False,
+            variant_queries=variant_queries or [query],
+            variant_eval_count=0,
+            merged_hit_count_before_cap=0,
+            merged_hit_count_after_cap=0,
+            winner_by_id={},
+        )
+
+    if expansion_mode == "asymmetric":
+        results = _score_prepared_bm25_corpus(prepared_corpus, query, top_k)
+        winner_by_id = {
+            embedding.id: BM25Winner(variant_index=0, variant_query=query, score=score)
+            for embedding, score in results
+        }
+        return BM25SearchBundle(
+            results=results,
+            has_lexical_signal=_has_lexical_signal(results, query, top_k),
+            variant_queries=variant_queries,
+            variant_eval_count=variant_eval_count,
+            merged_hit_count_before_cap=len(results),
+            merged_hit_count_after_cap=len(results),
+            winner_by_id=winner_by_id,
+        )
+
+    merged_by_id: dict[uuid.UUID, tuple[Embedding, BM25Winner]] = {}
+    for variant_index, variant_query in enumerate(variant_queries):
+        variant_results = _score_prepared_bm25_corpus(prepared_corpus, variant_query, top_k)
+        for embedding, score in variant_results:
+            existing = merged_by_id.get(embedding.id)
+            if existing is None or score > existing[1].score:
+                merged_by_id[embedding.id] = (
+                    embedding,
+                    BM25Winner(
+                        variant_index=variant_index,
+                        variant_query=variant_query,
+                        score=score,
+                    ),
+                )
+
+    merged_results = _sort_scored_embeddings(
+        [(embedding, winner.score) for embedding, winner in merged_by_id.values()]
+    )
+    merged_hit_count_before_cap = len(merged_results)
+    final_results = merged_results[:top_k]
+    winner_by_id = {
+        embedding.id: merged_by_id[embedding.id][1]
+        for embedding, _ in final_results
+        if embedding.id in merged_by_id
+    }
+    return BM25SearchBundle(
+        results=final_results,
+        has_lexical_signal=_has_lexical_signal(final_results, query, top_k),
+        variant_queries=variant_queries,
+        variant_eval_count=variant_eval_count,
+        merged_hit_count_before_cap=merged_hit_count_before_cap,
+        merged_hit_count_after_cap=len(final_results),
+        winner_by_id=winner_by_id,
+    )
 
 
 def reciprocal_rank_fusion(
@@ -735,6 +958,7 @@ def search_similar_chunks_detailed(
     db_url = str(db.bind.url if db.bind else "")
     vector_engine = "python-cosine" if "sqlite" in db_url else "pgvector"
     vector_search_fn = _python_cosine_search if "sqlite" in db_url else _pgvector_search
+    bm25_expansion_mode = _resolve_bm25_expansion_mode()
 
     # Build one shared candidate set before lexical stages: engine-specific
     # acquisition, then cross-variant merge/dedup/truncation.
@@ -748,6 +972,11 @@ def search_similar_chunks_detailed(
     vector_search_call_count = vector_candidate_set.call_count
     vector_duration_ms = vector_candidate_set.duration_ms
     extra_vector_search_calls = max(vector_search_call_count - 1, 0)
+    bm25_variant_queries = (
+        [query]
+        if bm25_expansion_mode == "asymmetric"
+        else lexical_safe_query_variants(query, base_variants=query_variants)
+    )
 
     if not vector_candidates:
         retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
@@ -784,6 +1013,10 @@ def search_similar_chunks_detailed(
             extra_embedding_api_requests=extra_embedding_api_requests,
             vector_search_call_count=vector_search_call_count,
             extra_vector_search_calls=extra_vector_search_calls,
+            bm25_expansion_mode=bm25_expansion_mode,
+            bm25_query_variant_count=len(bm25_variant_queries),
+            bm25_variant_eval_count=0,
+            extra_bm25_variant_evals=0,
             retrieval_duration_ms=retrieval_duration_ms,
             query_embedding_duration_ms=query_embedding_duration_ms,
             vector_search_duration_ms=vector_duration_ms,
@@ -815,20 +1048,47 @@ def search_similar_chunks_detailed(
 
     rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
     bm25_started_at = perf_counter()
-    bm25_results, has_lexical_signal = _bm25_score_candidates_with_signal(
+    bm25_bundle = _run_bm25_search(
         vector_embs,
-        query,
-        rrf_candidate_pool,
+        query=query,
+        query_variants=query_variants,
+        top_k=rrf_candidate_pool,
+        expansion_mode=bm25_expansion_mode,
     )
+    bm25_results = bm25_bundle.results
+    has_lexical_signal = bm25_bundle.has_lexical_signal
     bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
             name="bm25-search",
-            input={"query": query, "tenant_id": str(client_id), "top_k": rrf_candidate_pool},
+            input={
+                "query": query,
+                "query_variants": bm25_bundle.variant_queries,
+                "tenant_id": str(client_id),
+                "top_k": rrf_candidate_pool,
+                "bm25_expansion_mode": bm25_expansion_mode,
+                "variant_source": (
+                    "original-query"
+                    if bm25_expansion_mode == "asymmetric"
+                    else "lexical-safe-normalized-variants"
+                ),
+            },
         ).end(
             output={
-                "chunks": format_embedding_results(bm25_results, score_name="bm25_score"),
+                "chunks": _format_bm25_trace_results(
+                    bm25_results,
+                    winner_by_id=bm25_bundle.winner_by_id,
+                ),
                 "duration_ms": bm25_duration_ms,
+                "bm25_query_variant_count": len(bm25_bundle.variant_queries),
+                "bm25_variant_eval_count": bm25_bundle.variant_eval_count,
+                "extra_bm25_variant_evals": max(bm25_bundle.variant_eval_count - 1, 0),
+                "bm25_merged_hit_count_before_cap": (
+                    bm25_bundle.merged_hit_count_before_cap
+                ),
+                "bm25_merged_hit_count_after_cap": (
+                    bm25_bundle.merged_hit_count_after_cap
+                ),
             }
         )
     vector_for_rrf = vector_candidates[:rrf_candidate_pool]
@@ -854,6 +1114,7 @@ def search_similar_chunks_detailed(
                     bm25_results,
                     score_name="bm25_score",
                 ),
+                "bm25_expansion_mode": bm25_expansion_mode,
             },
         ).end(
             output={
@@ -992,6 +1253,12 @@ def search_similar_chunks_detailed(
         extra_embedding_api_requests=extra_embedding_api_requests,
         vector_search_call_count=vector_search_call_count,
         extra_vector_search_calls=extra_vector_search_calls,
+        bm25_expansion_mode=bm25_expansion_mode,
+        bm25_query_variant_count=len(bm25_bundle.variant_queries),
+        bm25_variant_eval_count=bm25_bundle.variant_eval_count,
+        extra_bm25_variant_evals=max(bm25_bundle.variant_eval_count - 1, 0),
+        bm25_merged_hit_count_before_cap=bm25_bundle.merged_hit_count_before_cap,
+        bm25_merged_hit_count_after_cap=bm25_bundle.merged_hit_count_after_cap,
         retrieval_duration_ms=retrieval_duration_ms,
         query_embedding_duration_ms=query_embedding_duration_ms,
         vector_search_duration_ms=vector_duration_ms,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     trace_high_volume_sample_rate: float = Field(0.1, alias="TRACE_HIGH_VOLUME_SAMPLE_RATE")
     trace_new_tenant_threshold: int = Field(100, alias="TRACE_NEW_TENANT_THRESHOLD")
     trace_rate_window_seconds: int = Field(3600, alias="TRACE_RATE_WINDOW_SECONDS")
+    bm25_expansion_mode: Literal["asymmetric", "symmetric_variants"] = Field(
+        "asymmetric",
+        alias="BM25_EXPANSION_MODE",
+    )
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")

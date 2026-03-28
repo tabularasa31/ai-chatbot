@@ -311,8 +311,13 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
     assert vector_span.output is not None
     assert vector_span.output["vector_search_call_count"] == 3
     assert vector_span.output["extra_vector_search_calls"] == 2
+    assert bm25_span.input is not None
+    assert bm25_span.input["bm25_expansion_mode"] == "asymmetric"
     assert bm25_span.output is not None
     assert bm25_span.output["chunks"]
+    assert bm25_span.output["bm25_query_variant_count"] == 1
+    assert bm25_span.output["bm25_variant_eval_count"] == 1
+    assert bm25_span.output["extra_bm25_variant_evals"] == 0
 
 
 def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> None:
@@ -356,7 +361,7 @@ def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> No
 
 def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeypatch) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import BM25SearchBundle, BM25Winner, search_similar_chunks_detailed
 
     class FakeBind:
         url = "sqlite://test"
@@ -403,21 +408,38 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
 
     captured: dict[str, object] = {}
 
-    def fake_bm25_score_candidates_with_signal(
+    def fake_run_bm25_search(
         candidates: list[Embedding],
+        *,
         query: str,
+        query_variants: list[str],
         top_k: int,
-    ) -> tuple[list[tuple[Embedding, float]], bool]:
+        expansion_mode: str,
+    ) -> BM25SearchBundle:
         captured["candidate_ids"] = [embedding.id for embedding in candidates]
-        return ([(secondary, 1.0)], True)
+        return BM25SearchBundle(
+            results=[(secondary, 1.0)],
+            has_lexical_signal=True,
+            variant_queries=[query],
+            variant_eval_count=1,
+            merged_hit_count_before_cap=1,
+            merged_hit_count_after_cap=1,
+            winner_by_id={
+                secondary.id: BM25Winner(
+                    variant_index=0,
+                    variant_query=query,
+                    score=1.0,
+                )
+            },
+        )
 
     monkeypatch.setattr(
         "backend.search.service._python_cosine_search",
         fake_python_cosine_search,
     )
     monkeypatch.setattr(
-        "backend.search.service._bm25_score_candidates_with_signal",
-        fake_bm25_score_candidates_with_signal,
+        "backend.search.service._run_bm25_search",
+        fake_run_bm25_search,
     )
 
     bundle = search_similar_chunks_detailed(
@@ -432,6 +454,178 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
     assert candidate_ids == [shared.id, secondary.id, tertiary.id]
     assert bundle.best_vector_similarity == 0.9
     assert len({embedding.id for embedding, _ in bundle.results}) == len(bundle.results)
+
+
+def test_lexical_safe_query_variants_dedupes_after_normalization() -> None:
+    from backend.search.service import lexical_safe_query_variants
+
+    variants = lexical_safe_query_variants(
+        "Reset password",
+        base_variants=[
+            " Reset   password ",
+            "reset password",
+            "RESET PASSWORD",
+            "Reset password",
+        ],
+    )
+
+    assert variants == ["Reset password"]
+
+
+def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_tie_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _run_bm25_search
+
+    first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="reset password guide")
+    second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
+    third = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="account recovery flow")
+
+    monkeypatch.setattr(
+        "backend.search.service.lexical_safe_query_variants",
+        lambda query, **kwargs: ["reset password", "password reset"],
+    )
+
+    def fake_score(prepared_corpus, query: str, top_k: int):
+        if query == "reset password":
+            return [(first, 1.0), (second, 0.6)]
+        return [(first, 1.0), (third, 0.9)]
+
+    monkeypatch.setattr(
+        "backend.search.service._score_prepared_bm25_corpus",
+        fake_score,
+    )
+
+    bundle = _run_bm25_search(
+        [first, second, third],
+        query="reset password",
+        query_variants=["Reset-password!!   reset password"],
+        top_k=5,
+        expansion_mode="symmetric_variants",
+    )
+
+    assert [embedding.id for embedding, _ in bundle.results] == [first.id, third.id, second.id]
+    assert bundle.merged_hit_count_before_cap == 3
+    assert bundle.merged_hit_count_after_cap == 3
+    assert bundle.winner_by_id[first.id].variant_index == 0
+
+
+def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _run_bm25_search
+
+    first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="cors settings")
+    second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="api key rotation")
+
+    monkeypatch.setattr(
+        "backend.search.service.lexical_safe_query_variants",
+        lambda query, **kwargs: ["cors settings", "cors config"],
+    )
+
+    def fake_score(prepared_corpus, query: str, top_k: int):
+        return [(first, 1.0), (second, 0.5)]
+
+    monkeypatch.setattr(
+        "backend.search.service._score_prepared_bm25_corpus",
+        fake_score,
+    )
+
+    asymmetric = _run_bm25_search(
+        [first, second],
+        query="cors settings",
+        query_variants=["cors settings"],
+        top_k=5,
+        expansion_mode="asymmetric",
+    )
+    symmetric = _run_bm25_search(
+        [first, second],
+        query="cors settings",
+        query_variants=["cors settings", "cors config"],
+        top_k=5,
+        expansion_mode="symmetric_variants",
+    )
+
+    assert symmetric.results == asymmetric.results
+    assert symmetric.winner_by_id[first.id].variant_index == 0
+    assert symmetric.merged_hit_count_before_cap == asymmetric.merged_hit_count_before_cap
+
+
+def test_run_bm25_search_applies_cap_after_deterministic_merge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _run_bm25_search
+
+    first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="reset password guide")
+    second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
+    third = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="account recovery")
+
+    monkeypatch.setattr(
+        "backend.search.service.lexical_safe_query_variants",
+        lambda query, **kwargs: ["reset password", "password reset", "account recovery"],
+    )
+
+    def fake_score(prepared_corpus, query: str, top_k: int):
+        if query == "reset password":
+            return [(first, 1.0)]
+        if query == "password reset":
+            return [(second, 0.9)]
+        return [(third, 0.8)]
+
+    monkeypatch.setattr(
+        "backend.search.service._score_prepared_bm25_corpus",
+        fake_score,
+    )
+
+    bundle = _run_bm25_search(
+        [first, second, third],
+        query="reset password",
+        query_variants=["reset password"],
+        top_k=2,
+        expansion_mode="symmetric_variants",
+    )
+
+    assert bundle.merged_hit_count_before_cap == 3
+    assert bundle.merged_hit_count_after_cap == 2
+    assert [embedding.id for embedding, _ in bundle.results] == [first.id, second.id]
+
+
+def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _run_bm25_search
+
+    alias_hit = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="alias documentation")
+
+    monkeypatch.setattr(
+        "backend.search.service.lexical_safe_query_variants",
+        lambda query, **kwargs: [query, "alias"],
+    )
+
+    def fake_score(prepared_corpus, query: str, top_k: int):
+        if query == "alias":
+            return [(alias_hit, 1.0)]
+        return []
+
+    monkeypatch.setattr(
+        "backend.search.service._score_prepared_bm25_corpus",
+        fake_score,
+    )
+
+    bundle = _run_bm25_search(
+        [alias_hit],
+        query="primary",
+        query_variants=["primary"],
+        top_k=5,
+        expansion_mode="symmetric_variants",
+    )
+
+    assert bundle.results == [(alias_hit, 1.0)]
+    assert bundle.has_lexical_signal is False
 
 
 def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
@@ -1039,6 +1233,12 @@ def test_search_route_traces_variant_summary(
             extra_embedding_api_requests=0,
             vector_search_call_count=3,
             extra_vector_search_calls=2,
+            bm25_expansion_mode="symmetric_variants",
+            bm25_query_variant_count=2,
+            bm25_variant_eval_count=2,
+            extra_bm25_variant_evals=1,
+            bm25_merged_hit_count_before_cap=4,
+            bm25_merged_hit_count_after_cap=3,
             retrieval_duration_ms=12.5,
             query_embedding_duration_ms=2.5,
             vector_search_duration_ms=7.5,
@@ -1064,6 +1264,12 @@ def test_search_route_traces_variant_summary(
                 "extra_embedded_queries": 2,
                 "extra_embedding_api_requests": 0,
                 "extra_vector_search_calls": 2,
+                "bm25_expansion_mode": "symmetric_variants",
+                "bm25_query_variant_count": 2,
+                "bm25_variant_eval_count": 2,
+                "extra_bm25_variant_evals": 1,
+                "bm25_merged_hit_count_before_cap": 4,
+                "bm25_merged_hit_count_after_cap": 3,
                 "retrieval_duration_ms": 12.5,
             },
             "tags": ["variants:multi"],

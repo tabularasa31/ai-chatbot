@@ -350,6 +350,12 @@ def test_process_chat_message_adds_variant_summary_to_trace(
             extra_embedded_queries=2,
             extra_embedding_api_requests=0,
             extra_vector_search_calls=2,
+            bm25_expansion_mode="symmetric_variants",
+            bm25_query_variant_count=2,
+            bm25_variant_eval_count=2,
+            extra_bm25_variant_evals=1,
+            bm25_merged_hit_count_before_cap=4,
+            bm25_merged_hit_count_after_cap=3,
             retrieval_duration_ms=18.4,
         ),
     )
@@ -382,6 +388,12 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2
     assert fake_trace.update_calls[-1]["metadata"]["extra_embedding_api_requests"] == 0
     assert fake_trace.update_calls[-1]["metadata"]["extra_vector_search_calls"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_expansion_mode"] == "symmetric_variants"
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_query_variant_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_variant_eval_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["extra_bm25_variant_evals"] == 1
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_before_cap"] == 4
+    assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_after_cap"] == 3
     assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
 

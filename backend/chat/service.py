@@ -164,6 +164,12 @@ def retrieve_context(
             extra_embedded_queries=bundle.extra_embedded_queries,
             extra_embedding_api_requests=bundle.extra_embedding_api_requests,
             extra_vector_search_calls=bundle.extra_vector_search_calls,
+            bm25_expansion_mode=bundle.bm25_expansion_mode,
+            bm25_query_variant_count=bundle.bm25_query_variant_count,
+            bm25_variant_eval_count=bundle.bm25_variant_eval_count,
+            extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
+            bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
+            bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
             retrieval_duration_ms=bundle.retrieval_duration_ms,
         )
 
@@ -196,6 +202,12 @@ def retrieve_context(
         extra_embedded_queries=bundle.extra_embedded_queries,
         extra_embedding_api_requests=bundle.extra_embedding_api_requests,
         extra_vector_search_calls=bundle.extra_vector_search_calls,
+        bm25_expansion_mode=bundle.bm25_expansion_mode,
+        bm25_query_variant_count=bundle.bm25_query_variant_count,
+        bm25_variant_eval_count=bundle.bm25_variant_eval_count,
+        extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
+        bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
+        bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
         retrieval_duration_ms=bundle.retrieval_duration_ms,
     )
 
@@ -220,6 +232,12 @@ class RetrievalContext:
     extra_embedded_queries: int = 0
     extra_embedding_api_requests: int = 0
     extra_vector_search_calls: int = 0
+    bm25_expansion_mode: Literal["asymmetric", "symmetric_variants"] = "asymmetric"
+    bm25_query_variant_count: int = 1
+    bm25_variant_eval_count: int = 1
+    extra_bm25_variant_evals: int = 0
+    bm25_merged_hit_count_before_cap: int = 0
+    bm25_merged_hit_count_after_cap: int = 0
     retrieval_duration_ms: float = 0.0
 
 

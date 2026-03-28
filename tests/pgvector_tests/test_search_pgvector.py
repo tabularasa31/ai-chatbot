@@ -268,6 +268,132 @@ def test_hybrid_search_limits_results_with_mixed_candidates(
     assert any("cors" in t for t in texts)
 
 
+@pytest.mark.pgvector
+def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
+    mock_openai_client: Mock,
+    pg_db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Symmetric BM25 runs extra lexical-safe evals on PG without regressing the final relevant hit."""
+    from tests.test_models import _create_client, _create_user
+    from backend.search.service import search_similar_chunks_detailed
+
+    user = _create_user(pg_db_session, email="hybrid_symmetric@example.com")
+    cl = _create_client(pg_db_session, user, name="Hybrid Symmetric")
+    doc_id = _make_document(pg_db_session, cl.id)
+
+    query_vec = [1.0] + [0.0] * 1535
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [query_vec for _ in queries],
+    )
+
+    _insert_embedding(pg_db_session, doc_id, "unrelated foo instructions", [1.0] + [0.0] * 1535)
+    _insert_embedding(
+        pg_db_session,
+        doc_id,
+        "reset password instructions",
+        [0.0, 1.0] + [0.0] * 1534,
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.bm25_expansion_mode",
+        "asymmetric",
+    )
+    asymmetric = search_similar_chunks_detailed(
+        cl.id,
+        "reset-password foo",
+        top_k=1,
+        db=pg_db_session,
+        api_key="sk-test",
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.bm25_expansion_mode",
+        "symmetric_variants",
+    )
+    symmetric = search_similar_chunks_detailed(
+        cl.id,
+        "reset-password foo",
+        top_k=1,
+        db=pg_db_session,
+        api_key="sk-test",
+    )
+
+    assert asymmetric.has_lexical_signal is True
+    assert symmetric.best_keyword_score is not None
+    assert symmetric.has_lexical_signal is True
+    assert asymmetric.bm25_query_variant_count == 1
+    assert asymmetric.bm25_variant_eval_count == 1
+    assert symmetric.bm25_query_variant_count > asymmetric.bm25_query_variant_count
+    assert symmetric.bm25_variant_eval_count > asymmetric.bm25_variant_eval_count
+    assert symmetric.results[0][0].chunk_text == "reset password instructions"
+
+
+@pytest.mark.pgvector
+def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_results(
+    mock_openai_client: Mock,
+    pg_db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Symmetric lexical-safe evaluation can add variant work without changing user-visible ranking."""
+    from tests.test_models import _create_client, _create_user
+    from backend.search.service import search_similar_chunks_detailed
+
+    user = _create_user(pg_db_session, email="hybrid_control@example.com")
+    cl = _create_client(pg_db_session, user, name="Hybrid Control")
+    doc_id = _make_document(pg_db_session, cl.id)
+
+    query_vec = [1.0] + [0.0] * 1535
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [query_vec for _ in queries],
+    )
+
+    _insert_embedding(
+        pg_db_session,
+        doc_id,
+        "cors settings allow origins",
+        [0.99, 0.01] + [0.0] * 1534,
+    )
+    _insert_embedding(
+        pg_db_session,
+        doc_id,
+        "rotate api keys in dashboard",
+        [0.7, 0.3] + [0.0] * 1534,
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.bm25_expansion_mode",
+        "asymmetric",
+    )
+    asymmetric = search_similar_chunks_detailed(
+        cl.id,
+        "cors settings!!",
+        top_k=2,
+        db=pg_db_session,
+        api_key="sk-test",
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.bm25_expansion_mode",
+        "symmetric_variants",
+    )
+    symmetric = search_similar_chunks_detailed(
+        cl.id,
+        "cors settings!!",
+        top_k=2,
+        db=pg_db_session,
+        api_key="sk-test",
+    )
+
+    assert symmetric.bm25_query_variant_count > asymmetric.bm25_query_variant_count
+    assert symmetric.bm25_variant_eval_count > asymmetric.bm25_variant_eval_count
+    assert [embedding.id for embedding, _ in symmetric.results] == [
+        embedding.id for embedding, _ in asymmetric.results
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Full HTTP path on real PostgreSQL
 # ---------------------------------------------------------------------------

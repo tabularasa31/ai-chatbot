@@ -11,12 +11,14 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
+    ContradictionPair,
     SourceOverlapPair,
     apply_script_boost,
     bm25_search_chunks,
     build_reliability_assessment,
     build_reliability_projection,
     cosine_similarity,
+    detect_metadata_contradictions,
     embed_queries,
     embed_queries_with_stats,
     detect_query_script_bucket,
@@ -1141,6 +1143,189 @@ def test_build_reliability_assessment_overlap_cap_is_not_applied_when_base_score
     assert reliability.cap is None
     assert reliability.cap_reason is None
     assert serialize_reliability(reliability)["signals"] == [{"kind": "source_overlap"}]
+
+
+def test_detect_metadata_contradictions_flags_effective_date_disagreement_on_overlap_pairs() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1, "effective_date": "2025-03-01"},
+    )
+
+    overlap_pairs = (
+        SourceOverlapPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            similarity=0.83,
+        ),
+    )
+
+    contradiction_pairs = detect_metadata_contradictions(
+        [(first, 0.9), (second, 0.88)],
+        overlap_pairs,
+    )
+
+    assert contradiction_pairs == (
+        ContradictionPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            basis="effective_date",
+            value_a="2024-03-01",
+            value_b="2025-03-01",
+        ),
+    )
+
+
+def test_detect_metadata_contradictions_ignores_single_sided_metadata() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    contradiction_pairs = detect_metadata_contradictions(
+        [(first, 0.9), (second, 0.88)],
+        (
+            SourceOverlapPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                similarity=0.83,
+            ),
+        ),
+    )
+
+    assert contradiction_pairs == ()
+
+
+def test_detect_metadata_contradictions_treats_date_granularity_as_compatible() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0, "effective_date": "2024"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1, "effective_date": "2024-03"},
+    )
+
+    contradiction_pairs = detect_metadata_contradictions(
+        [(first, 0.9), (second, 0.88)],
+        (
+            SourceOverlapPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                similarity=0.83,
+            ),
+        ),
+    )
+
+    assert contradiction_pairs == ()
+
+
+def test_detect_metadata_contradictions_normalizes_version_equivalence() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0, "version": "v2"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1, "version": "2.0"},
+    )
+
+    contradiction_pairs = detect_metadata_contradictions(
+        [(first, 0.9), (second, 0.88)],
+        (
+            SourceOverlapPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                similarity=0.83,
+            ),
+        ),
+    )
+
+    assert contradiction_pairs == ()
+
+
+def test_build_reliability_assessment_caps_to_low_on_contradiction() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        source_overlap_detected=True,
+        source_overlap_pairs=(
+            SourceOverlapPair(chunk_a_id="a", chunk_b_id="b", similarity=0.81),
+        ),
+        source_overlap_similarity_threshold=0.75,
+        contradiction_pairs=(
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+            ),
+        ),
+    )
+
+    assert serialize_reliability(reliability) == {
+        "base_score": "high",
+        "score": "low",
+        "cap": "low",
+        "cap_reason": "contradiction",
+        "signals": [{"kind": "source_overlap"}, {"kind": "contradiction"}],
+        "evidence": {
+            "source_overlap": {
+                "pairs": [
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "similarity": 0.81,
+                        "signal_type": "cross_document_overlap",
+                    }
+                ],
+                "similarity_threshold": 0.75,
+            },
+            "contradiction": {
+                "pairs": [
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "effective_date",
+                        "value_a": "2024-03-01",
+                        "value_b": "2025-03-01",
+                    }
+                ]
+            },
+        },
+    }
 
 
 def test_build_reliability_projection_does_not_mutate_canonical_object() -> None:

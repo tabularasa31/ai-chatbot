@@ -41,7 +41,7 @@ MAX_OVERLAP_CHECK_CANDIDATES = 5
 BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 
 ReliabilityScore = Literal["low", "medium", "high"]
-ReliabilityCapReason = Literal["source_overlap"]
+ReliabilityCapReason = Literal["source_overlap", "contradiction"]
 ReliabilitySignalKind = Literal[
     "source_overlap",
     "low_top_score",
@@ -63,6 +63,8 @@ RELIABILITY_SIGNAL_ORDER: tuple[ReliabilitySignalKind, ...] = (
 HIGH_RELIABILITY_SCORE_THRESHOLD = 0.8
 LOW_RELIABILITY_SCORE_THRESHOLD = 0.45
 WEAK_RECALL_RESULT_COUNT_THRESHOLD = 2
+CONTRADICTION_DATE_KEYS: tuple[str, ...] = ("effective_date",)
+CONTRADICTION_VERSION_KEYS: tuple[str, ...] = ("version", "revision")
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,25 @@ class ReliabilityEvidence:
     """Structured evidence families for canonical reliability payloads."""
 
     source_overlap: SourceOverlapEvidence | None = None
+    contradiction: "ContradictionEvidence | None" = None
+
+
+@dataclass(frozen=True)
+class ContradictionPair:
+    """Structured contradiction evidence for one overlap-admitted pair."""
+
+    chunk_a_id: str
+    chunk_b_id: str
+    basis: str
+    value_a: str
+    value_b: str
+
+
+@dataclass(frozen=True)
+class ContradictionEvidence:
+    """Debug/trace-only contradiction evidence kept under canonical reliability."""
+
+    pairs: tuple[ContradictionPair, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,6 +151,17 @@ def serialize_source_overlap_pair(pair: SourceOverlapPair) -> dict[str, object]:
     }
 
 
+def serialize_contradiction_pair(pair: ContradictionPair) -> dict[str, object]:
+    """Serialize one canonical contradiction pair without mutating the source object."""
+    return {
+        "chunk_a_id": pair.chunk_a_id,
+        "chunk_b_id": pair.chunk_b_id,
+        "basis": pair.basis,
+        "value_a": pair.value_a,
+        "value_b": pair.value_b,
+    }
+
+
 def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object]:
     """Serialize the canonical reliability object with stable empty containers."""
     evidence: dict[str, object] = {}
@@ -138,6 +170,14 @@ def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object
         evidence["source_overlap"] = {
             "pairs": [serialize_source_overlap_pair(pair) for pair in overlap_evidence.pairs],
             "similarity_threshold": overlap_evidence.similarity_threshold,
+        }
+    contradiction_evidence = reliability.evidence.contradiction
+    if contradiction_evidence is not None:
+        evidence["contradiction"] = {
+            "pairs": [
+                serialize_contradiction_pair(pair)
+                for pair in contradiction_evidence.pairs
+            ]
         }
     return {
         "base_score": reliability.base_score,
@@ -191,6 +231,131 @@ def _compute_base_reliability_score(
     return "low"
 
 
+def _normalize_date_value(raw_value: object) -> tuple[int, int | None, int | None] | None:
+    """Normalize YYYY / YYYY-MM / YYYY-MM-DD style dates for conservative comparison."""
+    if not isinstance(raw_value, str):
+        return None
+    value = raw_value.strip()
+    if not value:
+        return None
+    match = re.fullmatch(r"(\d{4})(?:[-/](\d{1,2})(?:[-/](\d{1,2}))?)?", value)
+    if match is None:
+        return None
+    year = int(match.group(1))
+    month = int(match.group(2)) if match.group(2) is not None else None
+    day = int(match.group(3)) if match.group(3) is not None else None
+    return (year, month, day)
+
+
+def _dates_contradict(
+    first_value: tuple[int, int | None, int | None],
+    second_value: tuple[int, int | None, int | None],
+) -> bool:
+    """Treat different granularity as compatible when shared known components match."""
+    first_year, first_month, first_day = first_value
+    second_year, second_month, second_day = second_value
+    if first_year != second_year:
+        return True
+    if first_month is not None and second_month is not None and first_month != second_month:
+        return True
+    if first_day is not None and second_day is not None and first_day != second_day:
+        return True
+    return False
+
+
+def _normalize_version_value(raw_value: object) -> tuple[int, ...] | None:
+    """Normalize versions like `v2`, `2.0`, and `2.1.0` for conservative comparison."""
+    if not isinstance(raw_value, str):
+        return None
+    value = raw_value.strip().casefold()
+    if not value:
+        return None
+    value = re.sub(r"^(?:version|revision|rev)\s*", "", value)
+    value = value.lstrip("v")
+    if not re.fullmatch(r"\d+(?:\.\d+)*", value):
+        return None
+    parts = [int(part) for part in value.split(".")]
+    while len(parts) > 1 and parts[-1] == 0:
+        parts.pop()
+    return tuple(parts)
+
+
+def _metadata_contradiction_pairs(
+    first: Embedding,
+    second: Embedding,
+) -> tuple[ContradictionPair, ...]:
+    """Detect narrow contradiction indicators from explicit metadata on one overlap pair."""
+    first_meta = first.metadata_json or {}
+    second_meta = second.metadata_json or {}
+    contradiction_pairs: list[ContradictionPair] = []
+    for key in CONTRADICTION_DATE_KEYS:
+        first_raw = first_meta.get(key)
+        second_raw = second_meta.get(key)
+        if first_raw is None or second_raw is None:
+            continue
+        if not isinstance(first_raw, str) or not isinstance(second_raw, str):
+            continue
+        first_normalized = _normalize_date_value(first_raw)
+        second_normalized = _normalize_date_value(second_raw)
+        if first_normalized is None or second_normalized is None:
+            continue
+        if not _dates_contradict(first_normalized, second_normalized):
+            continue
+        contradiction_pairs.append(
+            ContradictionPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                basis=key,
+                value_a=first_raw,
+                value_b=second_raw,
+            )
+        )
+    for key in CONTRADICTION_VERSION_KEYS:
+        first_raw = first_meta.get(key)
+        second_raw = second_meta.get(key)
+        if first_raw is None or second_raw is None:
+            continue
+        if not isinstance(first_raw, str) or not isinstance(second_raw, str):
+            continue
+        first_normalized = _normalize_version_value(first_raw)
+        second_normalized = _normalize_version_value(second_raw)
+        if first_normalized is None or second_normalized is None:
+            continue
+        if first_normalized == second_normalized:
+            continue
+        contradiction_pairs.append(
+            ContradictionPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                basis=key,
+                value_a=first_raw,
+                value_b=second_raw,
+            )
+        )
+    return tuple(contradiction_pairs)
+
+
+def detect_metadata_contradictions(
+    candidates: list[tuple[Embedding, float]],
+    overlap_pairs: tuple[SourceOverlapPair, ...],
+) -> tuple[ContradictionPair, ...]:
+    """Inspect only overlap-admitted pairs for narrow metadata contradiction indicators."""
+    if not overlap_pairs:
+        return ()
+    candidates_by_id = {
+        str(embedding.id): embedding
+        for embedding, _ in candidates[:MAX_OVERLAP_CHECK_CANDIDATES]
+    }
+    contradiction_pairs: list[ContradictionPair] = []
+    for overlap_pair in overlap_pairs:
+        first = candidates_by_id.get(overlap_pair.chunk_a_id)
+        second = candidates_by_id.get(overlap_pair.chunk_b_id)
+        if first is None or second is None:
+            continue
+        contradiction_pairs.extend(_metadata_contradiction_pairs(first, second))
+    return tuple(contradiction_pairs)
+
+
 def build_reliability_assessment(
     *,
     top_score: float | None,
@@ -198,6 +363,7 @@ def build_reliability_assessment(
     source_overlap_detected: bool = False,
     source_overlap_pairs: tuple[SourceOverlapPair, ...] = (),
     source_overlap_similarity_threshold: float | None = None,
+    contradiction_pairs: tuple[ContradictionPair, ...] = (),
 ) -> RetrievalReliability:
     """
     Build the canonical retrieval reliability object in one place.
@@ -215,6 +381,8 @@ def build_reliability_assessment(
     signal_kinds: list[ReliabilitySignalKind] = []
     if source_overlap_detected:
         signal_kinds.append("source_overlap")
+    if contradiction_pairs:
+        signal_kinds.append("contradiction")
     if top_score is not None and top_score < LOW_RELIABILITY_SCORE_THRESHOLD:
         signal_kinds.append("low_top_score")
     if result_count < WEAK_RECALL_RESULT_COUNT_THRESHOLD:
@@ -223,18 +391,31 @@ def build_reliability_assessment(
     cap: ReliabilityScore | None = None
     cap_reason: ReliabilityCapReason | None = None
     score = base_score
-    if source_overlap_detected and base_score == "high":
+    if contradiction_pairs and base_score != "low":
+        cap = "low"
+        cap_reason = "contradiction"
+        score = "low"
+    elif source_overlap_detected and base_score == "high":
         cap = "medium"
         cap_reason = "source_overlap"
         score = "medium"
 
     evidence = ReliabilityEvidence()
-    if source_overlap_pairs:
+    if source_overlap_pairs or contradiction_pairs:
         evidence = ReliabilityEvidence(
-            source_overlap=SourceOverlapEvidence(
-                pairs=source_overlap_pairs,
-                similarity_threshold=source_overlap_similarity_threshold,
-            )
+            source_overlap=(
+                SourceOverlapEvidence(
+                    pairs=source_overlap_pairs,
+                    similarity_threshold=source_overlap_similarity_threshold,
+                )
+                if source_overlap_pairs
+                else None
+            ),
+            contradiction=(
+                ContradictionEvidence(pairs=contradiction_pairs)
+                if contradiction_pairs
+                else None
+            ),
         )
 
     return RetrievalReliability(
@@ -1379,12 +1560,17 @@ def search_similar_chunks_detailed(
     source_overlap_detected, source_overlap_pairs = detect_source_overlaps(
         final_results
     )
+    contradiction_pairs = detect_metadata_contradictions(
+        final_results,
+        source_overlap_pairs,
+    )
     reliability = build_reliability_assessment(
         top_score=final_results[0][1] if final_results else None,
         result_count=len(final_results),
         source_overlap_detected=source_overlap_detected,
         source_overlap_pairs=source_overlap_pairs,
         source_overlap_similarity_threshold=0.75,
+        contradiction_pairs=contradiction_pairs,
     )
     if trace is not None:
         # The historical span name is preserved for continuity; payload semantics are overlap-only.

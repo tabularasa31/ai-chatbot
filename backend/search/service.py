@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 import uuid
 from dataclasses import dataclass
 from time import perf_counter
@@ -23,6 +25,13 @@ EMBEDDING_DIM = 1536
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all client chunks.
 BM25_CANDIDATE_POOL = 200
+RRF_CANDIDATE_POOL_MULTIPLIER = 4
+RERANK_LEXICAL_WEIGHT = 0.35
+RERANK_VECTOR_WEIGHT = 0.25
+RERANK_BM25_WEIGHT = 0.20
+RERANK_RRF_WEIGHT = 0.20
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -32,6 +41,35 @@ class SearchResultBundle:
     results: list[tuple[Embedding, float]]
     best_vector_similarity: float | None = None
     best_keyword_score: float | None = None
+    query_variants: list[str] | None = None
+
+
+def expand_query(query: str) -> list[str]:
+    """Generate lightweight query variants without changing user intent."""
+    variants: list[str] = []
+    seen: set[str] = set()
+
+    def _push(value: str) -> None:
+        normalized = " ".join(value.split())
+        if not normalized:
+            return
+        key = normalized.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        variants.append(normalized)
+
+    _push(query)
+
+    cleaned = re.sub(r"[^\w\s]", " ", query, flags=re.UNICODE)
+    _push(cleaned)
+
+    tokens = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)
+    if tokens:
+        unique_tokens = list(dict.fromkeys(tokens))
+        _push(" ".join(unique_tokens))
+
+    return variants or [query]
 
 
 def embed_query(query: str, *, api_key: str) -> list[float]:
@@ -51,6 +89,18 @@ def embed_query(query: str, *, api_key: str) -> list[float]:
         input=query,
     )
     return response.data[0].embedding
+
+
+def embed_queries(queries: list[str], *, api_key: str) -> list[list[float]]:
+    """Embed multiple search queries in one OpenAI API round-trip."""
+    if not queries:
+        return []
+    openai_client = get_openai_client(api_key)
+    response = openai_client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=queries,
+    )
+    return [item.embedding for item in response.data]
 
 
 def _bm25_score_candidates(
@@ -125,6 +175,69 @@ def reciprocal_rank_fusion(
     return [(id_to_emb[id_], scores[id_]) for id_ in sorted_ids[:top_k]]
 
 
+def _collect_score_map(results: list[tuple[Embedding, float]]) -> dict[uuid.UUID, float]:
+    """Collect the strongest score per embedding id."""
+    score_map: dict[uuid.UUID, float] = {}
+    for embedding, score in results:
+        existing = score_map.get(embedding.id)
+        if existing is None or score > existing:
+            score_map[embedding.id] = score
+    return score_map
+
+
+def _lexical_overlap_score(query: str, chunk_text: str) -> float:
+    """Cheap lexical signal used as an interim reranker until a cross-encoder is added."""
+    query_tokens = set(re.findall(r"\w+", query.casefold(), flags=re.UNICODE))
+    if not query_tokens:
+        return 0.0
+    chunk_tokens = set(re.findall(r"\w+", (chunk_text or "").casefold(), flags=re.UNICODE))
+    if not chunk_tokens:
+        return 0.0
+    overlap = len(query_tokens & chunk_tokens)
+    return overlap / len(query_tokens)
+
+
+def rerank_candidates(
+    query: str,
+    candidates: list[tuple[Embedding, float]],
+    *,
+    vector_scores: dict[uuid.UUID, float] | None = None,
+    bm25_scores: dict[uuid.UUID, float] | None = None,
+    top_k: int,
+) -> list[tuple[Embedding, float]]:
+    """Apply an interim heuristic reranking stage over fused candidates."""
+    if not candidates:
+        return []
+
+    max_rrf = max(score for _, score in candidates)
+    vector_scores = vector_scores or {}
+    bm25_scores = bm25_scores or {}
+
+    rescored: list[tuple[Embedding, float]] = []
+    for embedding, rrf_score in candidates:
+        lexical_score = _lexical_overlap_score(query, embedding.chunk_text or "")
+        vector_score = vector_scores.get(embedding.id, 0.0)
+        bm25_score = bm25_scores.get(embedding.id, 0.0)
+        normalized_rrf = rrf_score / max_rrf if max_rrf else 0.0
+        final_score = (
+            (lexical_score * RERANK_LEXICAL_WEIGHT)
+            + (vector_score * RERANK_VECTOR_WEIGHT)
+            + (bm25_score * RERANK_BM25_WEIGHT)
+            + (normalized_rrf * RERANK_RRF_WEIGHT)
+        )
+        rescored.append((embedding, round(final_score, 6)))
+
+    rescored.sort(
+        key=lambda item: (
+            item[1],
+            vector_scores.get(item[0].id, 0.0),
+            bm25_scores.get(item[0].id, 0.0),
+        ),
+        reverse=True,
+    )
+    return rescored[:top_k]
+
+
 def _pgvector_search(
     client_id: uuid.UUID,
     query_vector: list[float],
@@ -148,6 +261,7 @@ def _pgvector_search(
             for emb, distance in results_with_distance
         ]
     except Exception:
+        logger.exception("pgvector search failed; falling back to Python cosine search")
         return _python_cosine_search(client_id, query_vector, top_k, db)
 
 
@@ -183,7 +297,17 @@ def search_similar_chunks_detailed(
 
     SQLite (tests): Python cosine only; pgvector and BM25 are skipped.
     """
-    query_vector = embed_query(query, api_key=api_key)
+    query_variants = expand_query(query)
+    if trace is not None:
+        trace.span(
+            name="query-expansion",
+            input={"query": query},
+        ).end(
+            output={"variants": query_variants}
+        )
+
+    variant_vectors = embed_queries(query_variants, api_key=api_key)
+    query_vector = variant_vectors[0]
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
@@ -194,7 +318,7 @@ def search_similar_chunks_detailed(
                 name="vector-search",
                 input={
                     "query_embedding": format_query_embedding_preview(query_vector),
-                    "query": query,
+                    "query_variants": query_variants,
                     "tenant_id": str(client_id),
                     "top_k": top_k,
                     "engine": "python-cosine",
@@ -209,12 +333,23 @@ def search_similar_chunks_detailed(
         return SearchResultBundle(
             results=results,
             best_vector_similarity=results[0][1] if results else None,
+            query_variants=query_variants,
         )
 
     # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
     # BM25 then re-ranks only these candidates — no separate full-table scan.
     vector_started_at = perf_counter()
-    vector_candidates = _pgvector_search(client_id, query_vector, BM25_CANDIDATE_POOL, db)
+    vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
+    for variant, variant_vector in zip(query_variants, variant_vectors):
+        for embedding, similarity in _pgvector_search(client_id, variant_vector, BM25_CANDIDATE_POOL, db):
+            existing = vector_candidate_map.get(embedding.id)
+            if existing is None or similarity > existing[1]:
+                vector_candidate_map[embedding.id] = (embedding, similarity)
+    vector_candidates = sorted(
+        vector_candidate_map.values(),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:BM25_CANDIDATE_POOL]
     vector_duration_ms = round((perf_counter() - vector_started_at) * 1000, 2)
 
     if not vector_candidates:
@@ -223,7 +358,7 @@ def search_similar_chunks_detailed(
                 name="vector-search",
                 input={
                     "query_embedding": format_query_embedding_preview(query_vector),
-                    "query": query,
+                    "query_variants": query_variants,
                     "tenant_id": str(client_id),
                     "top_k": BM25_CANDIDATE_POOL,
                     "engine": "pgvector",
@@ -235,7 +370,7 @@ def search_similar_chunks_detailed(
                     "total_candidates_scanned": 0,
                 }
             )
-        return SearchResultBundle(results=[])
+        return SearchResultBundle(results=[], query_variants=query_variants)
 
     vector_embs = [emb for emb, _ in vector_candidates]
     if trace is not None:
@@ -243,7 +378,7 @@ def search_similar_chunks_detailed(
             name="vector-search",
             input={
                 "query_embedding": format_query_embedding_preview(query_vector),
-                "query": query,
+                "query_variants": query_variants,
                 "tenant_id": str(client_id),
                 "top_k": BM25_CANDIDATE_POOL,
                 "engine": "pgvector",
@@ -256,23 +391,24 @@ def search_similar_chunks_detailed(
                 ),
                 "duration_ms": vector_duration_ms,
                 "total_candidates_scanned": len(vector_candidates),
-            }
-        )
+                }
+            )
 
+    rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
     bm25_started_at = perf_counter()
-    bm25_results = _bm25_score_candidates(vector_embs, query, top_k * 2)
+    bm25_results = _bm25_score_candidates(vector_embs, query, rrf_candidate_pool)
     bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
             name="bm25-search",
-            input={"query": query, "tenant_id": str(client_id), "top_k": top_k * 2},
+            input={"query": query, "tenant_id": str(client_id), "top_k": rrf_candidate_pool},
         ).end(
             output={
                 "chunks": format_embedding_results(bm25_results, score_name="bm25_score"),
                 "duration_ms": bm25_duration_ms,
             }
         )
-    vector_for_rrf = vector_candidates[:top_k * 2]
+    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
     best_vector_similarity = vector_candidates[0][1] if vector_candidates else None
     best_keyword_score = bm25_results[0][1] if bm25_results else None
 
@@ -281,10 +417,15 @@ def search_similar_chunks_detailed(
             results=vector_for_rrf[:top_k],
             best_vector_similarity=best_vector_similarity,
             best_keyword_score=best_keyword_score,
+            query_variants=query_variants,
         )
 
     rrf_started_at = perf_counter()
-    fused_results = reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k)
+    fused_results = reciprocal_rank_fusion(
+        vector_for_rrf,
+        bm25_results,
+        top_k=rrf_candidate_pool,
+    )
     rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
@@ -309,10 +450,38 @@ def search_similar_chunks_detailed(
             }
         )
 
+    rerank_started_at = perf_counter()
+    reranked_results = rerank_candidates(
+        query,
+        fused_results,
+        vector_scores=_collect_score_map(vector_candidates),
+        bm25_scores=_collect_score_map(bm25_results),
+        top_k=top_k,
+    )
+    if trace is not None:
+        trace.span(
+            name="reranking",
+            input={
+                "query": query,
+                "candidate_count": len(fused_results),
+                "model": "heuristic-rrf-v0",
+            },
+        ).end(
+            output={
+                "ranked": format_embedding_results(
+                    reranked_results,
+                    score_name="reranker_score",
+                ),
+                "top_score": reranked_results[0][1] if reranked_results else None,
+                "duration_ms": round((perf_counter() - rerank_started_at) * 1000, 2),
+            }
+        )
+
     return SearchResultBundle(
-        results=fused_results,
+        results=reranked_results,
         best_vector_similarity=best_vector_similarity,
         best_keyword_score=best_keyword_score,
+        query_variants=query_variants,
     )
 
 

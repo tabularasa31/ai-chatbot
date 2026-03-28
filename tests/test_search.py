@@ -10,7 +10,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.search.service import bm25_search_chunks, cosine_similarity
+from backend.search.service import (
+    bm25_search_chunks,
+    cosine_similarity,
+    embed_queries,
+    expand_query,
+    rerank_candidates,
+)
 
 
 # --- Unit tests for cosine_similarity ---
@@ -80,7 +86,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     )
 
     assert bundle.results == []
-    assert [span.name for span in trace.spans] == ["vector-search"]
+    assert [span.name for span in trace.spans] == ["query-expansion", "vector-search"]
     assert trace.spans[-1].output == {
         "chunks": [],
         "duration_ms": trace.spans[-1].output["duration_ms"],
@@ -98,6 +104,95 @@ def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("model") == "text-embedding-3-small"
     assert call_kwargs.kwargs.get("input") == "test query"
+
+
+def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_client: Mock) -> None:
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 3),
+        Mock(embedding=[0.2] * 3),
+    ]
+
+    vectors = embed_queries(["first", "second"], api_key="sk-test")
+
+    assert vectors == [[0.1] * 3, [0.2] * 3]
+    mock_openai_client.embeddings.create.assert_called_once()
+    call_kwargs = mock_openai_client.embeddings.create.call_args
+    assert call_kwargs.kwargs.get("input") == ["first", "second"]
+
+
+def test_expand_query_deduplicates_and_normalizes() -> None:
+    variants = expand_query("Reset-password!!   reset password")
+    assert variants == [
+        "Reset-password!! reset password",
+        "Reset password reset password",
+        "reset password",
+    ]
+
+
+def test_expand_query_preserves_empty_query_as_single_variant() -> None:
+    assert expand_query("") == [""]
+
+
+def test_rerank_candidates_boosts_lexical_match() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="how to reset your password in the dashboard",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="billing invoice download instructions",
+        metadata_json={"chunk_index": 1},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(second, 0.9), (first, 0.7)],
+        vector_scores={first.id: 0.7, second.id: 0.9},
+        bm25_scores={first.id: 1.0, second.id: 0.1},
+        top_k=2,
+    )
+
+    assert [item[0].id for item in reranked] == [first.id, second.id]
+    assert reranked[0][1] > reranked[1][1]
+
+
+def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password steps",
+        metadata_json={"chunk_index": 1},
+    )
+    third = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="password reset troubleshooting",
+        metadata_json={"chunk_index": 2},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(first, 0.9), (second, 0.8), (third, 0.7)],
+        vector_scores={first.id: 0.9, second.id: 0.8, third.id: 0.7},
+        bm25_scores={first.id: 1.0, second.id: 0.8, third.id: 0.6},
+        top_k=3,
+    )
+
+    assert len(reranked) == 3
+    assert reranked[2][1] > 0.0
 
 
 # --- API tests (all mock OpenAI) ---

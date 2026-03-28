@@ -119,6 +119,14 @@ class ContradictionEvidence:
 
 
 @dataclass(frozen=True)
+class ContradictionPolicyEvaluation:
+    """Effective contradiction facts plus the cap decision derived from them."""
+
+    effective_pairs: tuple[ContradictionPair, ...] = ()
+    threshold_reached: bool = False
+
+
+@dataclass(frozen=True)
 class RetrievalReliability:
     """Canonical structured retrieval reliability contract."""
 
@@ -229,6 +237,82 @@ def _compute_base_reliability_score(
     if top_score >= LOW_RELIABILITY_SCORE_THRESHOLD:
         return "medium"
     return "low"
+
+
+def _contradiction_identity(
+    pair: ContradictionPair,
+) -> tuple[str, str, str, str, str]:
+    """Return the canonical duplicate identity for one contradiction fact."""
+    if (pair.chunk_a_id, pair.chunk_b_id) <= (pair.chunk_b_id, pair.chunk_a_id):
+        return (
+            pair.chunk_a_id,
+            pair.chunk_b_id,
+            pair.basis,
+            pair.value_a,
+            pair.value_b,
+        )
+    return (
+        pair.chunk_b_id,
+        pair.chunk_a_id,
+        pair.basis,
+        pair.value_b,
+        pair.value_a,
+    )
+
+
+def _logical_overlap_pair_identity(pair: ContradictionPair) -> tuple[str, str]:
+    """Return the orientation-insensitive identity for one logical overlap pair."""
+    return tuple(sorted((pair.chunk_a_id, pair.chunk_b_id)))
+
+
+def _is_valid_contradiction_pair(pair: ContradictionPair) -> bool:
+    """Keep only contradiction facts with the full canonical payload present."""
+    return all(
+        isinstance(value, str) and value.strip()
+        for value in (
+            pair.chunk_a_id,
+            pair.chunk_b_id,
+            pair.basis,
+            pair.value_a,
+            pair.value_b,
+        )
+    )
+
+
+def _evaluate_contradiction_policy(
+    contradiction_pairs: tuple[ContradictionPair, ...],
+) -> ContradictionPolicyEvaluation:
+    """
+    Evaluate contradiction severity from effective contradiction facts.
+
+    V1 removes only invalid facts and exact duplicate emissions; it does not
+    merge semantically distinct contradictions for scoring purposes.
+    """
+    effective_pairs: list[ContradictionPair] = []
+    seen_identities: set[tuple[str, str, str, str, str]] = set()
+    facts_per_overlap_pair: dict[tuple[str, str], int] = {}
+
+    for pair in contradiction_pairs:
+        if not _is_valid_contradiction_pair(pair):
+            continue
+        identity = _contradiction_identity(pair)
+        if identity in seen_identities:
+            continue
+        seen_identities.add(identity)
+        effective_pairs.append(pair)
+        overlap_pair_identity = _logical_overlap_pair_identity(pair)
+        facts_per_overlap_pair[overlap_pair_identity] = (
+            facts_per_overlap_pair.get(overlap_pair_identity, 0) + 1
+        )
+
+    threshold_reached = any(
+        fact_count >= 2
+        for fact_count in facts_per_overlap_pair.values()
+    ) or len(facts_per_overlap_pair) >= 2
+    return ContradictionPolicyEvaluation(
+        effective_pairs=tuple(effective_pairs),
+        threshold_reached=threshold_reached,
+    )
 
 
 def _normalize_date_value(raw_value: object) -> tuple[int, int | None, int | None] | None:
@@ -385,10 +469,12 @@ def build_reliability_assessment(
         top_score=top_score,
         result_count=result_count,
     )
+    contradiction_policy = _evaluate_contradiction_policy(contradiction_pairs)
+    effective_contradiction_pairs = contradiction_policy.effective_pairs
     signal_kinds: list[ReliabilitySignalKind] = []
     if source_overlap_detected:
         signal_kinds.append("source_overlap")
-    if contradiction_pairs:
+    if effective_contradiction_pairs:
         signal_kinds.append("contradiction")
     if top_score is not None and top_score < LOW_RELIABILITY_SCORE_THRESHOLD:
         signal_kinds.append("low_top_score")
@@ -398,7 +484,7 @@ def build_reliability_assessment(
     cap: ReliabilityScore | None = None
     cap_reason: ReliabilityCapReason | None = None
     score = base_score
-    if contradiction_pairs and base_score != "low":
+    if contradiction_policy.threshold_reached:
         cap = "low"
         cap_reason = "contradiction"
         score = "low"
@@ -408,7 +494,7 @@ def build_reliability_assessment(
         score = "medium"
 
     evidence = ReliabilityEvidence()
-    if source_overlap_pairs or contradiction_pairs:
+    if source_overlap_pairs or effective_contradiction_pairs:
         evidence = ReliabilityEvidence(
             source_overlap=(
                 SourceOverlapEvidence(
@@ -419,8 +505,8 @@ def build_reliability_assessment(
                 else None
             ),
             contradiction=(
-                ContradictionEvidence(pairs=contradiction_pairs)
-                if contradiction_pairs
+                ContradictionEvidence(pairs=effective_contradiction_pairs)
+                if effective_contradiction_pairs
                 else None
             ),
         )

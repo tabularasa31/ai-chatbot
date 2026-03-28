@@ -16,13 +16,13 @@ Chat9 requires your own OpenAI API key to generate answers and embeddings.
 
 You can get an OpenAI API key at https://platform.openai.com/api-keys.
 
-## Step 3: Upload your documents
+## Step 3: Add your knowledge
 
 1. Go to Dashboard → Knowledge.
-2. Click "Upload document".
-3. Supported formats: PDF, Markdown (.md), Swagger/OpenAPI (.json, .yaml, .yml). Maximum file size: 50 MB.
-4. After upload, the document will be processed automatically for AI search.
-5. Wait until the status returns to "Ready" — this may take a few seconds to a minute depending on document size.
+2. Either click "Upload document" or add a URL source.
+3. Supported file formats: PDF, Markdown (.md), Swagger/OpenAPI (.json, .yaml, .yml). Maximum file size: 50 MB.
+4. URL sources crawl same-domain documentation pages in the background and show crawl/index status in the same Knowledge hub.
+5. Wait until the document or source status returns to "Ready" — this may take a few seconds to a minute depending on size.
 
 ## Step 4: Get your embed code
 

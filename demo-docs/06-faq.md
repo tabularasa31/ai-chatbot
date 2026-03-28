@@ -12,7 +12,7 @@ Yes. Chat9 requires your own OpenAI API key to generate embeddings and answers. 
 Yes, Chat9 is currently free during early access. You only pay OpenAI directly for the AI usage (embeddings and chat).
 
 **What languages does Chat9 support?**
-Chat9 responds in the language the user writes in. Best results when your documentation and user questions are in the same language. Cross-lingual support (e.g. English questions against Russian docs) is in progress.
+Chat9 responds in the language the user writes in. Best results come when your documentation and user questions are close in language and terminology.
 
 ---
 
@@ -24,8 +24,11 @@ Typically 5–10 minutes: create account, verify email, add OpenAI key, upload d
 **What document formats are supported?**
 PDF, Markdown (.md), and Swagger/OpenAPI files (.json, .yaml, .yml).
 
+**Can I use a documentation website instead of uploading files?**
+Yes. In the Knowledge hub you can add a same-domain documentation URL source, track crawl/index status, and refresh it later.
+
 **How many documents can I upload?**
-Up to 100 documents per account.
+Up to 100 knowledge items per account. This shared capacity includes uploaded files and indexed URL-source pages.
 
 **What if my document didn't embed correctly?**
 Check the document status in the Dashboard. If it shows "Error", try deleting and re-uploading. If the issue persists, contact support.
@@ -55,6 +58,7 @@ If the answer is not in your documentation, the bot will say it doesn't have tha
 
 **How can I improve answer quality?**
 - Upload more complete documentation.
+- Add or refresh URL sources if your docs live on a website.
 - Use the 👍/👎 feedback in Chat Logs to identify weak answers.
 - Use the "Review bad answers" page to write ideal answers for training.
 - Use the Debug page to see which document chunks are being retrieved.

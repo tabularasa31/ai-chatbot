@@ -1,7 +1,26 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-27 (UTC) — URL-source page deletion in Knowledge
+**Last updated:** 2026-03-28 (UTC) — symmetric BM25 variant evaluation
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-28) — symmetric BM25 variant evaluation
+
+- ✅ **Explicit BM25 expansion policy:** retrieval now supports `BM25_EXPANSION_MODE` with `asymmetric` as the default and `symmetric_variants` as the opt-in lexical expansion path.
+- ✅ **Lexical-safe symmetric BM25 path:** BM25 can now evaluate the normalized lexical-safe variant set over the shared vector-built candidate corpus, merge hits deterministically before RRF, and keep `has_lexical_signal` semantics tied to the final merged lexical branch output.
+- ✅ **Expanded lexical observability:** traces now record BM25 expansion mode, lexical variant-eval counts, extra BM25 eval work, merged hit counts before/after cap, and compact winner provenance in the `bm25-search` span.
+- ✅ **Regression coverage + PG verification:** added unit/chat/pgvector coverage for deterministic lexical merge behavior, no-effective-change controls, cap interaction, and PG-path symmetric lexical evaluation.
+- ✅ **Docs sync:** product docs and FI-115 runbook now describe the vector/BM25 role split and the asymmetric-vs-symmetric evaluation gate.
+
+---
+
+## ✅ COMPLETED (2026-03-28) — query-variant retrieval observability
+
+- ✅ **FI-115 instrumentation:** retrieval now records query-variant fan-out and added work in traces: variant count/mode, extra embedded inputs, extra embedding API requests, extra vector-search calls, and retrieval/embedding/vector stage durations.
+- ✅ **Trace coverage parity:** direct `POST /search` requests now emit lightweight root traces, so query-cost measurements are available outside chat flow too.
+- ✅ **Tagging fix:** variant tags now merge with existing tenant tags for both sampled and deferred traces, preserving tenant-level segmentation.
+- ✅ **Docs + runbook:** observability rollout notes updated; added `docs/qa/FI-115-query-variant-cost.md` as the production evidence template for p50/p95 single-vs-multi review.
 
 ---
 
@@ -148,9 +167,14 @@
 ### Search / retrieval
 - ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`); промпт `FI-019ext-bm25-hybrid-hnsw.md` удалён после внедрения
   - PostgreSQL: `_pgvector_search` (top `2×top_k`) + `bm25_search_chunks` по `chunk_text` → `reciprocal_rank_fusion` (k=60)
-  - SQLite (тесты): только Python cosine, без BM25 (как в спеке промпта)
-  - Debug API: режим **`hybrid`** на Postgres; на SQLite по-прежнему **vector / keyword** по порогу косинуса
+  - SQLite (тесты): Python cosine только для vector candidate acquisition; дальше тот же BM25 → RRF → reranking → post-ranking flow по in-memory candidate pool после merge/dedup/truncation
+  - lexical participation определяется отдельно от reranker lexical feature: overlap в candidate pool включает hybrid contract даже там, где raw BM25 scores плоские/нестабильные
+  - Debug API: режим и confidence semantics выровнены с production path; `chunks[].score` отражает финальный pipeline score, `best_confidence_score` остаётся vector-derived
   - Зависимость: `backend/requirements.txt` → `rank-bm25>=0.2.2`
+- ✅ **FI-115** — observability for deterministic query variants before retrieval
+  - root traces now carry `variant_mode`, `query_variant_count`, `extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`, `retrieval_duration_ms`
+  - search stages expose `query-expansion`, `query-embedding`, and richer `vector-search` payloads for latency/cost comparison
+  - direct `/search` now has trace parity with chat; evaluation runbook lives in `docs/qa/FI-115-query-variant-cost.md`
 
 ### RAG / embeddings
 - ✅ **FI-009** — Sentence-aware chunking + метаданные эмбеддингов (`feature/fi-009-improved-chunking`)
@@ -250,9 +274,9 @@
 4. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
-5. **Langfuse tracing** (LLM observability)
-6. **Per-client system prompt**
-7. **Multiple file upload**
+5. **Per-client system prompt**
+6. **Multiple file upload**
+7. **FI-115 production review** — collect p50/p95 single-vs-multi evidence and decide on guardrails (`max_variants`, normalization, caching)
 
 ---
 
@@ -262,8 +286,9 @@
 - ✅ **Async embedding** (FI-021): `202 Accepted` + background task, polling по статусу `embedding → ready|error`
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)
-- ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
+- ✅ Hybrid retrieval (PostgreSQL: pgvector candidate acquisition + shared BM25/RRF/reranking; SQLite mirrors the same downstream orchestration with Python cosine candidates)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
+- ✅ Retrieval observability (Langfuse-style traces for chat + `/search`, including query-variant cost/latency fields)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)

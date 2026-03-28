@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-25  
+**Last updated:** 2026-03-28  
 **Status:** Production (getchat9.live)
 
 ---
@@ -177,12 +177,33 @@ Each chunk is embedded with `text-embedding-3-small` (1536 dimensions) and store
 
 Pure vector search struggles with exact keyword matches (product names, error codes). Chat9 combines two signals:
 
-1. **Vector search** — semantic similarity (pgvector, top `2×top_k` candidates)
-2. **BM25** — keyword frequency ranking (`rank-bm25` library, run over all client chunks in memory)
+1. **Vector candidate acquisition** — semantic similarity (`pgvector` in PostgreSQL, Python cosine in SQLite tests)
+2. **Candidate-pool BM25** — keyword ranking (`rank-bm25` library, run only over the in-memory candidate pool for the current request)
 
-The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60): a chunk scores higher if it appears near the top of both lists. This reliably outperforms either method alone on technical documentation queries.
+The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
-> Note: in the test environment (SQLite), pgvector is not available — tests use Python cosine similarity only. BM25 is not applied in tests.
+Vector remains the recall stage and shared candidate acquisition step. BM25 stays a lexical confirmation / precision stage over that already-built in-memory pool; even when lexical expansion is enabled, it adds repeated lexical scoring over the same shared pool rather than a second corpus-acquisition search.
+
+BM25 lexical expansion is an explicit policy:
+
+- `asymmetric` — default; BM25 evaluates only the original query text
+- `symmetric_variants` — BM25 evaluates the lexical-safe normalized variant set, merges hits deterministically, then sends the merged/capped lexical list into RRF
+
+“Symmetric” here applies to query handling only. It does not mean BM25 stops depending on the vector-built pool, and it does not imply that future freer rewrites/paraphrases from vector expansion automatically become valid BM25 inputs. BM25 should continue consuming only lexical-safe normalization variants unless that contract is revisited deliberately.
+
+> Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate-set construction (acquisition + merge/dedup + truncation), SQLite follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
+
+### Retrieval observability (FI-115)
+
+Retrieval is instrumented with Langfuse-style traces for both chat requests and direct `/search` calls. The search path now records:
+
+- query variant fan-out (`variant_mode`, `query_variant_count`)
+- extra work caused by expansion (`extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`)
+- lexical expansion policy and workload (`bm25_expansion_mode`, `bm25_query_variant_count`, `bm25_variant_eval_count`, `extra_bm25_variant_evals`)
+- lexical merge visibility (`bm25_merged_hit_count_before_cap`, `bm25_merged_hit_count_after_cap`)
+- timing split (`retrieval_duration_ms`, `query-embedding`, `vector-search`)
+
+The `bm25-search` span keeps the lexical inputs and merged lexical output explicit, including compact winner provenance for merged hits. This makes it possible to compare p50/p95 latency for single-vs-multi vector expansion and asymmetric-vs-symmetric lexical expansion without changing the default retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
 
 ---
 

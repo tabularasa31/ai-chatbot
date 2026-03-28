@@ -11,7 +11,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Layer | Technologies |
 |-------|----------------|
 | Backend | Python 3.11, FastAPI, Pydantic v2, SQLAlchemy, Alembic |
-| Database | PostgreSQL 14+ with **pgvector** (production); tests may use SQLite with simplified types (see `backend/models.py`) |
+| Database | PostgreSQL 14+ with **pgvector** (production); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
 | Auth | JWT, bcrypt, email verification (Brevo HTTP API) |
 | LLM | OpenAI API (per-client key / client settings; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |

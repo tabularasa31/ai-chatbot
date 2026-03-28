@@ -49,12 +49,13 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
-from backend.search.service import search_similar_chunks_detailed
+from backend.search.service import (
+    build_variant_trace_metadata,
+    build_variant_trace_tag,
+    search_similar_chunks_detailed,
+)
 
 logger = logging.getLogger(__name__)
-
-# SQLite tests: cosine-only path; used to label debug mode (not RRF scores).
-RETRIEVAL_VECTOR_CONFIDENCE = 0.70
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 
@@ -132,7 +133,7 @@ def retrieve_context(
 
     Uses tenant-scoped search with:
     - rank scores for ordering/debug
-    - vector similarity for escalation confidence on PostgreSQL
+    - vector similarity for escalation confidence
     client_id filtering enforced at DB level.
     """
     bundle = search_similar_chunks_detailed(
@@ -158,26 +159,27 @@ def retrieve_context(
             conflict_pairs=bundle.conflict_pairs,
             reliability_score=bundle.reliability_score,
             reliability_cap_reason=bundle.reliability_cap_reason,
+            variant_mode=bundle.variant_mode,
+            query_variant_count=bundle.query_variant_count,
+            extra_embedded_queries=bundle.extra_embedded_queries,
+            extra_embedding_api_requests=bundle.extra_embedding_api_requests,
+            extra_vector_search_calls=bundle.extra_vector_search_calls,
+            bm25_expansion_mode=bundle.bm25_expansion_mode,
+            bm25_query_variant_count=bundle.bm25_query_variant_count,
+            bm25_variant_eval_count=bundle.bm25_variant_eval_count,
+            extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
+            bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
+            bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
+            retrieval_duration_ms=bundle.retrieval_duration_ms,
         )
 
     best_rank_score = results[0][1]
-    db_url = str(db.bind.url if db.bind else "")
-    if "sqlite" in db_url:
-        # Tests: Python cosine only; same thresholds as before keyword→BM25 swap.
-        if best_rank_score >= RETRIEVAL_VECTOR_CONFIDENCE:
-            mode: Literal["vector", "keyword", "hybrid", "none"] = "vector"
-        else:
-            mode = "keyword"
-        best_confidence_score = best_rank_score
-        confidence_source: Literal["vector_similarity", "rank_score", "none"] = "rank_score"
-    elif bundle.best_keyword_score is None:
-        mode = "vector"
-        best_confidence_score = bundle.best_vector_similarity
-        confidence_source = "vector_similarity"
+    if bundle.has_lexical_signal:
+        mode: Literal["vector", "hybrid", "none"] = "hybrid"
     else:
-        mode = "hybrid"
-        best_confidence_score = bundle.best_vector_similarity
-        confidence_source = "vector_similarity"
+        mode = "vector"
+    best_confidence_score = bundle.best_vector_similarity
+    confidence_source: Literal["vector_similarity", "none"] = "vector_similarity"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]
@@ -195,6 +197,18 @@ def retrieve_context(
         conflict_pairs=bundle.conflict_pairs,
         reliability_score=bundle.reliability_score,
         reliability_cap_reason=bundle.reliability_cap_reason,
+        variant_mode=bundle.variant_mode,
+        query_variant_count=bundle.query_variant_count,
+        extra_embedded_queries=bundle.extra_embedded_queries,
+        extra_embedding_api_requests=bundle.extra_embedding_api_requests,
+        extra_vector_search_calls=bundle.extra_vector_search_calls,
+        bm25_expansion_mode=bundle.bm25_expansion_mode,
+        bm25_query_variant_count=bundle.bm25_query_variant_count,
+        bm25_variant_eval_count=bundle.bm25_variant_eval_count,
+        extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
+        bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
+        bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
+        retrieval_duration_ms=bundle.retrieval_duration_ms,
     )
 
 
@@ -205,14 +219,26 @@ class RetrievalContext:
     chunk_texts: list[str]
     document_ids: list[uuid.UUID]
     scores: list[float]
-    mode: Literal["vector", "keyword", "hybrid", "none"]
+    mode: Literal["vector", "hybrid", "none"]
     best_rank_score: float | None
     best_confidence_score: float | None
-    confidence_source: Literal["vector_similarity", "rank_score", "none"]
+    confidence_source: Literal["vector_similarity", "none"]
     conflicts_found: bool = False
     conflict_pairs: list[dict[str, object]] | None = None
     reliability_score: Literal["low", "medium", "high"] | None = None
     reliability_cap_reason: Literal["source_overlap"] | None = None
+    variant_mode: Literal["single", "multi"] = "single"
+    query_variant_count: int = 1
+    extra_embedded_queries: int = 0
+    extra_embedding_api_requests: int = 0
+    extra_vector_search_calls: int = 0
+    bm25_expansion_mode: Literal["asymmetric", "symmetric_variants"] = "asymmetric"
+    bm25_query_variant_count: int = 1
+    bm25_variant_eval_count: int = 1
+    extra_bm25_variant_evals: int = 0
+    bm25_merged_hit_count_before_cap: int = 0
+    bm25_merged_hit_count_after_cap: int = 0
+    retrieval_duration_ms: float = 0.0
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1107,7 +1133,9 @@ def process_chat_message(
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
+            **build_variant_trace_metadata(retrieval),
         },
+        tags=[build_variant_trace_tag(retrieval.variant_mode)],
     )
     return (answer, document_ids, tokens_used, bool(chat.ended_at))
 

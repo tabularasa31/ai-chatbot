@@ -26,7 +26,7 @@ Key recommendations added to this backlog:
 
 ### ~~[FI-019 ext] BM25 hybrid search + HNSW index~~ ✅ Done (2026-03-21)
 - HNSW: индекс в миграции (раньше).
-- BM25: `rank-bm25` в процессе запроса по чанкам клиента + RRF с векторным ранжированием (`backend/search/service.py`). Postgres full-text (`tsvector`) не используется — при росте корпуса см. кэширование / FTS в бэклоге.
+- BM25: `rank-bm25` в процессе запроса по candidate pool текущего retrieval request + RRF с векторным ранжированием (`backend/search/service.py`). Postgres full-text (`tsvector`) не используется — при росте корпуса см. кэширование / FTS в бэклоге.
 
 ### ~~[FI-021] Embeddings generation → BackgroundTasks~~ ✅ Done (2026-03-22)
 - `POST /embeddings/documents/{id}` returns `202 Accepted` immediately.
@@ -72,7 +72,8 @@ Key recommendations added to this backlog:
 - Add pytest-postgresql or separate profile with real PostgreSQL.
 
 ### [FI-030] RAG metrics & observability
-- Integrate Langfuse / Phoenix for per-request tracing.
+- Baseline Langfuse-style per-request tracing is already shipped (`rag-query`, `/search`, retrieval-stage spans, query-variant cost/latency fields).
+- Remaining work: validate against a real Langfuse deployment and decide which derived metrics/alerts should become productized.
 - RAGAS / DeepEval metrics: faithfulness, context precision, answer relevance.
 - Cost per query per tenant.
 

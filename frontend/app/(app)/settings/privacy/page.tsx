@@ -25,6 +25,13 @@ const OPTIONAL_TYPES: Array<{
   },
 ];
 
+function normalizePrivacyConfig(config: PrivacyConfigResponse): PrivacyConfigResponse {
+  return {
+    ...config,
+    optional_entity_types: [...config.optional_entity_types].sort(),
+  };
+}
+
 export default function PrivacySettingsPage() {
   const [config, setConfig] = useState<PrivacyConfigResponse>({ optional_entity_types: [] });
   const [savedConfig, setSavedConfig] = useState<PrivacyConfigResponse>({ optional_entity_types: [] });
@@ -33,7 +40,8 @@ export default function PrivacySettingsPage() {
   const [error, setError] = useState("");
   const [savedOk, setSavedOk] = useState(false);
   const isDirty =
-    config.optional_entity_types.join("|") !== savedConfig.optional_entity_types.join("|");
+    JSON.stringify(normalizePrivacyConfig(config)) !==
+    JSON.stringify(normalizePrivacyConfig(savedConfig));
 
   const load = useCallback(async () => {
     setError("");

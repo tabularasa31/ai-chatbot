@@ -134,7 +134,7 @@ def get_client_metrics(
 def list_pii_events(
     _: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-    limit: Annotated[int, Query(ge=0, le=200)] = 100,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
     direction: Optional[str] = None,
     client_id: Optional[str] = None,
@@ -184,7 +184,7 @@ def list_pii_events(
 def cleanup_pii_events(
     _: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-    retention_days: Annotated[int, Query(ge=1)] = 365,
+    retention_days: Annotated[int, Query(ge=30)] = 365,
 ) -> DeletedCountResponse:
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     deleted_count = (

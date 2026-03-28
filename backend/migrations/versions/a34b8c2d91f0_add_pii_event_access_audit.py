@@ -47,6 +47,7 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+    if not _has_index("pii_events", "ix_pii_events_actor_user_id"):
         op.create_index("ix_pii_events_actor_user_id", "pii_events", ["actor_user_id"])
     if not _has_column("pii_events", "action_path"):
         op.add_column("pii_events", sa.Column("action_path", sa.String(length=255), nullable=True))

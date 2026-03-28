@@ -313,6 +313,7 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
     assert list_resp.status_code == 200
     items = list_resp.json()["items"]
     assert len(items) == 1
+    assert isinstance(items[0]["direction"], str)
     assert items[0]["direction"] == "original_delete"
     assert items[0]["actor_user_id"] == str(user.id)
 
@@ -346,14 +347,21 @@ def test_admin_pii_events_reject_invalid_pagination_and_since_days(
 
     for url in (
         "/admin/privacy/pii-events?limit=-1",
+        "/admin/privacy/pii-events?limit=0",
         "/admin/privacy/pii-events?offset=-1",
         "/admin/privacy/pii-events?since_days=0",
     ):
         resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 422
 
+    ok_resp = client.get(
+        "/admin/privacy/pii-events?limit=200",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert ok_resp.status_code == 200
 
-def test_admin_pii_events_cleanup_rejects_zero_retention(
+
+def test_admin_pii_events_cleanup_rejects_short_retention(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -369,13 +377,14 @@ def test_admin_pii_events_cleanup_rejects_zero_retention(
     user.is_admin = True
     db_session.commit()
 
-    resp = client.delete(
-        "/admin/privacy/pii-events/retention?retention_days=0",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert resp.status_code == 422
+    for retention_days in (0, 1, 29):
+        resp = client.delete(
+            f"/admin/privacy/pii-events/retention?retention_days={retention_days}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
 
 
 def test_cleanup_pii_events_script_rejects_zero_retention() -> None:
-    with pytest.raises(ValueError, match="retention_days must be >= 1"):
-        cleanup_pii_events_run(0)
+    with pytest.raises(ValueError, match="retention_days must be >= 30"):
+        cleanup_pii_events_run(29)

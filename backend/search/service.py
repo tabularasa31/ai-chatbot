@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Literal
 
@@ -42,10 +42,217 @@ BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap"]
+ReliabilitySignalKind = Literal[
+    "source_overlap",
+    "low_top_score",
+    "weak_recall",
+    "contradiction",
+]
 VariantMode = Literal["single", "multi"]
 BM25ExpansionMode = Literal["asymmetric", "symmetric_variants"]
 
 logger = logging.getLogger(__name__)
+
+
+RELIABILITY_SIGNAL_ORDER: tuple[ReliabilitySignalKind, ...] = (
+    "source_overlap",
+    "low_top_score",
+    "weak_recall",
+    "contradiction",
+)
+HIGH_RELIABILITY_SCORE_THRESHOLD = 0.8
+LOW_RELIABILITY_SCORE_THRESHOLD = 0.45
+WEAK_RECALL_RESULT_COUNT_THRESHOLD = 2
+
+
+@dataclass(frozen=True)
+class ReliabilitySignal:
+    """Compact canonical reliability signal entry."""
+
+    kind: ReliabilitySignalKind
+
+
+@dataclass(frozen=True)
+class SourceOverlapPair:
+    """Structured overlap evidence between two different documents."""
+
+    chunk_a_id: str
+    chunk_b_id: str
+    similarity: float
+    signal_type: Literal["cross_document_overlap"] = "cross_document_overlap"
+
+
+@dataclass(frozen=True)
+class SourceOverlapEvidence:
+    """Debug/trace-only overlap evidence kept separate from compact signals."""
+
+    pairs: tuple[SourceOverlapPair, ...] = ()
+    similarity_threshold: float | None = None
+
+
+@dataclass(frozen=True)
+class ReliabilityEvidence:
+    """Structured evidence families for canonical reliability payloads."""
+
+    source_overlap: SourceOverlapEvidence | None = None
+
+
+@dataclass(frozen=True)
+class RetrievalReliability:
+    """Canonical structured retrieval reliability contract."""
+
+    base_score: ReliabilityScore = "low"
+    score: ReliabilityScore = "low"
+    cap: ReliabilityScore | None = None
+    cap_reason: ReliabilityCapReason | None = None
+    signals: tuple[ReliabilitySignal, ...] = ()
+    evidence: ReliabilityEvidence = field(default_factory=ReliabilityEvidence)
+
+    @property
+    def source_overlap_detected(self) -> bool:
+        return any(signal.kind == "source_overlap" for signal in self.signals)
+
+    @property
+    def source_overlap_pairs(self) -> list[dict[str, object]]:
+        overlap_evidence = self.evidence.source_overlap
+        if overlap_evidence is None:
+            return []
+        return [serialize_source_overlap_pair(pair) for pair in overlap_evidence.pairs]
+
+
+def serialize_source_overlap_pair(pair: SourceOverlapPair) -> dict[str, object]:
+    """Serialize one canonical overlap pair without mutating the source object."""
+    return {
+        "chunk_a_id": pair.chunk_a_id,
+        "chunk_b_id": pair.chunk_b_id,
+        "similarity": pair.similarity,
+        "signal_type": pair.signal_type,
+    }
+
+
+def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object]:
+    """Serialize the canonical reliability object with stable empty containers."""
+    evidence: dict[str, object] = {}
+    overlap_evidence = reliability.evidence.source_overlap
+    if overlap_evidence is not None:
+        evidence["source_overlap"] = {
+            "pairs": [serialize_source_overlap_pair(pair) for pair in overlap_evidence.pairs],
+            "similarity_threshold": overlap_evidence.similarity_threshold,
+        }
+    return {
+        "base_score": reliability.base_score,
+        "score": reliability.score,
+        "cap": reliability.cap,
+        "cap_reason": reliability.cap_reason,
+        "signals": [{"kind": signal.kind} for signal in reliability.signals],
+        "evidence": evidence,
+    }
+
+
+def build_reliability_projection(
+    reliability: RetrievalReliability,
+) -> dict[str, object]:
+    """Project canonical reliability into trace/debug-friendly payloads."""
+    return {
+        "reliability": serialize_reliability(reliability),
+        "source_overlap_detected": reliability.source_overlap_detected,
+        "source_overlap_pairs": reliability.source_overlap_pairs,
+    }
+
+
+def _build_reliability_signals(
+    kinds: list[ReliabilitySignalKind],
+) -> tuple[ReliabilitySignal, ...]:
+    """Deduplicate signal kinds and serialize them in stable order."""
+    ordered_kinds = {
+        kind
+        for kind in RELIABILITY_SIGNAL_ORDER
+        if kind in set(kinds)
+    }
+    return tuple(
+        ReliabilitySignal(kind=kind)
+        for kind in RELIABILITY_SIGNAL_ORDER
+        if kind in ordered_kinds
+    )
+
+
+def _compute_base_reliability_score(
+    *,
+    top_score: float | None,
+    result_count: int,
+) -> ReliabilityScore:
+    """Compute the raw categorical score before applying caps."""
+    if result_count == 0 or top_score is None:
+        return "low"
+    if top_score >= HIGH_RELIABILITY_SCORE_THRESHOLD:
+        return "high"
+    if top_score >= LOW_RELIABILITY_SCORE_THRESHOLD:
+        return "medium"
+    return "low"
+
+
+def build_reliability_assessment(
+    *,
+    top_score: float | None,
+    result_count: int,
+    source_overlap_detected: bool = False,
+    source_overlap_pairs: tuple[SourceOverlapPair, ...] = (),
+    source_overlap_similarity_threshold: float | None = None,
+) -> RetrievalReliability:
+    """
+    Build the canonical retrieval reliability object in one place.
+
+    `source_overlap_detected=True` with empty `source_overlap_pairs` is allowed
+    as a compatibility/mock state even though the real overlap detector normally
+    emits both together. Empty retrieval output intentionally records
+    `weak_recall` as a diagnostic signal rather than producing a signal-free
+    object.
+    """
+    base_score = _compute_base_reliability_score(
+        top_score=top_score,
+        result_count=result_count,
+    )
+    signal_kinds: list[ReliabilitySignalKind] = []
+    if source_overlap_detected:
+        signal_kinds.append("source_overlap")
+    if top_score is not None and top_score < LOW_RELIABILITY_SCORE_THRESHOLD:
+        signal_kinds.append("low_top_score")
+    if result_count < WEAK_RECALL_RESULT_COUNT_THRESHOLD:
+        signal_kinds.append("weak_recall")
+
+    cap: ReliabilityScore | None = None
+    cap_reason: ReliabilityCapReason | None = None
+    score = base_score
+    if source_overlap_detected and base_score == "high":
+        cap = "medium"
+        cap_reason = "source_overlap"
+        score = "medium"
+
+    evidence = ReliabilityEvidence()
+    if source_overlap_pairs:
+        evidence = ReliabilityEvidence(
+            source_overlap=SourceOverlapEvidence(
+                pairs=source_overlap_pairs,
+                similarity_threshold=source_overlap_similarity_threshold,
+            )
+        )
+
+    return RetrievalReliability(
+        base_score=base_score,
+        score=score,
+        cap=cap,
+        cap_reason=cap_reason,
+        signals=_build_reliability_signals(signal_kinds),
+        evidence=evidence,
+    )
+
+
+def default_retrieval_reliability() -> RetrievalReliability:
+    """Return the one canonical empty/default reliability state."""
+    return build_reliability_assessment(
+        top_score=None,
+        result_count=0,
+    )
 
 
 @dataclass
@@ -58,10 +265,7 @@ class SearchResultBundle:
     has_lexical_signal: bool = False
     query_variants: list[str] | None = None
     query_script_bucket: str | None = None
-    conflicts_found: bool = False
-    conflict_pairs: list[dict[str, object]] | None = None
-    reliability_score: ReliabilityScore | None = None
-    reliability_cap_reason: ReliabilityCapReason | None = None
+    reliability: RetrievalReliability = field(default_factory=default_retrieval_reliability)
     query_variant_count: int = 1
     variant_mode: VariantMode = "single"
     extra_variant_count: int = 0
@@ -781,7 +985,7 @@ def detect_source_overlaps(
     candidates: list[tuple[Embedding, float]],
     *,
     similarity_threshold: float = 0.75,
-) -> tuple[bool, list[dict[str, object]], ReliabilityCapReason | None]:
+) -> tuple[bool, tuple[SourceOverlapPair, ...]]:
     """Detect cross-document overlap on the final top-k result set only."""
     if len(candidates) > MAX_OVERLAP_CHECK_CANDIDATES:
         logger.warning(
@@ -792,7 +996,7 @@ def detect_source_overlaps(
             },
         )
     bounded_candidates = candidates[:MAX_OVERLAP_CHECK_CANDIDATES]
-    overlap_pairs: list[dict[str, object]] = []
+    overlap_pairs: list[SourceOverlapPair] = []
     for index, (first, _) in enumerate(bounded_candidates):
         for second, _ in bounded_candidates[index + 1 :]:
             if first.document_id == second.document_id:
@@ -801,45 +1005,13 @@ def detect_source_overlaps(
             if similarity < similarity_threshold:
                 continue
             overlap_pairs.append(
-                {
-                    "chunk_a_id": str(first.id),
-                    "chunk_b_id": str(second.id),
-                    "similarity": round(similarity, 4),
-                    "signal_type": "cross_document_overlap",
-                    "confirmed_by_llm": False,
-                }
+                SourceOverlapPair(
+                    chunk_a_id=str(first.id),
+                    chunk_b_id=str(second.id),
+                    similarity=round(similarity, 4),
+                )
             )
-    return bool(overlap_pairs), overlap_pairs, ("source_overlap" if overlap_pairs else None)
-
-
-def detect_conflicts(
-    candidates: list[tuple[Embedding, float]],
-    *,
-    similarity_threshold: float = 0.75,
-) -> tuple[bool, list[dict[str, object]], ReliabilityCapReason | None]:
-    """Backward-compatible alias for the interim source-overlap heuristic."""
-    return detect_source_overlaps(
-        candidates,
-        similarity_threshold=similarity_threshold,
-    )
-
-
-def compute_reliability_score(
-    *,
-    top_score: float | None,
-    conflicts_found: bool,
-    result_count: int,
-) -> ReliabilityScore:
-    """Compute a coarse reliability bucket for the final answer trace."""
-    if result_count == 0 or top_score is None:
-        return "low"
-    if conflicts_found:
-        return "medium"
-    if top_score >= 0.8:
-        return "high"
-    if top_score >= 0.45:
-        return "medium"
-    return "low"
+    return bool(overlap_pairs), tuple(overlap_pairs)
 
 
 def _pgvector_search(
@@ -998,7 +1170,10 @@ def search_similar_chunks_detailed(
             results=[],
             query_variants=query_variants,
             query_script_bucket=query_script_bucket,
-            reliability_score="low",
+            reliability=build_reliability_assessment(
+                top_score=None,
+                result_count=0,
+            ),
             query_variant_count=query_variant_count,
             variant_mode=variant_mode,
             extra_variant_count=extra_variant_count,
@@ -1201,10 +1376,18 @@ def search_similar_chunks_detailed(
         )
 
     overlap_started_at = perf_counter()
-    conflicts_found, conflict_pairs, reliability_cap_reason = detect_source_overlaps(
+    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(
         final_results
     )
+    reliability = build_reliability_assessment(
+        top_score=final_results[0][1] if final_results else None,
+        result_count=len(final_results),
+        source_overlap_detected=source_overlap_detected,
+        source_overlap_pairs=source_overlap_pairs,
+        source_overlap_similarity_threshold=0.75,
+    )
     if trace is not None:
+        # The historical span name is preserved for continuity; payload semantics are overlap-only.
         trace.span(
             name="source-overlap-check",
             input={
@@ -1213,19 +1396,10 @@ def search_similar_chunks_detailed(
             },
         ).end(
             output={
-                "semantic_conflict_detection": False,
-                "conflicts_found": conflicts_found,
-                "conflict_pairs": conflict_pairs,
-                "reliability_cap_reason": reliability_cap_reason,
+                **build_reliability_projection(reliability),
                 "duration_ms": round((perf_counter() - overlap_started_at) * 1000, 2),
             }
         )
-
-    reliability_score = compute_reliability_score(
-        top_score=final_results[0][1] if final_results else None,
-        conflicts_found=conflicts_found,
-        result_count=len(final_results),
-    )
     retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
 
     return SearchResultBundle(
@@ -1235,10 +1409,7 @@ def search_similar_chunks_detailed(
         has_lexical_signal=has_lexical_signal,
         query_variants=query_variants,
         query_script_bucket=query_script_bucket,
-        conflicts_found=conflicts_found,
-        conflict_pairs=conflict_pairs,
-        reliability_score=reliability_score,
-        reliability_cap_reason=reliability_cap_reason,
+        reliability=reliability,
         query_variant_count=query_variant_count,
         variant_mode=variant_mode,
         extra_variant_count=extra_variant_count,

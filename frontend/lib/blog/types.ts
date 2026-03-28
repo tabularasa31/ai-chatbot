@@ -32,6 +32,7 @@ export type BlogPost = {
   excerpt?: string;
   publishedAt: string;
   coverImage?: string;
+  socialImage?: string;
   tags: string[];
   body: BlogBlock[];
 };

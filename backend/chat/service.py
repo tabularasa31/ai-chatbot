@@ -331,7 +331,6 @@ def generate_answer(
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
     )
-    prompt = f"{system_prompt}\n\nContext:\n{user_message}"
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},

@@ -231,32 +231,6 @@ class RetrievalContext:
     extra_bm25_variant_evals: int = 0
     bm25_merged_hit_count_before_cap: int = 0
     bm25_merged_hit_count_after_cap: int = 0
-
-    @property
-    def source_overlap_detected(self) -> bool:
-        return self.reliability.source_overlap_detected
-
-    @property
-    def source_overlap_pairs(self) -> list[dict[str, object]]:
-        return self.reliability.source_overlap_pairs
-
-    @property
-    def reliability_score(self) -> Literal["low", "medium", "high"]:
-        return self.reliability.score
-
-    @property
-    def reliability_cap_reason(self) -> Literal["source_overlap"] | None:
-        return self.reliability.cap_reason
-
-    @property
-    def conflicts_found(self) -> bool:
-        """Compatibility alias for overlap semantics only."""
-        return self.source_overlap_detected
-
-    @property
-    def conflict_pairs(self) -> list[dict[str, object]]:
-        """Compatibility alias for overlap semantics only."""
-        return self.source_overlap_pairs
     retrieval_duration_ms: float = 0.0
 
 
@@ -1051,7 +1025,7 @@ def process_chat_message(
         api_key=api_key,
         trace=trace,
     )
-    reliability_score = retrieval.reliability_score or "low"
+    reliability_score = retrieval.reliability.score
     if (
         not validation["is_valid"]
         and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
@@ -1147,7 +1121,7 @@ def process_chat_message(
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
-            **build_reliability_projection(retrieval.reliability, include_legacy=True),
+            **build_reliability_projection(retrieval.reliability),
             **build_variant_trace_metadata(retrieval),
         },
         tags=[build_variant_trace_tag(retrieval.variant_mode)],
@@ -1204,7 +1178,7 @@ def run_debug(
         "best_rank_score": retrieval.best_rank_score,
         "best_confidence_score": retrieval.best_confidence_score,
         "confidence_source": retrieval.confidence_source,
-        **build_reliability_projection(retrieval.reliability, include_legacy=True),
+        **build_reliability_projection(retrieval.reliability),
         "chunks": chunks_debug,
         "validation": validate_answer(
             redacted_question, answer, chunk_texts, api_key=api_key

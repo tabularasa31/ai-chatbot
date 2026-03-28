@@ -151,25 +151,13 @@ def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object
 
 def build_reliability_projection(
     reliability: RetrievalReliability,
-    *,
-    include_legacy: bool = False,
 ) -> dict[str, object]:
     """Project canonical reliability into trace/debug-friendly payloads."""
-    projection: dict[str, object] = {
+    return {
         "reliability": serialize_reliability(reliability),
         "source_overlap_detected": reliability.source_overlap_detected,
         "source_overlap_pairs": reliability.source_overlap_pairs,
     }
-    if include_legacy:
-        projection.update(
-            {
-                "reliability_score": reliability.score,
-                "reliability_cap_reason": reliability.cap_reason,
-                "conflicts_found": reliability.source_overlap_detected,
-                "conflict_pairs": reliability.source_overlap_pairs,
-            }
-        )
-    return projection
 
 
 def _build_reliability_signals(
@@ -288,32 +276,6 @@ class SearchResultBundle:
     retrieval_duration_ms: float = 0.0
     query_embedding_duration_ms: float = 0.0
     vector_search_duration_ms: float = 0.0
-
-    @property
-    def source_overlap_detected(self) -> bool:
-        return self.reliability.source_overlap_detected
-
-    @property
-    def source_overlap_pairs(self) -> list[dict[str, object]]:
-        return self.reliability.source_overlap_pairs
-
-    @property
-    def reliability_score(self) -> ReliabilityScore:
-        return self.reliability.score
-
-    @property
-    def reliability_cap_reason(self) -> ReliabilityCapReason | None:
-        return self.reliability.cap_reason
-
-    @property
-    def conflicts_found(self) -> bool:
-        """Compatibility alias for overlap semantics only."""
-        return self.source_overlap_detected
-
-    @property
-    def conflict_pairs(self) -> list[dict[str, object]]:
-        """Compatibility alias for overlap semantics only."""
-        return self.source_overlap_pairs
 
 
 @dataclass
@@ -1042,41 +1004,6 @@ def detect_source_overlaps(
                 )
             )
     return bool(overlap_pairs), tuple(overlap_pairs)
-
-
-def detect_conflicts(
-    candidates: list[tuple[Embedding, float]],
-    *,
-    similarity_threshold: float = 0.75,
-) -> tuple[bool, list[dict[str, object]], ReliabilityCapReason | None]:
-    """Compatibility alias for overlap semantics, not contradiction detection."""
-    overlaps_found, overlap_pairs = detect_source_overlaps(
-        candidates,
-        similarity_threshold=similarity_threshold,
-    )
-    return (
-        overlaps_found,
-        [serialize_source_overlap_pair(pair) for pair in overlap_pairs],
-        ("source_overlap" if overlaps_found else None),
-    )
-
-
-def compute_reliability_score(
-    *,
-    top_score: float | None,
-    conflicts_found: bool,
-    result_count: int,
-) -> ReliabilityScore:
-    """Compatibility wrapper that preserves the legacy flat-field semantics."""
-    if result_count == 0 or top_score is None:
-        return "low"
-    if conflicts_found:
-        return "medium"
-    if top_score >= HIGH_RELIABILITY_SCORE_THRESHOLD:
-        return "high"
-    if top_score >= LOW_RELIABILITY_SCORE_THRESHOLD:
-        return "medium"
-    return "low"
 
 
 def _pgvector_search(

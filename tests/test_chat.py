@@ -771,12 +771,10 @@ def test_retrieve_context_propagates_reliability_cap_reason(
         api_key="sk-test",
     )
 
-    assert context.source_overlap_detected is True
-    assert context.source_overlap_pairs == []
-    assert context.conflicts_found is True
-    assert context.conflict_pairs == []
-    assert context.reliability_score == "medium"
-    assert context.reliability_cap_reason == "source_overlap"
+    assert context.reliability.source_overlap_detected is True
+    assert context.reliability.source_overlap_pairs == []
+    assert context.reliability.score == "medium"
+    assert context.reliability.cap_reason == "source_overlap"
 
 
 def test_retrieve_context_uses_vector_confidence_and_lexical_mode(

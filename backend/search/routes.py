@@ -104,7 +104,7 @@ def search_route(
         metadata={
             "route": str(request.url.path),
             "search_result_count": len(items),
-            **build_reliability_projection(bundle.reliability, include_legacy=True),
+            **build_reliability_projection(bundle.reliability),
             **build_variant_trace_metadata(bundle),
         },
         tags=[build_variant_trace_tag(bundle.variant_mode)],

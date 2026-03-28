@@ -16,7 +16,6 @@ from backend.search.service import (
     bm25_search_chunks,
     build_reliability_assessment,
     build_reliability_projection,
-    compute_reliability_score,
     cosine_similarity,
     embed_queries,
     embed_queries_with_stats,
@@ -1090,7 +1089,7 @@ def test_build_reliability_assessment_uses_overlap_signal_without_conflict_seman
         },
     }
 
-    projection = build_reliability_projection(reliability, include_legacy=True)
+    projection = build_reliability_projection(reliability)
     assert projection["source_overlap_detected"] is True
     assert projection["source_overlap_pairs"] == [
         {
@@ -1100,10 +1099,8 @@ def test_build_reliability_assessment_uses_overlap_signal_without_conflict_seman
             "signal_type": "cross_document_overlap",
         }
     ]
-    assert projection["conflicts_found"] is True
-    assert projection["conflict_pairs"] == projection["source_overlap_pairs"]
-    assert projection["reliability_score"] == "medium"
-    assert projection["reliability_cap_reason"] == "source_overlap"
+    assert projection["reliability"]["score"] == "medium"
+    assert projection["reliability"]["cap_reason"] == "source_overlap"
 
 
 def test_build_reliability_assessment_no_signal_serializes_stable_empty_shape() -> None:
@@ -1121,13 +1118,11 @@ def test_build_reliability_assessment_no_signal_serializes_stable_empty_shape() 
         "evidence": {},
     }
 
-    projection = build_reliability_projection(reliability, include_legacy=True)
+    projection = build_reliability_projection(reliability)
     assert projection["source_overlap_detected"] is False
     assert projection["source_overlap_pairs"] == []
-    assert projection["conflicts_found"] is False
-    assert projection["conflict_pairs"] == []
-    assert projection["reliability_score"] == "high"
-    assert projection["reliability_cap_reason"] is None
+    assert projection["reliability"]["score"] == "high"
+    assert projection["reliability"]["cap_reason"] is None
 
 
 def test_build_reliability_assessment_overlap_cap_is_not_applied_when_base_score_is_already_medium() -> None:
@@ -1159,23 +1154,23 @@ def test_build_reliability_projection_does_not_mutate_canonical_object() -> None
         source_overlap_similarity_threshold=0.75,
     )
     before = serialize_reliability(reliability)
-    projection = build_reliability_projection(reliability, include_legacy=True)
+    projection = build_reliability_projection(reliability)
 
     assert projection["reliability"] == before
     assert serialize_reliability(reliability) == before
 
 
-def test_build_reliability_projection_legacy_aliases_are_stable_for_empty_default_object() -> None:
-    projection = build_reliability_projection(build_reliability_assessment(top_score=None, result_count=0), include_legacy=True)
+def test_build_reliability_projection_is_stable_for_empty_default_object() -> None:
+    projection = build_reliability_projection(
+        build_reliability_assessment(top_score=None, result_count=0)
+    )
 
     assert projection["reliability"]["signals"] == [{"kind": "weak_recall"}]
     assert projection["reliability"]["evidence"] == {}
     assert projection["source_overlap_detected"] is False
     assert projection["source_overlap_pairs"] == []
-    assert projection["conflicts_found"] is False
-    assert projection["conflict_pairs"] == []
-    assert projection["reliability_score"] == "low"
-    assert projection["reliability_cap_reason"] is None
+    assert projection["reliability"]["score"] == "low"
+    assert projection["reliability"]["cap_reason"] is None
 
 
 def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
@@ -1231,14 +1226,6 @@ def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None
 
     assert at_threshold[0] is True
     assert above_threshold[0] is False
-
-
-def test_compute_reliability_score_compatibility_wrapper_uses_overlap_alias() -> None:
-    assert compute_reliability_score(top_score=0.9, conflicts_found=False, result_count=5) == "high"
-    assert compute_reliability_score(top_score=0.9, conflicts_found=True, result_count=5) == "medium"
-    assert compute_reliability_score(top_score=0.2, conflicts_found=True, result_count=5) == "medium"
-    assert compute_reliability_score(top_score=0.2, conflicts_found=False, result_count=5) == "low"
-    assert compute_reliability_score(top_score=None, conflicts_found=False, result_count=0) == "low"
 
 
 # --- API tests (all mock OpenAI) ---
@@ -1343,8 +1330,6 @@ def test_search_route_traces_variant_summary(
     }
     assert metadata["source_overlap_detected"] is False
     assert metadata["source_overlap_pairs"] == []
-    assert metadata["conflicts_found"] is False
-    assert metadata["conflict_pairs"] == []
     assert fake_trace.update_calls == [
         {
             "output": {"result_count": 0},
@@ -1361,10 +1346,6 @@ def test_search_route_traces_variant_summary(
                 },
                 "source_overlap_detected": False,
                 "source_overlap_pairs": [],
-                "reliability_score": "low",
-                "reliability_cap_reason": None,
-                "conflicts_found": False,
-                "conflict_pairs": [],
                 "variant_mode": "multi",
                 "query_variant_count": 3,
                 "extra_embedded_queries": 2,

@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-25  
+**Last updated:** 2026-03-28  
 **Status:** Production (getchat9.live)
 
 ---
@@ -182,7 +182,7 @@ Pure vector search struggles with exact keyword matches (product names, error co
 
 The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60): a chunk scores higher if it appears near the top of both lists. This reliably outperforms either method alone on technical documentation queries.
 
-> Note: in the test environment (SQLite), pgvector is not available — tests use Python cosine similarity only. BM25 is not applied in tests.
+> Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate acquisition, SQLite now follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
 
 ### Retrieval observability (FI-115)
 

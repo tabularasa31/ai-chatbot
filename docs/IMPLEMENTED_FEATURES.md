@@ -46,7 +46,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| **FI-008 / FI-019 ext** | Hybrid: pgvector + BM25 + RRF (Postgres); SQLite tests: cosine only | `backend/search/service.py`, `rank-bm25` |
+| **FI-008 / FI-019 ext** | Hybrid retrieval with shared BM25 + RRF + reranking orchestration; Postgres uses pgvector for vector candidates, SQLite uses Python cosine over the same downstream contract | `backend/search/service.py`, `rank-bm25` |
 | **FI-115** | Query-variant retrieval observability: variant fan-out counts, embedding/vector-call deltas, retrieval stage timings, root trace parity for chat and `/search`, variant segmentation tags | `backend/search/service.py`, `backend/search/routes.py`, `backend/chat/service.py`, `docs/07-observability-rollout.md`, `docs/qa/FI-115-query-variant-cost.md` |
 | RAG pipeline | Retrieve → prompt → generate → persist messages | `backend/chat/service.py` `process_chat_message`, `POST /chat` (X-API-Key) |
 | **FI-034** | LLM answer validation; fallback on low confidence | `validate_answer()`, `POST /chat/debug` → `validation` |

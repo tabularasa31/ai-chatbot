@@ -59,10 +59,10 @@ class DebugChunkResponse(BaseModel):
 class DebugInfoResponse(BaseModel):
     """Debug info for RAG retrieval."""
 
-    mode: Literal["vector", "keyword", "hybrid", "none"]
+    mode: Literal["vector", "hybrid", "none"]
     best_rank_score: Optional[float] = None
     best_confidence_score: Optional[float] = None
-    confidence_source: Optional[Literal["vector_similarity", "rank_score", "none"]] = None
+    confidence_source: Optional[Literal["vector_similarity", "none"]] = None
     chunks: list[DebugChunkResponse]
     validation: Optional[dict] = None
 
@@ -171,6 +171,9 @@ def chat_debug(
 
     debug_resp = DebugInfoResponse(
         mode=debug_dict["mode"],
+        best_rank_score=debug_dict.get("best_rank_score"),
+        best_confidence_score=debug_dict.get("best_confidence_score"),
+        confidence_source=debug_dict.get("confidence_source"),
         chunks=[
             DebugChunkResponse(
                 document_id=c["document_id"],

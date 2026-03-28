@@ -1,0 +1,57 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="900" fill="#0A0A0F"/>
+  <rect x="80" y="80" width="1440" height="740" rx="32" fill="#12121A" stroke="#1E1E2E" stroke-width="2"/>
+  <rect x="80" y="80" width="1440" height="96" rx="32" fill="#0F1016"/>
+  <path d="M80 144C80 126.327 94.3269 112 112 112H1488C1505.67 112 1520 126.327 1520 144V176H80V144Z" fill="#0F1016"/>
+
+  <circle cx="136" cy="128" r="10" fill="#E879F9"/>
+  <circle cx="170" cy="128" r="10" fill="#38BDF8"/>
+  <circle cx="204" cy="128" r="10" fill="#2D2D44"/>
+
+  <rect x="252" y="108" width="260" height="40" rx="20" fill="#12121A" stroke="#1E1E2E"/>
+  <text x="282" y="134" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">Chat9 Assistant</text>
+
+  <rect x="118" y="224" width="540" height="116" rx="24" fill="#2D2D44"/>
+  <text x="150" y="270" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="400">When was the pricing update released?</text>
+
+  <rect x="728" y="380" width="754" height="320" rx="28" fill="#111827" stroke="#1E1E2E" stroke-width="2"/>
+  <rect x="760" y="416" width="146" height="34" rx="17" fill="#E879F9"/>
+  <text x="792" y="438" fill="#0A0A0F" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Chat9</text>
+
+  <text x="760" y="490" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">
+    I found conflicting information in the sources.
+  </text>
+
+  <text x="760" y="536" fill="#D6D3F0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">
+    I can see two different dates for this update,
+  </text>
+  <text x="760" y="572" fill="#D6D3F0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">
+    so I do not want to give you an exact answer
+  </text>
+  <text x="760" y="608" fill="#D6D3F0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">
+    that may be wrong. For confirmed information,
+  </text>
+  <text x="760" y="644" fill="#D6D3F0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">
+    please contact your manager or support@getchat9.live.
+  </text>
+
+  <rect x="760" y="726" width="234" height="54" rx="27" fill="#38BDF8"/>
+  <text x="808" y="760" fill="#0A0A0F" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">View sources</text>
+
+  <rect x="1030" y="726" width="284" height="54" rx="27" fill="#1A1A24" stroke="#2D2D44"/>
+  <text x="1068" y="760" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">Contact manager</text>
+
+  <rect x="118" y="380" width="540" height="330" rx="28" fill="#0F1016" stroke="#1E1E2E" stroke-width="2"/>
+  <text x="154" y="430" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">Retrieved sources</text>
+
+  <rect x="154" y="468" width="468" height="96" rx="20" fill="#12121A" stroke="#273449" stroke-width="2"/>
+  <text x="186" y="508" fill="#38BDF8" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Source A</text>
+  <text x="186" y="542" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">Pricing update published in 2024</text>
+
+  <rect x="154" y="584" width="468" height="96" rx="20" fill="#12121A" stroke="#5B2333" stroke-width="2"/>
+  <text x="186" y="624" fill="#E879F9" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Source B</text>
+  <text x="186" y="658" fill="#FAF5FF" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="400">Pricing update published in 2025</text>
+
+  <rect x="118" y="736" width="302" height="42" rx="21" fill="#2A1220"/>
+  <text x="154" y="764" fill="#F9A8D4" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">Conflict detected between sources</text>
+</svg>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { getMetadataBase } from "@/lib/site";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -14,6 +15,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
+  metadataBase: getMetadataBase(),
   title: "AI Chatbot Dashboard",
   description: "AI Chatbot SaaS Dashboard",
 };

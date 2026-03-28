@@ -1,3 +1,5 @@
+"use client";
+
 import { useState } from 'react';
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
@@ -11,10 +13,18 @@ export function Navigation() {
       <div className="max-w-7xl mx-auto px-6 py-4">
         <div className="flex items-center justify-between">
           {/* Logo */}
-          <div className="text-[#FAF5FF] text-xl font-semibold">Chat9</div>
+          <Link href="/" className="text-[#FAF5FF] text-xl font-semibold">
+            Chat9
+          </Link>
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center gap-8">
+            <Link
+              href="/blog"
+              className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
+            >
+              Blog
+            </Link>
             <a
               href="https://chat9.gitbook.io/chat9-docs"
               target="_blank"
@@ -69,6 +79,12 @@ export function Navigation() {
               className="md:hidden overflow-hidden"
             >
               <div className="flex flex-col gap-4 py-6">
+                <Link
+                  href="/blog"
+                  className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors text-left"
+                >
+                  Blog
+                </Link>
                 <a
                   href="https://chat9.gitbook.io/chat9-docs"
                   target="_blank"

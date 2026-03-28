@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import threading
 import logging
 from dataclasses import dataclass
 import random
@@ -13,6 +14,7 @@ from typing import Any, Protocol
 from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
+MAX_DEFERRED_OPERATIONS = 128
 
 
 class _TraceClientProtocol(Protocol):
@@ -277,6 +279,15 @@ class _LangfuseTrace(TraceHandle):
             payload["status_message"] = status_message
         _safe_invoke(self.trace_obj.update, **payload)
 
+    def promote(
+        self,
+        *,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        if metadata or tags:
+            self.update(metadata=metadata, tags=tags)
+
     @property
     def sampled(self) -> bool:
         return True
@@ -287,6 +298,7 @@ class _DeferredSpan(SpanHandle):
         self._trace = trace
         self._kind = kind
         self._kwargs = kwargs
+        self._ended = False
 
     def end(
         self,
@@ -296,7 +308,10 @@ class _DeferredSpan(SpanHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
-        self._trace._operations.append(
+        if self._ended:
+            return
+        self._ended = True
+        self._trace._append_operation(
             {
                 "kind": self._kind,
                 "kwargs": dict(self._kwargs),
@@ -314,6 +329,7 @@ class _DeferredGeneration(GenerationHandle):
     def __init__(self, trace: "_DeferredTrace", *, kwargs: dict[str, Any]) -> None:
         self._trace = trace
         self._kwargs = kwargs
+        self._ended = False
 
     def end(
         self,
@@ -324,7 +340,10 @@ class _DeferredGeneration(GenerationHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
-        self._trace._operations.append(
+        if self._ended:
+            return
+        self._ended = True
+        self._trace._append_operation(
             {
                 "kind": "generation",
                 "kwargs": dict(self._kwargs),
@@ -354,6 +373,12 @@ class _DeferredTrace(TraceHandle):
         self._sampling_reason = sampling_reason
         self._operations: list[dict[str, Any]] = []
         self._materialized: TraceHandle | None = None
+
+    def _append_operation(self, operation: dict[str, Any]) -> None:
+        if len(self._operations) >= MAX_DEFERRED_OPERATIONS:
+            self._operations.pop(0)
+            logger.warning("Deferred trace buffer exceeded max operations; dropping oldest event")
+        self._operations.append(operation)
 
     def span(
         self,
@@ -408,7 +433,7 @@ class _DeferredTrace(TraceHandle):
                 status_message=status_message,
             )
             return
-        self._operations.append(
+        self._append_operation(
             {
                 "kind": "update",
                 "kwargs": {
@@ -502,6 +527,7 @@ class ObservabilityService:
         self._enabled = False
         self._tenant_query_counts: dict[str, int] = defaultdict(int)
         self._tenant_recent_queries: dict[str, deque[float]] = defaultdict(deque)
+        self._sampling_lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -510,6 +536,9 @@ class ObservabilityService:
     def reset(self) -> None:
         self._client = None
         self._enabled = False
+        with self._sampling_lock:
+            self._tenant_query_counts.clear()
+            self._tenant_recent_queries.clear()
 
     def init(self) -> None:
         if self._client is not None or self._enabled:
@@ -549,15 +578,24 @@ class ObservabilityService:
             self.reset()
 
     def _record_tenant_query(self, tenant_id: str) -> tuple[int, int]:
-        now = time.time()
-        recent = self._tenant_recent_queries[tenant_id]
-        recent.append(now)
-        window_seconds = max(int(settings.trace_rate_window_seconds), 1)
-        cutoff = now - window_seconds
-        while recent and recent[0] < cutoff:
-            recent.popleft()
-        self._tenant_query_counts[tenant_id] += 1
-        return self._tenant_query_counts[tenant_id], len(recent)
+        with self._sampling_lock:
+            now = time.time()
+            recent = self._tenant_recent_queries[tenant_id]
+            recent.append(now)
+            window_seconds = max(int(settings.trace_rate_window_seconds), 1)
+            cutoff = now - window_seconds
+            while recent and recent[0] < cutoff:
+                recent.popleft()
+            self._tenant_query_counts[tenant_id] += 1
+            total_count = self._tenant_query_counts[tenant_id]
+            recent_count = len(recent)
+            if recent_count == 0:
+                self._tenant_recent_queries.pop(tenant_id, None)
+            return total_count, recent_count
+
+    @staticmethod
+    def _clamp_sample_rate(value: float) -> float:
+        return max(0.0, min(float(value), 1.0))
 
     def _should_sample(
         self,
@@ -568,7 +606,7 @@ class ObservabilityService:
         if force_trace:
             return True, "forced"
         if tenant_id is None:
-            sample_rate = float(settings.trace_sample_rate)
+            sample_rate = self._clamp_sample_rate(settings.trace_sample_rate)
             return random.random() < sample_rate, "default"
 
         total_count, hourly_count = self._record_tenant_query(tenant_id)
@@ -576,10 +614,10 @@ class ObservabilityService:
             return True, "new-tenant"
 
         if hourly_count > int(settings.trace_high_volume_threshold):
-            sample_rate = float(settings.trace_high_volume_sample_rate)
+            sample_rate = self._clamp_sample_rate(settings.trace_high_volume_sample_rate)
             return random.random() < sample_rate, "high-volume"
 
-        sample_rate = float(settings.trace_sample_rate)
+        sample_rate = self._clamp_sample_rate(settings.trace_sample_rate)
         return random.random() < sample_rate, "default"
 
     def _materialize_trace(

@@ -261,3 +261,40 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     assert trace.sampled is True
     assert len(service._client.traces) == 1
     assert service._client.traces[0].init_kwargs["metadata"]["sampling_reason"] == "forced"
+
+
+def test_promote_updates_metadata_for_already_sampled_trace(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 1.0)
+
+    trace = service.begin_trace(
+        name="rag-query",
+        session_id="sampled-session",
+        tenant_id="tenant-3",
+    )
+    trace.promote(metadata={"promotion_reason": "low_reliability_or_escalation"})
+
+    assert len(service._client.traces) == 1
+    assert service._client.traces[0].updates == [
+        {"metadata": {"promotion_reason": "low_reliability_or_escalation"}}
+    ]
+
+
+def test_deferred_span_end_is_idempotent(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+    deferred = service.begin_trace(
+        name="rag-query",
+        session_id="deferred-session",
+    )
+
+    span = deferred.span(name="vector-search", input={"query": "hello"})
+    span.end(output={"chunks": []})
+    span.end(output={"chunks": ["duplicate"]})
+
+    assert len(deferred._operations) == 1

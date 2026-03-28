@@ -182,6 +182,15 @@ Pure vector search struggles with exact keyword matches (product names, error co
 
 The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
+Vector remains the recall stage and shared candidate acquisition step. BM25 stays a lexical confirmation / precision stage over that already-built in-memory pool; even when lexical expansion is enabled, it adds repeated lexical scoring over the same shared pool rather than a second corpus-acquisition search.
+
+BM25 lexical expansion is an explicit policy:
+
+- `asymmetric` — default; BM25 evaluates only the original query text
+- `symmetric_variants` — BM25 evaluates the lexical-safe normalized variant set, merges hits deterministically, then sends the merged/capped lexical list into RRF
+
+“Symmetric” here applies to query handling only. It does not mean BM25 stops depending on the vector-built pool, and it does not imply that future freer rewrites/paraphrases from vector expansion automatically become valid BM25 inputs. BM25 should continue consuming only lexical-safe normalization variants unless that contract is revisited deliberately.
+
 > Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate-set construction (acquisition + merge/dedup + truncation), SQLite follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
 
 ### Retrieval observability (FI-115)
@@ -190,9 +199,11 @@ Retrieval is instrumented with Langfuse-style traces for both chat requests and 
 
 - query variant fan-out (`variant_mode`, `query_variant_count`)
 - extra work caused by expansion (`extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`)
+- lexical expansion policy and workload (`bm25_expansion_mode`, `bm25_query_variant_count`, `bm25_variant_eval_count`, `extra_bm25_variant_evals`)
+- lexical merge visibility (`bm25_merged_hit_count_before_cap`, `bm25_merged_hit_count_after_cap`)
 - timing split (`retrieval_duration_ms`, `query-embedding`, `vector-search`)
 
-This makes it possible to compare p50/p95 latency for single-variant vs multi-variant requests without changing retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
+The `bm25-search` span keeps the lexical inputs and merged lexical output explicit, including compact winner provenance for merged hits. This makes it possible to compare p50/p95 latency for single-vs-multi vector expansion and asymmetric-vs-symmetric lexical expansion without changing the default retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
 
 ---
 

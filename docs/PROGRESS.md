@@ -1,7 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-28 (UTC) — query-variant retrieval observability
+**Last updated:** 2026-03-28 (UTC) — symmetric BM25 variant evaluation
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-28) — symmetric BM25 variant evaluation
+
+- ✅ **Explicit BM25 expansion policy:** retrieval now supports `BM25_EXPANSION_MODE` with `asymmetric` as the default and `symmetric_variants` as the opt-in lexical expansion path.
+- ✅ **Lexical-safe symmetric BM25 path:** BM25 can now evaluate the normalized lexical-safe variant set over the shared vector-built candidate corpus, merge hits deterministically before RRF, and keep `has_lexical_signal` semantics tied to the final merged lexical branch output.
+- ✅ **Expanded lexical observability:** traces now record BM25 expansion mode, lexical variant-eval counts, extra BM25 eval work, merged hit counts before/after cap, and compact winner provenance in the `bm25-search` span.
+- ✅ **Regression coverage + PG verification:** added unit/chat/pgvector coverage for deterministic lexical merge behavior, no-effective-change controls, cap interaction, and PG-path symmetric lexical evaluation.
+- ✅ **Docs sync:** product docs and FI-115 runbook now describe the vector/BM25 role split and the asymmetric-vs-symmetric evaluation gate.
 
 ---
 

@@ -247,6 +247,14 @@ def build_reliability_assessment(
     )
 
 
+def default_retrieval_reliability() -> RetrievalReliability:
+    """Return the one canonical empty/default reliability state."""
+    return build_reliability_assessment(
+        top_score=None,
+        result_count=0,
+    )
+
+
 @dataclass
 class SearchResultBundle:
     """Ranked retrieval results plus raw signals used for confidence decisions."""
@@ -257,7 +265,7 @@ class SearchResultBundle:
     has_lexical_signal: bool = False
     query_variants: list[str] | None = None
     query_script_bucket: str | None = None
-    reliability: RetrievalReliability = field(default_factory=RetrievalReliability)
+    reliability: RetrievalReliability = field(default_factory=default_retrieval_reliability)
     query_variant_count: int = 1
     variant_mode: VariantMode = "single"
     extra_variant_count: int = 0

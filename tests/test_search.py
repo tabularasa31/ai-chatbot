@@ -1173,6 +1173,16 @@ def test_build_reliability_projection_is_stable_for_empty_default_object() -> No
     assert projection["reliability"]["cap_reason"] is None
 
 
+def test_search_result_bundle_default_reliability_matches_canonical_empty_state() -> None:
+    from backend.search.service import SearchResultBundle
+
+    bundle = SearchResultBundle(results=[])
+
+    assert serialize_reliability(bundle.reliability) == serialize_reliability(
+        build_reliability_assessment(top_score=None, result_count=0)
+    )
+
+
 def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
     from backend.models import Embedding
 
@@ -1325,7 +1335,7 @@ def test_search_route_traces_variant_summary(
         "score": "low",
         "cap": None,
         "cap_reason": None,
-        "signals": [],
+        "signals": [{"kind": "weak_recall"}],
         "evidence": {},
     }
     assert metadata["source_overlap_detected"] is False
@@ -1341,7 +1351,7 @@ def test_search_route_traces_variant_summary(
                     "score": "low",
                     "cap": None,
                     "cap_reason": None,
-                    "signals": [],
+                    "signals": [{"kind": "weak_recall"}],
                     "evidence": {},
                 },
                 "source_overlap_detected": False,

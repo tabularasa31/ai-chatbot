@@ -54,6 +54,7 @@ from backend.search.service import (
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
+    default_retrieval_reliability,
     search_similar_chunks_detailed,
 )
 
@@ -219,7 +220,7 @@ class RetrievalContext:
     best_rank_score: float | None
     best_confidence_score: float | None
     confidence_source: Literal["vector_similarity", "none"]
-    reliability: RetrievalReliability = field(default_factory=RetrievalReliability)
+    reliability: RetrievalReliability = field(default_factory=default_retrieval_reliability)
     variant_mode: Literal["single", "multi"] = "single"
     query_variant_count: int = 1
     extra_embedded_queries: int = 0

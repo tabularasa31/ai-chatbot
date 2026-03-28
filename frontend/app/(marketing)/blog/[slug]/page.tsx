@@ -40,6 +40,8 @@ export function generateMetadata({
         {
           url: toAbsoluteUrl(post.coverImage),
           alt: post.title,
+          width: 1600,
+          height: 1600,
         },
       ]
     : undefined;

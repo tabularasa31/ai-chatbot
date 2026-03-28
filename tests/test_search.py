@@ -1607,6 +1607,93 @@ def test_build_reliability_assessment_deduplicates_exact_duplicate_contradiction
     }
 
 
+def test_build_reliability_assessment_deduplicates_mirrored_duplicate_contradictions() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+            ),
+            ContradictionPair(
+                chunk_a_id="b",
+                chunk_b_id="a",
+                basis="effective_date",
+                value_a="2025-03-01",
+                value_b="2024-03-01",
+            ),
+        ),
+    )
+
+    assert serialize_reliability(reliability) == {
+        "base_score": "high",
+        "score": "high",
+        "cap": None,
+        "cap_reason": None,
+        "signals": [{"kind": "contradiction"}],
+        "evidence": {
+            "contradiction": {
+                "pairs": [
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "effective_date",
+                        "value_a": "2024-03-01",
+                        "value_b": "2025-03-01",
+                    }
+                ]
+            },
+        },
+    }
+
+
+def test_build_reliability_assessment_counts_mirrored_distinct_facts_on_one_logical_pair() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+            ),
+            ContradictionPair(
+                chunk_a_id="b",
+                chunk_b_id="a",
+                basis="version",
+                value_a="v3",
+                value_b="v2",
+            ),
+        ),
+    )
+
+    assert reliability.score == "low"
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+    assert serialize_reliability(reliability)["evidence"]["contradiction"]["pairs"] == [
+        {
+            "chunk_a_id": "a",
+            "chunk_b_id": "b",
+            "basis": "effective_date",
+            "value_a": "2024-03-01",
+            "value_b": "2025-03-01",
+        },
+        {
+            "chunk_a_id": "b",
+            "chunk_b_id": "a",
+            "basis": "version",
+            "value_a": "v3",
+            "value_b": "v2",
+        },
+    ]
+
+
 def test_build_reliability_assessment_contradiction_cap_short_circuits_overlap_cap() -> None:
     reliability = build_reliability_assessment(
         top_score=0.9,

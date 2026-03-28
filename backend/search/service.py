@@ -242,14 +242,27 @@ def _compute_base_reliability_score(
 def _contradiction_identity(
     pair: ContradictionPair,
 ) -> tuple[str, str, str, str, str]:
-    """Return the exact-duplicate identity for one contradiction fact."""
+    """Return the canonical duplicate identity for one contradiction fact."""
+    if (pair.chunk_a_id, pair.chunk_b_id) <= (pair.chunk_b_id, pair.chunk_a_id):
+        return (
+            pair.chunk_a_id,
+            pair.chunk_b_id,
+            pair.basis,
+            pair.value_a,
+            pair.value_b,
+        )
     return (
-        pair.chunk_a_id,
         pair.chunk_b_id,
+        pair.chunk_a_id,
         pair.basis,
-        pair.value_a,
         pair.value_b,
+        pair.value_a,
     )
+
+
+def _logical_overlap_pair_identity(pair: ContradictionPair) -> tuple[str, str]:
+    """Return the orientation-insensitive identity for one logical overlap pair."""
+    return tuple(sorted((pair.chunk_a_id, pair.chunk_b_id)))
 
 
 def _is_valid_contradiction_pair(pair: ContradictionPair) -> bool:
@@ -287,7 +300,7 @@ def _evaluate_contradiction_policy(
             continue
         seen_identities.add(identity)
         effective_pairs.append(pair)
-        overlap_pair_identity = (pair.chunk_a_id, pair.chunk_b_id)
+        overlap_pair_identity = _logical_overlap_pair_identity(pair)
         facts_per_overlap_pair[overlap_pair_identity] = (
             facts_per_overlap_pair.get(overlap_pair_identity, 0) + 1
         )

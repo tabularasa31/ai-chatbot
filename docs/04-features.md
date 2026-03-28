@@ -212,7 +212,7 @@ Retrieval reliability keeps contradiction handling in the final capping stage. C
 - `1` effective contradiction fact on `1` overlap pair stays evidence-only
 - `2+` effective contradiction facts on the same overlap pair trigger contradiction cap
 - contradiction facts across at least `2` distinct overlap pairs also trigger contradiction cap
-- exact duplicate contradiction emissions do not increase severity
+- exact duplicate contradiction emissions, including reversed-orientation mirrors, do not increase severity
 - contradiction cap always maps directly to `score="low"`
 
 `cap_reason` follows cap precedence rather than only the last score mutation:

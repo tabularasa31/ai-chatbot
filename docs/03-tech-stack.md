@@ -30,7 +30,7 @@
 - **LLM Integration:** OpenAI API (via client's own API key)
   - gpt-4o-mini for chat (fast + cheap)
   - Optional second gpt-4o-mini call per chat turn for answer validation (FI-034): groundedness check; failures do not block the user-facing reply
-  - **PII redaction (FI-043):** before embedding search, chat completion, and validation completion, the user question is passed through regex redaction (`backend/chat/pii.py`); placeholders `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]` are sent to OpenAI; the original text is stored in `messages.content` for dashboard/logs
+  - **PII redaction / privacy hardening (FI-043 + follow-up hardening):** before embedding search, chat completion, and validation completion, the user question is passed through regex redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[PASSWORD]`, `[ID_DOC]`, `[IP]`, `[URL_TOKEN]` are sent to OpenAI; the original text is stored encrypted in `messages.content_original_encrypted`, redacted text is stored in `messages.content_redacted`, and legacy `messages.content` now mirrors the redacted-safe version
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
   
@@ -131,14 +131,14 @@
 │  POST /widget/chat (public clientId) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve client → client_id + openai_api_key        │
-│    2. Redact PII in question (regex, FI-043)             │
+│    2. Redact PII in question (regex + tenant toggles)    │
 │    3. Embed redacted question (OpenAI, client's key)      │
 │    4. Search embeddings (pgvector)                       │
 │    5. Build prompt (+ safe user context line if FI-KYC)  │
 │    6. Call OpenAI gpt-4o-mini (client's key); optional     │
 │       validation call (FI-034) also uses redacted text   │
 │    7. Track token usage                                  │
-│    8. Save original question + answer to messages          │
+│    8. Save encrypted original + redacted-safe message      │
 │    9. Return {answer, sources, tokens_used}              │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
@@ -200,7 +200,7 @@
    ↓
 9. Optional: second gpt-4o-mini call for validation (FI-034) using same redacted question
    ↓
-10. Track tokens used → save **original** question + answer to messages table
+10. Track tokens used → save encrypted original question plus redacted-safe message fields
    ↓
 11. Return: {answer, source_docs, tokens_used}
    ↓
@@ -224,7 +224,9 @@
 
 ### User message privacy (FI-043)
 - Regex redaction on the user question before any OpenAI call (embedding, chat, validation)
-- Dashboard and `Message.content` keep the **original** wording for support context; Stage 2 (NER, FI-044) is backlog for names/addresses
+- `messages.content_original_encrypted` keeps the original wording encrypted at rest; `messages.content_redacted` and legacy `messages.content` keep the safe/redacted version
+- Dashboard/admin flows are **safe-first**: redacted text is the default view; original text is available only for privileged admin access and is audit-logged via `pii_events`
+- Tenant admins can manage optional regex entity toggles in `Settings → Privacy`; privacy audit rows are retained via admin retention controls
 
 ### Multi-Tenant Isolation
 - Every query includes `WHERE client_id = $1`

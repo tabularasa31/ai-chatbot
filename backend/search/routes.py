@@ -18,6 +18,7 @@ from backend.models import User
 from backend.search.schemas import SearchRequest, SearchResponse, SearchResultItem
 from backend.observability import begin_trace
 from backend.search.service import (
+    build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
     search_similar_chunks_detailed,
@@ -103,6 +104,7 @@ def search_route(
         metadata={
             "route": str(request.url.path),
             "search_result_count": len(items),
+            **build_reliability_projection(bundle.reliability),
             **build_variant_trace_metadata(bundle),
         },
         tags=[build_variant_trace_tag(bundle.variant_mode)],

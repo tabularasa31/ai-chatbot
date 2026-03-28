@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Literal, Optional
@@ -50,8 +50,11 @@ from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
+    RetrievalReliability,
+    build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
+    default_retrieval_reliability,
     search_similar_chunks_detailed,
 )
 
@@ -155,10 +158,7 @@ def retrieve_context(
             best_rank_score=None,
             best_confidence_score=None,
             confidence_source="none",
-            conflicts_found=bundle.conflicts_found,
-            conflict_pairs=bundle.conflict_pairs,
-            reliability_score=bundle.reliability_score,
-            reliability_cap_reason=bundle.reliability_cap_reason,
+            reliability=bundle.reliability,
             variant_mode=bundle.variant_mode,
             query_variant_count=bundle.query_variant_count,
             extra_embedded_queries=bundle.extra_embedded_queries,
@@ -193,10 +193,7 @@ def retrieve_context(
         best_rank_score=best_rank_score,
         best_confidence_score=best_confidence_score,
         confidence_source=confidence_source,
-        conflicts_found=bundle.conflicts_found,
-        conflict_pairs=bundle.conflict_pairs,
-        reliability_score=bundle.reliability_score,
-        reliability_cap_reason=bundle.reliability_cap_reason,
+        reliability=bundle.reliability,
         variant_mode=bundle.variant_mode,
         query_variant_count=bundle.query_variant_count,
         extra_embedded_queries=bundle.extra_embedded_queries,
@@ -223,10 +220,7 @@ class RetrievalContext:
     best_rank_score: float | None
     best_confidence_score: float | None
     confidence_source: Literal["vector_similarity", "none"]
-    conflicts_found: bool = False
-    conflict_pairs: list[dict[str, object]] | None = None
-    reliability_score: Literal["low", "medium", "high"] | None = None
-    reliability_cap_reason: Literal["source_overlap"] | None = None
+    reliability: RetrievalReliability = field(default_factory=default_retrieval_reliability)
     variant_mode: Literal["single", "multi"] = "single"
     query_variant_count: int = 1
     extra_embedded_queries: int = 0
@@ -1032,7 +1026,7 @@ def process_chat_message(
         api_key=api_key,
         trace=trace,
     )
-    reliability_score = retrieval.reliability_score or "low"
+    reliability_score = retrieval.reliability.score
     if (
         not validation["is_valid"]
         and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
@@ -1125,14 +1119,10 @@ def process_chat_message(
             "retrieval_mode": retrieval.mode,
             "best_rank_score": retrieval.best_rank_score,
             "best_confidence_score": retrieval.best_confidence_score,
-            "reliability_score": reliability_score,
-            "reliability_cap_reason": retrieval.reliability_cap_reason,
-            "semantic_conflict_detection": False,
-            "conflicts_found": retrieval.conflicts_found,
-            "conflict_pairs": retrieval.conflict_pairs,
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
+            **build_reliability_projection(retrieval.reliability),
             **build_variant_trace_metadata(retrieval),
         },
         tags=[build_variant_trace_tag(retrieval.variant_mode)],
@@ -1189,11 +1179,7 @@ def run_debug(
         "best_rank_score": retrieval.best_rank_score,
         "best_confidence_score": retrieval.best_confidence_score,
         "confidence_source": retrieval.confidence_source,
-        "reliability_score": retrieval.reliability_score,
-        "reliability_cap_reason": retrieval.reliability_cap_reason,
-        "semantic_conflict_detection": False,
-        "conflicts_found": retrieval.conflicts_found,
-        "conflict_pairs": retrieval.conflict_pairs,
+        **build_reliability_projection(retrieval.reliability),
         "chunks": chunks_debug,
         "validation": validate_answer(
             redacted_question, answer, chunk_texts, api_key=api_key

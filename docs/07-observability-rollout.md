@@ -20,6 +20,7 @@ Configure `chat9-api` env:
 - `LANGFUSE_HOST`
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
+- `OBSERVABILITY_CAPTURE_FULL_PROMPTS`
 - `TRACE_SAMPLE_RATE`
 - `TRACE_HIGH_VOLUME_THRESHOLD`
 - `TRACE_HIGH_VOLUME_SAMPLE_RATE`
@@ -49,22 +50,24 @@ Implemented in code:
 - `bm25-search`
 - `rrf-fusion`
 - `reranking`
-- `language-boost`
+- `script-boost`
 - `mmr-pass`
-- `conflict-detection`
+- `source-overlap-check`
 - `llm-generation`
 - reliability score propagation
 - deferred sampling with promotion for low-reliability and escalated requests
+- promotion metadata for both deferred and already-sampled traces
 
 Implemented as heuristic/interim behavior:
 
 - query expansion
 - reranking
-- language detection/boost
+- script bucket detection/boost
 - MMR similarity scoring
-- conflict detection
+- cross-document overlap detection
 - cost estimation
 - in-process tenant sampling counters
+- bounded in-memory deferred trace buffering
 
 ## Acceptance Criteria Status
 
@@ -81,7 +84,7 @@ Reranking exists, but it is heuristic rather than cross-encoder based.
 MMR pass records replacements and reasons.
 
 `AC-5` Mostly covered.
-Generation tracing now includes system prompt, context chunk payload, and user message structure.
+Generation tracing now includes structured system/user messages, with full prompt/context capture gated by configuration.
 
 `AC-6` Partial.
 Token usage is captured; `cost_usd` is currently a coarse estimate.
@@ -113,4 +116,4 @@ Sampling logic and forced-promotion rules exist, but shared/distributed rate tra
 - production-grade cost model
 - Redis/shared-store tenant counters for multi-instance deployments
 - true quick-answer implementation
-- model-backed reranking/conflict confirmation if we decide the heuristics are insufficient
+- model-backed reranking and true contradiction detection if we decide the heuristics are insufficient

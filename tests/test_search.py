@@ -11,11 +11,11 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.search.service import (
-    apply_language_boost,
+    apply_script_boost,
     bm25_search_chunks,
     cosine_similarity,
     embed_queries,
-    detect_query_language,
+    detect_query_script_bucket,
     expand_query,
     mmr_select,
     rerank_candidates,
@@ -164,13 +164,12 @@ def test_rerank_candidates_boosts_lexical_match() -> None:
     assert reranked[0][1] > reranked[1][1]
 
 
-def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
-def test_detect_query_language_distinguishes_cyrillic() -> None:
-    assert detect_query_language("как сбросить пароль") == "cyrillic"
-    assert detect_query_language("reset password") == "latin"
+def test_detect_query_script_bucket_distinguishes_cyrillic() -> None:
+    assert detect_query_script_bucket("как сбросить пароль") == "cyrillic"
+    assert detect_query_script_bucket("reset password") == "latin"
 
 
-def test_apply_language_boost_prefers_matching_language() -> None:
+def test_apply_script_boost_prefers_matching_script_bucket() -> None:
     from backend.models import Embedding
 
     english = Embedding(
@@ -186,7 +185,7 @@ def test_apply_language_boost_prefers_matching_language() -> None:
         metadata_json={"language": "ru"},
     )
 
-    boosted = apply_language_boost(
+    boosted = apply_script_boost(
         "cyrillic",
         [(english, 0.81), (russian, 0.79)],
         top_k=2,
@@ -217,19 +216,75 @@ def test_mmr_select_replaces_near_duplicate_chunk() -> None:
         metadata_json={"chunk_index": 2},
     )
 
-    selected, replacements = mmr_select(
+    selection = mmr_select(
         [(first, 0.95), (duplicate, 0.92), (diverse, 0.7)],
         top_k=2,
     )
+    selected = selection.results
+    replacements = selection.replacements
 
     assert [item[0].id for item in selected] == [first.id, diverse.id]
+    assert selected[0][1] == 0.95
+    assert selected[1][1] == 0.7
     assert replacements == [
         {
             "removed_chunk_id": str(duplicate.id),
             "replacement_chunk_id": str(diverse.id),
-            "reason": "too_similar_to_existing_chunks:0.000",
+            "reason": "removed_baseline_redundancy:0.833",
+            "removed_redundancy": 0.833333,
+            "replacement_redundancy": 0.0,
         }
     ]
+    assert selection.diagnostics == [
+        {
+            "selected_chunk_id": str(first.id),
+            "selected_rank": 1,
+            "base_score": 0.95,
+            "mmr_score": 0.95,
+            "redundancy_penalty": 0.0,
+        },
+        {
+            "selected_chunk_id": str(diverse.id),
+            "selected_rank": 2,
+            "base_score": 0.7,
+            "mmr_score": 0.49,
+            "redundancy_penalty": 0.0,
+        },
+    ]
+
+
+def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password steps",
+        metadata_json={"chunk_index": 1},
+    )
+    third = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="password reset troubleshooting",
+        metadata_json={"chunk_index": 2},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(first, 0.9), (second, 0.8), (third, 0.7)],
+        vector_scores={first.id: 0.9, second.id: 0.8, third.id: 0.7},
+        bm25_scores={first.id: 1.0, second.id: 0.8, third.id: 0.6},
+        top_k=3,
+    )
+
+    assert len(reranked) == 3
+    assert reranked[2][1] > 0.0
 
 
 def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:

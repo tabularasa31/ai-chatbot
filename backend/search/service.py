@@ -30,7 +30,7 @@ RERANK_LEXICAL_WEIGHT = 0.35
 RERANK_VECTOR_WEIGHT = 0.25
 RERANK_BM25_WEIGHT = 0.20
 RERANK_RRF_WEIGHT = 0.20
-LANGUAGE_BOOST_FACTOR = 0.1
+SCRIPT_BOOST_FACTOR = 0.1
 MMR_LAMBDA = 0.7
 
 logger = logging.getLogger(__name__)
@@ -44,18 +44,32 @@ class SearchResultBundle:
     best_vector_similarity: float | None = None
     best_keyword_score: float | None = None
     query_variants: list[str] | None = None
-    query_language: str | None = None
+    query_script_bucket: str | None = None
 
 
-def detect_query_language(text: str) -> str:
-    """Detect a coarse language bucket from the query text."""
+@dataclass
+class MMRSelectionResult:
+    """MMR selection order plus separate debug metadata for observability."""
+
+    results: list[tuple[Embedding, float]]
+    replacements: list[dict[str, object]]
+    diagnostics: list[dict[str, object]]
+
+
+def detect_query_script_bucket(text: str) -> str:
+    """Detect a coarse script bucket from the query text."""
     if re.search(r"[а-яё]", text.casefold(), flags=re.UNICODE):
         return "cyrillic"
     return "latin"
 
 
-def _embedding_language(embedding: Embedding) -> str:
-    """Infer a coarse language bucket from embedding metadata or chunk text."""
+def detect_query_language(text: str) -> str:
+    """Backward-compatible alias for coarse script bucket detection."""
+    return detect_query_script_bucket(text)
+
+
+def _embedding_script_bucket(embedding: Embedding) -> str:
+    """Infer a coarse script bucket from embedding metadata or chunk text."""
     meta = embedding.metadata_json or {}
     language = meta.get("language")
     if isinstance(language, str) and language.strip():
@@ -64,7 +78,7 @@ def _embedding_language(embedding: Embedding) -> str:
             return "cyrillic"
         if lowered.startswith("en"):
             return "latin"
-    return detect_query_language(embedding.chunk_text or "")
+    return detect_query_script_bucket(embedding.chunk_text or "")
 
 
 def expand_query(query: str) -> list[str]:
@@ -261,21 +275,37 @@ def rerank_candidates(
     return rescored[:top_k]
 
 
+def apply_script_boost(
+    query_script_bucket: str,
+    candidates: list[tuple[Embedding, float]],
+    *,
+    top_k: int,
+) -> list[tuple[Embedding, float]]:
+    """Soft-boost chunks that match the query script bucket."""
+    boosted: list[tuple[Embedding, float]] = []
+    for embedding, score in candidates:
+        adjusted = score + (
+            SCRIPT_BOOST_FACTOR
+            if _embedding_script_bucket(embedding) == query_script_bucket
+            else 0.0
+        )
+        boosted.append((embedding, round(adjusted, 6)))
+    boosted.sort(key=lambda item: item[1], reverse=True)
+    return boosted[:top_k]
+
+
 def apply_language_boost(
     query_language: str,
     candidates: list[tuple[Embedding, float]],
     *,
     top_k: int,
 ) -> list[tuple[Embedding, float]]:
-    """Soft-boost chunks that match the query language/script."""
-    boosted: list[tuple[Embedding, float]] = []
-    for embedding, score in candidates:
-        adjusted = score + (
-            LANGUAGE_BOOST_FACTOR if _embedding_language(embedding) == query_language else 0.0
-        )
-        boosted.append((embedding, round(adjusted, 6)))
-    boosted.sort(key=lambda item: item[1], reverse=True)
-    return boosted[:top_k]
+    """Backward-compatible alias for coarse script-bucket boosting."""
+    return apply_script_boost(
+        query_script_bucket=query_language,
+        candidates=candidates,
+        top_k=top_k,
+    )
 
 
 def _token_set(text: str) -> set[str]:
@@ -299,15 +329,17 @@ def mmr_select(
     *,
     top_k: int,
     lambda_mult: float = MMR_LAMBDA,
-) -> tuple[list[tuple[Embedding, float]], list[dict[str, str]]]:
-    """Select top-k diverse chunks and record any replacements."""
+) -> MMRSelectionResult:
+    """Select top-k diverse chunks while preserving comparable output scores."""
     if not candidates:
-        return [], []
+        return MMRSelectionResult(results=[], replacements=[], diagnostics=[])
 
     selected: list[tuple[Embedding, float]] = []
     selected_ids: set[uuid.UUID] = set()
-    replacements: list[dict[str, str]] = []
+    replacements: list[dict[str, object]] = []
+    diagnostics: list[dict[str, object]] = []
     baseline_top_ids = [embedding.id for embedding, _ in candidates[:top_k]]
+    baseline_top_map = {embedding.id: embedding for embedding, _ in candidates[:top_k]}
     remaining = list(candidates)
 
     while remaining and len(selected) < top_k:
@@ -315,6 +347,15 @@ def mmr_select(
             chosen = remaining.pop(0)
             selected.append(chosen)
             selected_ids.add(chosen[0].id)
+            diagnostics.append(
+                {
+                    "selected_chunk_id": str(chosen[0].id),
+                    "selected_rank": 1,
+                    "base_score": round(chosen[1], 6),
+                    "mmr_score": round(chosen[1], 6),
+                    "redundancy_penalty": 0.0,
+                }
+            )
             continue
 
         best_index = 0
@@ -332,22 +373,43 @@ def mmr_select(
                 best_similarity = similarity
 
         chosen = remaining.pop(best_index)
-        selected.append((chosen[0], round(best_score, 6)))
+        selected_before_choice = list(selected)
+        selected.append((chosen[0], round(chosen[1], 6)))
         selected_ids.add(chosen[0].id)
+        diagnostics.append(
+            {
+                "selected_chunk_id": str(chosen[0].id),
+                "selected_rank": len(selected),
+                "base_score": round(chosen[1], 6),
+                "mmr_score": round(best_score, 6),
+                "redundancy_penalty": round(best_similarity, 6),
+            }
+        )
 
         if chosen[0].id not in baseline_top_ids:
             for baseline_id in baseline_top_ids:
                 if baseline_id not in selected_ids:
+                    removed_embedding = baseline_top_map[baseline_id]
+                    removed_similarity = max(
+                        _candidate_similarity(removed_embedding, selected_embedding)
+                        for selected_embedding, _ in selected_before_choice
+                    )
                     replacements.append(
                         {
                             "removed_chunk_id": str(baseline_id),
                             "replacement_chunk_id": str(chosen[0].id),
-                            "reason": f"too_similar_to_existing_chunks:{best_similarity:.3f}",
+                            "reason": f"removed_baseline_redundancy:{removed_similarity:.3f}",
+                            "removed_redundancy": round(removed_similarity, 6),
+                            "replacement_redundancy": round(best_similarity, 6),
                         }
                     )
                     break
 
-    return selected, replacements
+    return MMRSelectionResult(
+        results=selected,
+        replacements=replacements,
+        diagnostics=diagnostics,
+    )
 
 
 def _pgvector_search(
@@ -420,7 +482,7 @@ def search_similar_chunks_detailed(
 
     variant_vectors = embed_queries(query_variants, api_key=api_key)
     query_vector = variant_vectors[0]
-    query_language = detect_query_language(query)
+    query_script_bucket = detect_query_script_bucket(query)
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
@@ -447,7 +509,7 @@ def search_similar_chunks_detailed(
             results=results,
             best_vector_similarity=results[0][1] if results else None,
             query_variants=query_variants,
-            query_language=query_language,
+            query_script_bucket=query_script_bucket,
         )
 
     # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
@@ -487,7 +549,7 @@ def search_similar_chunks_detailed(
         return SearchResultBundle(
             results=[],
             query_variants=query_variants,
-            query_language=query_language,
+            query_script_bucket=query_script_bucket,
         )
 
     vector_embs = [emb for emb, _ in vector_candidates]
@@ -536,7 +598,7 @@ def search_similar_chunks_detailed(
             best_vector_similarity=best_vector_similarity,
             best_keyword_score=best_keyword_score,
             query_variants=query_variants,
-            query_language=query_language,
+            query_script_bucket=query_script_bucket,
         )
 
     rrf_started_at = perf_counter()
@@ -597,47 +659,51 @@ def search_similar_chunks_detailed(
         )
 
     language_started_at = perf_counter()
-    language_boosted_results = apply_language_boost(
-        query_language,
+    script_boosted_results = apply_script_boost(
+        query_script_bucket,
         reranked_results,
         top_k=max(top_k * 2, top_k),
     )
     if trace is not None:
         trace.span(
-            name="language-boost",
+            name="script-boost",
             input={
-                "query_language": query_language,
+                "query_script_bucket": query_script_bucket,
                 "candidate_count": len(reranked_results),
+                "strategy": "coarse-script-bucket-heuristic",
             },
         ).end(
             output={
                 "reordered": format_embedding_results(
-                    language_boosted_results[:top_k],
-                    score_name="language_boost_score",
+                    script_boosted_results[:top_k],
+                    score_name="script_boost_score",
                 ),
                 "duration_ms": round((perf_counter() - language_started_at) * 1000, 2),
             }
         )
 
     mmr_started_at = perf_counter()
-    final_results, replacements = mmr_select(
-        language_boosted_results,
+    mmr_selection = mmr_select(
+        script_boosted_results,
         top_k=top_k,
     )
+    final_results = mmr_selection.results
     if trace is not None:
         trace.span(
             name="mmr-pass",
             input={
                 "lambda": MMR_LAMBDA,
-                "candidate_count": len(language_boosted_results),
+                "candidate_count": len(script_boosted_results),
+                "selection_strategy": "mmr-order-base-score-output",
             },
         ).end(
             output={
                 "final_chunks": format_embedding_results(
                     final_results,
-                    score_name="mmr_score",
+                    score_name="final_score",
                 ),
-                "replacements": replacements,
+                "selection_diagnostics": mmr_selection.diagnostics,
+                "replacements": mmr_selection.replacements,
                 "duration_ms": round((perf_counter() - mmr_started_at) * 1000, 2),
             }
         )
@@ -647,7 +713,7 @@ def search_similar_chunks_detailed(
         best_vector_similarity=best_vector_similarity,
         best_keyword_score=best_keyword_score,
         query_variants=query_variants,
-        query_language=query_language,
+        query_script_bucket=query_script_bucket,
     )
 
 

@@ -263,6 +263,31 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     assert service._client.traces[0].init_kwargs["metadata"]["sampling_reason"] == "forced"
 
 
+def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 1.0)
+
+    trace = service.begin_trace(
+        name="rag-query",
+        session_id="sampled-session",
+        tenant_id="tenant-merge",
+        tags=["tenant:tenant-merge"],
+    )
+    trace.update(
+        output={"answer": "hi"},
+        tags=["variants:multi"],
+    )
+
+    assert len(service._client.traces) == 1
+    assert service._client.traces[0].updates[0]["tags"] == [
+        "tenant:tenant-merge",
+        "variants:multi",
+    ]
+
+
 def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     monkeypatch,
 ) -> None:
@@ -283,6 +308,7 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
         name="rag-query",
         session_id="deferred-session",
         tenant_id="tenant-variants",
+        tags=["tenant:tenant-variants"],
     )
 
     trace.span(
@@ -317,4 +343,7 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     assert materialized.spans[0][1].ended_with["output"]["extra_embedded_queries"] == 2
     assert materialized.updates[0]["metadata"]["variant_mode"] == "multi"
     assert materialized.updates[0]["metadata"]["query_variant_count"] == 3
-    assert materialized.updates[0]["tags"] == ["variants:multi"]
+    assert materialized.updates[0]["tags"] == [
+        "tenant:tenant-variants",
+        "variants:multi",
+    ]

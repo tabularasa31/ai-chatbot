@@ -180,6 +180,16 @@ def embed_queries(queries: list[str], *, api_key: str) -> list[list[float]]:
     return [item.embedding for item in response.data]
 
 
+def embed_queries_with_stats(
+    queries: list[str], *, api_key: str
+) -> tuple[list[list[float]], int]:
+    """Embed multiple queries and return the actual API request count used."""
+    if not queries:
+        return [], 0
+    vectors = embed_queries(queries, api_key=api_key)
+    return vectors, 1
+
+
 def _bm25_score_candidates(
     candidates: list[Embedding],
     query: str,
@@ -596,11 +606,13 @@ def search_similar_chunks_detailed(
         )
 
     embedding_started_at = perf_counter()
-    variant_vectors = embed_queries(query_variants, api_key=api_key)
+    variant_vectors, embedding_api_request_count = embed_queries_with_stats(
+        query_variants,
+        api_key=api_key,
+    )
     query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
     embedded_query_count = len(query_variants)
     extra_embedded_queries = max(embedded_query_count - 1, 0)
-    embedding_api_request_count = 1 if query_variants else 0
     query_vector = variant_vectors[0]
     query_script_bucket = detect_query_script_bucket(query)
     if trace is not None:

@@ -16,6 +16,7 @@ from backend.search.service import (
     compute_reliability_score,
     cosine_similarity,
     embed_queries,
+    embed_queries_with_stats,
     detect_query_script_bucket,
     detect_conflicts,
     detect_source_overlaps,
@@ -343,6 +344,24 @@ def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_clie
     mock_openai_client.embeddings.create.assert_called_once()
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("input") == ["first", "second"]
+
+
+def test_embed_queries_with_stats_reports_actual_request_count(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 3),
+        Mock(embedding=[0.2] * 3),
+    ]
+
+    vectors, request_count = embed_queries_with_stats(
+        ["first", "second"],
+        api_key="sk-test",
+    )
+
+    assert vectors == [[0.1] * 3, [0.2] * 3]
+    assert request_count == 1
+    mock_openai_client.embeddings.create.assert_called_once()
 
 
 def test_expand_query_deduplicates_and_normalizes() -> None:

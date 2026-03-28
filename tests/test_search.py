@@ -40,6 +40,54 @@ def test_cosine_similarity_zero_vectors() -> None:
     assert cosine_similarity(zero, zero) == 0.0
 
 
+def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> None:
+    from backend.search.service import search_similar_chunks_detailed
+
+    class FakeSpan:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.output: dict[str, object] | None = None
+
+        def end(self, **kwargs: object) -> None:
+            self.output = kwargs["output"]
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.spans: list[FakeSpan] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            span = FakeSpan(kwargs["name"])
+            self.spans.append(span)
+            return span
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    monkeypatch.setattr("backend.search.service.embed_query", lambda *args, **kwargs: [0.1] * 3)
+    monkeypatch.setattr("backend.search.service._pgvector_search", lambda *args, **kwargs: [])
+
+    trace = FakeTrace()
+    bundle = search_similar_chunks_detailed(
+        client_id=uuid.uuid4(),
+        query="hello",
+        top_k=3,
+        db=FakeDB(),
+        api_key="sk-test",
+        trace=trace,
+    )
+
+    assert bundle.results == []
+    assert [span.name for span in trace.spans] == ["vector-search"]
+    assert trace.spans[-1].output == {
+        "chunks": [],
+        "duration_ms": trace.spans[-1].output["duration_ms"],
+        "total_candidates_scanned": 0,
+    }
+
+
 def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     """embed_query calls OpenAI with correct model name."""
     from backend.search.service import embed_query

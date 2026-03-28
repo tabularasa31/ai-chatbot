@@ -2,6 +2,7 @@
 
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from slowapi.errors import RateLimitExceeded
 logger = logging.getLogger(__name__)
 
 from backend.core.limiter import limiter
+from backend.observability import init_observability, shutdown_observability
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
@@ -23,7 +25,17 @@ from backend.routes.widget import widget_router
 from backend.search.routes import search_router
 from backend.escalation.routes import escalation_router
 
-app = FastAPI(title="AI Chatbot API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_observability()
+    try:
+        yield
+    finally:
+        shutdown_observability()
+
+
+app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

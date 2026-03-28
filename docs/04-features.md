@@ -215,9 +215,19 @@ Before any text is sent to OpenAI, the user's message is passed through a regex 
 | Email addresses | `[EMAIL]` |
 | Phone numbers | `[PHONE]` |
 | API keys (common formats) | `[API_KEY]` |
-| Credit card numbers | `[CREDIT_CARD]` |
+| Payment card numbers | `[CARD]` |
+| Password-like secrets | `[PASSWORD]` |
+| Identity documents | `[ID_DOC]` |
+| IPv4 addresses | `[IP]` |
+| URLs with token-like params | `[URL_TOKEN]` |
 
-The **original unredacted text** is stored in `messages.content` for the dashboard log. Only placeholders go to OpenAI.
+Only redacted text crosses the OpenAI boundary. Storage is split into:
+
+- `messages.content_original_encrypted` — encrypted original wording
+- `messages.content_redacted` — canonical safe text
+- `messages.content` — legacy compatibility field, now kept redacted-safe
+
+Tenant admins can configure optional regex entity types in `Settings → Privacy`. Chat logs and escalations are **safe-first**: redacted text is shown by default, while original text requires privileged access and every original view/delete action is written to `pii_events`.
 
 ### Answer validation (FI-034)
 

@@ -304,6 +304,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Client
+    from backend.search.service import build_reliability_assessment
 
     class FakeSpan:
         def end(self, **kwargs: object) -> None:
@@ -344,7 +345,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
             best_rank_score=0.93,
             best_confidence_score=0.91,
             confidence_source="vector_similarity",
-            reliability_score="high",
+            reliability=build_reliability_assessment(top_score=0.93, result_count=5),
             variant_mode="multi",
             query_variant_count=3,
             extra_embedded_queries=2,
@@ -395,6 +396,14 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_before_cap"] == 4
     assert fake_trace.update_calls[-1]["metadata"]["bm25_merged_hit_count_after_cap"] == 3
     assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
+    assert fake_trace.update_calls[-1]["metadata"]["reliability"] == {
+        "base_score": "high",
+        "score": "high",
+        "cap": None,
+        "cap_reason": None,
+        "signals": [],
+        "evidence": {},
+    }
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
 
 
@@ -726,7 +735,7 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import SearchResultBundle
+    from backend.search.service import SearchResultBundle, build_reliability_assessment
 
     embedding = Embedding(
         id=uuid.uuid4(),
@@ -741,10 +750,11 @@ def test_retrieve_context_propagates_reliability_cap_reason(
             results=[(embedding, 0.88)],
             best_vector_similarity=0.88,
             query_variants=["reset password"],
-            conflicts_found=True,
-            conflict_pairs=[{"chunk_a_id": "a", "chunk_b_id": "b"}],
-            reliability_score="medium",
-            reliability_cap_reason="source_overlap",
+            reliability=build_reliability_assessment(
+                top_score=0.88,
+                result_count=5,
+                source_overlap_detected=True,
+            ),
         ),
     )
 
@@ -761,8 +771,10 @@ def test_retrieve_context_propagates_reliability_cap_reason(
         api_key="sk-test",
     )
 
+    assert context.source_overlap_detected is True
+    assert context.source_overlap_pairs == []
     assert context.conflicts_found is True
-    assert context.conflict_pairs == [{"chunk_a_id": "a", "chunk_b_id": "b"}]
+    assert context.conflict_pairs == []
     assert context.reliability_score == "medium"
     assert context.reliability_cap_reason == "source_overlap"
 

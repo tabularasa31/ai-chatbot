@@ -1,6 +1,10 @@
-"""Tests for PII regex redaction (FI-043)."""
+"""Tests for PII regex redaction."""
 
-from backend.chat.pii import redact, redact_text
+from backend.chat.pii import (
+    DetectedEntitySummary,
+    redact,
+    redact_text,
+)
 
 
 def test_redact_email():
@@ -30,9 +34,36 @@ def test_redact_api_keys():
     )
 
 
-def test_redact_credit_cards():
-    assert "[CREDIT_CARD]" in redact_text("card: 4111 1111 1111 1111")
-    assert "[CREDIT_CARD]" in redact_text("4111111111111111")
+def test_redact_password_id_doc_ip_and_url_token():
+    result = redact_text(
+        "password is Hunter22 passport 4510 123456 ip 192.168.1.10 "
+        "https://example.com/reset?token=abc123456"
+    )
+    assert "[PASSWORD]" in result
+    assert "[ID_DOC]" in result
+    assert "[IP]" in result
+    assert "[URL_TOKEN]" in result
+
+
+def test_redact_credit_cards_with_luhn():
+    assert "[CARD]" in redact_text("card: 4111 1111 1111 1111")
+    assert "[CARD]" in redact_text("4111111111111111")
+    assert "[CARD]" not in redact_text("4111111111111112")
+    assert redact_text("number 1234 5678 9012 3456") == "number 1234 5678 9012 3456"
+
+
+def test_optional_entity_types_can_be_disabled():
+    result = redact_text(
+        "паспорт 4510 123456 from 192.168.1.10",
+        optional_entity_types={"IP"},
+    )
+    assert "[IP]" in result
+    assert "[ID_DOC]" not in result
+
+
+def test_ip_redaction_skips_invalid_octets():
+    text = "release 1.2.3.4 and invalid ip 999.999.999.999"
+    assert redact_text(text) == text
 
 
 def test_no_false_positives_on_normal_text():
@@ -40,12 +71,18 @@ def test_no_false_positives_on_normal_text():
     assert redact_text(text) == text
 
 
-def test_was_redacted_flag():
-    _, was_redacted = redact("send to test@email.com")
-    assert was_redacted is True
+def test_redaction_result_contains_entity_counts():
+    result = redact("mail me at test@email.com and backup@email.com")
+    assert result.was_redacted is True
+    assert result.entities_found == [DetectedEntitySummary(type="EMAIL", count=2)]
 
-    _, was_redacted = redact("how do I reset my password?")
-    assert was_redacted is False
+
+def test_was_redacted_flag():
+    result = redact("send to test@email.com")
+    assert result.was_redacted is True
+
+    result = redact("how do I reset my password?")
+    assert result.was_redacted is False
 
 
 def test_multiple_entities():

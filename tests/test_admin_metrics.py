@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Chat, Client, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, User
+from backend.models import Chat, Client, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.scripts.cleanup_pii_events import run as cleanup_pii_events_run
 
 from tests.conftest import register_and_verify_user
 
@@ -265,3 +267,115 @@ def test_clients_me_includes_is_admin(client: TestClient, db_session: Session) -
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_admin"] is True
+
+
+def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(client, db_session, email="pii-admin@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PII Admin Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    user = db_session.query(User).filter(User.email == "pii-admin@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    old_event = PiiEvent(
+        client_id=client_id,
+        actor_user_id=user.id,
+        direction=PiiEventDirection.original_view,
+        entity_type="ORIGINAL_VIEW",
+        count=1,
+        action_path="/chat/logs/session/demo",
+        created_at=datetime.now(timezone.utc) - timedelta(days=400),
+    )
+    fresh_event = PiiEvent(
+        client_id=client_id,
+        actor_user_id=user.id,
+        direction=PiiEventDirection.original_delete,
+        entity_type="ORIGINAL_DELETE",
+        count=1,
+        action_path="/chat/logs/session/demo/delete-original",
+        created_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([old_event, fresh_event])
+    db_session.commit()
+    old_event_id = str(old_event.id)
+    fresh_event_id = str(fresh_event.id)
+
+    list_resp = client.get(
+        "/admin/privacy/pii-events?direction=original_delete",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert list_resp.status_code == 200
+    items = list_resp.json()["items"]
+    assert len(items) == 1
+    assert items[0]["direction"] == "original_delete"
+    assert items[0]["actor_user_id"] == str(user.id)
+
+    cleanup_resp = client.delete(
+        "/admin/privacy/pii-events/retention?retention_days=365",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert cleanup_resp.status_code == 200
+    assert cleanup_resp.json()["deleted_count"] >= 1
+
+    remaining_ids = {str(row.id) for row in db_session.query(PiiEvent).all()}
+    assert old_event_id not in remaining_ids
+    assert fresh_event_id in remaining_ids
+
+
+def test_admin_pii_events_reject_invalid_pagination_and_since_days(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="pii-params@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PII Params Client"},
+    )
+
+    user = db_session.query(User).filter(User.email == "pii-params@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    for url in (
+        "/admin/privacy/pii-events?limit=-1",
+        "/admin/privacy/pii-events?offset=-1",
+        "/admin/privacy/pii-events?since_days=0",
+    ):
+        resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 422
+
+
+def test_admin_pii_events_cleanup_rejects_zero_retention(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="pii-cleanup-guard@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PII Cleanup Guard Client"},
+    )
+
+    user = db_session.query(User).filter(User.email == "pii-cleanup-guard@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.commit()
+
+    resp = client.delete(
+        "/admin/privacy/pii-events/retention?retention_days=0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+
+
+def test_cleanup_pii_events_script_rejects_zero_retention() -> None:
+    with pytest.raises(ValueError, match="retention_days must be >= 1"):
+        cleanup_pii_events_run(0)

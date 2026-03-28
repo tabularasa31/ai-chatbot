@@ -17,6 +17,7 @@ function LoginForm() {
   const [transitioning, setTransitioning] = useState(false);
 
   const notVerified = searchParams.get("error") === "email_not_verified";
+  const sessionExpired = searchParams.get("error") === "session_expired";
 
   const onAuthTransitionComplete = useCallback(() => {
     router.replace("/dashboard");
@@ -50,6 +51,11 @@ function LoginForm() {
     <AuthCard>
       {transitioning && <AuthTransition onComplete={onAuthTransitionComplete} />}
       <h1 className={authStyles.heading}>Sign in</h1>
+      {sessionExpired && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-200 text-sm rounded-lg px-4 py-3 mb-2">
+          Your session expired. Please sign in again.
+        </div>
+      )}
       {notVerified && (
         <div className="bg-amber-500/10 border border-amber-500/30 text-amber-300 text-sm rounded-lg px-4 py-3 mb-2">
           Please verify your email before signing in. Check your inbox for the verification link.

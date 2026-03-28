@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
+
+from backend.models import PiiEventDirection
 
 
 class AdminMetricsSummary(BaseModel):
@@ -41,3 +44,20 @@ class AdminClientMetricsList(BaseModel):
     """List of per-client metrics."""
 
     items: list[AdminClientMetricsItem]
+
+
+class AdminPiiEventItem(BaseModel):
+    id: UUID
+    client_id: UUID
+    chat_id: Optional[UUID] = None
+    message_id: Optional[UUID] = None
+    actor_user_id: Optional[UUID] = None
+    direction: PiiEventDirection
+    entity_type: str
+    count: int
+    action_path: Optional[str] = None
+    created_at: datetime
+
+
+class AdminPiiEventList(BaseModel):
+    items: list[AdminPiiEventItem]

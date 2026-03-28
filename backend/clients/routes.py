@@ -14,8 +14,10 @@ from backend.clients.schemas import (
     DisclosureConfigResponse,
     KycSecretGeneratedResponse,
     KycStatusResponse,
+    PrivacyConfigResponse,
     UpdateClientRequest,
     UpdateDisclosureConfigRequest,
+    UpdatePrivacyConfigRequest,
     ValidateApiKeyResponse,
 )
 from backend.clients.service import (
@@ -27,9 +29,11 @@ from backend.clients.service import (
     get_client_by_user,
     get_disclosure_config_for_user,
     get_kyc_status,
+    get_redaction_config_for_user,
     rotate_kyc_secret,
     update_client,
     update_disclosure_config_for_user,
+    update_redaction_config_for_user,
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter
@@ -135,6 +139,25 @@ def put_disclosure_route(
     """Update tenant-wide disclosure level."""
     data = update_disclosure_config_for_user(current_user.id, body.level, db)
     return DisclosureConfigResponse(**data)
+
+
+@clients_router.get("/me/privacy", response_model=PrivacyConfigResponse)
+def get_privacy_route(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PrivacyConfigResponse:
+    data = get_redaction_config_for_user(current_user.id, db)
+    return PrivacyConfigResponse(**data)
+
+
+@clients_router.put("/me/privacy", response_model=PrivacyConfigResponse)
+def put_privacy_route(
+    body: UpdatePrivacyConfigRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> PrivacyConfigResponse:
+    data = update_redaction_config_for_user(current_user.id, body.optional_entity_types, db)
+    return PrivacyConfigResponse(**data)
 
 
 @clients_router.patch("/me", response_model=ClientResponse)

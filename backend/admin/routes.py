@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import datetime, timedelta, timezone
+import uuid
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
@@ -12,10 +14,13 @@ from backend.admin.schemas import (
     AdminClientMetricsItem,
     AdminClientMetricsList,
     AdminMetricsSummary,
+    AdminPiiEventItem,
+    AdminPiiEventList,
 )
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import get_current_user, require_admin_user
 from backend.core.db import get_db
-from backend.models import Chat, Client, Document, Embedding, Message, MessageRole, User
+from backend.models import Chat, Client, Document, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.privacy_schemas import DeletedCountResponse
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -123,3 +128,69 @@ def get_client_metrics(
         )
 
     return AdminClientMetricsList(items=items)
+
+
+@admin_router.get("/privacy/pii-events", response_model=AdminPiiEventList)
+def list_pii_events(
+    _: Annotated[User, Depends(require_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=0, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    direction: Optional[str] = None,
+    client_id: Optional[str] = None,
+    actor_user_id: Optional[str] = None,
+    since_days: Annotated[Optional[int], Query(ge=1)] = None,
+) -> AdminPiiEventList:
+    q = db.query(PiiEvent).order_by(PiiEvent.created_at.desc())
+    if direction:
+        try:
+            q = q.filter(PiiEvent.direction == PiiEventDirection(direction))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid direction") from exc
+    if client_id:
+        try:
+            q = q.filter(PiiEvent.client_id == uuid.UUID(client_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid client_id") from exc
+    if actor_user_id:
+        try:
+            q = q.filter(PiiEvent.actor_user_id == uuid.UUID(actor_user_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid actor_user_id") from exc
+    if since_days is not None:
+        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        q = q.filter(PiiEvent.created_at >= since)
+    rows = q.offset(offset).limit(limit).all()
+    return AdminPiiEventList(
+        items=[
+            AdminPiiEventItem(
+                id=row.id,
+                client_id=row.client_id,
+                chat_id=row.chat_id,
+                message_id=row.message_id,
+                actor_user_id=row.actor_user_id,
+                direction=row.direction,
+                entity_type=row.entity_type,
+                count=row.count,
+                action_path=row.action_path,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ]
+    )
+
+
+@admin_router.delete("/privacy/pii-events/retention", response_model=DeletedCountResponse)
+def cleanup_pii_events(
+    _: Annotated[User, Depends(require_admin_user)],
+    db: Annotated[Session, Depends(get_db)],
+    retention_days: Annotated[int, Query(ge=1)] = 365,
+) -> DeletedCountResponse:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    deleted_count = (
+        db.query(PiiEvent)
+        .filter(PiiEvent.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+    return DeletedCountResponse(deleted_count=int(deleted_count or 0))

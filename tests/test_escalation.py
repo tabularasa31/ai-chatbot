@@ -182,6 +182,31 @@ def test_create_escalation_ticket_retries_on_integrity_error(
     assert call_count[0] == 2
 
 
+def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-redact@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Redaction Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "my email is user@example.com",
+        EscalationTrigger.low_similarity,
+        db_session,
+    )
+
+    assert ticket.primary_question == "my email is [EMAIL]"
+    assert ticket.primary_question_redacted == "my email is [EMAIL]"
+    assert ticket.primary_question_original_encrypted is not None
+
+
 def test_create_escalation_ticket_raises_after_max_retries(
     client: TestClient,
     db_session: Session,
@@ -376,3 +401,185 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     ticket = db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).first()
     assert ticket is not None
     assert ticket.trigger == EscalationTrigger.answer_rejected
+
+
+def test_escalation_api_returns_safe_question_by_default(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-api@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc API Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+
+    resp = client.get(
+        f"/escalations/{ticket.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["primary_question"] == "contact me at [EMAIL]"
+    assert data["primary_question_original"] is None
+    assert data["primary_question_original_available"] is True
+
+
+def test_escalation_api_can_include_original_question(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-api-orig@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc API Orig Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+    user = db_session.query(User).filter(User.email == "esc-api-orig@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.get(
+        f"/escalations/{ticket.id}?include_original=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["primary_question"] == "contact me at [EMAIL]"
+    assert data["primary_question_original"] == "contact me at user@example.com"
+
+
+def test_escalation_api_include_original_requires_admin(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-api-no-admin@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc API No Admin Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+
+    resp = client.get(
+        f"/escalations/{ticket.id}?include_original=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 403
+
+
+def test_delete_escalation_original_requires_admin_and_removes_original(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="esc-delete@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc Delete Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = create_escalation_ticket(
+        client_id,
+        "contact me at user@example.com",
+        EscalationTrigger.user_request,
+        db_session,
+    )
+
+    denied = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert denied.status_code == 403
+
+    user = db_session.query(User).filter(User.email == "esc-delete@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted_count"] == 1
+
+    db_session.refresh(ticket)
+    assert ticket.primary_question_original_encrypted is None
+    assert ticket.primary_question == ticket.primary_question_redacted
+
+
+def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missing(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.core.crypto import encrypt_value
+
+    token = register_and_verify_user(client, db_session, email="esc-delete-empty@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Esc Delete Empty Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0001",
+        primary_question="secret@example.com",
+        primary_question_original_encrypted=encrypt_value("secret@example.com"),
+        primary_question_redacted=None,
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    user = db_session.query(User).filter(User.email == "esc-delete-empty@example.com").first()
+    assert user is not None
+    user.is_admin = True
+    db_session.add(user)
+    db_session.commit()
+
+    resp = client.post(
+        f"/escalations/{ticket.id}/delete-original",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
+    db_session.refresh(ticket)
+    assert ticket.primary_question_original_encrypted is None
+    assert ticket.primary_question == ""

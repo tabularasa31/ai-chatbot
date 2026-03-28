@@ -83,6 +83,7 @@ class KycStatusResponse(BaseModel):
 
 
 DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
+RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
 
 class DisclosureConfigResponse(BaseModel):
@@ -95,3 +96,15 @@ class UpdateDisclosureConfigRequest(BaseModel):
     """PUT body for /clients/me/disclosure."""
 
     level: DisclosureLevelLiteral
+
+
+class PrivacyConfigResponse(BaseModel):
+    """Tenant-wide regex redaction settings."""
+
+    optional_entity_types: list[RedactionEntityLiteral]
+
+
+class UpdatePrivacyConfigRequest(BaseModel):
+    """PUT body for /clients/me/privacy."""
+
+    optional_entity_types: list[RedactionEntityLiteral]

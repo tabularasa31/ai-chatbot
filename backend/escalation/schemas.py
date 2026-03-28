@@ -13,6 +13,8 @@ class EscalationTicketOut(BaseModel):
     id: UUID
     ticket_number: str
     primary_question: str
+    primary_question_original: Optional[str] = None
+    primary_question_original_available: bool = False
     conversation_summary: Optional[str] = None
     trigger: str
     best_similarity_score: Optional[float] = None

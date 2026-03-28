@@ -1,4 +1,6 @@
-fastapi==0.104.1
+fastapi==0.111.0
+starlette==0.37.2
+anyio>=4.4,<5
 uvicorn==0.24.0
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
@@ -13,9 +15,10 @@ pytest-asyncio==0.21.1
 httpx==0.25.2
 beautifulsoup4==4.12.3
 openai>=1.70.0
+langfuse>=2.60.2,<3
 pypdf>=4.0.0
 PyYAML==6.0.1
-python-multipart==0.0.6
+python-multipart>=0.0.7
 email-validator==2.1.0
 pytest-cov==4.1.0
 slowapi==0.1.9

@@ -21,6 +21,11 @@ class Settings(BaseSettings):
         False,
         alias="OBSERVABILITY_CAPTURE_FULL_PROMPTS",
     )
+    trace_sample_rate: float = Field(1.0, alias="TRACE_SAMPLE_RATE")
+    trace_high_volume_threshold: int = Field(1000, alias="TRACE_HIGH_VOLUME_THRESHOLD")
+    trace_high_volume_sample_rate: float = Field(0.1, alias="TRACE_HIGH_VOLUME_SAMPLE_RATE")
+    trace_new_tenant_threshold: int = Field(100, alias="TRACE_NEW_TENANT_THRESHOLD")
+    trace_rate_window_seconds: int = Field(3600, alias="TRACE_RATE_WINDOW_SECONDS")
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")

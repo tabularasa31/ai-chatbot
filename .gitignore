@@ -22,6 +22,7 @@ env/
 .idea/
 *.swp
 *.swo
+.claude/worktrees/
 
 # Environment variables
 .env
@@ -30,6 +31,7 @@ env/
 test.db
 *.sqlite
 *.sqlite3
+frontend/.test-dist/
 
 # Pytest cache / coverage
 .pytest_cache/
@@ -39,4 +41,3 @@ htmlcov/
 # OS files
 .DS_Store
 Thumbs.db
-

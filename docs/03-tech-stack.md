@@ -49,7 +49,7 @@
   
 - **Deployment:** Railway
   - PostgreSQL + app in one place
-  - Git push → auto deploy
+  - Production release usually follows the repo branch workflow (`main` for development, `deploy` for production)
   
 ---
 
@@ -162,11 +162,10 @@
 │                                                           │
 │  Client dashboard:                                       │
 │  - Login/signup                                          │
-│  - OpenAI API key setup                                  │
-│  - Document upload                                       │
-│  - Chat logs viewer with feedback                        │
-│  - API key management                                    │
-│  - Token usage stats                                     │
+│  - OpenAI API key + widget/agents settings               │
+│  - Knowledge hub (files + URL sources)                   │
+│  - Chat logs / feedback / escalations                    │
+│  - Admin/privacy views                                   │
 │                                                           │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -178,33 +177,32 @@
 ```
 1. Visitor types question
    ↓
-2. Widget sends: POST /chat {question, api_key}
+2. Widget sends: `POST /widget/chat?client_id=ch_…&message=...`
    ↓
-3. Backend validates API key → gets client_id + client's openai_api_key
+3. Backend resolves public `clientId` → gets tenant `client_id` + client's OpenAI key
    ↓
 4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
 5. OpenAI API: Embed redacted question → vector(1536)  [client's key]
    ↓
-6. PostgreSQL pgvector: Search similar chunks
-   SELECT chunk_text FROM embeddings
-   WHERE client_id = X
-   ORDER BY vector <-> question_vector
-   LIMIT 3
+6. Retrieval pipeline:
+   - pgvector / Python cosine candidate acquisition
+   - BM25 over the shared candidate pool
+   - Reciprocal Rank Fusion + reranking + selection
+   - overlap / contradiction reliability assessment
    ↓
-7. Build prompt:
-   "Based on:\n{chunk1}\n{chunk2}\n{chunk3}\n\nAnswer: {redacted_question}"
+7. Build grounded prompt from the selected chunks
    ↓
 8. OpenAI API: Chat completion  [client's key]
-   gpt-4o-mini (temperature=0.2, max_tokens=500)
+   gpt-4o-mini
    ↓
 9. Optional: second gpt-4o-mini call for validation (FI-034) using same redacted question
    ↓
 10. Track tokens used → save encrypted original question plus redacted-safe message fields
    ↓
-11. Return: {answer, source_docs, tokens_used}
+11. Return answer + sources + reliability metadata
    ↓
-12. Widget displays answer
+12. Widget / dashboard displays answer
 ```
 
 ---
@@ -213,8 +211,9 @@
 
 ### API Key Authentication
 - Client gets 32-character random API key
-- Widget includes key in requests: `X-API-Key: abc123...`
-- Backend validates key → retrieves client_id and openai_api_key
+- Dashboard / private API calls use the tenant API key (`X-API-Key`)
+- Public widget chat uses tenant `public_id` / `clientId`; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
+- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `client_id` and the tenant OpenAI key
 - All queries filter by client_id (no data leaks between tenants)
 
 ### OpenAI Key Isolation
@@ -251,7 +250,7 @@
 
 ### Backend
 - Stateless design (can run multiple instances)
-- Background embedding processing (FI-021, coming next)
+- Background embedding processing (FI-021) for document and URL-source indexing
 - OpenAI rate limit handling (retry logic)
 
 ### Frontend
@@ -277,8 +276,8 @@
 └──────────┘ └──────────┘
 ```
 
-- **Backend:** `git push` → Railway auto-deploys FastAPI
-- **Frontend:** `git push` → Vercel auto-builds Next.js
+- **Backend:** Railway serves FastAPI; production releases typically flow through the repo branch strategy (`main` / `deploy`)
+- **Frontend:** Vercel serves Next.js; production branch often tracks `deploy`
 - **CI (FI-026):** GitHub Actions on `push` / `pull_request` to `main` and `deploy` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
 - **Database:** PostgreSQL on Railway
 - **Email:** Brevo HTTP API (transactional + future daily reports)
@@ -286,4 +285,4 @@
 
 ---
 
-**Next:** See `04-phase-breakdown.md` for detailed implementation phases.
+**Next:** See [`IMPLEMENTED_FEATURES.md`](./IMPLEMENTED_FEATURES.md), [`PROGRESS.md`](./PROGRESS.md), and [`BACKLOG_PRODUCT.md`](./BACKLOG_PRODUCT.md) for current shipped capabilities and roadmap.

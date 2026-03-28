@@ -205,6 +205,37 @@ Retrieval is instrumented with Langfuse-style traces for both chat requests and 
 
 The `bm25-search` span keeps the lexical inputs and merged lexical output explicit, including compact winner provenance for merged hits. This makes it possible to compare p50/p95 latency for single-vs-multi vector expansion and asymmetric-vs-symmetric lexical expansion without changing the default retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
 
+### Retrieval reliability contradiction policy
+
+Retrieval reliability keeps contradiction handling in the final capping stage. Contradiction is always recorded in `signals` and `evidence`, but it only changes the final verdict after corroboration:
+
+- `1` effective contradiction fact on `1` overlap pair stays evidence-only
+- `2+` effective contradiction facts on the same overlap pair trigger contradiction cap
+- contradiction facts across at least `2` distinct overlap pairs also trigger contradiction cap
+- exact duplicate contradiction emissions, including reversed-orientation mirrors, do not increase severity
+- contradiction cap always maps directly to `score="low"`
+
+`cap_reason` follows cap precedence rather than only the last score mutation:
+
+- if contradiction threshold is reached, `cap_reason="contradiction"`
+- otherwise the existing `source_overlap` cap behavior stays unchanged
+
+Policy table:
+
+| Effective contradiction shape | Final score effect | `cap_reason` |
+|---|---|---|
+| No facts | Existing behavior only | Existing behavior |
+| `1` fact on `1` pair | Evidence-only | Not `contradiction` |
+| `2+` facts on `1` pair | Cap to `low` | `contradiction` |
+| Facts across at least `2` distinct pairs | Cap to `low` | `contradiction` |
+| Threshold reached and `base_score` already `low` | Stay `low` | `contradiction` |
+
+Rollout note:
+
+- sample production-like traces before enabling the policy by default
+- review the share of single-fact cases, same-pair `2+` fact cases, multi-pair cases, and the rate of outcomes that would flip versus the old behavior
+- define an acceptable flip-rate threshold first; if the observed flip rate exceeds it, require product review or gate rollout behind a feature flag
+
 ---
 
 ## 5. RAG Chat Pipeline

@@ -110,7 +110,7 @@ git push -u origin feature/documents
 # Open PR into main (or agreed base)
 
 # After merge: merge or fast-forward into `deploy` when cutting a production release (your process).
-# If you need to discard local work: git fetch origin && git reset --hard origin/main
+# Avoid destructive cleanup commands unless you have explicitly confirmed the worktree state first.
 ```
 
 ---
@@ -259,9 +259,9 @@ git push -u origin feature/documents
 # 5. After approval: merge to main
 # 6. Production: merge main → deploy when ready (per team process)
 
-# Reset local branch after feedback:
-git fetch origin
-git reset --hard origin/main
+# If branch state needs cleanup after feedback:
+# inspect the worktree first and prefer non-destructive recovery commands
+# (for example, targeted checkout/restore or a fresh branch from main)
 ```
 
 ---

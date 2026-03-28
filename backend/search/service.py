@@ -39,6 +39,7 @@ MAX_OVERLAP_CHECK_CANDIDATES = 5
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap"]
+VariantMode = Literal["single", "multi"]
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,17 @@ class SearchResultBundle:
     conflict_pairs: list[dict[str, object]] | None = None
     reliability_score: ReliabilityScore | None = None
     reliability_cap_reason: ReliabilityCapReason | None = None
+    query_variant_count: int = 1
+    variant_mode: VariantMode = "single"
+    extra_variant_count: int = 0
+    embedded_query_count: int = 1
+    extra_embedded_queries: int = 0
+    embedding_api_request_count: int = 1
+    vector_search_call_count: int = 0
+    extra_vector_search_calls: int = 0
+    retrieval_duration_ms: float = 0.0
+    query_embedding_duration_ms: float = 0.0
+    vector_search_duration_ms: float = 0.0
 
 
 @dataclass
@@ -65,6 +77,26 @@ class MMRSelectionResult:
     results: list[tuple[Embedding, float]]
     replacements: list[dict[str, object]]
     diagnostics: list[dict[str, object]]
+
+
+def _variant_mode_for_count(count: int) -> VariantMode:
+    return "multi" if count > 1 else "single"
+
+
+def build_variant_trace_metadata(bundle: SearchResultBundle) -> dict[str, object]:
+    """Compact trace metadata used on parent request traces."""
+    return {
+        "variant_mode": bundle.variant_mode,
+        "query_variant_count": bundle.query_variant_count,
+        "extra_embedded_queries": bundle.extra_embedded_queries,
+        "extra_vector_search_calls": bundle.extra_vector_search_calls,
+        "retrieval_duration_ms": bundle.retrieval_duration_ms,
+    }
+
+
+def build_variant_trace_tag(variant_mode: VariantMode) -> str:
+    """Simple tag for slicing traces by variant fan-out."""
+    return f"variants:{variant_mode}"
 
 
 def detect_query_script_bucket(text: str) -> str:
@@ -545,23 +577,58 @@ def search_similar_chunks_detailed(
 
     SQLite (tests): Python cosine only; pgvector and BM25 are skipped.
     """
+    retrieval_started_at = perf_counter()
     query_variants = expand_query(query)
+    query_variant_count = len(query_variants)
+    variant_mode = _variant_mode_for_count(query_variant_count)
+    extra_variant_count = max(query_variant_count - 1, 0)
     if trace is not None:
         trace.span(
             name="query-expansion",
             input={"query": query},
         ).end(
-            output={"variants": query_variants}
+            output={
+                "variants": query_variants,
+                "query_variant_count": query_variant_count,
+                "variant_mode": variant_mode,
+                "extra_variant_count": extra_variant_count,
+            }
         )
 
+    embedding_started_at = perf_counter()
     variant_vectors = embed_queries(query_variants, api_key=api_key)
+    query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
+    embedded_query_count = len(query_variants)
+    extra_embedded_queries = max(embedded_query_count - 1, 0)
+    embedding_api_request_count = 1 if query_variants else 0
     query_vector = variant_vectors[0]
     query_script_bucket = detect_query_script_bucket(query)
+    if trace is not None:
+        trace.span(
+            name="query-embedding",
+            input={
+                "query_variants": query_variants,
+                "query_variant_count": query_variant_count,
+                "variant_mode": variant_mode,
+                "model": EMBEDDING_MODEL,
+            },
+        ).end(
+            output={
+                "embedded_query_count": embedded_query_count,
+                "extra_embedded_queries": extra_embedded_queries,
+                "embedding_api_request_count": embedding_api_request_count,
+                "duration_ms": query_embedding_duration_ms,
+            }
+        )
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
         vector_started_at = perf_counter()
         results = _python_cosine_search(client_id, query_vector, top_k, db)
+        vector_search_call_count = 1 if query_vector else 0
+        extra_vector_search_calls = 0
+        vector_search_duration_ms = round((perf_counter() - vector_started_at) * 1000, 2)
+        retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
         if trace is not None:
             trace.span(
                 name="vector-search",
@@ -575,8 +642,10 @@ def search_similar_chunks_detailed(
             ).end(
                 output={
                     "chunks": format_embedding_results(results, score_name="similarity_score"),
-                    "duration_ms": round((perf_counter() - vector_started_at) * 1000, 2),
+                    "duration_ms": vector_search_duration_ms,
                     "total_candidates_scanned": len(results),
+                    "vector_search_call_count": vector_search_call_count,
+                    "extra_vector_search_calls": extra_vector_search_calls,
                 }
             )
         return SearchResultBundle(
@@ -589,13 +658,26 @@ def search_similar_chunks_detailed(
                 conflicts_found=False,
                 result_count=len(results),
             ),
+            query_variant_count=query_variant_count,
+            variant_mode=variant_mode,
+            extra_variant_count=extra_variant_count,
+            embedded_query_count=embedded_query_count,
+            extra_embedded_queries=extra_embedded_queries,
+            embedding_api_request_count=embedding_api_request_count,
+            vector_search_call_count=vector_search_call_count,
+            extra_vector_search_calls=extra_vector_search_calls,
+            retrieval_duration_ms=retrieval_duration_ms,
+            query_embedding_duration_ms=query_embedding_duration_ms,
+            vector_search_duration_ms=vector_search_duration_ms,
         )
 
     # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
     # BM25 then re-ranks only these candidates — no separate full-table scan.
     vector_started_at = perf_counter()
     vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
+    vector_search_call_count = 0
     for variant, variant_vector in zip(query_variants, variant_vectors):
+        vector_search_call_count += 1
         for embedding, similarity in _pgvector_search(client_id, variant_vector, BM25_CANDIDATE_POOL, db):
             existing = vector_candidate_map.get(embedding.id)
             if existing is None or similarity > existing[1]:
@@ -606,8 +688,10 @@ def search_similar_chunks_detailed(
         reverse=True,
     )[:BM25_CANDIDATE_POOL]
     vector_duration_ms = round((perf_counter() - vector_started_at) * 1000, 2)
+    extra_vector_search_calls = max(vector_search_call_count - 1, 0)
 
     if not vector_candidates:
+        retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
         if trace is not None:
             trace.span(
                 name="vector-search",
@@ -623,6 +707,8 @@ def search_similar_chunks_detailed(
                     "chunks": [],
                     "duration_ms": vector_duration_ms,
                     "total_candidates_scanned": 0,
+                    "vector_search_call_count": vector_search_call_count,
+                    "extra_vector_search_calls": extra_vector_search_calls,
                 }
             )
         return SearchResultBundle(
@@ -630,6 +716,17 @@ def search_similar_chunks_detailed(
             query_variants=query_variants,
             query_script_bucket=query_script_bucket,
             reliability_score="low",
+            query_variant_count=query_variant_count,
+            variant_mode=variant_mode,
+            extra_variant_count=extra_variant_count,
+            embedded_query_count=embedded_query_count,
+            extra_embedded_queries=extra_embedded_queries,
+            embedding_api_request_count=embedding_api_request_count,
+            vector_search_call_count=vector_search_call_count,
+            extra_vector_search_calls=extra_vector_search_calls,
+            retrieval_duration_ms=retrieval_duration_ms,
+            query_embedding_duration_ms=query_embedding_duration_ms,
+            vector_search_duration_ms=vector_duration_ms,
         )
 
     vector_embs = [emb for emb, _ in vector_candidates]
@@ -651,7 +748,9 @@ def search_similar_chunks_detailed(
                 ),
                 "duration_ms": vector_duration_ms,
                 "total_candidates_scanned": len(vector_candidates),
-                }
+                "vector_search_call_count": vector_search_call_count,
+                "extra_vector_search_calls": extra_vector_search_calls,
+            }
             )
 
     rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
@@ -673,6 +772,7 @@ def search_similar_chunks_detailed(
     best_keyword_score = bm25_results[0][1] if bm25_results else None
 
     if not bm25_results:
+        retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
         return SearchResultBundle(
             results=vector_for_rrf[:top_k],
             best_vector_similarity=best_vector_similarity,
@@ -684,6 +784,17 @@ def search_similar_chunks_detailed(
                 conflicts_found=False,
                 result_count=len(vector_for_rrf[:top_k]),
             ),
+            query_variant_count=query_variant_count,
+            variant_mode=variant_mode,
+            extra_variant_count=extra_variant_count,
+            embedded_query_count=embedded_query_count,
+            extra_embedded_queries=extra_embedded_queries,
+            embedding_api_request_count=embedding_api_request_count,
+            vector_search_call_count=vector_search_call_count,
+            extra_vector_search_calls=extra_vector_search_calls,
+            retrieval_duration_ms=retrieval_duration_ms,
+            query_embedding_duration_ms=query_embedding_duration_ms,
+            vector_search_duration_ms=vector_duration_ms,
         )
 
     rrf_started_at = perf_counter()
@@ -821,6 +932,7 @@ def search_similar_chunks_detailed(
         conflicts_found=conflicts_found,
         result_count=len(final_results),
     )
+    retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
 
     return SearchResultBundle(
         results=final_results,
@@ -832,6 +944,17 @@ def search_similar_chunks_detailed(
         conflict_pairs=conflict_pairs,
         reliability_score=reliability_score,
         reliability_cap_reason=reliability_cap_reason,
+        query_variant_count=query_variant_count,
+        variant_mode=variant_mode,
+        extra_variant_count=extra_variant_count,
+        embedded_query_count=embedded_query_count,
+        extra_embedded_queries=extra_embedded_queries,
+        embedding_api_request_count=embedding_api_request_count,
+        vector_search_call_count=vector_search_call_count,
+        extra_vector_search_calls=extra_vector_search_calls,
+        retrieval_duration_ms=retrieval_duration_ms,
+        query_embedding_duration_ms=query_embedding_duration_ms,
+        vector_search_duration_ms=vector_duration_ms,
     )
 
 

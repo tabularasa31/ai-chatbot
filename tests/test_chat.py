@@ -298,6 +298,92 @@ def test_process_chat_message_ends_followup_span_on_exception(
     ]
 
 
+def test_process_chat_message_adds_variant_summary_to_trace(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Client
+
+    class FakeSpan:
+        def end(self, **kwargs: object) -> None:
+            return None
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+        def promote(self, **kwargs: object) -> None:
+            return None
+
+    token = register_and_verify_user(client, db_session, email="trace-chat@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Chat Client"},
+    )
+    set_client_openai_key(client, token)
+    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=["reset password in settings"],
+            document_ids=[uuid.uuid4()],
+            scores=[0.93],
+            mode="hybrid",
+            best_rank_score=0.93,
+            best_confidence_score=0.91,
+            confidence_source="vector_similarity",
+            reliability_score="high",
+            variant_mode="multi",
+            query_variant_count=3,
+            extra_embedded_queries=2,
+            extra_vector_search_calls=2,
+            retrieval_duration_ms=18.4,
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: ("Use the reset link in settings.", 17),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.validate_answer",
+        lambda *args, **kwargs: {"is_valid": True, "confidence": 0.95},
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    answer, _, tokens_used, chat_ended = process_chat_message(
+        client_row.id,
+        "How do I reset my password?",
+        uuid.uuid4(),
+        db_session,
+        api_key=cl_resp.json()["api_key"],
+    )
+
+    assert answer == "Use the reset link in settings."
+    assert tokens_used == 17
+    assert chat_ended is False
+    assert fake_trace.update_calls[-1]["metadata"]["variant_mode"] == "multi"
+    assert fake_trace.update_calls[-1]["metadata"]["query_variant_count"] == 3
+    assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["extra_vector_search_calls"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
+    assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
+
+
 # --- API tests ---
 
 

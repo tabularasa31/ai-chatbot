@@ -261,3 +261,60 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     assert trace.sampled is True
     assert len(service._client.traces) == 1
     assert service._client.traces[0].init_kwargs["metadata"]["sampling_reason"] == "forced"
+
+
+def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
+    monkeypatch,
+) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    service.begin_trace(
+        name="rag-query",
+        session_id="seed-session",
+        tenant_id="tenant-variants",
+    )
+    trace = service.begin_trace(
+        name="rag-query",
+        session_id="deferred-session",
+        tenant_id="tenant-variants",
+    )
+
+    trace.span(
+        name="query-embedding",
+        input={"query_variant_count": 3, "variant_mode": "multi"},
+    ).end(
+        output={
+            "embedded_query_count": 3,
+            "extra_embedded_queries": 2,
+            "embedding_api_request_count": 1,
+            "duration_ms": 4.2,
+        }
+    )
+    trace.update(
+        output={"result_count": 1},
+        metadata={
+            "variant_mode": "multi",
+            "query_variant_count": 3,
+            "extra_embedded_queries": 2,
+            "extra_vector_search_calls": 2,
+            "retrieval_duration_ms": 16.8,
+        },
+        tags=["variants:multi"],
+    )
+    trace.promote(metadata={"promotion_reason": "variant-observability-test"})
+
+    assert len(service._client.traces) == 1
+    materialized = service._client.traces[0]
+    assert materialized.init_kwargs["session_id"] == "deferred-session"
+    assert materialized.init_kwargs["metadata"]["promotion_reason"] == "variant-observability-test"
+    assert materialized.spans[0][0]["name"] == "query-embedding"
+    assert materialized.spans[0][1].ended_with["output"]["extra_embedded_queries"] == 2
+    assert materialized.updates[0]["metadata"]["variant_mode"] == "multi"
+    assert materialized.updates[0]["metadata"]["query_variant_count"] == 3
+    assert materialized.updates[0]["tags"] == ["variants:multi"]

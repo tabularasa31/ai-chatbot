@@ -49,7 +49,11 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
-from backend.search.service import search_similar_chunks_detailed
+from backend.search.service import (
+    build_variant_trace_metadata,
+    build_variant_trace_tag,
+    search_similar_chunks_detailed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -158,6 +162,11 @@ def retrieve_context(
             conflict_pairs=bundle.conflict_pairs,
             reliability_score=bundle.reliability_score,
             reliability_cap_reason=bundle.reliability_cap_reason,
+            variant_mode=bundle.variant_mode,
+            query_variant_count=bundle.query_variant_count,
+            extra_embedded_queries=bundle.extra_embedded_queries,
+            extra_vector_search_calls=bundle.extra_vector_search_calls,
+            retrieval_duration_ms=bundle.retrieval_duration_ms,
         )
 
     best_rank_score = results[0][1]
@@ -195,6 +204,11 @@ def retrieve_context(
         conflict_pairs=bundle.conflict_pairs,
         reliability_score=bundle.reliability_score,
         reliability_cap_reason=bundle.reliability_cap_reason,
+        variant_mode=bundle.variant_mode,
+        query_variant_count=bundle.query_variant_count,
+        extra_embedded_queries=bundle.extra_embedded_queries,
+        extra_vector_search_calls=bundle.extra_vector_search_calls,
+        retrieval_duration_ms=bundle.retrieval_duration_ms,
     )
 
 
@@ -213,6 +227,11 @@ class RetrievalContext:
     conflict_pairs: list[dict[str, object]] | None = None
     reliability_score: Literal["low", "medium", "high"] | None = None
     reliability_cap_reason: Literal["source_overlap"] | None = None
+    variant_mode: Literal["single", "multi"] = "single"
+    query_variant_count: int = 1
+    extra_embedded_queries: int = 0
+    extra_vector_search_calls: int = 0
+    retrieval_duration_ms: float = 0.0
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1107,7 +1126,9 @@ def process_chat_message(
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
+            **build_variant_trace_metadata(retrieval),
         },
+        tags=[build_variant_trace_tag(retrieval.variant_mode)],
     )
     return (answer, document_ids, tokens_used, bool(chat.ended_at))
 

@@ -298,7 +298,10 @@ def generate_answer(
         generation = trace.generation(
             name="llm-generation",
             model="gpt-4o-mini",
-            input=[{"role": "user", "content": prompt}],
+            input={
+                "question_preview": truncate_text(question),
+                "context_chunk_count": len(context_chunks),
+            },
             metadata={
                 "temperature": 0.2,
                 "max_tokens": 500,
@@ -672,20 +675,98 @@ def process_chat_message(
             # Parse contact email from original user text, not redacted text.
             # Redaction replaces addresses with placeholders and would break capture.
             email = parse_contact_email(question)
-            if email:
-                apply_collected_contact_email(ticket.id, chat.id, email, db)
-                db.refresh(ticket)
-                db.refresh(chat)
-                db.expire(chat, ["messages"])
-                msgs = build_chat_messages_for_openai(chat, redacted_question)
+            try:
+                if email:
+                    apply_collected_contact_email(ticket.id, chat.id, email, db)
+                    db.refresh(ticket)
+                    db.refresh(chat)
+                    db.expire(chat, ["messages"])
+                    msgs = build_chat_messages_for_openai(chat, redacted_question)
+                    out = complete_escalation_openai_turn(
+                        phase=EscalationPhase.handoff_email_known,
+                        chat_messages=msgs,
+                        fact_json=fact_from_ticket(ticket, chat=chat),
+                        latest_user_text=redacted_question,
+                        api_key=api_key,
+                    )
+                    chat.escalation_followup_pending = True
+                    db.add(chat)
+                    db.commit()
+                    _persist_turn(
+                        db,
+                        chat,
+                        client_id,
+                        question,
+                        out.message_to_user,
+                        [],
+                        out.tokens_used,
+                        optional_entity_types=optional_entity_types,
+                    )
+                    awaiting_email_span.end(
+                        output={"ticket_found": True, "email_captured": True}
+                    )
+                    trace.update(
+                        output={"answer": out.message_to_user, "source": "escalation_email_capture"},
+                        metadata={"chat_ended": False, "escalated": True},
+                    )
+                    return (out.message_to_user, [], out.tokens_used, False)
                 out = complete_escalation_openai_turn(
-                    phase=EscalationPhase.handoff_email_known,
+                    phase=EscalationPhase.email_parse_failed,
                     chat_messages=msgs,
                     fact_json=fact_from_ticket(ticket, chat=chat),
                     latest_user_text=redacted_question,
                     api_key=api_key,
                 )
-                chat.escalation_followup_pending = True
+                _persist_turn(
+                    db,
+                    chat,
+                    client_id,
+                    question,
+                    out.message_to_user,
+                    [],
+                    out.tokens_used,
+                    optional_entity_types=optional_entity_types,
+                )
+                awaiting_email_span.end(
+                    output={"ticket_found": True, "email_captured": False}
+                )
+                trace.update(
+                    output={"answer": out.message_to_user, "source": "escalation_email_retry"},
+                    metadata={"chat_ended": False, "escalated": True},
+                )
+                return (out.message_to_user, [], out.tokens_used, False)
+            except Exception as exc:
+                awaiting_email_span.end(
+                    output={"ticket_found": True, "error": True},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+                raise
+
+    # --- Follow-up yes/no ---
+    if chat.escalation_followup_pending:
+        followup_span = trace.span(
+            name="escalation-followup",
+            input={"pending": True},
+        )
+        ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
+        try:
+            out = complete_escalation_openai_turn(
+                phase=EscalationPhase.followup_awaiting_yes_no,
+                chat_messages=msgs,
+                fact_json={
+                    **fact_from_ticket(ticket, chat=chat),
+                    "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                },
+                latest_user_text=redacted_question,
+                api_key=api_key,
+            )
+            decision = out.followup_decision or "unclear"
+            if decision == "unclear" and _escalation_clarify_already_asked(chat):
+                decision = "yes"
+            if decision == "yes":
+                chat.escalation_followup_pending = False
+                _clear_escalation_clarify_flag(chat)
                 db.add(chat)
                 db.commit()
                 _persist_turn(
@@ -698,63 +779,35 @@ def process_chat_message(
                     out.tokens_used,
                     optional_entity_types=optional_entity_types,
                 )
-                awaiting_email_span.end(
-                    output={"ticket_found": True, "email_captured": True}
-                )
+                followup_span.end(output={"decision": decision, "chat_ended": False})
                 trace.update(
-                    output={"answer": out.message_to_user, "source": "escalation_email_capture"},
+                    output={"answer": out.message_to_user, "source": "escalation_followup"},
                     metadata={"chat_ended": False, "escalated": True},
                 )
                 return (out.message_to_user, [], out.tokens_used, False)
-            out = complete_escalation_openai_turn(
-                phase=EscalationPhase.email_parse_failed,
-                chat_messages=msgs,
-                fact_json=fact_from_ticket(ticket, chat=chat),
-                latest_user_text=redacted_question,
-                api_key=api_key,
-            )
-            _persist_turn(
-                db,
-                chat,
-                client_id,
-                question,
-                out.message_to_user,
-                [],
-                out.tokens_used,
-                optional_entity_types=optional_entity_types,
-            )
-            awaiting_email_span.end(
-                output={"ticket_found": True, "email_captured": False}
-            )
-            trace.update(
-                output={"answer": out.message_to_user, "source": "escalation_email_retry"},
-                metadata={"chat_ended": False, "escalated": True},
-            )
-            return (out.message_to_user, [], out.tokens_used, False)
-
-    # --- Follow-up yes/no ---
-    if chat.escalation_followup_pending:
-        followup_span = trace.span(
-            name="escalation-followup",
-            input={"pending": True},
-        )
-        ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
-        out = complete_escalation_openai_turn(
-            phase=EscalationPhase.followup_awaiting_yes_no,
-            chat_messages=msgs,
-            fact_json={
-                **fact_from_ticket(ticket, chat=chat),
-                "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
-            },
-            latest_user_text=redacted_question,
-            api_key=api_key,
-        )
-        decision = out.followup_decision or "unclear"
-        if decision == "unclear" and _escalation_clarify_already_asked(chat):
-            decision = "yes"
-        if decision == "yes":
-            chat.escalation_followup_pending = False
-            _clear_escalation_clarify_flag(chat)
+            if decision == "no":
+                chat.escalation_followup_pending = False
+                _clear_escalation_clarify_flag(chat)
+                chat.ended_at = datetime.now(timezone.utc)
+                db.add(chat)
+                db.commit()
+                _persist_turn(
+                    db,
+                    chat,
+                    client_id,
+                    question,
+                    out.message_to_user,
+                    [],
+                    out.tokens_used,
+                    optional_entity_types=optional_entity_types,
+                )
+                followup_span.end(output={"decision": decision, "chat_ended": True})
+                trace.update(
+                    output={"answer": out.message_to_user, "source": "escalation_followup"},
+                    metadata={"chat_ended": True, "escalated": True},
+                )
+                return (out.message_to_user, [], out.tokens_used, True)
+            _set_escalation_clarify_flag(chat)
             db.add(chat)
             db.commit()
             _persist_turn(
@@ -773,47 +826,13 @@ def process_chat_message(
                 metadata={"chat_ended": False, "escalated": True},
             )
             return (out.message_to_user, [], out.tokens_used, False)
-        if decision == "no":
-            chat.escalation_followup_pending = False
-            _clear_escalation_clarify_flag(chat)
-            chat.ended_at = datetime.now(timezone.utc)
-            db.add(chat)
-            db.commit()
-            _persist_turn(
-                db,
-                chat,
-                client_id,
-                question,
-                out.message_to_user,
-                [],
-                out.tokens_used,
-                optional_entity_types=optional_entity_types,
+        except Exception as exc:
+            followup_span.end(
+                output={"error": True},
+                level="ERROR",
+                status_message=str(exc),
             )
-            followup_span.end(output={"decision": decision, "chat_ended": True})
-            trace.update(
-                output={"answer": out.message_to_user, "source": "escalation_followup"},
-                metadata={"chat_ended": True, "escalated": True},
-            )
-            return (out.message_to_user, [], out.tokens_used, True)
-        _set_escalation_clarify_flag(chat)
-        db.add(chat)
-        db.commit()
-        _persist_turn(
-            db,
-            chat,
-            client_id,
-            question,
-            out.message_to_user,
-            [],
-            out.tokens_used,
-            optional_entity_types=optional_entity_types,
-        )
-        followup_span.end(output={"decision": decision, "chat_ended": False})
-        trace.update(
-            output={"answer": out.message_to_user, "source": "escalation_followup"},
-            metadata={"chat_ended": False, "escalated": True},
-        )
-        return (out.message_to_user, [], out.tokens_used, False)
+            raise
 
     # --- T-3: explicit human request (before RAG) ---
     human_request_span = trace.span(

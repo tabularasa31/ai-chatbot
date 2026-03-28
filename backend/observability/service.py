@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -19,9 +20,10 @@ class _TraceClientProtocol(Protocol):
         ...
 
 
-class SpanHandle:
+class SpanHandle(ABC):
     """Interface for span-like objects."""
 
+    @abstractmethod
     def end(
         self,
         *,
@@ -33,9 +35,10 @@ class SpanHandle:
         raise NotImplementedError
 
 
-class GenerationHandle(SpanHandle):
+class GenerationHandle(SpanHandle, ABC):
     """Interface for generation-like objects."""
 
+    @abstractmethod
     def end(
         self,
         *,
@@ -48,9 +51,10 @@ class GenerationHandle(SpanHandle):
         raise NotImplementedError
 
 
-class TraceHandle:
+class TraceHandle(ABC):
     """Interface for trace-like objects."""
 
+    @abstractmethod
     def span(
         self,
         *,
@@ -60,6 +64,7 @@ class TraceHandle:
     ) -> SpanHandle:
         raise NotImplementedError
 
+    @abstractmethod
     def generation(
         self,
         *,
@@ -70,6 +75,7 @@ class TraceHandle:
     ) -> GenerationHandle:
         raise NotImplementedError
 
+    @abstractmethod
     def update(
         self,
         *,
@@ -258,6 +264,7 @@ def _safe_construct(factory: Any, **kwargs: Any) -> Any | None:
     try:
         return factory(**payload)
     except TypeError:
+        logger.warning("Observability factory signature mismatch; retrying without metadata")
         fallback = {key: value for key, value in payload.items() if key != "metadata"}
         try:
             return factory(**fallback)
@@ -298,6 +305,10 @@ class ObservabilityService:
     def enabled(self) -> bool:
         return self._enabled
 
+    def reset(self) -> None:
+        self._client = None
+        self._enabled = False
+
     def init(self) -> None:
         if self._client is not None or self._enabled:
             return
@@ -323,8 +334,7 @@ class ObservabilityService:
             logger.info("Langfuse observability initialized")
         except Exception:
             logger.exception("Failed to initialize Langfuse; observability stays disabled")
-            self._client = None
-            self._enabled = False
+            self.reset()
 
     def shutdown(self) -> None:
         if self._client is None:
@@ -334,8 +344,7 @@ class ObservabilityService:
         except Exception:
             logger.exception("Failed to flush Langfuse client during shutdown")
         finally:
-            self._client = None
-            self._enabled = False
+            self.reset()
 
     def begin_trace(
         self,

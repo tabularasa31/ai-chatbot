@@ -285,6 +285,7 @@ def search_similar_chunks_detailed(
 
     rrf_started_at = perf_counter()
     fused_results = reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k)
+    rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
             name="rrf-fusion",
@@ -304,7 +305,7 @@ def search_similar_chunks_detailed(
                     fused_results,
                     score_name="rrf_score",
                 ),
-                "duration_ms": round((perf_counter() - rrf_started_at) * 1000, 2),
+                "duration_ms": rrf_duration_ms,
             }
         )
 

@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import threading
 import logging
 from dataclasses import dataclass
+import random
+import time
+from collections import defaultdict, deque
 from typing import Any, Protocol
 
 from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
+MAX_DEFERRED_OPERATIONS = 128
 
 
 class _TraceClientProtocol(Protocol):
@@ -87,6 +92,18 @@ class TraceHandle(ABC):
     ) -> None:
         raise NotImplementedError
 
+    def promote(
+        self,
+        *,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        return None
+
+    @property
+    def sampled(self) -> bool:
+        return True
+
 
 class _NoOpSpan(SpanHandle):
     def end(
@@ -143,6 +160,10 @@ class _NoOpTrace(TraceHandle):
         status_message: str | None = None,
     ) -> None:
         return None
+
+    @property
+    def sampled(self) -> bool:
+        return False
 
 
 @dataclass
@@ -258,6 +279,210 @@ class _LangfuseTrace(TraceHandle):
             payload["status_message"] = status_message
         _safe_invoke(self.trace_obj.update, **payload)
 
+    def promote(
+        self,
+        *,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        if metadata or tags:
+            self.update(metadata=metadata, tags=tags)
+
+    @property
+    def sampled(self) -> bool:
+        return True
+
+
+class _DeferredSpan(SpanHandle):
+    def __init__(self, trace: "_DeferredTrace", *, kind: str, kwargs: dict[str, Any]) -> None:
+        self._trace = trace
+        self._kind = kind
+        self._kwargs = kwargs
+        self._ended = False
+
+    def end(
+        self,
+        *,
+        output: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        level: str | None = None,
+        status_message: str | None = None,
+    ) -> None:
+        if self._ended:
+            return
+        self._ended = True
+        self._trace._append_operation(
+            {
+                "kind": self._kind,
+                "kwargs": dict(self._kwargs),
+                "end": {
+                    "output": output,
+                    "metadata": metadata,
+                    "level": level,
+                    "status_message": status_message,
+                },
+            }
+        )
+
+
+class _DeferredGeneration(GenerationHandle):
+    def __init__(self, trace: "_DeferredTrace", *, kwargs: dict[str, Any]) -> None:
+        self._trace = trace
+        self._kwargs = kwargs
+        self._ended = False
+
+    def end(
+        self,
+        *,
+        output: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        usage: dict[str, int] | None = None,
+        level: str | None = None,
+        status_message: str | None = None,
+    ) -> None:
+        if self._ended:
+            return
+        self._ended = True
+        self._trace._append_operation(
+            {
+                "kind": "generation",
+                "kwargs": dict(self._kwargs),
+                "end": {
+                    "output": output,
+                    "metadata": metadata,
+                    "usage": usage,
+                    "level": level,
+                    "status_message": status_message,
+                },
+            }
+        )
+
+
+class _DeferredTrace(TraceHandle):
+    def __init__(
+        self,
+        service: "ObservabilityService",
+        *,
+        init_kwargs: dict[str, Any],
+        sampled: bool,
+        sampling_reason: str,
+    ) -> None:
+        self._service = service
+        self._init_kwargs = init_kwargs
+        self._sampled = sampled
+        self._sampling_reason = sampling_reason
+        self._operations: list[dict[str, Any]] = []
+        self._materialized: TraceHandle | None = None
+
+    def _append_operation(self, operation: dict[str, Any]) -> None:
+        if len(self._operations) >= MAX_DEFERRED_OPERATIONS:
+            self._operations.pop(0)
+            logger.warning("Deferred trace buffer exceeded max operations; dropping oldest event")
+        self._operations.append(operation)
+
+    def span(
+        self,
+        *,
+        name: str,
+        input: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> SpanHandle:
+        if self._materialized is not None:
+            return self._materialized.span(name=name, input=input, metadata=metadata)
+        return _DeferredSpan(
+            self,
+            kind="span",
+            kwargs={"name": name, "input": input, "metadata": metadata},
+        )
+
+    def generation(
+        self,
+        *,
+        name: str,
+        model: str,
+        input: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> GenerationHandle:
+        if self._materialized is not None:
+            return self._materialized.generation(
+                name=name,
+                model=model,
+                input=input,
+                metadata=metadata,
+            )
+        return _DeferredGeneration(
+            self,
+            kwargs={"name": name, "model": model, "input": input, "metadata": metadata},
+        )
+
+    def update(
+        self,
+        *,
+        output: Any | None = None,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        level: str | None = None,
+        status_message: str | None = None,
+    ) -> None:
+        if self._materialized is not None:
+            self._materialized.update(
+                output=output,
+                metadata=metadata,
+                tags=tags,
+                level=level,
+                status_message=status_message,
+            )
+            return
+        self._append_operation(
+            {
+                "kind": "update",
+                "kwargs": {
+                    "output": output,
+                    "metadata": metadata,
+                    "tags": tags,
+                    "level": level,
+                    "status_message": status_message,
+                },
+            }
+        )
+
+    def promote(
+        self,
+        *,
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+    ) -> None:
+        if self._materialized is not None:
+            if metadata or tags:
+                self._materialized.update(metadata=metadata, tags=tags)
+            return
+        materialized = self._service._materialize_trace(
+            init_kwargs=self._init_kwargs,
+            metadata=metadata,
+            tags=tags,
+            sampling_reason=self._sampling_reason,
+        )
+        if materialized is None:
+            return
+        self._materialized = materialized
+        for operation in self._operations:
+            kind = operation["kind"]
+            if kind == "update":
+                self._materialized.update(**operation["kwargs"])
+                continue
+            if kind == "span":
+                span = self._materialized.span(**operation["kwargs"])
+                span.end(**operation["end"])
+                continue
+            if kind == "generation":
+                generation = self._materialized.generation(**operation["kwargs"])
+                generation.end(**operation["end"])
+        self._operations.clear()
+
+    @property
+    def sampled(self) -> bool:
+        return self._sampled or self._materialized is not None
+
 
 def _safe_construct(factory: Any, **kwargs: Any) -> Any | None:
     payload = {key: value for key, value in kwargs.items() if value is not None}
@@ -300,6 +525,9 @@ class ObservabilityService:
     def __init__(self) -> None:
         self._client: _TraceClientProtocol | None = None
         self._enabled = False
+        self._tenant_query_counts: dict[str, int] = defaultdict(int)
+        self._tenant_recent_queries: dict[str, deque[float]] = defaultdict(deque)
+        self._sampling_lock = threading.Lock()
 
     @property
     def enabled(self) -> bool:
@@ -308,6 +536,9 @@ class ObservabilityService:
     def reset(self) -> None:
         self._client = None
         self._enabled = False
+        with self._sampling_lock:
+            self._tenant_query_counts.clear()
+            self._tenant_recent_queries.clear()
 
     def init(self) -> None:
         if self._client is not None or self._enabled:
@@ -346,28 +577,115 @@ class ObservabilityService:
         finally:
             self.reset()
 
+    def _record_tenant_query(self, tenant_id: str) -> tuple[int, int]:
+        with self._sampling_lock:
+            now = time.time()
+            recent = self._tenant_recent_queries[tenant_id]
+            recent.append(now)
+            window_seconds = max(int(settings.trace_rate_window_seconds), 1)
+            cutoff = now - window_seconds
+            while recent and recent[0] < cutoff:
+                recent.popleft()
+            self._tenant_query_counts[tenant_id] += 1
+            total_count = self._tenant_query_counts[tenant_id]
+            recent_count = len(recent)
+            if recent_count == 0:
+                self._tenant_recent_queries.pop(tenant_id, None)
+            return total_count, recent_count
+
+    @staticmethod
+    def _clamp_sample_rate(value: float) -> float:
+        return max(0.0, min(float(value), 1.0))
+
+    def _should_sample(
+        self,
+        *,
+        tenant_id: str | None,
+        force_trace: bool,
+    ) -> tuple[bool, str]:
+        if force_trace:
+            return True, "forced"
+        if tenant_id is None:
+            sample_rate = self._clamp_sample_rate(settings.trace_sample_rate)
+            return random.random() < sample_rate, "default"
+
+        total_count, hourly_count = self._record_tenant_query(tenant_id)
+        if total_count <= int(settings.trace_new_tenant_threshold):
+            return True, "new-tenant"
+
+        if hourly_count > int(settings.trace_high_volume_threshold):
+            sample_rate = self._clamp_sample_rate(settings.trace_high_volume_sample_rate)
+            return random.random() < sample_rate, "high-volume"
+
+        sample_rate = self._clamp_sample_rate(settings.trace_sample_rate)
+        return random.random() < sample_rate, "default"
+
+    def _materialize_trace(
+        self,
+        *,
+        init_kwargs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        sampling_reason: str,
+    ) -> TraceHandle | None:
+        if self._client is None:
+            return None
+        merged_metadata = dict(init_kwargs.get("metadata") or {})
+        if metadata:
+            merged_metadata.update(metadata)
+        merged_metadata.setdefault("sampling_reason", sampling_reason)
+        merged_tags = list(init_kwargs.get("tags") or [])
+        if tags:
+            merged_tags.extend(tags)
+        trace_obj = _safe_construct(
+            self._client.trace,
+            name=init_kwargs["name"],
+            session_id=init_kwargs["session_id"],
+            user_id=init_kwargs.get("user_id"),
+            metadata=merged_metadata,
+            tags=merged_tags,
+        )
+        if trace_obj is None:
+            return None
+        return _LangfuseTrace(trace_obj)
+
     def begin_trace(
         self,
         *,
         name: str,
         session_id: str,
+        tenant_id: str | None = None,
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
+        force_trace: bool = False,
     ) -> TraceHandle:
         if self._client is None:
             return _NoOpTrace()
-        trace_obj = _safe_construct(
-            self._client.trace,
-            name=name,
-            session_id=session_id,
-            user_id=user_id,
-            metadata=metadata,
-            tags=tags,
+        sampled, sampling_reason = self._should_sample(
+            tenant_id=tenant_id,
+            force_trace=force_trace,
         )
-        if trace_obj is None:
-            return _NoOpTrace()
-        return _LangfuseTrace(trace_obj)
+        init_kwargs = {
+            "name": name,
+            "session_id": session_id,
+            "user_id": user_id,
+            "metadata": metadata,
+            "tags": tags,
+        }
+        if sampled:
+            materialized = self._materialize_trace(
+                init_kwargs=init_kwargs,
+                sampling_reason=sampling_reason,
+            )
+            if materialized is not None:
+                return materialized
+        return _DeferredTrace(
+            self,
+            init_kwargs=init_kwargs,
+            sampled=sampled,
+            sampling_reason=sampling_reason,
+        )
 
 
 _service = ObservabilityService()
@@ -389,14 +707,18 @@ def begin_trace(
     *,
     name: str,
     session_id: str,
+    tenant_id: str | None = None,
     user_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
+    force_trace: bool = False,
 ) -> TraceHandle:
     return _service.begin_trace(
         name=name,
         session_id=session_id,
+        tenant_id=tenant_id,
         user_id=user_id,
         metadata=metadata,
         tags=tags,
+        force_trace=force_trace,
     )

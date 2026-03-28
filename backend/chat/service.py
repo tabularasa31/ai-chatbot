@@ -624,9 +624,12 @@ def process_chat_message(
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
 
+    explicit_human_request = detect_human_request(redacted_question)
+
     trace = begin_trace(
         name="rag-query",
         session_id=str(session_id),
+        tenant_id=str(client_id),
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
         metadata={
             "tenant_id": str(client_id),
@@ -637,6 +640,7 @@ def process_chat_message(
             "has_user_context": bool(effective_user_ctx),
         },
         tags=[f"tenant:{client_id}"],
+        force_trace=explicit_human_request,
     )
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
@@ -858,7 +862,6 @@ def process_chat_message(
         name="human-request-detection",
         input={"question": redacted_question},
     )
-    explicit_human_request = detect_human_request(redacted_question)
     human_request_span.end(output={"matched": explicit_human_request})
     if explicit_human_request:
         try:
@@ -966,6 +969,13 @@ def process_chat_message(
             "reliability_score": reliability_score,
         }
     )
+    if reliability_score == "low" or escalate:
+        trace.promote(
+            metadata={
+                "sampling_promoted": True,
+                "promotion_reason": "low_reliability_or_escalation",
+            }
+        )
     if escalate and esc_trigger is not None:
         try:
             preview = chunks_preview_from_results(document_ids, scores, chunk_texts)

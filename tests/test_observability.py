@@ -7,6 +7,7 @@ import types
 import uuid
 
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
+from backend.observability import ObservabilityService
 from backend.observability.formatters import (
     format_embedding_preview,
     format_query_embedding_preview,
@@ -88,7 +89,6 @@ def test_observability_noops_when_config_missing(monkeypatch) -> None:
 
     assert service.enabled is False
 
-
 def test_observability_can_reinit_after_shutdown(monkeypatch) -> None:
     class FakeLangfuse:
         instances = 0
@@ -164,3 +164,137 @@ def test_safe_invoke_drops_unsupported_generation_end_arguments() -> None:
     )
 
     assert received == {"output": "done"}
+
+
+class _FakeSpan:
+    def __init__(self) -> None:
+        self.ended_with = None
+
+    def end(self, **kwargs):
+        self.ended_with = kwargs
+
+
+class _FakeTrace:
+    def __init__(self, **kwargs) -> None:
+        self.init_kwargs = kwargs
+        self.spans = []
+        self.generations = []
+        self.updates = []
+
+    def span(self, **kwargs):
+        span = _FakeSpan()
+        self.spans.append((kwargs, span))
+        return span
+
+    def generation(self, **kwargs):
+        generation = _FakeSpan()
+        self.generations.append((kwargs, generation))
+        return generation
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
+class _FakeClient:
+    def __init__(self) -> None:
+        self.traces = []
+
+    def trace(self, **kwargs):
+        trace = _FakeTrace(**kwargs)
+        self.traces.append(trace)
+        return trace
+
+    def flush(self):
+        return None
+
+
+def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    trace_a = service.begin_trace(
+        name="rag-query",
+        session_id="sess-a",
+        tenant_id="tenant-1",
+    )
+    trace_b = service.begin_trace(
+        name="rag-query",
+        session_id="sess-b",
+        tenant_id="tenant-1",
+    )
+
+    assert trace_a.sampled is False
+    assert trace_b.sampled is False
+
+    trace_b.span(name="vector-search", input={"query": "hello"}).end(output={"chunks": []})
+    trace_b.update(output={"answer": "hi"})
+    trace_b.promote(metadata={"promotion_reason": "test"})
+
+    assert len(service._client.traces) == 1
+    materialized = service._client.traces[0]
+    assert materialized.init_kwargs["session_id"] == "sess-b"
+    assert materialized.init_kwargs["metadata"]["promotion_reason"] == "test"
+    assert materialized.init_kwargs["metadata"]["sampling_reason"] == "high-volume"
+    assert materialized.spans[0][0]["name"] == "vector-search"
+    assert materialized.updates[0]["output"] == {"answer": "hi"}
+
+
+def test_force_trace_bypasses_sampling(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    trace = service.begin_trace(
+        name="rag-query",
+        session_id="forced-session",
+        tenant_id="tenant-2",
+        force_trace=True,
+    )
+
+    assert trace.sampled is True
+    assert len(service._client.traces) == 1
+    assert service._client.traces[0].init_kwargs["metadata"]["sampling_reason"] == "forced"
+
+
+def test_promote_updates_metadata_for_already_sampled_trace(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 1.0)
+
+    trace = service.begin_trace(
+        name="rag-query",
+        session_id="sampled-session",
+        tenant_id="tenant-3",
+    )
+    trace.promote(metadata={"promotion_reason": "low_reliability_or_escalation"})
+
+    assert len(service._client.traces) == 1
+    assert service._client.traces[0].updates == [
+        {"metadata": {"promotion_reason": "low_reliability_or_escalation"}}
+    ]
+
+
+def test_deferred_span_end_is_idempotent(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+    deferred = service.begin_trace(
+        name="rag-query",
+        session_id="deferred-session",
+    )
+
+    span = deferred.span(name="vector-search", input={"query": "hello"})
+    span.end(output={"chunks": []})
+    span.end(output={"chunks": ["duplicate"]})
+
+    assert len(deferred._operations) == 1

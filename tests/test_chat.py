@@ -348,6 +348,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
             variant_mode="multi",
             query_variant_count=3,
             extra_embedded_queries=2,
+            extra_embedding_api_requests=0,
             extra_vector_search_calls=2,
             retrieval_duration_ms=18.4,
         ),
@@ -379,6 +380,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["metadata"]["variant_mode"] == "multi"
     assert fake_trace.update_calls[-1]["metadata"]["query_variant_count"] == 3
     assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["extra_embedding_api_requests"] == 0
     assert fake_trace.update_calls[-1]["metadata"]["extra_vector_search_calls"] == 2
     assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]

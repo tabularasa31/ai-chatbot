@@ -63,6 +63,7 @@ class SearchResultBundle:
     embedded_query_count: int = 1
     extra_embedded_queries: int = 0
     embedding_api_request_count: int = 1
+    extra_embedding_api_requests: int = 0
     vector_search_call_count: int = 0
     extra_vector_search_calls: int = 0
     retrieval_duration_ms: float = 0.0
@@ -89,6 +90,7 @@ def build_variant_trace_metadata(bundle: SearchResultBundle) -> dict[str, object
         "variant_mode": bundle.variant_mode,
         "query_variant_count": bundle.query_variant_count,
         "extra_embedded_queries": bundle.extra_embedded_queries,
+        "extra_embedding_api_requests": bundle.extra_embedding_api_requests,
         "extra_vector_search_calls": bundle.extra_vector_search_calls,
         "retrieval_duration_ms": bundle.retrieval_duration_ms,
     }
@@ -613,6 +615,7 @@ def search_similar_chunks_detailed(
     query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
     embedded_query_count = len(query_variants)
     extra_embedded_queries = max(embedded_query_count - 1, 0)
+    extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
     query_vector = variant_vectors[0]
     query_script_bucket = detect_query_script_bucket(query)
     if trace is not None:
@@ -629,6 +632,7 @@ def search_similar_chunks_detailed(
                 "embedded_query_count": embedded_query_count,
                 "extra_embedded_queries": extra_embedded_queries,
                 "embedding_api_request_count": embedding_api_request_count,
+                "extra_embedding_api_requests": extra_embedding_api_requests,
                 "duration_ms": query_embedding_duration_ms,
             }
         )
@@ -676,6 +680,7 @@ def search_similar_chunks_detailed(
             embedded_query_count=embedded_query_count,
             extra_embedded_queries=extra_embedded_queries,
             embedding_api_request_count=embedding_api_request_count,
+            extra_embedding_api_requests=extra_embedding_api_requests,
             vector_search_call_count=vector_search_call_count,
             extra_vector_search_calls=extra_vector_search_calls,
             retrieval_duration_ms=retrieval_duration_ms,
@@ -734,6 +739,7 @@ def search_similar_chunks_detailed(
             embedded_query_count=embedded_query_count,
             extra_embedded_queries=extra_embedded_queries,
             embedding_api_request_count=embedding_api_request_count,
+            extra_embedding_api_requests=extra_embedding_api_requests,
             vector_search_call_count=vector_search_call_count,
             extra_vector_search_calls=extra_vector_search_calls,
             retrieval_duration_ms=retrieval_duration_ms,
@@ -802,6 +808,7 @@ def search_similar_chunks_detailed(
             embedded_query_count=embedded_query_count,
             extra_embedded_queries=extra_embedded_queries,
             embedding_api_request_count=embedding_api_request_count,
+            extra_embedding_api_requests=extra_embedding_api_requests,
             vector_search_call_count=vector_search_call_count,
             extra_vector_search_calls=extra_vector_search_calls,
             retrieval_duration_ms=retrieval_duration_ms,
@@ -962,6 +969,7 @@ def search_similar_chunks_detailed(
         embedded_query_count=embedded_query_count,
         extra_embedded_queries=extra_embedded_queries,
         embedding_api_request_count=embedding_api_request_count,
+        extra_embedding_api_requests=extra_embedding_api_requests,
         vector_search_call_count=vector_search_call_count,
         extra_vector_search_calls=extra_vector_search_calls,
         retrieval_duration_ms=retrieval_duration_ms,

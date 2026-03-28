@@ -119,6 +119,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
         "embedded_query_count": 1,
         "extra_embedded_queries": 0,
         "embedding_api_request_count": 1,
+        "extra_embedding_api_requests": 0,
         "duration_ms": trace.spans[1].output["duration_ms"],
     }
     assert trace.spans[-1].output == {
@@ -194,12 +195,14 @@ def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> 
     assert bundle.embedded_query_count == 3
     assert bundle.extra_embedded_queries == 2
     assert bundle.embedding_api_request_count == 1
+    assert bundle.extra_embedding_api_requests == 0
     assert bundle.vector_search_call_count == 3
     assert bundle.extra_vector_search_calls == 2
     assert query_embedding_span.output == {
         "embedded_query_count": 3,
         "extra_embedded_queries": 2,
         "embedding_api_request_count": 1,
+        "extra_embedding_api_requests": 0,
         "duration_ms": query_embedding_span.output["duration_ms"],
     }
     assert vector_span.output is not None
@@ -811,6 +814,7 @@ def test_search_route_traces_variant_summary(
             embedded_query_count=3,
             extra_embedded_queries=2,
             embedding_api_request_count=1,
+            extra_embedding_api_requests=0,
             vector_search_call_count=3,
             extra_vector_search_calls=2,
             retrieval_duration_ms=12.5,
@@ -836,6 +840,7 @@ def test_search_route_traces_variant_summary(
                 "variant_mode": "multi",
                 "query_variant_count": 3,
                 "extra_embedded_queries": 2,
+                "extra_embedding_api_requests": 0,
                 "extra_vector_search_calls": 2,
                 "retrieval_duration_ms": 12.5,
             },

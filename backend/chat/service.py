@@ -165,6 +165,7 @@ def retrieve_context(
             variant_mode=bundle.variant_mode,
             query_variant_count=bundle.query_variant_count,
             extra_embedded_queries=bundle.extra_embedded_queries,
+            extra_embedding_api_requests=bundle.extra_embedding_api_requests,
             extra_vector_search_calls=bundle.extra_vector_search_calls,
             retrieval_duration_ms=bundle.retrieval_duration_ms,
         )
@@ -207,6 +208,7 @@ def retrieve_context(
         variant_mode=bundle.variant_mode,
         query_variant_count=bundle.query_variant_count,
         extra_embedded_queries=bundle.extra_embedded_queries,
+        extra_embedding_api_requests=bundle.extra_embedding_api_requests,
         extra_vector_search_calls=bundle.extra_vector_search_calls,
         retrieval_duration_ms=bundle.retrieval_duration_ms,
     )
@@ -230,6 +232,7 @@ class RetrievalContext:
     variant_mode: Literal["single", "multi"] = "single"
     query_variant_count: int = 1
     extra_embedded_queries: int = 0
+    extra_embedding_api_requests: int = 0
     extra_vector_search_calls: int = 0
     retrieval_duration_ms: float = 0.0
 

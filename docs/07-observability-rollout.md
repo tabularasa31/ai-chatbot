@@ -80,6 +80,7 @@ Parent trace metadata and tags:
 - `variant_mode`: `single` or `multi`
 - `query_variant_count`
 - `extra_embedded_queries`
+- `extra_embedding_api_requests`
 - `extra_vector_search_calls`
 - `retrieval_duration_ms`
 - tag: `variants:single` or `variants:multi`
@@ -96,6 +97,7 @@ Parent trace metadata and tags:
 - `embedded_query_count`
 - `extra_embedded_queries`
 - `embedding_api_request_count`
+- `extra_embedding_api_requests`
 - `duration_ms`
 
 `vector-search` span output:
@@ -109,6 +111,7 @@ Interpretation:
 
 - primary cost signal: `extra_embedded_queries`
 - secondary transport signal: `embedding_api_request_count`
+- transport delta signal: `extra_embedding_api_requests`
 - pgvector fan-out signal: `extra_vector_search_calls`
 - latency should be compared at two levels:
   - end-to-end request trace latency
@@ -135,6 +138,7 @@ Recommended review steps:
 4. Check work amplification:
    - avg/p95 `query_variant_count`
    - avg/p95 `extra_embedded_queries`
+   - avg/p95 `extra_embedding_api_requests`
    - avg/p95 `extra_vector_search_calls`
 5. Sample a few high-tail `multi` traces and inspect `query-expansion` outputs to see whether extra variants are meaningfully different or just punctuation/token-order noise.
 

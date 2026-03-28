@@ -19,6 +19,7 @@ Primary signals:
 - p50 / p95 `retrieval_duration_ms`
 - p50 / p95 `query_variant_count`
 - p50 / p95 `extra_embedded_queries`
+- p50 / p95 `extra_embedding_api_requests`
 - p50 / p95 `extra_vector_search_calls`
 
 Supporting signals:
@@ -40,6 +41,7 @@ Trace metadata:
 - `variant_mode`
 - `query_variant_count`
 - `extra_embedded_queries`
+- `extra_embedding_api_requests`
 - `extra_vector_search_calls`
 - `retrieval_duration_ms`
 
@@ -78,7 +80,8 @@ Fill this with real production numbers.
 
 - `multi` should justify its extra work with a small enough latency delta to remain operationally cheap.
 - `retrieval_duration_ms` matters more than total latency when generation variance is high.
-- `embedding_api_request_count` should usually stay flat because variants are batched; if cost rises, it will mostly show up in `extra_embedded_queries`.
+- `embedding_api_request_count` should usually stay flat because variants are batched.
+- `extra_embedding_api_requests` should usually stay at `0`; if it rises, batching or retries changed and transport overhead is no longer flat.
 - `extra_vector_search_calls` is the clearest pgvector workload amplifier.
 - Slow `multi` traces with nearly duplicate variants are stronger evidence for guardrails than slow traces with clearly distinct variants.
 

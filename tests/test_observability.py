@@ -319,6 +319,7 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
             "embedded_query_count": 3,
             "extra_embedded_queries": 2,
             "embedding_api_request_count": 1,
+            "extra_embedding_api_requests": 0,
             "duration_ms": 4.2,
         }
     )
@@ -328,6 +329,7 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
             "variant_mode": "multi",
             "query_variant_count": 3,
             "extra_embedded_queries": 2,
+            "extra_embedding_api_requests": 0,
             "extra_vector_search_calls": 2,
             "retrieval_duration_ms": 16.8,
         },

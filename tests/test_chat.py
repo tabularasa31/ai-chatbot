@@ -88,6 +88,34 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["max_tokens"] == 500
 
 
+def test_generate_answer_ends_generation_on_openai_error(mock_openai_client: Mock) -> None:
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_handle = FakeGeneration()
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            return self.generation_handle
+
+    trace = FakeTrace()
+    mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_answer("What?", ["chunk1"], api_key="sk-test", trace=trace)
+
+    assert len(trace.generation_handle.end_calls) == 1
+    end_call = trace.generation_handle.end_calls[0]
+    assert end_call["level"] == "ERROR"
+    assert end_call["status_message"] == "boom"
+    assert "duration_ms" in end_call["metadata"]
+
+
 # --- API tests ---
 
 

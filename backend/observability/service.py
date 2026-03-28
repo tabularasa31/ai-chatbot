@@ -333,6 +333,9 @@ class ObservabilityService:
             self._client.flush()
         except Exception:
             logger.exception("Failed to flush Langfuse client during shutdown")
+        finally:
+            self._client = None
+            self._enabled = False
 
     def begin_trace(
         self,

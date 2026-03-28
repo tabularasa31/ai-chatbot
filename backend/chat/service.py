@@ -306,31 +306,44 @@ def generate_answer(
             },
         )
     started_at = perf_counter()
-    response = openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=500,
-    )
-    answer_text = response.choices[0].message.content or ""
-    total_tokens = response.usage.total_tokens if response.usage else 0
-    if generation is not None:
-        prompt_tokens = _safe_int(getattr(response.usage, "prompt_tokens", 0) if response.usage else 0)
-        completion_tokens = _safe_int(
-            getattr(response.usage, "completion_tokens", 0) if response.usage else 0
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=500,
         )
-        generation.end(
-            output=answer_text.strip(),
-            usage={
-                "input": prompt_tokens,
-                "output": completion_tokens,
-            },
-            metadata={
-                "total_tokens": _safe_int(total_tokens),
-                "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-            },
-        )
-    return (answer_text.strip(), total_tokens)
+        answer_text = response.choices[0].message.content or ""
+        total_tokens = response.usage.total_tokens if response.usage else 0
+        if generation is not None:
+            prompt_tokens = _safe_int(
+                getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
+            )
+            completion_tokens = _safe_int(
+                getattr(response.usage, "completion_tokens", 0) if response.usage else 0
+            )
+            generation.end(
+                output=answer_text.strip(),
+                usage={
+                    "input": prompt_tokens,
+                    "output": completion_tokens,
+                },
+                metadata={
+                    "total_tokens": _safe_int(total_tokens),
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
+        return (answer_text.strip(), total_tokens)
+    except Exception as exc:
+        if generation is not None:
+            generation.end(
+                metadata={
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                },
+                level="ERROR",
+                status_message=str(exc),
+            )
+        raise
 
 
 def validate_answer(

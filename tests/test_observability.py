@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+import types
 import uuid
 
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
@@ -10,7 +12,7 @@ from backend.observability.formatters import (
     format_query_embedding_preview,
     truncate_text,
 )
-from backend.observability.service import get_observability
+from backend.observability.service import _safe_construct, _safe_invoke, get_observability
 
 
 def test_truncate_text_keeps_short_input() -> None:
@@ -85,3 +87,80 @@ def test_observability_noops_when_config_missing(monkeypatch) -> None:
     trace.update(output={"answer": "hi"})
 
     assert service.enabled is False
+
+
+def test_observability_can_reinit_after_shutdown(monkeypatch) -> None:
+    class FakeLangfuse:
+        instances = 0
+
+        def __init__(self, **kwargs) -> None:
+            type(self).instances += 1
+            self.kwargs = kwargs
+            self.flushed = False
+
+        def flush(self) -> None:
+            self.flushed = True
+
+    service = get_observability()
+    service._client = None
+    service._enabled = False
+    monkeypatch.setattr("backend.observability.service.settings.langfuse_host", "https://langfuse.test")
+    monkeypatch.setattr("backend.observability.service.settings.langfuse_public_key", "pk-test")
+    monkeypatch.setattr("backend.observability.service.settings.langfuse_secret_key", "sk-test")
+    monkeypatch.setitem(sys.modules, "langfuse", types.SimpleNamespace(Langfuse=FakeLangfuse))
+
+    service.init()
+    first_client = service._client
+
+    assert service.enabled is True
+    assert first_client is not None
+
+    service.shutdown()
+
+    assert first_client.flushed is True
+    assert service._client is None
+    assert service.enabled is False
+
+    service.init()
+
+    assert service.enabled is True
+    assert service._client is not None
+    assert service._client is not first_client
+    assert FakeLangfuse.instances == 2
+
+    service.shutdown()
+
+
+def test_safe_construct_drops_unsupported_metadata_argument() -> None:
+    def factory(*, name: str, input: dict[str, str]) -> dict[str, object]:
+        return {"name": name, "input": input}
+
+    result = _safe_construct(
+        factory,
+        name="vector-search",
+        input={"query": "hello"},
+        metadata={"tenant_id": "tenant-1"},
+    )
+
+    assert result == {
+        "name": "vector-search",
+        "input": {"query": "hello"},
+    }
+
+
+def test_safe_invoke_drops_unsupported_generation_end_arguments() -> None:
+    received: dict[str, object] = {}
+
+    def end(*, output: str) -> None:
+        received["output"] = output
+
+    _safe_invoke(
+        end,
+        output="done",
+        metadata={"duration_ms": 12.3},
+        usage={"input": 10, "output": 5},
+        level="ERROR",
+        status_message="boom",
+    )
+
+    assert received == {"output": "done"}

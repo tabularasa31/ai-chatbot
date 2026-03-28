@@ -10,6 +10,8 @@ from backend.models import PiiEvent
 
 
 def run(retention_days: int) -> int:
+    if retention_days < 30:
+        raise ValueError("retention_days must be >= 30")
     db = SessionLocal()
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)

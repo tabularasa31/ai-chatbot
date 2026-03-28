@@ -184,4 +184,5 @@ def delete_escalation_original(
             )
         )
         db.commit()
+        db.refresh(ticket)
     return OriginalContentDeleteResponse(deleted_count=deleted_count)

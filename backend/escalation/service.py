@@ -376,11 +376,8 @@ def delete_ticket_original_content(
     if ticket.primary_question_original_encrypted is None:
         return ticket, 0
     ticket.primary_question_original_encrypted = None
-    if ticket.primary_question_redacted:
-        ticket.primary_question = ticket.primary_question_redacted
+    ticket.primary_question = ticket.primary_question_redacted or ""
     db.add(ticket)
-    db.commit()
-    db.refresh(ticket)
     return ticket, 1
 
 

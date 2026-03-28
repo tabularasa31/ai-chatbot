@@ -25,18 +25,30 @@ const OPTIONAL_TYPES: Array<{
   },
 ];
 
+function normalizePrivacyConfig(config: PrivacyConfigResponse): PrivacyConfigResponse {
+  return {
+    ...config,
+    optional_entity_types: [...config.optional_entity_types].sort(),
+  };
+}
+
 export default function PrivacySettingsPage() {
   const [config, setConfig] = useState<PrivacyConfigResponse>({ optional_entity_types: [] });
+  const [savedConfig, setSavedConfig] = useState<PrivacyConfigResponse>({ optional_entity_types: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [savedOk, setSavedOk] = useState(false);
+  const isDirty =
+    JSON.stringify(normalizePrivacyConfig(config)) !==
+    JSON.stringify(normalizePrivacyConfig(savedConfig));
 
   const load = useCallback(async () => {
     setError("");
     try {
       const data = await api.privacy.get();
       setConfig(data);
+      setSavedConfig(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load privacy settings");
     } finally {
@@ -55,6 +67,7 @@ export default function PrivacySettingsPage() {
     try {
       const updated = await api.privacy.update(config);
       setConfig(updated);
+      setSavedConfig(updated);
       setSavedOk(true);
       setTimeout(() => setSavedOk(false), 2500);
     } catch (e) {
@@ -73,6 +86,12 @@ export default function PrivacySettingsPage() {
           : [...current.optional_entity_types, value].sort(),
       };
     });
+  }
+
+  function handleReset() {
+    setConfig(savedConfig);
+    setSavedOk(false);
+    setError("");
   }
 
   return (
@@ -126,6 +145,12 @@ export default function PrivacySettingsPage() {
               </p>
             </div>
 
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              {isDirty
+                ? "You have unsaved privacy changes."
+                : "No unsaved privacy changes."}
+            </div>
+
             <div className="space-y-3">
               {OPTIONAL_TYPES.map((opt) => {
                 const checked = config.optional_entity_types.includes(opt.value);
@@ -153,14 +178,24 @@ export default function PrivacySettingsPage() {
               })}
             </div>
 
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700"
-            >
-              {saving ? "Saving…" : "Save"}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={saving || !isDirty}
+                className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700"
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={saving || !isDirty}
+                className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-medium disabled:opacity-50 hover:bg-slate-50"
+              >
+                Reset changes
+              </button>
+            </div>
           </section>
         </>
       )}

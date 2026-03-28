@@ -1021,9 +1021,7 @@ def delete_session_original_content(
         if message.content_original_encrypted is None:
             continue
         message.content_original_encrypted = None
-        if message.content_redacted:
-            message.content = message.content_redacted
+        message.content = message.content_redacted or ""
         db.add(message)
         deleted_count += 1
-    db.commit()
     return chat, deleted_count

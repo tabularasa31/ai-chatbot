@@ -649,6 +649,69 @@ class ObservabilityService:
             return None
         return _LangfuseTrace(trace_obj)
 
+    def _record_tenant_query(self, tenant_id: str) -> tuple[int, int]:
+        now = time.time()
+        recent = self._tenant_recent_queries[tenant_id]
+        recent.append(now)
+        window_seconds = max(int(settings.trace_rate_window_seconds), 1)
+        cutoff = now - window_seconds
+        while recent and recent[0] < cutoff:
+            recent.popleft()
+        self._tenant_query_counts[tenant_id] += 1
+        return self._tenant_query_counts[tenant_id], len(recent)
+
+    def _should_sample(
+        self,
+        *,
+        tenant_id: str | None,
+        force_trace: bool,
+    ) -> tuple[bool, str]:
+        if force_trace:
+            return True, "forced"
+        if tenant_id is None:
+            sample_rate = float(settings.trace_sample_rate)
+            return random.random() < sample_rate, "default"
+
+        total_count, hourly_count = self._record_tenant_query(tenant_id)
+        if total_count <= int(settings.trace_new_tenant_threshold):
+            return True, "new-tenant"
+
+        if hourly_count > int(settings.trace_high_volume_threshold):
+            sample_rate = float(settings.trace_high_volume_sample_rate)
+            return random.random() < sample_rate, "high-volume"
+
+        sample_rate = float(settings.trace_sample_rate)
+        return random.random() < sample_rate, "default"
+
+    def _materialize_trace(
+        self,
+        *,
+        init_kwargs: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        tags: list[str] | None = None,
+        sampling_reason: str,
+    ) -> TraceHandle | None:
+        if self._client is None:
+            return None
+        merged_metadata = dict(init_kwargs.get("metadata") or {})
+        if metadata:
+            merged_metadata.update(metadata)
+        merged_metadata.setdefault("sampling_reason", sampling_reason)
+        merged_tags = list(init_kwargs.get("tags") or [])
+        if tags:
+            merged_tags.extend(tags)
+        trace_obj = _safe_construct(
+            self._client.trace,
+            name=init_kwargs["name"],
+            session_id=init_kwargs["session_id"],
+            user_id=init_kwargs.get("user_id"),
+            metadata=merged_metadata,
+            tags=merged_tags,
+        )
+        if trace_obj is None:
+            return None
+        return _LangfuseTrace(trace_obj)
+
     def begin_trace(
         self,
         *,

@@ -14,6 +14,7 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     FALLBACK_LOW_CONFIDENCE_ANSWER,
     RetrievalContext,
+    build_rag_messages,
     build_rag_prompt,
     generate_answer,
     retrieve_context,
@@ -47,6 +48,15 @@ def test_build_rag_prompt_empty_chunks() -> None:
     assert "Question: Q?" in result
     assert "(none)" in result
     assert "[Response level: standard]" in result
+
+
+def test_build_rag_messages_splits_system_and_user_parts() -> None:
+    system_prompt, user_message = build_rag_messages("What is X?", ["chunk1", "chunk2"])
+    assert "Hard limits" in system_prompt
+    assert "Context:" not in system_prompt
+    assert "chunk1" in user_message
+    assert "chunk2" in user_message
+    assert "Question: What is X?" in user_message
 
 
 def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
@@ -86,6 +96,8 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     mock_openai_client.chat.completions.create.assert_called_once()
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["messages"][0]["role"] == "system"
+    assert call_kwargs["messages"][1]["role"] == "user"
     assert call_kwargs["temperature"] == 0.2
     assert call_kwargs["max_tokens"] == 500
 
@@ -159,17 +171,19 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
 
     generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
 
+    system_prompt, user_message = build_rag_messages("What?", ["secret internal KB chunk"])
     assert trace.generation_input == [
-        {
-            "role": "user",
-            "content": build_rag_prompt("What?", ["secret internal KB chunk"]),
-        }
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
     ]
     assert trace.generation_metadata == {
         "temperature": 0.2,
         "max_tokens": 500,
         "context_chunk_count": 1,
         "captures_full_prompt": True,
+        "finish_reason_expected": "stop_or_length",
+        "system_prompt": system_prompt,
+        "context_chunks": ["secret internal KB chunk"],
     }
 
 

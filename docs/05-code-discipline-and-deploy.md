@@ -218,6 +218,11 @@ Please ask before making changes.
 
 ## Git Workflow
 
+## Observability Deploy Note
+
+The Langfuse rollout checklist and current spec coverage live in:
+`docs/07-observability-rollout.md`
+
 ### Initial Setup
 
 ```bash

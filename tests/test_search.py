@@ -10,7 +10,19 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.search.service import bm25_search_chunks, cosine_similarity
+from backend.search.service import (
+    apply_script_boost,
+    bm25_search_chunks,
+    compute_reliability_score,
+    cosine_similarity,
+    embed_queries,
+    detect_query_script_bucket,
+    detect_conflicts,
+    detect_source_overlaps,
+    expand_query,
+    mmr_select,
+    rerank_candidates,
+)
 
 
 # --- Unit tests for cosine_similarity ---
@@ -80,7 +92,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     )
 
     assert bundle.results == []
-    assert [span.name for span in trace.spans] == ["vector-search"]
+    assert [span.name for span in trace.spans] == ["query-expansion", "vector-search"]
     assert trace.spans[-1].output == {
         "chunks": [],
         "duration_ms": trace.spans[-1].output["duration_ms"],
@@ -98,6 +110,399 @@ def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("model") == "text-embedding-3-small"
     assert call_kwargs.kwargs.get("input") == "test query"
+
+
+def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_client: Mock) -> None:
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 3),
+        Mock(embedding=[0.2] * 3),
+    ]
+
+    vectors = embed_queries(["first", "second"], api_key="sk-test")
+
+    assert vectors == [[0.1] * 3, [0.2] * 3]
+    mock_openai_client.embeddings.create.assert_called_once()
+    call_kwargs = mock_openai_client.embeddings.create.call_args
+    assert call_kwargs.kwargs.get("input") == ["first", "second"]
+
+
+def test_expand_query_deduplicates_and_normalizes() -> None:
+    variants = expand_query("Reset-password!!   reset password")
+    assert variants == [
+        "Reset-password!! reset password",
+        "Reset password reset password",
+        "reset password",
+    ]
+
+
+def test_expand_query_preserves_empty_query_as_single_variant() -> None:
+    assert expand_query("") == [""]
+
+
+def test_rerank_candidates_boosts_lexical_match() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="how to reset your password in the dashboard",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="billing invoice download instructions",
+        metadata_json={"chunk_index": 1},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(second, 0.9), (first, 0.7)],
+        vector_scores={first.id: 0.7, second.id: 0.9},
+        bm25_scores={first.id: 1.0, second.id: 0.1},
+        top_k=2,
+    )
+
+    assert [item[0].id for item in reranked] == [first.id, second.id]
+    assert reranked[0][1] > reranked[1][1]
+
+
+def test_detect_query_script_bucket_distinguishes_cyrillic() -> None:
+    assert detect_query_script_bucket("как сбросить пароль") == "cyrillic"
+    assert detect_query_script_bucket("reset password") == "latin"
+
+
+def test_detect_query_script_bucket_uses_other_for_non_latin_non_cyrillic() -> None:
+    assert detect_query_script_bucket("パスワードをリセット") == "other"
+
+
+def test_detect_query_script_bucket_prefers_cyrillic_for_mixed_script_query() -> None:
+    assert detect_query_script_bucket("OpenAI для русского") == "cyrillic"
+
+
+def test_apply_script_boost_prefers_matching_script_bucket() -> None:
+    from backend.models import Embedding
+
+    english = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings",
+        metadata_json={"language": "en"},
+    )
+    russian = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="сброс пароля в настройках",
+        metadata_json={"language": "ru"},
+    )
+
+    boosted = apply_script_boost(
+        "cyrillic",
+        [(english, 0.81), (russian, 0.79)],
+        top_k=2,
+    )
+
+    assert [item[0].id for item in boosted] == [russian.id, english.id]
+
+
+def test_apply_script_boost_treats_ukrainian_metadata_as_cyrillic() -> None:
+    from backend.models import Embedding
+
+    english = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings",
+        metadata_json={"language": "en"},
+    )
+    ukrainian = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="скинути пароль в налаштуваннях",
+        metadata_json={"language": "uk"},
+    )
+
+    boosted = apply_script_boost(
+        "cyrillic",
+        [(english, 0.81), (ukrainian, 0.79)],
+        top_k=2,
+    )
+
+    assert [item[0].id for item in boosted] == [ukrainian.id, english.id]
+
+
+def test_mmr_select_replaces_near_duplicate_chunk() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    duplicate = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+    diverse = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="download billing invoice from account page",
+        metadata_json={"chunk_index": 2},
+    )
+
+    selection = mmr_select(
+        [(first, 0.95), (duplicate, 0.92), (diverse, 0.7)],
+        top_k=2,
+    )
+    selected = selection.results
+    replacements = selection.replacements
+
+    assert [item[0].id for item in selected] == [first.id, diverse.id]
+    assert selected[0][1] == 0.95
+    assert selected[1][1] == 0.7
+    assert replacements == [
+        {
+            "removed_chunk_id": str(duplicate.id),
+            "replacement_chunk_id": str(diverse.id),
+            "reason": "removed_baseline_redundancy:0.833",
+            "removed_redundancy": 0.833333,
+            "replacement_redundancy": 0.0,
+        }
+    ]
+    assert selection.diagnostics == [
+        {
+            "selected_chunk_id": str(first.id),
+            "selected_rank": 1,
+            "base_score": 0.95,
+            "mmr_score": 0.95,
+            "redundancy_penalty": 0.0,
+        },
+        {
+            "selected_chunk_id": str(diverse.id),
+            "selected_rank": 2,
+            "base_score": 0.7,
+            "mmr_score": 0.49,
+            "redundancy_penalty": 0.0,
+        },
+    ]
+
+
+def test_mmr_select_handles_empty_candidates() -> None:
+    selection = mmr_select([], top_k=3)
+
+    assert selection.results == []
+    assert selection.replacements == []
+    assert selection.diagnostics == []
+
+
+def test_mmr_select_returns_available_candidates_when_fewer_than_top_k(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from backend.models import Embedding
+
+    only = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="single chunk",
+        metadata_json={"chunk_index": 0},
+    )
+
+    selection = mmr_select([(only, 0.88)], top_k=3)
+
+    assert selection.results == [(only, 0.88)]
+    assert any("fewer candidates than requested top_k" in message for message in caplog.messages)
+
+
+def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password steps",
+        metadata_json={"chunk_index": 1},
+    )
+    third = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="password reset troubleshooting",
+        metadata_json={"chunk_index": 2},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(first, 0.9), (second, 0.8), (third, 0.7)],
+        vector_scores={first.id: 0.9, second.id: 0.8, third.id: 0.7},
+        bm25_scores={first.id: 1.0, second.id: 0.8, third.id: 0.6},
+        top_k=3,
+    )
+
+    assert len(reranked) == 3
+    assert reranked[2][1] > 0.0
+
+
+def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password steps",
+        metadata_json={"chunk_index": 1},
+    )
+    third = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="password reset troubleshooting",
+        metadata_json={"chunk_index": 2},
+    )
+
+    reranked = rerank_candidates(
+        "reset password",
+        [(first, 0.9), (second, 0.8), (third, 0.7)],
+        vector_scores={first.id: 0.9, second.id: 0.8, third.id: 0.7},
+        bm25_scores={first.id: 1.0, second.id: 0.8, third.id: 0.6},
+        top_k=3,
+    )
+
+    assert len(reranked) == 3
+    assert reranked[2][1] > 0.0
+
+
+def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    conflicts_found, conflict_pairs, reliability_cap = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
+
+    assert conflicts_found is True
+    assert reliability_cap == "source_overlap"
+    assert conflict_pairs == [
+        {
+            "chunk_a_id": str(first.id),
+            "chunk_b_id": str(second.id),
+            "similarity": 0.8333,
+            "signal_type": "cross_document_overlap",
+            "confirmed_by_llm": False,
+        }
+    ]
+
+
+def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
+    from backend.models import Embedding
+
+    document_id = uuid.uuid4()
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=document_id,
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=document_id,
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    conflicts_found, conflict_pairs, reliability_cap = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
+
+    assert conflicts_found is False
+    assert conflict_pairs == []
+    assert reliability_cap is None
+
+
+def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma delta",
+        metadata_json={"chunk_index": 1},
+    )
+
+    at_threshold = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.75,
+    )
+    above_threshold = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.76,
+    )
+
+    assert at_threshold[0] is True
+    assert above_threshold[0] is False
+
+
+def test_detect_conflicts_aliases_source_overlap_heuristic() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    assert detect_conflicts(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    ) == detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
+
+
+def test_compute_reliability_score_uses_conflicts_and_top_score() -> None:
+    assert compute_reliability_score(top_score=0.9, conflicts_found=False, result_count=5) == "high"
+    assert compute_reliability_score(top_score=0.9, conflicts_found=True, result_count=5) == "medium"
+    assert compute_reliability_score(top_score=0.2, conflicts_found=False, result_count=5) == "low"
+    assert compute_reliability_score(top_score=None, conflicts_found=False, result_count=0) == "low"
 
 
 # --- API tests (all mock OpenAI) ---

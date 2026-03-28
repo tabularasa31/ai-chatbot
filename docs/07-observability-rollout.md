@@ -69,6 +69,9 @@ Implemented as heuristic/interim behavior:
 - in-process tenant sampling counters
 - bounded in-memory deferred trace buffering
 
+Current MMR note:
+the `mmr-pass` stage uses token-set Jaccard similarity over the post-rerank pool and recomputes pairwise comparisons as chunks are selected. Normal current usage is small (`/search` defaults to `top_k=3`, chat retrieval uses `top_k=5`, so MMR usually sees about 6-10 candidates after script boost). That remains acceptable for roughly up to 50 MMR candidates; around 100 candidates it becomes a noticeable hot-path cost, and the schema-allowed worst case (`top_k=100` => up to 200 MMR candidates before selection) is outside the intended operating range until we add a cap or replace the heuristic.
+
 ## Acceptance Criteria Status
 
 `AC-1` Partial.

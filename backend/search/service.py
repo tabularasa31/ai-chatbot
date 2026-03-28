@@ -76,11 +76,6 @@ def detect_query_script_bucket(text: str) -> str:
     return "other"
 
 
-def detect_query_language(text: str) -> str:
-    """Backward-compatible alias for coarse script bucket detection."""
-    return detect_query_script_bucket(text)
-
-
 def _embedding_script_bucket(embedding: Embedding) -> str:
     """Infer a coarse script bucket from embedding metadata or chunk text."""
     meta = embedding.metadata_json or {}
@@ -307,20 +302,6 @@ def apply_script_boost(
     return boosted[:top_k]
 
 
-def apply_language_boost(
-    query_language: str,
-    candidates: list[tuple[Embedding, float]],
-    *,
-    top_k: int,
-) -> list[tuple[Embedding, float]]:
-    """Backward-compatible alias for coarse script-bucket boosting."""
-    return apply_script_boost(
-        query_script_bucket=query_language,
-        candidates=candidates,
-        top_k=top_k,
-    )
-
-
 def _token_set(text: str) -> set[str]:
     return set(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
 
@@ -341,7 +322,16 @@ def mmr_select(
     top_k: int,
     lambda_mult: float = MMR_LAMBDA,
 ) -> MMRSelectionResult:
-    """Select top-k diverse chunks while preserving comparable output scores."""
+    """
+    Select top-k diverse chunks while preserving comparable output scores.
+
+    This is an interim heuristic over a small post-rerank pool. Similarity is
+    lexical Jaccard overlap on token sets, and each selection step recomputes
+    pairwise comparisons against already-selected chunks. That is acceptable for
+    the current bounded usage (typically 6-10 candidates, still reasonable up to
+    roughly 50), but pools approaching 100 candidates become a hot-path cost and
+    should be capped or optimized before we widen them further.
+    """
     if not candidates:
         return MMRSelectionResult(results=[], replacements=[], diagnostics=[])
     if len(candidates) < top_k:
@@ -753,7 +743,7 @@ def search_similar_chunks_detailed(
             }
         )
 
-    language_started_at = perf_counter()
+    script_started_at = perf_counter()
     script_boosted_results = apply_script_boost(
         query_script_bucket,
         reranked_results,
@@ -773,10 +763,12 @@ def search_similar_chunks_detailed(
                     script_boosted_results[:top_k],
                     score_name="script_boost_score",
                 ),
-                "duration_ms": round((perf_counter() - language_started_at) * 1000, 2),
+                "duration_ms": round((perf_counter() - script_started_at) * 1000, 2),
             }
         )
 
+    # Keep MMR on the small post-rerank pool only. The current lexical pairwise
+    # similarity is an interim heuristic, not a large-pool reranker.
     mmr_started_at = perf_counter()
     mmr_selection = mmr_select(
         script_boosted_results,

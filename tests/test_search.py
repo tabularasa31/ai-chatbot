@@ -58,6 +58,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     class FakeSpan:
         def __init__(self, name: str) -> None:
             self.name = name
+            self.input: dict[str, object] | None = None
             self.output: dict[str, object] | None = None
 
         def end(self, **kwargs: object) -> None:
@@ -69,6 +70,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
 
         def span(self, **kwargs: object) -> FakeSpan:
             span = FakeSpan(kwargs["name"])
+            span.input = kwargs["input"]
             self.spans.append(span)
             return span
 
@@ -98,6 +100,116 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
         "duration_ms": trace.spans[-1].output["duration_ms"],
         "total_candidates_scanned": 0,
     }
+
+
+def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
+    monkeypatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import search_similar_chunks_detailed
+
+    class FakeSpan:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.input: dict[str, object] | None = None
+            self.output: dict[str, object] | None = None
+
+        def end(self, **kwargs: object) -> None:
+            self.output = kwargs["output"]
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.spans: list[FakeSpan] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            span = FakeSpan(kwargs["name"])
+            span.input = kwargs["input"]
+            self.spans.append(span)
+            return span
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    cyrillic_primary = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="сброс пароля в настройках аккаунта",
+        metadata_json={"language": "ru", "chunk_index": 0},
+    )
+    cyrillic_duplicate = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="сброс пароля в настройках аккаунта сейчас",
+        metadata_json={"language": "ru", "chunk_index": 1},
+    )
+    latin_diverse = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="download billing invoice from account page",
+        metadata_json={"language": "en", "chunk_index": 2},
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
+    )
+    monkeypatch.setattr(
+        "backend.search.service._pgvector_search",
+        lambda *args, **kwargs: [
+            (cyrillic_primary, 0.95),
+            (cyrillic_duplicate, 0.92),
+            (latin_diverse, 0.7),
+        ],
+    )
+
+    trace = FakeTrace()
+    bundle = search_similar_chunks_detailed(
+        client_id=uuid.uuid4(),
+        query="как сбросить пароль",
+        top_k=3,
+        db=FakeDB(),
+        api_key="sk-test",
+        trace=trace,
+    )
+
+    assert bundle.query_script_bucket == "cyrillic"
+    assert [span.name for span in trace.spans] == [
+        "query-expansion",
+        "vector-search",
+        "bm25-search",
+        "rrf-fusion",
+        "reranking",
+        "script-boost",
+        "mmr-pass",
+        "source-overlap-check",
+    ]
+
+    script_span = next(span for span in trace.spans if span.name == "script-boost")
+    mmr_span = next(span for span in trace.spans if span.name == "mmr-pass")
+    legacy_query_key = "query" + "_language"
+    legacy_boost_key = "language" + "_boost"
+    serialized_trace = repr(
+        [
+            {"name": span.name, "input": span.input, "output": span.output}
+            for span in trace.spans
+        ]
+    )
+
+    assert script_span.input is not None
+    assert script_span.input["query_script_bucket"] == "cyrillic"
+    assert legacy_query_key not in script_span.input
+    assert mmr_span.input is not None
+    assert mmr_span.input["candidate_count"] == 3
+    assert mmr_span.output is not None
+    assert mmr_span.output["selection_diagnostics"]
+    assert "query_script_bucket" in serialized_trace
+    assert "script-boost" in serialized_trace
+    assert "mmr-pass" in serialized_trace
+    assert legacy_query_key not in serialized_trace
+    assert legacy_boost_key not in serialized_trace
 
 
 def test_embed_query_uses_openai_client(mock_openai_client: Mock) -> None:

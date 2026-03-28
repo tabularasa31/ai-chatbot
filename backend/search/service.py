@@ -32,6 +32,8 @@ RERANK_BM25_WEIGHT = 0.20
 RERANK_RRF_WEIGHT = 0.20
 SCRIPT_BOOST_FACTOR = 0.1
 MMR_LAMBDA = 0.7
+CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
+LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,9 @@ def detect_query_script_bucket(text: str) -> str:
     """Detect a coarse script bucket from the query text."""
     if re.search(r"[а-яё]", text.casefold(), flags=re.UNICODE):
         return "cyrillic"
-    return "latin"
+    if re.search(r"[a-z]", text.casefold(), flags=re.UNICODE):
+        return "latin"
+    return "other"
 
 
 def detect_query_language(text: str) -> str:
@@ -74,9 +78,9 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
     language = meta.get("language")
     if isinstance(language, str) and language.strip():
         lowered = language.strip().lower()
-        if lowered.startswith("ru"):
+        if lowered.startswith(CYRILLIC_LANGUAGE_PREFIXES):
             return "cyrillic"
-        if lowered.startswith("en"):
+        if lowered.startswith(LATIN_LANGUAGE_PREFIXES):
             return "latin"
     return detect_query_script_bucket(embedding.chunk_text or "")
 
@@ -319,8 +323,6 @@ def _candidate_similarity(first: Embedding, second: Embedding) -> float:
     if not first_tokens or not second_tokens:
         return 0.0
     union = first_tokens | second_tokens
-    if not union:
-        return 0.0
     return len(first_tokens & second_tokens) / len(union)
 
 
@@ -333,13 +335,20 @@ def mmr_select(
     """Select top-k diverse chunks while preserving comparable output scores."""
     if not candidates:
         return MMRSelectionResult(results=[], replacements=[], diagnostics=[])
+    if len(candidates) < top_k:
+        logger.warning(
+            "MMR received fewer candidates than requested top_k",
+            extra={"candidate_count": len(candidates), "top_k": top_k},
+        )
 
     selected: list[tuple[Embedding, float]] = []
     selected_ids: set[uuid.UUID] = set()
     replacements: list[dict[str, object]] = []
     diagnostics: list[dict[str, object]] = []
-    baseline_top_ids = [embedding.id for embedding, _ in candidates[:top_k]]
+    baseline_top_ids = {embedding.id for embedding, _ in candidates[:top_k]}
+    baseline_top_order = [embedding.id for embedding, _ in candidates[:top_k]]
     baseline_top_map = {embedding.id: embedding for embedding, _ in candidates[:top_k]}
+    displaced_baseline_ids: set[uuid.UUID] = set()
     remaining = list(candidates)
 
     while remaining and len(selected) < top_k:
@@ -373,7 +382,7 @@ def mmr_select(
                 best_similarity = similarity
 
         chosen = remaining.pop(best_index)
-        selected_before_choice = list(selected)
+        selected_snapshot = list(selected)
         selected.append((chosen[0], round(chosen[1], 6)))
         selected_ids.add(chosen[0].id)
         diagnostics.append(
@@ -387,13 +396,14 @@ def mmr_select(
         )
 
         if chosen[0].id not in baseline_top_ids:
-            for baseline_id in baseline_top_ids:
-                if baseline_id not in selected_ids:
+            for baseline_id in baseline_top_order:
+                if baseline_id not in selected_ids and baseline_id not in displaced_baseline_ids:
                     removed_embedding = baseline_top_map[baseline_id]
                     removed_similarity = max(
                         _candidate_similarity(removed_embedding, selected_embedding)
-                        for selected_embedding, _ in selected_before_choice
+                        for selected_embedding, _ in selected_snapshot
                     )
+                    displaced_baseline_ids.add(baseline_id)
                     replacements.append(
                         {
                             "removed_chunk_id": str(baseline_id),
@@ -662,7 +672,7 @@ def search_similar_chunks_detailed(
     script_boosted_results = apply_script_boost(
         query_script_bucket,
         reranked_results,
-        top_k=max(top_k * 2, top_k),
+        top_k=top_k * 2,
     )
     if trace is not None:
         trace.span(

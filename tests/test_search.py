@@ -169,6 +169,14 @@ def test_detect_query_script_bucket_distinguishes_cyrillic() -> None:
     assert detect_query_script_bucket("reset password") == "latin"
 
 
+def test_detect_query_script_bucket_uses_other_for_non_latin_non_cyrillic() -> None:
+    assert detect_query_script_bucket("パスワードをリセット") == "other"
+
+
+def test_detect_query_script_bucket_prefers_cyrillic_for_mixed_script_query() -> None:
+    assert detect_query_script_bucket("OpenAI для русского") == "cyrillic"
+
+
 def test_apply_script_boost_prefers_matching_script_bucket() -> None:
     from backend.models import Embedding
 
@@ -192,6 +200,31 @@ def test_apply_script_boost_prefers_matching_script_bucket() -> None:
     )
 
     assert [item[0].id for item in boosted] == [russian.id, english.id]
+
+
+def test_apply_script_boost_treats_ukrainian_metadata_as_cyrillic() -> None:
+    from backend.models import Embedding
+
+    english = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings",
+        metadata_json={"language": "en"},
+    )
+    ukrainian = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="скинути пароль в налаштуваннях",
+        metadata_json={"language": "uk"},
+    )
+
+    boosted = apply_script_boost(
+        "cyrillic",
+        [(english, 0.81), (ukrainian, 0.79)],
+        top_k=2,
+    )
+
+    assert [item[0].id for item in boosted] == [ukrainian.id, english.id]
 
 
 def test_mmr_select_replaces_near_duplicate_chunk() -> None:
@@ -251,6 +284,32 @@ def test_mmr_select_replaces_near_duplicate_chunk() -> None:
             "redundancy_penalty": 0.0,
         },
     ]
+
+
+def test_mmr_select_handles_empty_candidates() -> None:
+    selection = mmr_select([], top_k=3)
+
+    assert selection.results == []
+    assert selection.replacements == []
+    assert selection.diagnostics == []
+
+
+def test_mmr_select_returns_available_candidates_when_fewer_than_top_k(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from backend.models import Embedding
+
+    only = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="single chunk",
+        metadata_json={"chunk_index": 0},
+    )
+
+    selection = mmr_select([(only, 0.88)], top_k=3)
+
+    assert selection.results == [(only, 0.88)]
+    assert any("fewer candidates than requested top_k" in message for message in caplog.messages)
 
 
 def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candidates() -> None:

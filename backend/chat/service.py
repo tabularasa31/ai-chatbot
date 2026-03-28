@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
+from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
 from backend.disclosure_config import resolve_level
@@ -295,17 +296,23 @@ def generate_answer(
     openai_client = get_openai_client(api_key)
     generation = None
     if trace is not None:
+        generation_input: Any
+        if settings.observability_capture_full_prompts:
+            generation_input = [{"role": "user", "content": prompt}]
+        else:
+            generation_input = {
+                "question_preview": truncate_text(question),
+                "context_chunk_count": len(context_chunks),
+            }
         generation = trace.generation(
             name="llm-generation",
             model="gpt-4o-mini",
-            input={
-                "question_preview": truncate_text(question),
-                "context_chunk_count": len(context_chunks),
-            },
+            input=generation_input,
             metadata={
                 "temperature": 0.2,
                 "max_tokens": 500,
                 "context_chunk_count": len(context_chunks),
+                "captures_full_prompt": settings.observability_capture_full_prompts,
             },
         )
     started_at = perf_counter()

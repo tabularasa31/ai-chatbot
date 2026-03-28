@@ -111,12 +111,64 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
     trace = FakeTrace()
+    from backend.chat import service as chat_service
+
+    assert chat_service.settings.observability_capture_full_prompts is False
 
     generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
 
     assert trace.generation_input == {
         "question_preview": "What?",
         "context_chunk_count": 1,
+    }
+
+
+def test_generate_answer_can_trace_full_prompt_when_enabled(
+    mock_openai_client: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_input: object | None = None
+            self.generation_metadata: object | None = None
+            self.generation_handle = FakeGeneration()
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            self.generation_input = kwargs["input"]
+            self.generation_metadata = kwargs["metadata"]
+            return self.generation_handle
+
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
+    trace = FakeTrace()
+
+    monkeypatch.setattr(
+        "backend.chat.service.settings.observability_capture_full_prompts",
+        True,
+    )
+
+    generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+
+    assert trace.generation_input == [
+        {
+            "role": "user",
+            "content": build_rag_prompt("What?", ["secret internal KB chunk"]),
+        }
+    ]
+    assert trace.generation_metadata == {
+        "temperature": 0.2,
+        "max_tokens": 500,
+        "context_chunk_count": 1,
+        "captures_full_prompt": True,
     }
 
 

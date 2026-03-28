@@ -405,7 +405,7 @@ def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> 
     )
 
     assert conflicts_found is True
-    assert reliability_cap == "medium"
+    assert reliability_cap == "source_overlap"
     assert conflict_pairs == [
         {
             "chunk_a_id": str(first.id),
@@ -415,6 +415,62 @@ def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> 
             "confirmed_by_llm": False,
         }
     ]
+
+
+def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
+    from backend.models import Embedding
+
+    document_id = uuid.uuid4()
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=document_id,
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=document_id,
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    conflicts_found, conflict_pairs, reliability_cap = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
+
+    assert conflicts_found is False
+    assert conflict_pairs == []
+    assert reliability_cap is None
+
+
+def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="alpha beta gamma delta",
+        metadata_json={"chunk_index": 1},
+    )
+
+    at_threshold = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.75,
+    )
+    above_threshold = detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.76,
+    )
+
+    assert at_threshold[0] is True
+    assert above_threshold[0] is False
 
 
 def test_detect_conflicts_aliases_source_overlap_heuristic() -> None:

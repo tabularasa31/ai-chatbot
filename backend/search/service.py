@@ -7,6 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Literal
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
@@ -34,6 +35,10 @@ SCRIPT_BOOST_FACTOR = 0.1
 MMR_LAMBDA = 0.7
 CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
 LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
+MAX_OVERLAP_CHECK_CANDIDATES = 5
+
+ReliabilityScore = Literal["low", "medium", "high"]
+ReliabilityCapReason = Literal["source_overlap"]
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +52,10 @@ class SearchResultBundle:
     best_keyword_score: float | None = None
     query_variants: list[str] | None = None
     query_script_bucket: str | None = None
-    source_overlap_detected: bool = False
-    source_overlap_pairs: list[dict[str, object]] | None = None
     conflicts_found: bool = False
     conflict_pairs: list[dict[str, object]] | None = None
-    reliability_score: str | None = None
-    reliability_cap_reason: str | None = None
-    reliability_score_cap: str | None = None
+    reliability_score: ReliabilityScore | None = None
+    reliability_cap_reason: ReliabilityCapReason | None = None
 
 
 @dataclass
@@ -433,15 +435,24 @@ def detect_source_overlaps(
     candidates: list[tuple[Embedding, float]],
     *,
     similarity_threshold: float = 0.75,
-) -> tuple[bool, list[dict[str, object]], str | None]:
-    """Detect cross-document overlap as a coarse retrieval warning signal."""
+) -> tuple[bool, list[dict[str, object]], ReliabilityCapReason | None]:
+    """Detect cross-document overlap on the final top-k result set only."""
+    if len(candidates) > MAX_OVERLAP_CHECK_CANDIDATES:
+        logger.warning(
+            "Source overlap detection received more candidates than expected; truncating",
+            extra={
+                "candidate_count": len(candidates),
+                "max_candidates": MAX_OVERLAP_CHECK_CANDIDATES,
+            },
+        )
+    bounded_candidates = candidates[:MAX_OVERLAP_CHECK_CANDIDATES]
     overlap_pairs: list[dict[str, object]] = []
-    for index, (first, _) in enumerate(candidates):
-        for second, _ in candidates[index + 1 :]:
+    for index, (first, _) in enumerate(bounded_candidates):
+        for second, _ in bounded_candidates[index + 1 :]:
+            if first.document_id == second.document_id:
+                continue
             similarity = _candidate_similarity(first, second)
             if similarity < similarity_threshold:
-                continue
-            if first.document_id == second.document_id:
                 continue
             overlap_pairs.append(
                 {
@@ -452,14 +463,14 @@ def detect_source_overlaps(
                     "confirmed_by_llm": False,
                 }
             )
-    return bool(overlap_pairs), overlap_pairs, ("medium" if overlap_pairs else None)
+    return bool(overlap_pairs), overlap_pairs, ("source_overlap" if overlap_pairs else None)
 
 
 def detect_conflicts(
     candidates: list[tuple[Embedding, float]],
     *,
     similarity_threshold: float = 0.75,
-) -> tuple[bool, list[dict[str, object]], str | None]:
+) -> tuple[bool, list[dict[str, object]], ReliabilityCapReason | None]:
     """Backward-compatible alias for the interim source-overlap heuristic."""
     return detect_source_overlaps(
         candidates,
@@ -472,7 +483,7 @@ def compute_reliability_score(
     top_score: float | None,
     conflicts_found: bool,
     result_count: int,
-) -> str:
+) -> ReliabilityScore:
     """Compute a coarse reliability bucket for the final answer trace."""
     if result_count == 0 or top_score is None:
         return "low"
@@ -793,12 +804,9 @@ def search_similar_chunks_detailed(
         )
 
     overlap_started_at = perf_counter()
-    source_overlap_detected, source_overlap_pairs, reliability_cap_reason = detect_source_overlaps(
+    conflicts_found, conflict_pairs, reliability_cap_reason = detect_source_overlaps(
         final_results
     )
-    conflicts_found = source_overlap_detected
-    conflict_pairs = source_overlap_pairs
-    reliability_score_cap = reliability_cap_reason
     if trace is not None:
         trace.span(
             name="source-overlap-check",
@@ -808,20 +816,17 @@ def search_similar_chunks_detailed(
             },
         ).end(
             output={
-                "source_overlap_detected": source_overlap_detected,
-                "source_overlap_pairs": source_overlap_pairs,
-                "reliability_cap_reason": reliability_cap_reason,
                 "semantic_conflict_detection": False,
                 "conflicts_found": conflicts_found,
                 "conflict_pairs": conflict_pairs,
-                "reliability_score_cap": reliability_score_cap,
+                "reliability_cap_reason": reliability_cap_reason,
                 "duration_ms": round((perf_counter() - overlap_started_at) * 1000, 2),
             }
         )
 
     reliability_score = compute_reliability_score(
         top_score=final_results[0][1] if final_results else None,
-        conflicts_found=source_overlap_detected,
+        conflicts_found=conflicts_found,
         result_count=len(final_results),
     )
 
@@ -831,13 +836,10 @@ def search_similar_chunks_detailed(
         best_keyword_score=best_keyword_score,
         query_variants=query_variants,
         query_script_bucket=query_script_bucket,
-        source_overlap_detected=source_overlap_detected,
-        source_overlap_pairs=source_overlap_pairs,
         conflicts_found=conflicts_found,
         conflict_pairs=conflict_pairs,
         reliability_score=reliability_score,
         reliability_cap_reason=reliability_cap_reason,
-        reliability_score_cap=reliability_score_cap,
     )
 
 

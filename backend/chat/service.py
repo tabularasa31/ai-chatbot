@@ -149,13 +149,10 @@ def retrieve_context(
             best_rank_score=None,
             best_confidence_score=None,
             confidence_source="none",
-            source_overlap_detected=bundle.source_overlap_detected,
-            source_overlap_pairs=bundle.source_overlap_pairs,
             conflicts_found=bundle.conflicts_found,
             conflict_pairs=bundle.conflict_pairs,
             reliability_score=bundle.reliability_score,
             reliability_cap_reason=bundle.reliability_cap_reason,
-            reliability_score_cap=bundle.reliability_score_cap,
         )
 
     best_rank_score = results[0][1]
@@ -189,13 +186,10 @@ def retrieve_context(
         best_rank_score=best_rank_score,
         best_confidence_score=best_confidence_score,
         confidence_source=confidence_source,
-        source_overlap_detected=bundle.source_overlap_detected,
-        source_overlap_pairs=bundle.source_overlap_pairs,
         conflicts_found=bundle.conflicts_found,
         conflict_pairs=bundle.conflict_pairs,
         reliability_score=bundle.reliability_score,
         reliability_cap_reason=bundle.reliability_cap_reason,
-        reliability_score_cap=bundle.reliability_score_cap,
     )
 
 
@@ -210,13 +204,10 @@ class RetrievalContext:
     best_rank_score: float | None
     best_confidence_score: float | None
     confidence_source: Literal["vector_similarity", "rank_score", "none"]
-    source_overlap_detected: bool = False
-    source_overlap_pairs: list[dict[str, object]] | None = None
     conflicts_found: bool = False
     conflict_pairs: list[dict[str, object]] | None = None
     reliability_score: Literal["low", "medium", "high"] | None = None
-    reliability_cap_reason: Literal["medium"] | None = None
-    reliability_score_cap: Literal["medium"] | None = None
+    reliability_cap_reason: Literal["source_overlap"] | None = None
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1033,11 +1024,8 @@ def process_chat_message(
             "best_rank_score": retrieval.best_rank_score,
             "best_confidence_score": retrieval.best_confidence_score,
             "reliability_score": reliability_score,
-            "source_overlap_detected": retrieval.source_overlap_detected,
-            "source_overlap_pairs": retrieval.source_overlap_pairs,
             "reliability_cap_reason": retrieval.reliability_cap_reason,
             "semantic_conflict_detection": False,
-            "reliability_score_cap": retrieval.reliability_score_cap,
             "conflicts_found": retrieval.conflicts_found,
             "conflict_pairs": retrieval.conflict_pairs,
             "validation": validation,
@@ -1098,8 +1086,6 @@ def run_debug(
         "best_confidence_score": retrieval.best_confidence_score,
         "confidence_source": retrieval.confidence_source,
         "reliability_score": retrieval.reliability_score,
-        "source_overlap_detected": retrieval.source_overlap_detected,
-        "source_overlap_pairs": retrieval.source_overlap_pairs,
         "reliability_cap_reason": retrieval.reliability_cap_reason,
         "semantic_conflict_detection": False,
         "conflicts_found": retrieval.conflicts_found,

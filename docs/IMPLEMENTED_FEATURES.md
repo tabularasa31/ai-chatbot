@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-27 (URL-source page deletion in Knowledge)
+**Last updated:** 2026-03-28 (query-variant retrieval observability)
 
 ---
 
@@ -47,6 +47,7 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
 | **FI-008 / FI-019 ext** | Hybrid: pgvector + BM25 + RRF (Postgres); SQLite tests: cosine only | `backend/search/service.py`, `rank-bm25` |
+| **FI-115** | Query-variant retrieval observability: variant fan-out counts, embedding/vector-call deltas, retrieval stage timings, root trace parity for chat and `/search`, variant segmentation tags | `backend/search/service.py`, `backend/search/routes.py`, `backend/chat/service.py`, `docs/07-observability-rollout.md`, `docs/qa/FI-115-query-variant-cost.md` |
 | RAG pipeline | Retrieve → prompt → generate → persist messages | `backend/chat/service.py` `process_chat_message`, `POST /chat` (X-API-Key) |
 | **FI-034** | LLM answer validation; fallback on low confidence | `validate_answer()`, `POST /chat/debug` → `validation` |
 | **FI-043 + privacy hardening** | Regex PII redaction before OpenAI plus encrypted original storage, redacted-safe logs/escalations, tenant privacy settings, `pii_events` audit log, original-content access/delete controls, retention cleanup, Privacy Log UI + CSV export | `backend/chat/pii.py`, `backend/chat/service.py`, `backend/escalation/service.py`, `backend/admin/routes.py`, `frontend/app/(app)/settings/privacy/page.tsx`, `frontend/app/(app)/admin/privacy/page.tsx` |
@@ -92,6 +93,7 @@
 | pgvector + HNSW | Native vector column + index | migration `dd643d1a544a`, `embeddings.vector` |
 | **FI-026** | GitHub Actions on `main` + `deploy`: backend Ruff + pytest + coverage; frontend ESLint + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
 | Coverage hardening (2026-03-24) | Added high-risk regression tests for escalation state machine, manual escalation endpoint, auth reset flow, and retrieval edge/error paths; stable `/search` OpenAI error contract (`503`) | `tests/test_chat.py`, `tests/test_escalation.py`, `tests/test_auth.py`, `tests/test_search.py`, `tests/pgvector_tests/test_search_pgvector.py`, `backend/search/routes.py` |
+| Retrieval observability (2026-03-28) | Root traces for chat + `/search`; query-variant cost/latency fields; tenant-tag-preserving variant segmentation; regression coverage for sampled and deferred traces | `backend/observability/service.py`, `tests/test_observability.py`, `tests/test_search.py`, `tests/test_chat.py` |
 | Developer test runbook | Engineer-focused grouped test commands for local/CI runs | `docs/06-developer-test-runbook.md` |
 | Deploy | `main` vs `deploy`, Vercel + Railway; promote via PR after green CI | see `PROGRESS.md` → Infrastructure |
 

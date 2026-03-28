@@ -16,6 +16,7 @@ from backend.search.service import (
     compute_reliability_score,
     cosine_similarity,
     embed_queries,
+    embed_queries_with_stats,
     detect_query_script_bucket,
     detect_conflicts,
     detect_source_overlaps,
@@ -80,7 +81,10 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     class FakeDB:
         bind = FakeBind()
 
-    monkeypatch.setattr("backend.search.service.embed_query", lambda *args, **kwargs: [0.1] * 3)
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
+    )
     monkeypatch.setattr("backend.search.service._pgvector_search", lambda *args, **kwargs: [])
 
     trace = FakeTrace()
@@ -94,12 +98,118 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     )
 
     assert bundle.results == []
-    assert [span.name for span in trace.spans] == ["query-expansion", "vector-search"]
+    assert bundle.variant_mode == "single"
+    assert bundle.query_variant_count == 1
+    assert bundle.extra_embedded_queries == 0
+    assert bundle.extra_vector_search_calls == 0
+    assert bundle.embedding_api_request_count == 1
+    assert bundle.vector_search_call_count == 1
+    assert [span.name for span in trace.spans] == [
+        "query-expansion",
+        "query-embedding",
+        "vector-search",
+    ]
+    assert trace.spans[0].output == {
+        "variants": ["hello"],
+        "query_variant_count": 1,
+        "variant_mode": "single",
+        "extra_variant_count": 0,
+    }
+    assert trace.spans[1].output == {
+        "embedded_query_count": 1,
+        "extra_embedded_queries": 0,
+        "embedding_api_request_count": 1,
+        "extra_embedding_api_requests": 0,
+        "duration_ms": trace.spans[1].output["duration_ms"],
+    }
     assert trace.spans[-1].output == {
         "chunks": [],
         "duration_ms": trace.spans[-1].output["duration_ms"],
         "total_candidates_scanned": 0,
+        "vector_search_call_count": 1,
+        "extra_vector_search_calls": 0,
     }
+
+
+def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> None:
+    from backend.models import Embedding
+    from backend.search.service import search_similar_chunks_detailed
+
+    class FakeSpan:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.input: dict[str, object] | None = None
+            self.output: dict[str, object] | None = None
+
+        def end(self, **kwargs: object) -> None:
+            self.output = kwargs["output"]
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.spans: list[FakeSpan] = []
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            span = FakeSpan(kwargs["name"])
+            span.input = kwargs["input"]
+            self.spans.append(span)
+            return span
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password instructions",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
+    )
+    monkeypatch.setattr(
+        "backend.search.service._pgvector_search",
+        lambda *args, **kwargs: [(embedding, 0.91)],
+    )
+
+    trace = FakeTrace()
+    bundle = search_similar_chunks_detailed(
+        client_id=uuid.uuid4(),
+        query="Reset-password!!   reset password",
+        top_k=3,
+        db=FakeDB(),
+        api_key="sk-test",
+        trace=trace,
+    )
+
+    query_embedding_span = next(span for span in trace.spans if span.name == "query-embedding")
+    vector_span = next(span for span in trace.spans if span.name == "vector-search")
+
+    assert bundle.query_variant_count == 3
+    assert bundle.variant_mode == "multi"
+    assert bundle.extra_variant_count == 2
+    assert bundle.embedded_query_count == 3
+    assert bundle.extra_embedded_queries == 2
+    assert bundle.embedding_api_request_count == 1
+    assert bundle.extra_embedding_api_requests == 0
+    assert bundle.vector_search_call_count == 3
+    assert bundle.extra_vector_search_calls == 2
+    assert query_embedding_span.output == {
+        "embedded_query_count": 3,
+        "extra_embedded_queries": 2,
+        "embedding_api_request_count": 1,
+        "extra_embedding_api_requests": 0,
+        "duration_ms": query_embedding_span.output["duration_ms"],
+    }
+    assert vector_span.output is not None
+    assert vector_span.output["vector_search_call_count"] == 3
+    assert vector_span.output["extra_vector_search_calls"] == 2
+    assert bundle.retrieval_duration_ms >= bundle.query_embedding_duration_ms
+    assert bundle.retrieval_duration_ms >= bundle.vector_search_duration_ms
 
 
 def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
@@ -178,6 +288,7 @@ def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
     assert bundle.query_script_bucket == "cyrillic"
     assert [span.name for span in trace.spans] == [
         "query-expansion",
+        "query-embedding",
         "vector-search",
         "bm25-search",
         "rrf-fusion",
@@ -236,6 +347,24 @@ def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_clie
     mock_openai_client.embeddings.create.assert_called_once()
     call_kwargs = mock_openai_client.embeddings.create.call_args
     assert call_kwargs.kwargs.get("input") == ["first", "second"]
+
+
+def test_embed_queries_with_stats_reports_actual_request_count(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.embeddings.create.return_value.data = [
+        Mock(embedding=[0.1] * 3),
+        Mock(embedding=[0.2] * 3),
+    ]
+
+    vectors, request_count = embed_queries_with_stats(
+        ["first", "second"],
+        api_key="sk-test",
+    )
+
+    assert vectors == [[0.1] * 3, [0.2] * 3]
+    assert request_count == 1
+    mock_openai_client.embeddings.create.assert_called_once()
 
 
 def test_expand_query_deduplicates_and_normalizes() -> None:
@@ -642,6 +771,82 @@ def test_search_no_embeddings(
     assert response.status_code == 200
     data = response.json()
     assert data["results"] == []
+
+
+def test_search_route_traces_variant_summary(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.search.service import SearchResultBundle
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.update_calls: list[dict[str, object]] = []
+
+        def span(self, **kwargs: object):
+            class FakeSpan:
+                def end(self, **kwargs: object) -> None:
+                    return None
+
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            self.update_calls.append(kwargs)
+
+    token = register_and_verify_user(client, db_session, email="trace-search@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Search Client"},
+    )
+    set_client_openai_key(client, token)
+
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
+    monkeypatch.setattr(
+        "backend.search.routes.search_similar_chunks_detailed",
+        lambda **kwargs: SearchResultBundle(
+            results=[],
+            query_variant_count=3,
+            variant_mode="multi",
+            extra_variant_count=2,
+            embedded_query_count=3,
+            extra_embedded_queries=2,
+            embedding_api_request_count=1,
+            extra_embedding_api_requests=0,
+            vector_search_call_count=3,
+            extra_vector_search_calls=2,
+            retrieval_duration_ms=12.5,
+            query_embedding_duration_ms=2.5,
+            vector_search_duration_ms=7.5,
+        ),
+    )
+
+    response = client.post(
+        "/search",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"query": "Reset-password!!   reset password", "top_k": 3},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"results": []}
+    assert fake_trace.update_calls == [
+        {
+            "output": {"result_count": 0},
+            "metadata": {
+                "route": "/search",
+                "search_result_count": 0,
+                "variant_mode": "multi",
+                "query_variant_count": 3,
+                "extra_embedded_queries": 2,
+                "extra_embedding_api_requests": 0,
+                "extra_vector_search_calls": 2,
+                "retrieval_duration_ms": 12.5,
+            },
+            "tags": ["variants:multi"],
+        }
+    ]
 
 
 def test_search_single_embedding_match(

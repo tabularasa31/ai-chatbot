@@ -15,6 +15,19 @@ from backend.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _merge_tags(*tag_lists: list[str] | None) -> list[str]:
+    """Merge trace tags while preserving order and removing duplicates."""
+    merged: list[str] = []
+    seen: set[str] = set()
+    for tag_list in tag_lists:
+        for tag in tag_list or []:
+            if tag in seen:
+                continue
+            seen.add(tag)
+            merged.append(tag)
+    return merged
+
+
 class _TraceClientProtocol(Protocol):
     def trace(self, **kwargs: Any) -> Any:
         ...
@@ -218,6 +231,7 @@ class _LangfuseGeneration(GenerationHandle):
 @dataclass
 class _LangfuseTrace(TraceHandle):
     trace_obj: Any
+    tags: list[str]
 
     def span(
         self,
@@ -270,7 +284,8 @@ class _LangfuseTrace(TraceHandle):
         if metadata:
             payload["metadata"] = metadata
         if tags:
-            payload["tags"] = tags
+            self.tags = _merge_tags(self.tags, tags)
+            payload["tags"] = self.tags
         if level is not None:
             payload["level"] = level
         if status_message is not None:
@@ -596,9 +611,7 @@ class ObservabilityService:
         if metadata:
             merged_metadata.update(metadata)
         merged_metadata.setdefault("sampling_reason", sampling_reason)
-        merged_tags = list(init_kwargs.get("tags") or [])
-        if tags:
-            merged_tags.extend(tags)
+        merged_tags = _merge_tags(init_kwargs.get("tags"), tags)
         trace_obj = _safe_construct(
             self._client.trace,
             name=init_kwargs["name"],
@@ -609,7 +622,7 @@ class ObservabilityService:
         )
         if trace_obj is None:
             return None
-        return _LangfuseTrace(trace_obj)
+        return _LangfuseTrace(trace_obj, tags=merged_tags)
 
     def begin_trace(
         self,

@@ -1,7 +1,16 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-27 (UTC) — URL-source page deletion in Knowledge
+**Last updated:** 2026-03-28 (UTC) — query-variant retrieval observability
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-28) — query-variant retrieval observability
+
+- ✅ **FI-115 instrumentation:** retrieval now records query-variant fan-out and added work in traces: variant count/mode, extra embedded inputs, extra embedding API requests, extra vector-search calls, and retrieval/embedding/vector stage durations.
+- ✅ **Trace coverage parity:** direct `POST /search` requests now emit lightweight root traces, so query-cost measurements are available outside chat flow too.
+- ✅ **Tagging fix:** variant tags now merge with existing tenant tags for both sampled and deferred traces, preserving tenant-level segmentation.
+- ✅ **Docs + runbook:** observability rollout notes updated; added `docs/qa/FI-115-query-variant-cost.md` as the production evidence template for p50/p95 single-vs-multi review.
 
 ---
 
@@ -151,6 +160,10 @@
   - SQLite (тесты): только Python cosine, без BM25 (как в спеке промпта)
   - Debug API: режим **`hybrid`** на Postgres; на SQLite по-прежнему **vector / keyword** по порогу косинуса
   - Зависимость: `backend/requirements.txt` → `rank-bm25>=0.2.2`
+- ✅ **FI-115** — observability for deterministic query variants before retrieval
+  - root traces now carry `variant_mode`, `query_variant_count`, `extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`, `retrieval_duration_ms`
+  - search stages expose `query-expansion`, `query-embedding`, and richer `vector-search` payloads for latency/cost comparison
+  - direct `/search` now has trace parity with chat; evaluation runbook lives in `docs/qa/FI-115-query-variant-cost.md`
 
 ### RAG / embeddings
 - ✅ **FI-009** — Sentence-aware chunking + метаданные эмбеддингов (`feature/fi-009-improved-chunking`)
@@ -250,9 +263,9 @@
 4. **FI-041** — Status page integration (real-time incident awareness)
 
 ### Medium-term (P3):
-5. **Langfuse tracing** (LLM observability)
-6. **Per-client system prompt**
-7. **Multiple file upload**
+5. **Per-client system prompt**
+6. **Multiple file upload**
+7. **FI-115 production review** — collect p50/p95 single-vs-multi evidence and decide on guardrails (`max_variants`, normalization, caching)
 
 ---
 
@@ -264,6 +277,7 @@
 - ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
+- ✅ Retrieval observability (Langfuse-style traces for chat + `/search`, including query-variant cost/latency fields)
 - ✅ Multi-tenant isolation (client_id scoping)
 - ✅ Chat widget (embeddable, ~6KB vanilla JS)
 - ✅ Zero-config widget embed (public_id + iframe)

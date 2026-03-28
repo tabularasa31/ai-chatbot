@@ -72,7 +72,8 @@ Key recommendations added to this backlog:
 - Add pytest-postgresql or separate profile with real PostgreSQL.
 
 ### [FI-030] RAG metrics & observability
-- Integrate Langfuse / Phoenix for per-request tracing.
+- Baseline Langfuse-style per-request tracing is already shipped (`rag-query`, `/search`, retrieval-stage spans, query-variant cost/latency fields).
+- Remaining work: validate against a real Langfuse deployment and decide which derived metrics/alerts should become productized.
 - RAGAS / DeepEval metrics: faithfulness, context precision, answer relevance.
 - Cost per query per tenant.
 

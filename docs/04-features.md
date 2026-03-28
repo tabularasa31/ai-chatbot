@@ -184,6 +184,16 @@ The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60): a c
 
 > Note: in the test environment (SQLite), pgvector is not available — tests use Python cosine similarity only. BM25 is not applied in tests.
 
+### Retrieval observability (FI-115)
+
+Retrieval is instrumented with Langfuse-style traces for both chat requests and direct `/search` calls. The search path now records:
+
+- query variant fan-out (`variant_mode`, `query_variant_count`)
+- extra work caused by expansion (`extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`)
+- timing split (`retrieval_duration_ms`, `query-embedding`, `vector-search`)
+
+This makes it possible to compare p50/p95 latency for single-variant vs multi-variant requests without changing retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
+
 ---
 
 ## 5. RAG Chat Pipeline

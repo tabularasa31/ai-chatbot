@@ -24,7 +24,7 @@ export function Navigation() {
               Docs
             </a>
             <a
-              href="https://github.com/tabularasa31/ai-chatbot"
+              href="https://github.com/tabularasa31/chat9-sdks"
               target="_blank"
               rel="noopener noreferrer"
               className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
@@ -78,7 +78,7 @@ export function Navigation() {
                   Docs
                 </a>
                 <a
-                  href="https://github.com/tabularasa31/ai-chatbot"
+                  href="https://github.com/tabularasa31/chat9-sdks"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"

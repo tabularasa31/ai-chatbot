@@ -16,6 +16,7 @@ from backend.chat.service import (
     RetrievalContext,
     build_rag_prompt,
     generate_answer,
+    process_chat_message,
     validate_answer,
 )
 
@@ -86,6 +87,200 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["model"] == "gpt-4o-mini"
     assert call_kwargs["temperature"] == 0.2
     assert call_kwargs["max_tokens"] == 500
+
+
+def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_input: object | None = None
+            self.generation_handle = FakeGeneration()
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            self.generation_input = kwargs["input"]
+            return self.generation_handle
+
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
+    trace = FakeTrace()
+    from backend.chat import service as chat_service
+
+    assert chat_service.settings.observability_capture_full_prompts is False
+
+    generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+
+    assert trace.generation_input == {
+        "question_preview": "What?",
+        "context_chunk_count": 1,
+    }
+
+
+def test_generate_answer_can_trace_full_prompt_when_enabled(
+    mock_openai_client: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_input: object | None = None
+            self.generation_metadata: object | None = None
+            self.generation_handle = FakeGeneration()
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            self.generation_input = kwargs["input"]
+            self.generation_metadata = kwargs["metadata"]
+            return self.generation_handle
+
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
+    trace = FakeTrace()
+
+    monkeypatch.setattr(
+        "backend.chat.service.settings.observability_capture_full_prompts",
+        True,
+    )
+
+    generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+
+    assert trace.generation_input == [
+        {
+            "role": "user",
+            "content": build_rag_prompt("What?", ["secret internal KB chunk"]),
+        }
+    ]
+    assert trace.generation_metadata == {
+        "temperature": 0.2,
+        "max_tokens": 500,
+        "context_chunk_count": 1,
+        "captures_full_prompt": True,
+    }
+
+
+def test_generate_answer_ends_generation_on_openai_error(mock_openai_client: Mock) -> None:
+    class FakeGeneration:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.generation_handle = FakeGeneration()
+
+        def generation(self, **kwargs: object) -> FakeGeneration:
+            return self.generation_handle
+
+    trace = FakeTrace()
+    mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        generate_answer("What?", ["chunk1"], api_key="sk-test", trace=trace)
+
+    assert len(trace.generation_handle.end_calls) == 1
+    end_call = trace.generation_handle.end_calls[0]
+    assert end_call["level"] == "ERROR"
+    assert end_call["status_message"] == "boom"
+    assert "duration_ms" in end_call["metadata"]
+
+
+def test_process_chat_message_ends_followup_span_on_exception(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, Client, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    class FakeSpan:
+        def __init__(self) -> None:
+            self.end_calls: list[dict[str, object]] = []
+
+        def end(self, **kwargs: object) -> None:
+            self.end_calls.append(kwargs)
+
+    class FakeTrace:
+        def __init__(self) -> None:
+            self.followup_span = FakeSpan()
+
+        def span(self, **kwargs: object) -> FakeSpan:
+            if kwargs["name"] == "escalation-followup":
+                return self.followup_span
+            return FakeSpan()
+
+        def update(self, **kwargs: object) -> None:
+            return None
+
+    token = register_and_verify_user(client, db_session, email="trace-followup@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Trace Client"},
+    )
+    set_client_openai_key(client, token)
+    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    chat = Chat(
+        client_id=client_row.id,
+        session_id=uuid.uuid4(),
+        user_context={},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_row.id,
+        ticket_number="ESC-0001",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    fake_trace = FakeTrace()
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        process_chat_message(
+            client_row.id,
+            "no thanks",
+            chat.session_id,
+            db_session,
+            api_key=cl_resp.json()["api_key"],
+        )
+
+    assert fake_trace.followup_span.end_calls == [
+        {
+            "output": {"error": True},
+            "level": "ERROR",
+            "status_message": "boom",
+        }
+    ]
 
 
 # --- API tests ---

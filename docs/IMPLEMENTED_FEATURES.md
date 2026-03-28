@@ -49,7 +49,7 @@
 | **FI-008 / FI-019 ext** | Hybrid: pgvector + BM25 + RRF (Postgres); SQLite tests: cosine only | `backend/search/service.py`, `rank-bm25` |
 | RAG pipeline | Retrieve → prompt → generate → persist messages | `backend/chat/service.py` `process_chat_message`, `POST /chat` (X-API-Key) |
 | **FI-034** | LLM answer validation; fallback on low confidence | `validate_answer()`, `POST /chat/debug` → `validation` |
-| **FI-043** | Regex PII redaction before OpenAI; original in `Message.content` | `backend/chat/pii.py` |
+| **FI-043 + privacy hardening** | Regex PII redaction before OpenAI plus encrypted original storage, redacted-safe logs/escalations, tenant privacy settings, `pii_events` audit log, original-content access/delete controls, retention cleanup, Privacy Log UI + CSV export | `backend/chat/pii.py`, `backend/chat/service.py`, `backend/escalation/service.py`, `backend/admin/routes.py`, `frontend/app/(app)/settings/privacy/page.tsx`, `frontend/app/(app)/admin/privacy/page.tsx` |
 | **FI-ESC v1** | L2 escalation: tickets (DB + tenant email), triggers (low similarity, no chunks, human phrase, manual), OpenAI JSON handoff UX, `chat_ended` on `POST /chat` | `backend/escalation/`, `process_chat_message`, `POST /chat/{session_id}/escalate`, JWT `GET/POST /escalations*`, migration `fi_esc_v1` |
 | Sessions / logs / feedback | Session list, logs, thumbs, ideal answer, bad answers | `GET /chat/sessions`, logs, feedback, bad-answers |
 

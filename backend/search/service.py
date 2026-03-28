@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from time import perf_counter
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, Embedding
+from backend.observability import TraceHandle
+from backend.observability.formatters import (
+    format_embedding_results,
+    format_query_embedding_preview,
+)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
@@ -170,6 +176,7 @@ def search_similar_chunks_detailed(
     db: Session,
     *,
     api_key: str,
+    trace: TraceHandle | None = None,
 ) -> SearchResultBundle:
     """
     Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
@@ -180,7 +187,25 @@ def search_similar_chunks_detailed(
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
+        vector_started_at = perf_counter()
         results = _python_cosine_search(client_id, query_vector, top_k, db)
+        if trace is not None:
+            trace.span(
+                name="vector-search",
+                input={
+                    "query_embedding": format_query_embedding_preview(query_vector),
+                    "query": query,
+                    "tenant_id": str(client_id),
+                    "top_k": top_k,
+                    "engine": "python-cosine",
+                },
+            ).end(
+                output={
+                    "chunks": format_embedding_results(results, score_name="similarity_score"),
+                    "duration_ms": round((perf_counter() - vector_started_at) * 1000, 2),
+                    "total_candidates_scanned": len(results),
+                }
+            )
         return SearchResultBundle(
             results=results,
             best_vector_similarity=results[0][1] if results else None,
@@ -188,13 +213,65 @@ def search_similar_chunks_detailed(
 
     # Fetch a wider candidate pool via the HNSW index so BM25 has enough coverage.
     # BM25 then re-ranks only these candidates — no separate full-table scan.
+    vector_started_at = perf_counter()
     vector_candidates = _pgvector_search(client_id, query_vector, BM25_CANDIDATE_POOL, db)
+    vector_duration_ms = round((perf_counter() - vector_started_at) * 1000, 2)
 
     if not vector_candidates:
+        if trace is not None:
+            trace.span(
+                name="vector-search",
+                input={
+                    "query_embedding": format_query_embedding_preview(query_vector),
+                    "query": query,
+                    "tenant_id": str(client_id),
+                    "top_k": BM25_CANDIDATE_POOL,
+                    "engine": "pgvector",
+                },
+            ).end(
+                output={
+                    "chunks": [],
+                    "duration_ms": vector_duration_ms,
+                    "total_candidates_scanned": 0,
+                }
+            )
         return SearchResultBundle(results=[])
 
     vector_embs = [emb for emb, _ in vector_candidates]
+    if trace is not None:
+        trace.span(
+            name="vector-search",
+            input={
+                "query_embedding": format_query_embedding_preview(query_vector),
+                "query": query,
+                "tenant_id": str(client_id),
+                "top_k": BM25_CANDIDATE_POOL,
+                "engine": "pgvector",
+            },
+        ).end(
+            output={
+                "chunks": format_embedding_results(
+                    vector_candidates[:top_k * 2],
+                    score_name="similarity_score",
+                ),
+                "duration_ms": vector_duration_ms,
+                "total_candidates_scanned": len(vector_candidates),
+            }
+        )
+
+    bm25_started_at = perf_counter()
     bm25_results = _bm25_score_candidates(vector_embs, query, top_k * 2)
+    bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
+    if trace is not None:
+        trace.span(
+            name="bm25-search",
+            input={"query": query, "tenant_id": str(client_id), "top_k": top_k * 2},
+        ).end(
+            output={
+                "chunks": format_embedding_results(bm25_results, score_name="bm25_score"),
+                "duration_ms": bm25_duration_ms,
+            }
+        )
     vector_for_rrf = vector_candidates[:top_k * 2]
     best_vector_similarity = vector_candidates[0][1] if vector_candidates else None
     best_keyword_score = bm25_results[0][1] if bm25_results else None
@@ -206,8 +283,34 @@ def search_similar_chunks_detailed(
             best_keyword_score=best_keyword_score,
         )
 
+    rrf_started_at = perf_counter()
+    fused_results = reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k)
+    rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
+    if trace is not None:
+        trace.span(
+            name="rrf-fusion",
+            input={
+                "vector_results": format_embedding_results(
+                    vector_for_rrf,
+                    score_name="similarity_score",
+                ),
+                "bm25_results": format_embedding_results(
+                    bm25_results,
+                    score_name="bm25_score",
+                ),
+            },
+        ).end(
+            output={
+                "merged_chunks": format_embedding_results(
+                    fused_results,
+                    score_name="rrf_score",
+                ),
+                "duration_ms": rrf_duration_ms,
+            }
+        )
+
     return SearchResultBundle(
-        results=reciprocal_rank_fusion(vector_for_rrf, bm25_results, top_k=top_k),
+        results=fused_results,
         best_vector_similarity=best_vector_similarity,
         best_keyword_score=best_keyword_score,
     )

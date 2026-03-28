@@ -10,12 +10,15 @@ Security, isolation, abuse protection.
 **Problem (was):** User messages went directly to OpenAI (embeddings + completion + validation) with potential PII.
 
 **Implemented:**
-- `backend/chat/pii.py` — pure-regex redaction: `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CREDIT_CARD]` (Tier 1A).
+- `backend/chat/pii.py` — regex redaction with structured metadata: `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[PASSWORD]`, `[ID_DOC]`, `[IP]`, `[URL_TOKEN]`.
 - `backend/chat/service.py` — `redact()` before `retrieve_context()`, `generate_answer()`, and `validate_answer()` in `process_chat_message()` and `run_debug()`.
-- Original question remains in `Message.content` for tenant admin context; redacted text only crosses the OpenAI boundary.
+- Original text is stored encrypted in `messages.content_original_encrypted`; redacted text is stored in `messages.content_redacted` and legacy `messages.content`.
+- Escalation tickets use the same split storage (`primary_question_original_encrypted`, `primary_question_redacted`) and default to redacted outbound payloads.
+- `pii_events` stores audit rows for redaction, original-view, and original-delete events; admin Privacy Log UI supports safe review, CSV export, and retention cleanup.
+- Tenant admins can manage optional regex entity toggles in `Settings → Privacy`; original-content access is safe-first and audit-logged.
 - Tests: `tests/chat/test_pii.py`.
 
-**Still out of scope (v2 / FI-044):** Presidio NER, tenant toggles, ingestion scanning, GDPR deletion flows — see FI-044 below.
+**Still out of scope (v2 / FI-044):** Presidio NER / locale-aware Tier 2 entities, ingestion scanning, richer GDPR workflows beyond current original-content deletion support — see FI-044 below.
 
 **Spec reference:** `specs/pii-redaction-spec.docx` (FR-1, FR-2 Tier 1, FR-3.1 Stage 1 only, FR-4)
 
@@ -56,9 +59,7 @@ Security, isolation, abuse protection.
 - Tier 2 entities: full names, addresses, passport numbers, INN
 - Language auto-detection per session
 - Tenant config: which Tier 2/3 entity types are active
-- Audit log UI: Settings → Privacy → Redaction Log (CSV export, 12mo retention)
-- Tenant admin: can view original text in dashboard (own users only, access logged)
-- GDPR deletion: `content_original` deleted on request, `content_redacted` retained
+- Existing shipped foundation to extend: regex privacy settings, redacted-first logs/escalations, encrypted original storage, audit log UI, original-content access logging, retention cleanup, and current original-content deletion endpoints
 
 **Infrastructure cost:** ~500MB spaCy models on Railway, +50–200ms latency per message
 **Spec reference:** `specs/pii-redaction-spec.docx` (full spec)

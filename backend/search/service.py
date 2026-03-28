@@ -81,6 +81,15 @@ class MMRSelectionResult:
     diagnostics: list[dict[str, object]]
 
 
+@dataclass
+class VectorCandidateSet:
+    """Shared vector candidate-set construction output before lexical stages."""
+
+    candidates: list[tuple[Embedding, float]]
+    call_count: int
+    duration_ms: float
+
+
 def _embedding_tiebreak_key(embedding: Embedding) -> tuple[str, int, str]:
     """Deterministic secondary key for equal-score ordering."""
     meta = embedding.metadata_json or {}
@@ -234,6 +243,9 @@ def _bm25_score_candidates_with_signal(
     if not scored:
         return [], False
 
+    # Signal detection is intentionally separate from ranking features. We use
+    # token overlap only to decide whether a lexical branch participated at all;
+    # downstream reranking still applies its own lexical feature weighting.
     lexical_overlap_scored = [
         (embedding, _lexical_overlap_score(query, embedding.chunk_text or ""))
         for embedding in candidates
@@ -266,6 +278,37 @@ def _bm25_score_candidates(
 ) -> list[tuple[Embedding, float]]:
     scored, _ = _bm25_score_candidates_with_signal(candidates, query, top_k)
     return scored
+
+
+def _build_vector_candidate_set(
+    client_id: uuid.UUID,
+    variant_vectors: list[list[float]],
+    db: Session,
+    *,
+    vector_search_fn,
+) -> VectorCandidateSet:
+    """Acquire, merge, dedupe, and truncate vector candidates across variants."""
+    vector_started_at = perf_counter()
+    vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
+    vector_search_call_count = 0
+    for variant_vector in variant_vectors:
+        vector_search_call_count += 1
+        for embedding, similarity in vector_search_fn(
+            client_id,
+            variant_vector,
+            BM25_CANDIDATE_POOL,
+            db,
+        ):
+            existing = vector_candidate_map.get(embedding.id)
+            if existing is None or similarity > existing[1]:
+                vector_candidate_map[embedding.id] = (embedding, similarity)
+    return VectorCandidateSet(
+        candidates=_sort_scored_embeddings(list(vector_candidate_map.values()))[
+            :BM25_CANDIDATE_POOL
+        ],
+        call_count=vector_search_call_count,
+        duration_ms=round((perf_counter() - vector_started_at) * 1000, 2),
+    )
 
 
 def bm25_search_chunks(
@@ -668,7 +711,7 @@ def search_similar_chunks_detailed(
     embedded_query_count = len(query_variants)
     extra_embedded_queries = max(embedded_query_count - 1, 0)
     extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
-    query_vector = variant_vectors[0] if variant_vectors else []
+    trace_query_vector = variant_vectors[0] if variant_vectors else []
     query_script_bucket = detect_query_script_bucket(query)
     if trace is not None:
         trace.span(
@@ -693,26 +736,17 @@ def search_similar_chunks_detailed(
     vector_engine = "python-cosine" if "sqlite" in db_url else "pgvector"
     vector_search_fn = _python_cosine_search if "sqlite" in db_url else _pgvector_search
 
-    # Fetch a wider candidate pool via the vector engine so BM25 has enough coverage.
-    # BM25 then re-ranks only these candidates — no separate full-table scan.
-    vector_started_at = perf_counter()
-    vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
-    vector_search_call_count = 0
-    for variant_vector in variant_vectors:
-        vector_search_call_count += 1
-        for embedding, similarity in vector_search_fn(
-            client_id,
-            variant_vector,
-            BM25_CANDIDATE_POOL,
-            db,
-        ):
-            existing = vector_candidate_map.get(embedding.id)
-            if existing is None or similarity > existing[1]:
-                vector_candidate_map[embedding.id] = (embedding, similarity)
-    vector_candidates = _sort_scored_embeddings(
-        list(vector_candidate_map.values())
-    )[:BM25_CANDIDATE_POOL]
-    vector_duration_ms = round((perf_counter() - vector_started_at) * 1000, 2)
+    # Build one shared candidate set before lexical stages: engine-specific
+    # acquisition, then cross-variant merge/dedup/truncation.
+    vector_candidate_set = _build_vector_candidate_set(
+        client_id,
+        variant_vectors,
+        db,
+        vector_search_fn=vector_search_fn,
+    )
+    vector_candidates = vector_candidate_set.candidates
+    vector_search_call_count = vector_candidate_set.call_count
+    vector_duration_ms = vector_candidate_set.duration_ms
     extra_vector_search_calls = max(vector_search_call_count - 1, 0)
 
     if not vector_candidates:
@@ -721,7 +755,7 @@ def search_similar_chunks_detailed(
             trace.span(
                 name="vector-search",
                 input={
-                    "query_embedding": format_query_embedding_preview(query_vector),
+                    "query_embedding": format_query_embedding_preview(trace_query_vector),
                     "query_variants": query_variants,
                     "tenant_id": str(client_id),
                     "top_k": BM25_CANDIDATE_POOL,
@@ -760,7 +794,7 @@ def search_similar_chunks_detailed(
         trace.span(
             name="vector-search",
             input={
-                "query_embedding": format_query_embedding_preview(query_vector),
+                "query_embedding": format_query_embedding_preview(trace_query_vector),
                 "query_variants": query_variants,
                 "tenant_id": str(client_id),
                 "top_k": BM25_CANDIDATE_POOL,

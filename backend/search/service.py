@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ RERANK_LEXICAL_WEIGHT = 0.35
 RERANK_VECTOR_WEIGHT = 0.25
 RERANK_BM25_WEIGHT = 0.20
 RERANK_RRF_WEIGHT = 0.20
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -86,6 +89,18 @@ def embed_query(query: str, *, api_key: str) -> list[float]:
         input=query,
     )
     return response.data[0].embedding
+
+
+def embed_queries(queries: list[str], *, api_key: str) -> list[list[float]]:
+    """Embed multiple search queries in one OpenAI API round-trip."""
+    if not queries:
+        return []
+    openai_client = get_openai_client(api_key)
+    response = openai_client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=queries,
+    )
+    return [item.embedding for item in response.data]
 
 
 def _bm25_score_candidates(
@@ -194,7 +209,7 @@ def rerank_candidates(
     if not candidates:
         return []
 
-    max_rrf = max(score for _, score in candidates) or 1.0
+    max_rrf = max(score for _, score in candidates)
     vector_scores = vector_scores or {}
     bm25_scores = bm25_scores or {}
 
@@ -246,6 +261,7 @@ def _pgvector_search(
             for emb, distance in results_with_distance
         ]
     except Exception:
+        logger.exception("pgvector search failed; falling back to Python cosine search")
         return _python_cosine_search(client_id, query_vector, top_k, db)
 
 
@@ -290,7 +306,8 @@ def search_similar_chunks_detailed(
             output={"variants": query_variants}
         )
 
-    query_vector = embed_query(query, api_key=api_key)
+    variant_vectors = embed_queries(query_variants, api_key=api_key)
+    query_vector = variant_vectors[0]
 
     db_url = str(db.bind.url if db.bind else "")
     if "sqlite" in db_url:
@@ -323,8 +340,7 @@ def search_similar_chunks_detailed(
     # BM25 then re-ranks only these candidates — no separate full-table scan.
     vector_started_at = perf_counter()
     vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
-    for variant in query_variants:
-        variant_vector = query_vector if variant == query else embed_query(variant, api_key=api_key)
+    for variant, variant_vector in zip(query_variants, variant_vectors):
         for embedding, similarity in _pgvector_search(client_id, variant_vector, BM25_CANDIDATE_POOL, db):
             existing = vector_candidate_map.get(embedding.id)
             if existing is None or similarity > existing[1]:
@@ -378,20 +394,21 @@ def search_similar_chunks_detailed(
                 }
             )
 
+    rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
     bm25_started_at = perf_counter()
-    bm25_results = _bm25_score_candidates(vector_embs, query, top_k * 2)
+    bm25_results = _bm25_score_candidates(vector_embs, query, rrf_candidate_pool)
     bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
             name="bm25-search",
-            input={"query": query, "tenant_id": str(client_id), "top_k": top_k * 2},
+            input={"query": query, "tenant_id": str(client_id), "top_k": rrf_candidate_pool},
         ).end(
             output={
                 "chunks": format_embedding_results(bm25_results, score_name="bm25_score"),
                 "duration_ms": bm25_duration_ms,
             }
         )
-    vector_for_rrf = vector_candidates[: max(top_k * RRF_CANDIDATE_POOL_MULTIPLIER, top_k * 2)]
+    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
     best_vector_similarity = vector_candidates[0][1] if vector_candidates else None
     best_keyword_score = bm25_results[0][1] if bm25_results else None
 
@@ -407,7 +424,7 @@ def search_similar_chunks_detailed(
     fused_results = reciprocal_rank_fusion(
         vector_for_rrf,
         bm25_results,
-        top_k=max(top_k * RRF_CANDIDATE_POOL_MULTIPLIER, top_k),
+        top_k=rrf_candidate_pool,
     )
     rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
     if trace is not None:

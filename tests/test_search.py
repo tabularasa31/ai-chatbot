@@ -482,11 +482,6 @@ def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_ti
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
     third = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="account recovery flow")
 
-    monkeypatch.setattr(
-        "backend.search.service.lexical_safe_query_variants",
-        lambda query, **kwargs: ["reset password", "password reset"],
-    )
-
     def fake_score(prepared_corpus, query: str, top_k: int):
         if query == "reset password":
             return [(first, 1.0), (second, 0.6)]
@@ -500,7 +495,7 @@ def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_ti
     bundle = _run_bm25_search(
         [first, second, third],
         query="reset password",
-        query_variants=["Reset-password!!   reset password"],
+        variant_queries=["reset password", "password reset"],
         top_k=5,
         expansion_mode="symmetric_variants",
     )
@@ -520,11 +515,6 @@ def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_c
     first = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="cors settings")
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="api key rotation")
 
-    monkeypatch.setattr(
-        "backend.search.service.lexical_safe_query_variants",
-        lambda query, **kwargs: ["cors settings", "cors config"],
-    )
-
     def fake_score(prepared_corpus, query: str, top_k: int):
         return [(first, 1.0), (second, 0.5)]
 
@@ -536,14 +526,14 @@ def test_run_bm25_search_symmetric_mode_can_match_asymmetric_when_no_effective_c
     asymmetric = _run_bm25_search(
         [first, second],
         query="cors settings",
-        query_variants=["cors settings"],
+        variant_queries=["cors settings"],
         top_k=5,
         expansion_mode="asymmetric",
     )
     symmetric = _run_bm25_search(
         [first, second],
         query="cors settings",
-        query_variants=["cors settings", "cors config"],
+        variant_queries=["cors settings", "cors config"],
         top_k=5,
         expansion_mode="symmetric_variants",
     )
@@ -563,11 +553,6 @@ def test_run_bm25_search_applies_cap_after_deterministic_merge(
     second = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="password reset checklist")
     third = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="account recovery")
 
-    monkeypatch.setattr(
-        "backend.search.service.lexical_safe_query_variants",
-        lambda query, **kwargs: ["reset password", "password reset", "account recovery"],
-    )
-
     def fake_score(prepared_corpus, query: str, top_k: int):
         if query == "reset password":
             return [(first, 1.0)]
@@ -583,7 +568,7 @@ def test_run_bm25_search_applies_cap_after_deterministic_merge(
     bundle = _run_bm25_search(
         [first, second, third],
         query="reset password",
-        query_variants=["reset password"],
+        variant_queries=["reset password", "password reset", "account recovery"],
         top_k=2,
         expansion_mode="symmetric_variants",
     )
@@ -601,11 +586,6 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
 
     alias_hit = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="alias documentation")
 
-    monkeypatch.setattr(
-        "backend.search.service.lexical_safe_query_variants",
-        lambda query, **kwargs: [query, "alias"],
-    )
-
     def fake_score(prepared_corpus, query: str, top_k: int):
         if query == "alias":
             return [(alias_hit, 1.0)]
@@ -619,7 +599,7 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
     bundle = _run_bm25_search(
         [alias_hit],
         query="primary",
-        query_variants=["primary"],
+        variant_queries=["primary", "alias"],
         top_k=5,
         expansion_mode="symmetric_variants",
     )

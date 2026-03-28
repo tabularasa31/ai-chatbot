@@ -480,16 +480,11 @@ def _run_bm25_search(
     candidates: list[Embedding],
     *,
     query: str,
-    query_variants: list[str],
+    variant_queries: list[str],
     top_k: int,
     expansion_mode: BM25ExpansionMode,
 ) -> BM25SearchBundle:
     """Evaluate BM25 over one shared corpus using asymmetric or symmetric policy."""
-    variant_queries = (
-        [query]
-        if expansion_mode == "asymmetric"
-        else lexical_safe_query_variants(query, base_variants=query_variants)
-    )
     prepared_corpus = _prepare_bm25_corpus(candidates)
     variant_eval_count = len(variant_queries)
     if not candidates or not variant_queries:
@@ -1051,7 +1046,7 @@ def search_similar_chunks_detailed(
     bm25_bundle = _run_bm25_search(
         vector_embs,
         query=query,
-        query_variants=query_variants,
+        variant_queries=bm25_variant_queries,
         top_k=rrf_candidate_pool,
         expansion_mode=bm25_expansion_mode,
     )

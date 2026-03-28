@@ -86,7 +86,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     )
 
     assert bundle.results == []
-    assert [span.name for span in trace.spans] == ["vector-search"]
+    assert [span.name for span in trace.spans] == ["query-expansion", "vector-search"]
     assert trace.spans[-1].output == {
         "chunks": [],
         "duration_ms": trace.spans[-1].output["duration_ms"],

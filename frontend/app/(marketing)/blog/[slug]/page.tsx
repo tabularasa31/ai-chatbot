@@ -35,10 +35,11 @@ export function generateMetadata({
   }
 
   const articleUrl = getArticleUrl(post.slug);
-  const images = post.coverImage
+  const socialImage = post.socialImage ?? post.coverImage;
+  const images = socialImage
     ? [
         {
-          url: toAbsoluteUrl(post.coverImage),
+          url: toAbsoluteUrl(socialImage),
           alt: post.title,
           width: 1600,
           height: 1600,
@@ -66,10 +67,10 @@ export function generateMetadata({
       images,
     },
     twitter: {
-      card: post.coverImage ? "summary_large_image" : "summary",
+      card: socialImage ? "summary_large_image" : "summary",
       title: post.title,
       description: post.description,
-      images: post.coverImage ? [toAbsoluteUrl(post.coverImage)] : undefined,
+      images: socialImage ? [toAbsoluteUrl(socialImage)] : undefined,
     },
   };
 }
@@ -83,6 +84,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
 
   const relatedPosts = getRelatedBlogPosts(post.slug);
   const articleUrl = getArticleUrl(post.slug);
+  const jsonLdImage = post.socialImage ?? post.coverImage;
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "BlogPosting",
@@ -91,7 +93,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
     url: articleUrl,
     mainEntityOfPage: articleUrl,
     datePublished: post.publishedAt,
-    image: post.coverImage ? [toAbsoluteUrl(post.coverImage)] : undefined,
+    image: jsonLdImage ? [toAbsoluteUrl(jsonLdImage)] : undefined,
   };
 
   return (

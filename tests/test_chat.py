@@ -755,6 +755,49 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     assert context.reliability_cap_reason == "source_overlap"
 
 
+def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import SearchResultBundle
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="secret number explanation",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.search_similar_chunks_detailed",
+        lambda *args, **kwargs: SearchResultBundle(
+            results=[(embedding, 0.77)],
+            best_vector_similarity=0.0,
+            best_keyword_score=1.0,
+            has_lexical_signal=True,
+            query_variants=["secret number"],
+        ),
+    )
+
+    class FakeBind:
+        url = "sqlite://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    context = retrieve_context(
+        client_id=uuid.uuid4(),
+        question="secret number",
+        db=FakeDB(),
+        api_key="sk-test",
+    )
+
+    assert context.mode == "hybrid"
+    assert context.best_rank_score == 0.77
+    assert context.best_confidence_score == 0.0
+    assert context.confidence_source == "vector_similarity"
+
+
 def test_chat_session_continuity(
     mock_openai_client: Mock,
     client: TestClient,
@@ -1732,7 +1775,7 @@ def test_debug_with_embeddings_vector_mode(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    """Debug endpoint: embeddings with high similarity → mode vector, chunks returned."""
+    """Debug endpoint keeps vector confidence separate from final retrieval mode."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     token = register_and_verify_user(client, db_session, email="debugvec@example.com")
@@ -1780,7 +1823,9 @@ def test_debug_with_embeddings_vector_mode(
     data = response.json()
     assert data["answer"] == "42"
     assert data["tokens_used"] == 10
-    assert data["debug"]["mode"] == "vector"
+    assert data["debug"]["mode"] == "hybrid"
+    assert data["debug"]["confidence_source"] == "vector_similarity"
+    assert data["debug"]["best_confidence_score"] > 0.0
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)
@@ -1825,10 +1870,22 @@ def test_debug_with_embeddings_keyword_mode(
         vector=None,
         metadata_json={"vector": chunk_vec, "chunk_index": 0},
     )
-    db_session.add(emb)
+    decoy = Embedding(
+        document_id=doc.id,
+        chunk_text="Billing overview and invoice export steps.",
+        vector=None,
+        metadata_json={"vector": chunk_vec, "chunk_index": 1},
+    )
+    second_decoy = Embedding(
+        document_id=doc.id,
+        chunk_text="Password rotation policy for administrators only.",
+        vector=None,
+        metadata_json={"vector": chunk_vec, "chunk_index": 2},
+    )
+    db_session.add_all([emb, decoy, second_decoy])
     db_session.commit()
 
-    # Query vector orthogonal to chunk → cosine = 0 → fallback to keyword
+    # Query vector orthogonal to chunk → vector confidence 0, lexical signal drives ranking.
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [
         Mock(embedding=query_vec)
@@ -1845,11 +1902,13 @@ def test_debug_with_embeddings_keyword_mode(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["debug"]["mode"] == "keyword"
+    assert data["debug"]["mode"] == "hybrid"
+    assert data["debug"]["confidence_source"] == "vector_similarity"
+    assert data["debug"]["best_confidence_score"] == 0.0
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)
-    assert chunk["score"] >= 0  # SQLite cosine path; orthogonal → similarity 0
+    assert chunk["score"] > 0.0
     assert "secret" in chunk["preview"].lower()
 
 

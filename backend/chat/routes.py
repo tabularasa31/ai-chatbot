@@ -171,6 +171,9 @@ def chat_debug(
 
     debug_resp = DebugInfoResponse(
         mode=debug_dict["mode"],
+        best_rank_score=debug_dict.get("best_rank_score"),
+        best_confidence_score=debug_dict.get("best_confidence_score"),
+        confidence_source=debug_dict.get("confidence_source"),
         chunks=[
             DebugChunkResponse(
                 document_id=c["document_id"],

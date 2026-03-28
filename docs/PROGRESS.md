@@ -157,8 +157,9 @@
 ### Search / retrieval
 - ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`); промпт `FI-019ext-bm25-hybrid-hnsw.md` удалён после внедрения
   - PostgreSQL: `_pgvector_search` (top `2×top_k`) + `bm25_search_chunks` по `chunk_text` → `reciprocal_rank_fusion` (k=60)
-  - SQLite (тесты): только Python cosine, без BM25 (как в спеке промпта)
-  - Debug API: режим **`hybrid`** на Postgres; на SQLite по-прежнему **vector / keyword** по порогу косинуса
+  - SQLite (тесты): Python cosine только для vector candidate acquisition; дальше тот же BM25 → RRF → reranking → post-ranking flow по in-memory candidate pool после merge/dedup/truncation
+  - lexical participation определяется отдельно от reranker lexical feature: overlap в candidate pool включает hybrid contract даже там, где raw BM25 scores плоские/нестабильные
+  - Debug API: режим и confidence semantics выровнены с production path; `chunks[].score` отражает финальный pipeline score, `best_confidence_score` остаётся vector-derived
   - Зависимость: `backend/requirements.txt` → `rank-bm25>=0.2.2`
 - ✅ **FI-115** — observability for deterministic query variants before retrieval
   - root traces now carry `variant_mode`, `query_variant_count`, `extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`, `retrieval_duration_ms`
@@ -275,7 +276,7 @@
 - ✅ **Async embedding** (FI-021): `202 Accepted` + background task, polling по статусу `embedding → ready|error`
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)
-- ✅ Hybrid retrieval (PostgreSQL: pgvector + BM25 + RRF; SQLite tests: cosine only)
+- ✅ Hybrid retrieval (PostgreSQL: pgvector candidate acquisition + shared BM25/RRF/reranking; SQLite mirrors the same downstream orchestration with Python cosine candidates)
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Retrieval observability (Langfuse-style traces for chat + `/search`, including query-variant cost/latency fields)
 - ✅ Multi-tenant isolation (client_id scoping)

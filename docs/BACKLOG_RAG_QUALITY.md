@@ -34,9 +34,9 @@ Detailed research (6 models) — in `RAG_QUALITY_RESEARCH.md`.
 
 **Implemented:**
 - In-memory BM25 over `chunk_text` via `rank-bm25` (`BM25Okapi`), not Postgres `tsvector`
-- RRF fusion of vector + BM25 rankings (`reciprocal_rank_fusion`, k=60)
-- PostgreSQL: `_pgvector_search` + BM25 + RRF in `search_similar_chunks`; SQLite tests: cosine-only path
-- Scores after fusion are RRF (not cosine); debug `mode`: `hybrid` on Postgres
+- RRF fusion of vector + BM25 rankings (`reciprocal_rank_fusion`, k=60) plus downstream reranking / post-ranking stages
+- PostgreSQL: `_pgvector_search` for vector candidates; SQLite tests: Python cosine for vector candidates, then the same downstream candidate-pool orchestration
+- Debug/retrieval semantics now use vector-derived confidence plus lexical-participation-aware mode selection across both paths
 - Spec reference (still useful for future work): `specs/hybrid-search-spec.docx` (FR-2, FR-3)
 
 ---

@@ -57,9 +57,6 @@ from backend.search.service import (
 
 logger = logging.getLogger(__name__)
 
-# SQLite tests: cosine-only path; used to label debug mode (not RRF scores).
-RETRIEVAL_VECTOR_CONFIDENCE = 0.70
-
 LOW_CONFIDENCE_THRESHOLD = 0.4
 
 DISCLOSURE_HARD_LIMITS = (
@@ -136,7 +133,7 @@ def retrieve_context(
 
     Uses tenant-scoped search with:
     - rank scores for ordering/debug
-    - vector similarity for escalation confidence on PostgreSQL
+    - vector similarity for escalation confidence
     client_id filtering enforced at DB level.
     """
     bundle = search_similar_chunks_detailed(
@@ -171,23 +168,12 @@ def retrieve_context(
         )
 
     best_rank_score = results[0][1]
-    db_url = str(db.bind.url if db.bind else "")
-    if "sqlite" in db_url:
-        # Tests: Python cosine only; same thresholds as before keyword→BM25 swap.
-        if best_rank_score >= RETRIEVAL_VECTOR_CONFIDENCE:
-            mode: Literal["vector", "keyword", "hybrid", "none"] = "vector"
-        else:
-            mode = "keyword"
-        best_confidence_score = best_rank_score
-        confidence_source: Literal["vector_similarity", "rank_score", "none"] = "rank_score"
-    elif bundle.best_keyword_score is None:
-        mode = "vector"
-        best_confidence_score = bundle.best_vector_similarity
-        confidence_source = "vector_similarity"
+    if bundle.has_lexical_signal:
+        mode: Literal["vector", "hybrid", "none"] = "hybrid"
     else:
-        mode = "hybrid"
-        best_confidence_score = bundle.best_vector_similarity
-        confidence_source = "vector_similarity"
+        mode = "vector"
+    best_confidence_score = bundle.best_vector_similarity
+    confidence_source: Literal["vector_similarity", "none"] = "vector_similarity"
 
     chunk_texts = [r[0].chunk_text or "" for r in results]
     document_ids = [r[0].document_id for r in results]
@@ -221,10 +207,10 @@ class RetrievalContext:
     chunk_texts: list[str]
     document_ids: list[uuid.UUID]
     scores: list[float]
-    mode: Literal["vector", "keyword", "hybrid", "none"]
+    mode: Literal["vector", "hybrid", "none"]
     best_rank_score: float | None
     best_confidence_score: float | None
-    confidence_source: Literal["vector_similarity", "rank_score", "none"]
+    confidence_source: Literal["vector_similarity", "none"]
     conflicts_found: bool = False
     conflict_pairs: list[dict[str, object]] | None = None
     reliability_score: Literal["low", "medium", "high"] | None = None

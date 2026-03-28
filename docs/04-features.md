@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-25  
+**Last updated:** 2026-03-28  
 **Status:** Production (getchat9.live)
 
 ---
@@ -177,12 +177,12 @@ Each chunk is embedded with `text-embedding-3-small` (1536 dimensions) and store
 
 Pure vector search struggles with exact keyword matches (product names, error codes). Chat9 combines two signals:
 
-1. **Vector search** — semantic similarity (pgvector, top `2×top_k` candidates)
-2. **BM25** — keyword frequency ranking (`rank-bm25` library, run over all client chunks in memory)
+1. **Vector candidate acquisition** — semantic similarity (`pgvector` in PostgreSQL, Python cosine in SQLite tests)
+2. **Candidate-pool BM25** — keyword ranking (`rank-bm25` library, run only over the in-memory candidate pool for the current request)
 
-The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60): a chunk scores higher if it appears near the top of both lists. This reliably outperforms either method alone on technical documentation queries.
+The two ranked lists are merged with **Reciprocal Rank Fusion** (RRF, k=60), then passed through heuristic reranking and post-ranking selection stages. This reliably outperforms either method alone on technical documentation queries while keeping SQLite/test retrieval close to the production orchestration contract.
 
-> Note: in the test environment (SQLite), pgvector is not available — tests use Python cosine similarity only. BM25 is not applied in tests.
+> Note: in the test environment (SQLite), pgvector is still unavailable, so vector candidates come from Python cosine similarity. After candidate-set construction (acquisition + merge/dedup + truncation), SQLite follows the same BM25 → RRF → reranking → post-ranking orchestration contract as PostgreSQL over that in-memory candidate pool.
 
 ### Retrieval observability (FI-115)
 

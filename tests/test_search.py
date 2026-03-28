@@ -412,7 +412,7 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
         candidates: list[Embedding],
         *,
         query: str,
-        query_variants: list[str],
+        variant_queries: list[str],
         top_k: int,
         expansion_mode: str,
     ) -> BM25SearchBundle:

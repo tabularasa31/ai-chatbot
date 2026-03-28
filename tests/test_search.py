@@ -18,6 +18,7 @@ from backend.search.service import (
     embed_queries,
     detect_query_script_bucket,
     detect_conflicts,
+    detect_source_overlaps,
     expand_query,
     mmr_select,
     rerank_candidates,
@@ -382,7 +383,7 @@ def test_rerank_candidates_uses_widened_bm25_scores_without_zeroing_tail_candida
     assert reranked[2][1] > 0.0
 
 
-def test_detect_conflicts_flags_duplicate_chunks_from_different_docs() -> None:
+def test_detect_source_overlaps_flags_duplicate_chunks_from_different_docs() -> None:
     from backend.models import Embedding
 
     first = Embedding(
@@ -398,7 +399,7 @@ def test_detect_conflicts_flags_duplicate_chunks_from_different_docs() -> None:
         metadata_json={"chunk_index": 1},
     )
 
-    conflicts_found, conflict_pairs, reliability_cap = detect_conflicts(
+    conflicts_found, conflict_pairs, reliability_cap = detect_source_overlaps(
         [(first, 0.9), (second, 0.88)],
         similarity_threshold=0.6,
     )
@@ -410,9 +411,35 @@ def test_detect_conflicts_flags_duplicate_chunks_from_different_docs() -> None:
             "chunk_a_id": str(first.id),
             "chunk_b_id": str(second.id),
             "similarity": 0.8333,
+            "signal_type": "cross_document_overlap",
             "confirmed_by_llm": False,
         }
     ]
+
+
+def test_detect_conflicts_aliases_source_overlap_heuristic() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={"chunk_index": 1},
+    )
+
+    assert detect_conflicts(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    ) == detect_source_overlaps(
+        [(first, 0.9), (second, 0.88)],
+        similarity_threshold=0.6,
+    )
 
 
 def test_compute_reliability_score_uses_conflicts_and_top_score() -> None:

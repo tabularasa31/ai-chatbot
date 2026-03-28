@@ -1427,6 +1427,34 @@ def test_bm25_search_chunks_finds_match(db_session) -> None:
     assert results[0][1] > results[-1][1]
 
 
+def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:
+    from backend.models import Embedding
+    from backend.search.service import _bm25_score_candidates_with_signal
+
+    matching = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="secret number explanation",
+        metadata_json={"chunk_index": 0},
+    )
+    non_matching = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="billing invoice guide",
+        metadata_json={"chunk_index": 1},
+    )
+
+    results, has_signal = _bm25_score_candidates_with_signal(
+        [matching, non_matching],
+        "secret",
+        top_k=5,
+    )
+
+    assert has_signal is True
+    assert [embedding.id for embedding, _ in results] == [matching.id]
+    assert results[0][1] == 1.0
+
+
 def test_search_low_vector_similarity_still_returns_chunk(
     mock_openai_client: Mock,
     client: TestClient,

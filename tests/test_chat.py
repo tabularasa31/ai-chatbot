@@ -1775,7 +1775,7 @@ def test_debug_with_embeddings_vector_mode(
     client: TestClient,
     db_session: Session,
 ) -> None:
-    """Debug endpoint: embeddings with high similarity → mode vector, chunks returned."""
+    """Debug endpoint keeps vector confidence separate from final retrieval mode."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     token = register_and_verify_user(client, db_session, email="debugvec@example.com")
@@ -1823,7 +1823,9 @@ def test_debug_with_embeddings_vector_mode(
     data = response.json()
     assert data["answer"] == "42"
     assert data["tokens_used"] == 10
-    assert data["debug"]["mode"] == "vector"
+    assert data["debug"]["mode"] == "hybrid"
+    assert data["debug"]["confidence_source"] == "vector_similarity"
+    assert data["debug"]["best_confidence_score"] > 0.0
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)

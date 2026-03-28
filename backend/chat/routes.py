@@ -59,10 +59,10 @@ class DebugChunkResponse(BaseModel):
 class DebugInfoResponse(BaseModel):
     """Debug info for RAG retrieval."""
 
-    mode: Literal["vector", "hybrid", "none"]
+    mode: Literal["vector", "keyword", "hybrid", "none"]
     best_rank_score: Optional[float] = None
     best_confidence_score: Optional[float] = None
-    confidence_source: Optional[Literal["vector_similarity", "none"]] = None
+    confidence_source: Optional[Literal["vector_similarity", "rank_score", "none"]] = None
     chunks: list[DebugChunkResponse]
     validation: Optional[dict] = None
 

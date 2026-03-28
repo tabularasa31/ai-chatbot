@@ -233,9 +233,25 @@ def _bm25_score_candidates_with_signal(
     scored = _sort_scored_embeddings(scored)[:top_k]
     if not scored:
         return [], False
-    has_lexical_signal = any(score > 0.0 for _, score in scored)
+
+    lexical_overlap_scored = [
+        (embedding, _lexical_overlap_score(query, embedding.chunk_text or ""))
+        for embedding in candidates
+    ]
+    lexical_overlap_scored = [
+        (embedding, score)
+        for embedding, score in lexical_overlap_scored
+        if score > 0.0
+    ]
+    lexical_overlap_scored = _sort_scored_embeddings(lexical_overlap_scored)[:top_k]
+    has_lexical_signal = bool(lexical_overlap_scored)
     if not has_lexical_signal:
         return [], False
+
+    distinct_raw_scores = len({round(score, 12) for _, score in scored}) > 1
+    if not distinct_raw_scores:
+        scored = lexical_overlap_scored
+
     max_s = scored[0][1]
     min_s = scored[-1][1]
     if max_s == min_s:

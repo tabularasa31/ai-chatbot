@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-28 (symmetric BM25 variant evaluation)
+**Last updated:** 2026-03-28 (contradiction reliability policy)
 
 ---
 
@@ -47,6 +47,7 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
 | **FI-008 / FI-019 ext** | Hybrid retrieval with shared BM25 + RRF + reranking orchestration; Postgres uses pgvector for vector candidates, SQLite uses Python cosine for candidate acquisition and then the same candidate-pool lexical/ranking contract | `backend/search/service.py`, `rank-bm25` |
+| Contradiction reliability policy (2026-03-28) | Contradiction evidence remains visible in canonical retrieval reliability, but only corroborated contradiction now caps to `low`: single facts stay evidence-only, same-pair or multi-pair multiplicity triggers `cap_reason="contradiction"`, reversed-orientation mirrors no longer double-count, and the contract shape stays unchanged | `backend/search/service.py`, `tests/test_search.py`, `tests/test_chat.py`, `docs/04-features.md` |
 | **FI-115 + BM25 symmetry follow-up** | Query-variant retrieval observability plus explicit BM25 expansion policy: default `asymmetric`, opt-in `symmetric_variants`, lexical-safe variant evaluation over the shared candidate pool, deterministic lexical merge before RRF, BM25 variant-eval / merged-hit trace fields, root trace parity for chat and `/search`, variant segmentation tags | `backend/search/service.py`, `backend/search/routes.py`, `backend/chat/service.py`, `backend/core/config.py`, `docs/04-features.md`, `docs/07-observability-rollout.md`, `docs/qa/FI-115-query-variant-cost.md` |
 | RAG pipeline | Retrieve → prompt → generate → persist messages | `backend/chat/service.py` `process_chat_message`, `POST /chat` (X-API-Key) |
 | **FI-034** | LLM answer validation; fallback on low confidence | `validate_answer()`, `POST /chat/debug` → `validation` |

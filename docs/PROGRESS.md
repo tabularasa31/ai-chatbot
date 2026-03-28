@@ -287,6 +287,7 @@
 - ✅ RAG pipeline (OpenAI text-embedding-3-small + gpt-4o-mini; sentence-aware chunking + chunk metadata; regex PII redaction перед внешними вызовами FI-043; post-generation answer validation FI-034)
 - ✅ **Per-type chunking** (TD-033): оптимальные параметры чанкинга по типу документа (swagger/markdown/pdf)
 - ✅ Hybrid retrieval (PostgreSQL: pgvector candidate acquisition + shared BM25/RRF/reranking; SQLite mirrors the same downstream orchestration with Python cosine candidates)
+- ✅ Contradiction reliability policy: contradiction stays visible in reliability evidence/signals, single facts remain evidence-only, corroborated same-pair or multi-pair contradiction caps to `low`, mirrored pair emissions no longer double-count
 - ✅ pgvector native search (SQL cosine_distance, HNSW index)
 - ✅ Retrieval observability (Langfuse-style traces for chat + `/search`, including query-variant cost/latency fields)
 - ✅ Multi-tenant isolation (client_id scoping)

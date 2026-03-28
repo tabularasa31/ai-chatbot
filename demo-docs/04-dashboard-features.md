@@ -20,6 +20,7 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 - **URL sources:** Add a documentation website by URL, track crawl/index status, review recent runs, and manage exclusions.
 - **Indexed pages:** Inside a URL source, you can remove one indexed page without deleting the whole source. Removed pages stay excluded from future refreshes for that source.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
+- **Reliability visibility:** retrieval/debug flows keep overlap and contradiction evidence available for investigation without changing the visible dashboard contract shape.
 
 ## Agents (`/settings`)
 
@@ -49,6 +50,7 @@ A dedicated page showing answers marked with 👎.
 Test your bot directly in the dashboard.
 
 - Ask a question and inspect the retrieved chunks plus matching scores.
+- Reliability metadata includes the canonical score and cap reason from the retrieval pipeline.
 - **Answer** is shown in a code-style block with an inline **copy** icon.
 
 ## Response controls (`/settings/disclosure`)

@@ -27,7 +27,7 @@ Example (placeholders — the Dashboard fills in your real `clientId` and may ad
 
 ## CORS
 
-The widget can be embedded on any domain — CORS is configured to allow all origins (`*`).
+The widget is designed to work on arbitrary sites because the public loader injects an iframe hosted by Chat9. You do not need to expose your private API key in page HTML.
 
 ## Session continuity
 
@@ -47,7 +47,7 @@ By default the widget is anonymous — Chat9 does not know who is talking. **Ide
 
 1. Your server generates a short-lived signed token using your **signing secret**.
 2. The token is passed to the widget on page load.
-3. Chat9 verifies the token and attaches the user identity to the session.
+3. Chat9 verifies the token during `POST /widget/session/init` and attaches the user identity to the session.
 
 The token is HMAC-signed — any tampering is detected. The payload is **encoded, not encrypted**, so do not put passwords, payment data, or other secrets inside it.
 

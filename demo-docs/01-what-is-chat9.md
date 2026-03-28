@@ -6,13 +6,14 @@ You upload your product documentation, and Chat9 creates a smart chat widget tha
 
 ## How it works
 
-1. **Upload your docs** — PDF, Markdown, and Swagger/OpenAPI files.
+1. **Add your knowledge** — upload PDF, Markdown, and Swagger/OpenAPI files, or index a documentation website URL.
 2. **Get a chat widget** — a JavaScript snippet you embed on your website in 2 lines of code.
 3. **Your customers get instant answers** — the bot answers based on your documentation only. No hallucinations about products you don't sell.
 
 ## Key features
 
 - **RAG pipeline** — answers come directly from your documentation, not from generic AI knowledge.
+- **Hybrid retrieval + reliability signals** — Chat9 combines vector search with lexical retrieval and keeps overlap / contradiction evidence for debugging.
 - **Full conversation logs** — see every question your customers ask in the dashboard.
 - **👍/👎 feedback** — mark good and bad answers, review and improve over time.
 - **Your OpenAI key** — you connect your own OpenAI API key. You control AI costs directly.

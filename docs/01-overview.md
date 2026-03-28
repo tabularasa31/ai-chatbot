@@ -1,6 +1,6 @@
 # Chat9 — Architecture Overview
 
-**Status:** MVP  
+**Status:** MVP feature-complete, deployed to production
 **Owner:** Elina
 
 ---
@@ -39,7 +39,8 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 
 ### 2. Document Upload
 - Client uploads: PDF, Markdown, Swagger/OpenAPI
-- Documents are parsed, chunked, and embedded automatically
+- Or adds a same-domain documentation URL source for background crawling and indexing
+- Documents/pages are parsed, chunked, and embedded automatically
 
 ### 3. Indexing
 - Parsed text split into **sentence-aware chunks** (мягкий лимит ~500 символов, перекрытие последних *N* предложений между соседними чанками)
@@ -53,10 +54,11 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ### 5. RAG Pipeline
 1. Website visitor asks question in chat
 2. Question is embedded
-3. Similar document chunks found (vector search)
-4. Top 3 chunks + question sent to OpenAI `gpt-4o-mini`
-5. LLM generates answer based on client's documentation
-6. Answer appears in chat (~2 seconds)
+3. Hybrid retrieval finds relevant chunks (pgvector candidate acquisition + BM25/RRF/reranking)
+4. Retrieval reliability is recorded with overlap / contradiction evidence
+5. Top chunks + question sent to OpenAI `gpt-4o-mini`
+6. Optional validation pass checks whether the answer is grounded in the retrieved context
+7. Answer appears in chat and low-confidence cases can fall back or escalate
 
 ### 6. Feedback & Improvement
 - Client sees all conversations in dashboard
@@ -80,9 +82,9 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 3. Copy embed code from the Dashboard (`public_id` / `ch_…` in the script) → paste before `</body>` (API key stays private for dashboard/API use)
 
 #### Day 2: Upload Documents
-1. Upload PDFs, Markdown, Swagger files
-2. Processing happens automatically (status: Processing → Ready)
-3. Widget becomes active
+1. Upload PDFs, Markdown, Swagger files or add a URL source
+2. Processing happens automatically (status: Processing / Crawling → Ready)
+3. Widget becomes active as soon as indexed knowledge is available
 
 #### Day 3+: Monitor & Improve
 1. Dashboard → Chat Logs
@@ -113,8 +115,10 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ✅ Forgot password flow (Brevo email + token reset)  
 ✅ Multi-tenant client management (API keys)  
 ✅ Document upload (PDF, Markdown, Swagger/OpenAPI)  
+✅ URL knowledge sources with refresh and per-page deletion
 ✅ RAG-powered chat API (gpt-4o-mini)  
 ✅ Hybrid retrieval with pgvector on PostgreSQL and SQLite test-path parity for downstream BM25/RRF/reranking orchestration  
+✅ Retrieval reliability signals and contradiction policy
 ✅ Zero-config embeddable widget (iframe, no CORS issues)
 ✅ Optional widget user identification (FI-KYC): HMAC token + session init
 ✅ Chat history & session logging

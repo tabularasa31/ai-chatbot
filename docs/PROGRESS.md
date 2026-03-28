@@ -1,7 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-28 (UTC) — symmetric BM25 variant evaluation
+**Last updated:** 2026-03-28 (UTC) — contradiction reliability policy
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-03-28) — contradiction reliability policy
+
+- ✅ **Corroboration-based contradiction cap:** contradiction evidence now remains visible in canonical retrieval reliability, but a single contradiction fact stays evidence-only instead of forcing `low`.
+- ✅ **Multiplicity threshold:** contradiction now caps reliability to `low` only when corroborated by multiple facts on one logical overlap pair or by contradiction across multiple logical overlap pairs.
+- ✅ **Canonical logical-pair handling:** mirrored `(a, b)` / `(b, a)` contradiction emissions no longer double-count for thresholding or dedupe.
+- ✅ **Precedence + reason semantics:** contradiction short-circuits overlap capping once threshold is reached, and `cap_reason="contradiction"` remains visible even when the base score was already `low`.
+- ✅ **Docs + regression sync:** updated product docs, feature registry, and search/chat tests to match the new contradiction policy.
 
 ---
 

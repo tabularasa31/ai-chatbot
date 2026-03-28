@@ -34,11 +34,12 @@
 - **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML)
 - **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
-- **Hybrid retrieval** — PostgreSQL: pgvector cosine + BM25 (`rank-bm25`) merged with RRF; SQLite/tests: Python cosine only
+- **Hybrid retrieval** — PostgreSQL: pgvector cosine candidate acquisition + BM25 (`rank-bm25`) + RRF + reranking; SQLite/tests: Python cosine candidate acquisition followed by the same downstream lexical/ranking orchestration
+- **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
-- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, chat logs, feedback, admin metrics
+- **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, **Agents / Settings**, chat logs, feedback, escalations, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
 - **Email verification** — signup link via Brevo HTTP API
@@ -179,6 +180,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | PATCH | `/documents/sources/{source_id}` | Update URL source name, schedule, exclusions (JWT, verified only) |
 | POST | `/documents/sources/{source_id}/refresh` | Re-crawl a URL source on demand (JWT, verified only) |
 | DELETE | `/documents/sources/{source_id}` | Delete a URL source and its indexed pages (JWT) |
+| DELETE | `/documents/sources/{source_id}/pages/{document_id}` | Delete one indexed URL-derived page and persist manual exclusion for later refreshes (JWT) |
 | DELETE | `/documents/{id}` | Delete document (JWT) |
 | POST | `/embeddings/documents/{id}` | Re-trigger embeddings generation (force re-index, JWT) |
 
@@ -212,6 +214,9 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | POST | `/search` | Vector search (JWT); returns `503` when OpenAI is unavailable |
 | GET | `/health` | Health check |
 | GET | `/embed.js` | Widget script |
+| POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
+| POST | `/widget/chat` | Public widget chat by `clientId` |
+| POST | `/widget/escalate` | Public widget manual escalation |
 
 ---
 

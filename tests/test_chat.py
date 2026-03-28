@@ -171,17 +171,19 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
 
     generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
 
+    system_prompt, user_message = build_rag_messages("What?", ["secret internal KB chunk"])
     assert trace.generation_input == [
-        {
-            "role": "user",
-            "content": build_rag_prompt("What?", ["secret internal KB chunk"]),
-        }
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
     ]
     assert trace.generation_metadata == {
         "temperature": 0.2,
         "max_tokens": 500,
         "context_chunk_count": 1,
         "captures_full_prompt": True,
+        "finish_reason_expected": "stop_or_length",
+        "system_prompt": system_prompt,
+        "context_chunks": ["secret internal KB chunk"],
     }
 
 

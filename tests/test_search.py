@@ -1236,6 +1236,7 @@ def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None
 def test_compute_reliability_score_compatibility_wrapper_uses_overlap_alias() -> None:
     assert compute_reliability_score(top_score=0.9, conflicts_found=False, result_count=5) == "high"
     assert compute_reliability_score(top_score=0.9, conflicts_found=True, result_count=5) == "medium"
+    assert compute_reliability_score(top_score=0.2, conflicts_found=True, result_count=5) == "medium"
     assert compute_reliability_score(top_score=0.2, conflicts_found=False, result_count=5) == "low"
     assert compute_reliability_score(top_score=None, conflicts_found=False, result_count=0) == "low"
 

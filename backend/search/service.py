@@ -211,7 +211,15 @@ def build_reliability_assessment(
     source_overlap_pairs: tuple[SourceOverlapPair, ...] = (),
     source_overlap_similarity_threshold: float | None = None,
 ) -> RetrievalReliability:
-    """Build the canonical retrieval reliability object in one place."""
+    """
+    Build the canonical retrieval reliability object in one place.
+
+    `source_overlap_detected=True` with empty `source_overlap_pairs` is allowed
+    as a compatibility/mock state even though the real overlap detector normally
+    emits both together. Empty retrieval output intentionally records
+    `weak_recall` as a diagnostic signal rather than producing a signal-free
+    object.
+    """
     base_score = _compute_base_reliability_score(
         top_score=top_score,
         result_count=result_count,
@@ -1059,12 +1067,16 @@ def compute_reliability_score(
     conflicts_found: bool,
     result_count: int,
 ) -> ReliabilityScore:
-    """Compatibility wrapper over the canonical reliability builder."""
-    return build_reliability_assessment(
-        top_score=top_score,
-        result_count=result_count,
-        source_overlap_detected=conflicts_found,
-    ).score
+    """Compatibility wrapper that preserves the legacy flat-field semantics."""
+    if result_count == 0 or top_score is None:
+        return "low"
+    if conflicts_found:
+        return "medium"
+    if top_score >= HIGH_RELIABILITY_SCORE_THRESHOLD:
+        return "high"
+    if top_score >= LOW_RELIABILITY_SCORE_THRESHOLD:
+        return "medium"
+    return "low"
 
 
 def _pgvector_search(

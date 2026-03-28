@@ -1275,6 +1275,59 @@ def test_detect_metadata_contradictions_normalizes_version_equivalence() -> None
     assert contradiction_pairs == ()
 
 
+def test_detect_metadata_contradictions_can_emit_multiple_facts_for_one_overlap_pair() -> None:
+    from backend.models import Embedding
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={
+            "chunk_index": 0,
+            "effective_date": "2024-03-01",
+            "version": "v2",
+        },
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel now",
+        metadata_json={
+            "chunk_index": 1,
+            "effective_date": "2025-03-01",
+            "version": "v3",
+        },
+    )
+
+    contradiction_pairs = detect_metadata_contradictions(
+        [(first, 0.9), (second, 0.88)],
+        (
+            SourceOverlapPair(
+                chunk_a_id=str(first.id),
+                chunk_b_id=str(second.id),
+                similarity=0.83,
+            ),
+        ),
+    )
+
+    assert contradiction_pairs == (
+        ContradictionPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            basis="effective_date",
+            value_a="2024-03-01",
+            value_b="2025-03-01",
+        ),
+        ContradictionPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            basis="version",
+            value_a="v2",
+            value_b="v3",
+        ),
+    )
+
+
 def test_build_reliability_assessment_caps_to_low_on_contradiction() -> None:
     reliability = build_reliability_assessment(
         top_score=0.9,

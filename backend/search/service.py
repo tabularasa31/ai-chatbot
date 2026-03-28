@@ -284,7 +284,14 @@ def _metadata_contradiction_pairs(
     first: Embedding,
     second: Embedding,
 ) -> tuple[ContradictionPair, ...]:
-    """Detect narrow contradiction indicators from explicit metadata on one overlap pair."""
+    """
+    Detect narrow contradiction indicators from explicit metadata on one overlap pair.
+
+    One overlap-admitted chunk pair may legitimately yield multiple contradiction
+    facts, for example separate disagreements on `effective_date` and `version`.
+    This helper intentionally returns fact-level evidence rather than forcing a
+    one-entry-per-pair summary.
+    """
     first_meta = first.metadata_json or {}
     second_meta = second.metadata_json or {}
     contradiction_pairs: list[ContradictionPair] = []

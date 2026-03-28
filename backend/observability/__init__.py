@@ -2,6 +2,7 @@
 
 from backend.observability.service import (
     GenerationHandle,
+    ObservabilityService,
     SpanHandle,
     TraceHandle,
     begin_trace,
@@ -12,6 +13,7 @@ from backend.observability.service import (
 
 __all__ = [
     "GenerationHandle",
+    "ObservabilityService",
     "SpanHandle",
     "TraceHandle",
     "begin_trace",

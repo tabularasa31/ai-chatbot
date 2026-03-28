@@ -14,8 +14,10 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     FALLBACK_LOW_CONFIDENCE_ANSWER,
     RetrievalContext,
+    build_rag_messages,
     build_rag_prompt,
     generate_answer,
+    retrieve_context,
     process_chat_message,
     validate_answer,
 )
@@ -46,6 +48,15 @@ def test_build_rag_prompt_empty_chunks() -> None:
     assert "Question: Q?" in result
     assert "(none)" in result
     assert "[Response level: standard]" in result
+
+
+def test_build_rag_messages_splits_system_and_user_parts() -> None:
+    system_prompt, user_message = build_rag_messages("What is X?", ["chunk1", "chunk2"])
+    assert "Hard limits" in system_prompt
+    assert "Context:" not in system_prompt
+    assert "chunk1" in user_message
+    assert "chunk2" in user_message
+    assert "Question: What is X?" in user_message
 
 
 def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
@@ -85,6 +96,8 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     mock_openai_client.chat.completions.create.assert_called_once()
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["messages"][0]["role"] == "system"
+    assert call_kwargs["messages"][1]["role"] == "user"
     assert call_kwargs["temperature"] == 0.2
     assert call_kwargs["max_tokens"] == 500
 
@@ -158,17 +171,19 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
 
     generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
 
+    system_prompt, user_message = build_rag_messages("What?", ["secret internal KB chunk"])
     assert trace.generation_input == [
-        {
-            "role": "user",
-            "content": build_rag_prompt("What?", ["secret internal KB chunk"]),
-        }
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
     ]
     assert trace.generation_metadata == {
         "temperature": 0.2,
         "max_tokens": 500,
         "context_chunk_count": 1,
         "captures_full_prompt": True,
+        "finish_reason_expected": "stop_or_length",
+        "system_prompt": system_prompt,
+        "context_chunks": ["secret internal KB chunk"],
     }
 
 
@@ -605,6 +620,51 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     assert data["answer"] == "Максимум 100 документов можно загрузить на аккаунт."
     assert "[[escalation_ticket:" not in data["answer"]
     assert data["source_documents"] == [str(doc_id)]
+
+
+def test_retrieve_context_propagates_reliability_cap_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import SearchResultBundle
+
+    embedding = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="reset password in settings panel",
+        metadata_json={"chunk_index": 0},
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.search_similar_chunks_detailed",
+        lambda *args, **kwargs: SearchResultBundle(
+            results=[(embedding, 0.88)],
+            best_vector_similarity=0.88,
+            query_variants=["reset password"],
+            conflicts_found=True,
+            conflict_pairs=[{"chunk_a_id": "a", "chunk_b_id": "b"}],
+            reliability_score="medium",
+            reliability_cap_reason="source_overlap",
+        ),
+    )
+
+    class FakeBind:
+        url = "postgresql://test"
+
+    class FakeDB:
+        bind = FakeBind()
+
+    context = retrieve_context(
+        client_id=uuid.uuid4(),
+        question="reset password",
+        db=FakeDB(),
+        api_key="sk-test",
+    )
+
+    assert context.conflicts_found is True
+    assert context.conflict_pairs == [{"chunk_a_id": "a", "chunk_b_id": "b"}]
+    assert context.reliability_score == "medium"
+    assert context.reliability_cap_reason == "source_overlap"
 
 
 def test_chat_session_continuity(

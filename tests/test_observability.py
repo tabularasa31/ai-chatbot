@@ -296,6 +296,18 @@ def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
         assert "sampling_mode:full_capture" in fake_trace.init_kwargs["tags"]
 
 
+def test_full_capture_mode_still_advances_tenant_counters(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
+
+    service.begin_trace(name="rag-query", session_id="s1", tenant_id="tenant-counter")
+    service.begin_trace(name="rag-query", session_id="s2", tenant_id="tenant-counter")
+
+    assert service._tenant_query_counts["tenant-counter"] == 2
+
+
 def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
     service = ObservabilityService()
     service._client = _FakeClient()

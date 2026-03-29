@@ -77,6 +77,7 @@ Implemented as heuristic/interim behavior:
 ## Trace sampling
 
 - **`FULL_CAPTURE_MODE`:** `true` records 100% of traces that pass the Langfuse client gate (early-stage / low-traffic). `false` restores adaptive sampling: new-tenant boost, high-volume downsample, default `TRACE_SAMPLE_RATE`, and `force_trace` overrides — unchanged from prior behavior.
+- **Tenant counters:** when `tenant_id` is present, per-tenant totals and rolling-window counts are still updated in full-capture mode so toggling `FULL_CAPTURE_MODE` at runtime (same process) does not reset adaptive classification. Requests without a tenant id behave as before (no tenant counter state).
 - **Analysis fields:** each materialized root trace includes metadata `sampling_mode` (`full_capture` or `adaptive`) alongside existing `sampling_reason` (`full_capture`, `forced`, `new-tenant`, `high-volume`, `default`). A tag `sampling_mode:full_capture` or `sampling_mode:adaptive` is merged into the trace tag list for Langfuse filters.
 
 ## Query Variant Cost Metrics

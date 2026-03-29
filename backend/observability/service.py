@@ -581,6 +581,10 @@ class ObservabilityService:
         force_trace: bool,
     ) -> tuple[bool, str]:
         if settings.full_capture_mode:
+            # Keep tenant counters in sync with adaptive path so a later FULL_CAPTURE_MODE=false
+            # toggle does not reset new-tenant / high-volume classification.
+            if tenant_id is not None:
+                self._record_tenant_query(tenant_id)
             return True, "full_capture"
         if force_trace:
             return True, "forced"

@@ -20,15 +20,19 @@ def authenticate_tester(username: str, password: str, db: Session) -> Tester | N
     return tester
 
 
-def assert_bot_exists(bot_id: str, db: Session) -> None:
-    """Raises ValueError if no client with this public_id."""
+def assert_bot_ready_for_widget_chat(bot_id: str, db: Session) -> None:
+    """Same preconditions as POST /widget/chat for this public_id."""
     client = db.query(Client).filter(Client.public_id == bot_id).first()
     if not client:
         raise ValueError("bot_not_found")
+    if not client.is_active:
+        raise ValueError("bot_inactive")
+    if not client.openai_api_key or not str(client.openai_api_key).strip():
+        raise ValueError("bot_openai_not_configured")
 
 
 def create_eval_session(tester_id: uuid.UUID, bot_id: str, db: Session) -> EvalSession:
-    assert_bot_exists(bot_id, db)
+    assert_bot_ready_for_widget_chat(bot_id, db)
     session = EvalSession(tester_id=tester_id, bot_id=bot_id)
     db.add(session)
     db.commit()

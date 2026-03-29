@@ -22,6 +22,8 @@ type Props = {
   saved: boolean;
   onSaved: (messageIndex: number) => void;
   getToken: () => string | null;
+  /** Expired / invalid eval token: clear storage and return to login. */
+  onAuthFailed?: () => void;
 };
 
 function formatApiDetail(detail: unknown, fallback: string): string {
@@ -44,6 +46,7 @@ export function EvalRatingPanel({
   saved,
   onSaved,
   getToken,
+  onAuthFailed,
 }: Props) {
   const [verdict, setVerdict] = useState<Verdict>(null);
   const [errorCategory, setErrorCategory] = useState<string>("");
@@ -125,6 +128,10 @@ export function EvalRatingPanel({
           body: JSON.stringify(body),
         }
       );
+      if (res.status === 401) {
+        onAuthFailed?.();
+        return;
+      }
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(

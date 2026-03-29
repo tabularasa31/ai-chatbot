@@ -25,7 +25,7 @@ from backend.eval.service import (
     get_session_for_tester,
     list_session_results,
 )
-from backend.eval.tokens import create_eval_access_token
+from backend.eval.tokens import EvalJwtSecretMissing, create_eval_access_token
 from backend.models import Tester
 
 eval_router = APIRouter(prefix="/eval", tags=["eval"])
@@ -42,7 +42,13 @@ def eval_login(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
         )
-    token = create_eval_access_token(tester.id)
+    try:
+        token = create_eval_access_token(tester.id)
+    except EvalJwtSecretMissing:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Eval authentication is not configured (set EVAL_JWT_SECRET)",
+        ) from None
     return EvalTokenResponse(access_token=token)
 
 
@@ -59,10 +65,21 @@ def eval_create_session(
     try:
         session = create_eval_session(tester.id, body.bot_id, db)
     except ValueError as e:
-        if str(e) == "bot_not_found":
+        code = str(e)
+        if code == "bot_not_found":
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Bot not found",
+            ) from e
+        if code == "bot_inactive":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Client is not active",
+            ) from e
+        if code == "bot_openai_not_configured":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="OpenAI API key not configured. Add your key in dashboard settings.",
             ) from e
         raise
     return EvalSessionResponse(

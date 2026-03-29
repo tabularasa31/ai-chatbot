@@ -7,14 +7,22 @@ from typing import Any, Dict
 import jwt
 
 from backend.core.config import settings
+from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 
-EVAL_JWT_TYP = "eval_tester"
+EVAL_JWT_TYP = EVAL_TESTER_JWT_TYP
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 
+class EvalJwtSecretMissing(Exception):
+    """EVAL_JWT_SECRET is unset or blank (misconfiguration)."""
+
+
 def _eval_secret() -> str:
-    return settings.eval_jwt_secret or settings.jwt_secret
+    s = settings.eval_jwt_secret
+    if not isinstance(s, str) or not s.strip():
+        raise EvalJwtSecretMissing
+    return s.strip()
 
 
 def create_eval_access_token(tester_id: uuid.UUID) -> str:
@@ -32,7 +40,11 @@ def create_eval_access_token(tester_id: uuid.UUID) -> str:
 def decode_eval_access_token(token: str) -> uuid.UUID | None:
     """Return tester id if token is a valid eval tester JWT; else None."""
     try:
-        payload = jwt.decode(token, _eval_secret(), algorithms=[ALGORITHM])
+        secret = _eval_secret()
+    except EvalJwtSecretMissing:
+        raise
+    try:
+        payload = jwt.decode(token, secret, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
     if payload.get("typ") != EVAL_JWT_TYP:

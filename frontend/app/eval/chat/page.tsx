@@ -4,7 +4,14 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChatWidget, type ChatWidgetBelowAssistantContext } from "@/components/ChatWidget";
 import { EvalRatingPanel } from "@/components/eval/EvalRatingPanel";
-import { evalApiBase, getEvalToken } from "@/lib/evalAuth";
+import { evalApiBase, getEvalToken, removeEvalToken } from "@/lib/evalAuth";
+
+/** Dedupe POST /eval/sessions in React Strict Mode (dev double-mount) and parallel effects. */
+const evalSessionBootstrapPromises = new Map<string, Promise<string>>();
+
+function evalSessionBootstrapKey(botId: string, token: string): string {
+  return `${botId}::${token.slice(0, 48)}`;
+}
 
 function formatApiDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
@@ -40,6 +47,11 @@ function EvalChatContent() {
     router.replace(`/eval/login?next=${next}`);
   }, [router, botId]);
 
+  const handleEvalAuthFailure = useCallback(() => {
+    removeEvalToken();
+    redirectToLogin();
+  }, [redirectToLogin]);
+
   useEffect(() => {
     const token = getEvalToken();
     if (!token) {
@@ -52,12 +64,12 @@ function EvalChatContent() {
     const token = getEvalToken();
     if (!token) return;
 
-    let cancelled = false;
-    setSessionLoading(true);
-    setSessionError("");
-
-    (async () => {
-      try {
+    const key = evalSessionBootstrapKey(botId, token);
+    let promise = evalSessionBootstrapPromises.get(key);
+    if (!promise) {
+      setSessionLoading(true);
+      setSessionError("");
+      promise = (async () => {
         const res = await fetch(`${apiBase}/eval/sessions`, {
           method: "POST",
           headers: {
@@ -67,35 +79,54 @@ function EvalChatContent() {
           body: JSON.stringify({ bot_id: botId }),
         });
         const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
+        if (res.status === 401) {
+          removeEvalToken();
+          throw new Error("__eval_auth_401");
+        }
         if (!res.ok) {
-          setSessionError(
+          throw new Error(
             formatApiDetail((data as { detail?: unknown }).detail, `Ошибка ${res.status}`)
           );
-          setEvalSessionId(null);
-          return;
         }
         const id = (data as { id?: string }).id;
-        if (!id) {
-          setSessionError("Нет id сессии в ответе");
-          setEvalSessionId(null);
+        if (!id) throw new Error("Нет id сессии в ответе");
+        return id;
+      })().finally(() => {
+        evalSessionBootstrapPromises.delete(key);
+      });
+      evalSessionBootstrapPromises.set(key, promise);
+    } else {
+      setSessionLoading(true);
+      setSessionError("");
+    }
+
+    let cancelled = false;
+    promise
+      .then((id) => {
+        if (cancelled) return;
+        setEvalSessionId(id);
+        setSessionError("");
+        setSessionLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSessionLoading(false);
+        setEvalSessionId(null);
+        if (e instanceof Error && e.message === "__eval_auth_401") {
+          redirectToLogin();
           return;
         }
-        setEvalSessionId(id);
-      } catch {
-        if (!cancelled) {
+        if (e instanceof Error) {
+          setSessionError(e.message);
+        } else {
           setSessionError("Не удалось создать сессию оценки");
-          setEvalSessionId(null);
         }
-      } finally {
-        if (!cancelled) setSessionLoading(false);
-      }
-    })();
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [apiBase, botId]);
+  }, [apiBase, botId, redirectToLogin]);
 
   const markSaved = useCallback((idx: number) => {
     setSavedMessageIndexes((prev) => {
@@ -108,6 +139,7 @@ function EvalChatContent() {
   const renderBelowAssistant = useCallback(
     function evalRenderBelowAssistant(ctx: ChatWidgetBelowAssistantContext) {
       if (!evalSessionId) return null;
+      // MVP: escalation handoff lines are still normal assistant bubbles (rateable).
       return (
         <EvalRatingPanel
           apiBase={apiBase}
@@ -118,10 +150,11 @@ function EvalChatContent() {
           saved={savedMessageIndexes.has(ctx.messageIndex)}
           onSaved={markSaved}
           getToken={getEvalToken}
+          onAuthFailed={handleEvalAuthFailure}
         />
       );
     },
-    [apiBase, evalSessionId, savedMessageIndexes, markSaved],
+    [apiBase, evalSessionId, savedMessageIndexes, markSaved, handleEvalAuthFailure],
   );
 
   if (!botId) {

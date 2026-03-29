@@ -141,6 +141,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |----------|-------|-------------|
 | `DATABASE_URL` | Backend | PostgreSQL connection string |
 | `JWT_SECRET` | Backend | Secret for JWT (min 32 chars) |
+| `EVAL_JWT_SECRET` | Backend | Separate secret for internal `/eval/*` tester JWT (min 32 chars) |
 | `ENVIRONMENT` | Backend | `development` or `production` |
 | `ENCRYPTION_KEY` | Backend | Fernet key for OpenAI key encryption |
 | `FRONTEND_URL` | Backend | Frontend URL (e.g. https://getchat9.live) |

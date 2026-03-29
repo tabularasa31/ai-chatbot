@@ -13,7 +13,7 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <h2
                 key={`${block.type}-${index}`}
-                className="text-2xl md:text-3xl text-[#FAF5FF] pt-4"
+                className="pt-4 text-2xl text-[#FAF5FF] md:text-3xl"
               >
                 {block.text}
               </h2>
@@ -22,7 +22,7 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <p
                 key={`${block.type}-${index}`}
-                className="text-lg leading-8 text-[#FAF5FF]/82"
+                className="text-lg leading-8 text-[#C6C0D4]"
               >
                 {block.text}
               </p>
@@ -31,7 +31,7 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <ul
                 key={`${block.type}-${index}`}
-                className="space-y-3 pl-6 text-lg leading-8 text-[#FAF5FF]/82 list-disc marker:text-[#38BDF8]"
+                className="list-disc space-y-3 pl-6 text-lg leading-8 text-[#C6C0D4] marker:text-[#5EC8FF]"
               >
                 {block.items.map((item) => (
                   <li key={item}>{item}</li>
@@ -42,11 +42,11 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <blockquote
                 key={`${block.type}-${index}`}
-                className="border-l-4 border-[#E879F9] bg-[#12121A] rounded-r-2xl px-6 py-5"
+                className="rounded-r-2xl border-l-4 border-[#E879F9] bg-[#14141D] px-6 py-5"
               >
                 <p className="text-xl leading-8 text-[#FAF5FF]">{block.text}</p>
                 {block.attribution ? (
-                  <footer className="mt-3 text-sm uppercase tracking-[0.2em] text-[#FAF5FF]/45">
+                  <footer className="mt-3 text-sm uppercase tracking-[0.2em] text-[#A9A3BA]">
                     {block.attribution}
                   </footer>
                 ) : null}

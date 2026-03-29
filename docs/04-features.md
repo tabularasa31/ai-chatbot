@@ -205,6 +205,8 @@ Retrieval is instrumented with Langfuse-style traces for both chat requests and 
 
 The `bm25-search` span keeps the lexical inputs and merged lexical output explicit, including compact winner provenance for merged hits. This makes it possible to compare p50/p95 latency for single-vs-multi vector expansion and asymmetric-vs-symmetric lexical expansion without changing the default retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
 
+**Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive tenant sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
+
 ### Retrieval reliability contradiction policy
 
 Retrieval reliability keeps contradiction handling in the final capping stage. Contradiction is always recorded in `signals` and `evidence`, but it only changes the final verdict after corroboration:

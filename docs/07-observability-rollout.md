@@ -57,6 +57,7 @@ Implemented in code:
 - `source-overlap-check`
 - `llm-generation`
 - reliability score propagation
+- contradiction observability projection (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`)
 - deferred sampling with promotion for low-reliability and escalated requests
 - promotion metadata for both deferred and already-sampled traces
 

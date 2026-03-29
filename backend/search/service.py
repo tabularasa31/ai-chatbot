@@ -102,7 +102,7 @@ class ReliabilityEvidence:
 
 @dataclass(frozen=True)
 class ContradictionPair:
-    """Structured contradiction evidence for one overlap-admitted pair."""
+    """Canonical contradiction fact entry for one overlap-admitted logical pair."""
 
     chunk_a_id: str
     chunk_b_id: str
@@ -113,7 +113,7 @@ class ContradictionPair:
 
 @dataclass(frozen=True)
 class ContradictionEvidence:
-    """Debug/trace-only contradiction evidence kept under canonical reliability."""
+    """Canonical contradiction evidence; `pairs` is a flat fact-level entry list."""
 
     pairs: tuple[ContradictionPair, ...] = ()
 
@@ -201,10 +201,12 @@ def build_reliability_projection(
     reliability: RetrievalReliability,
 ) -> dict[str, object]:
     """Project canonical reliability into trace/debug-friendly payloads."""
+    reliability_payload = serialize_reliability(reliability)
     return {
-        "reliability": serialize_reliability(reliability),
+        "reliability": reliability_payload,
         "source_overlap_detected": reliability.source_overlap_detected,
         "source_overlap_pairs": reliability.source_overlap_pairs,
+        **_build_contradiction_projection_fields(reliability_payload),
     }
 
 
@@ -260,9 +262,68 @@ def _contradiction_identity(
     )
 
 
+def _logical_overlap_pair_identity_from_ids(
+    chunk_a_id: str,
+    chunk_b_id: str,
+) -> tuple[str, str]:
+    """Return the orientation-insensitive identity for one logical overlap pair."""
+    return tuple(sorted((chunk_a_id, chunk_b_id)))
+
+
 def _logical_overlap_pair_identity(pair: ContradictionPair) -> tuple[str, str]:
     """Return the orientation-insensitive identity for one logical overlap pair."""
-    return tuple(sorted((pair.chunk_a_id, pair.chunk_b_id)))
+    return _logical_overlap_pair_identity_from_ids(pair.chunk_a_id, pair.chunk_b_id)
+
+
+def _build_contradiction_projection_fields(
+    reliability_payload: dict[str, object],
+) -> dict[str, object]:
+    """Derive observability-only contradiction metrics from final canonical payload."""
+    contradiction_pairs_payload: list[dict[str, object]] = []
+    evidence_payload = reliability_payload.get("evidence")
+    if isinstance(evidence_payload, dict):
+        contradiction_payload = evidence_payload.get("contradiction")
+        if isinstance(contradiction_payload, dict):
+            pairs_payload = contradiction_payload.get("pairs")
+            if isinstance(pairs_payload, list):
+                contradiction_pairs_payload = [
+                    pair_payload
+                    for pair_payload in pairs_payload
+                    if isinstance(pair_payload, dict)
+                ]
+
+    contradiction_count = len(contradiction_pairs_payload)
+    if contradiction_count == 0:
+        return {
+            "contradiction_detected": False,
+            "contradiction_count": 0,
+            "contradiction_pair_count": 0,
+            "contradiction_basis_types": [],
+        }
+
+    contradiction_basis_types: list[str] = []
+    seen_basis_types: set[str] = set()
+    logical_pair_identities: set[tuple[str, str]] = set()
+
+    for pair_payload in contradiction_pairs_payload:
+        basis = pair_payload.get("basis")
+        if isinstance(basis, str) and basis not in seen_basis_types:
+            seen_basis_types.add(basis)
+            contradiction_basis_types.append(basis)
+
+        chunk_a_id = pair_payload.get("chunk_a_id")
+        chunk_b_id = pair_payload.get("chunk_b_id")
+        if isinstance(chunk_a_id, str) and isinstance(chunk_b_id, str):
+            logical_pair_identities.add(
+                _logical_overlap_pair_identity_from_ids(chunk_a_id, chunk_b_id)
+            )
+
+    return {
+        "contradiction_detected": True,
+        "contradiction_count": contradiction_count,
+        "contradiction_pair_count": len(logical_pair_identities),
+        "contradiction_basis_types": contradiction_basis_types,
+    }
 
 
 def _is_valid_contradiction_pair(pair: ContradictionPair) -> bool:

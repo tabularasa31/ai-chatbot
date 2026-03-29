@@ -310,6 +310,7 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
 
     vector_span = next(span for span in trace.spans if span.name == "vector-search")
     bm25_span = next(span for span in trace.spans if span.name == "bm25-search")
+    overlap_span = next(span for span in trace.spans if span.name == "source-overlap-check")
     assert vector_span.input is not None
     assert vector_span.input["engine"] == "python-cosine"
     assert vector_span.output is not None
@@ -322,6 +323,11 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
     assert bm25_span.output["bm25_query_variant_count"] == 1
     assert bm25_span.output["bm25_variant_eval_count"] == 1
     assert bm25_span.output["extra_bm25_variant_evals"] == 0
+    assert overlap_span.output is not None
+    assert overlap_span.output["contradiction_detected"] is False
+    assert overlap_span.output["contradiction_count"] == 0
+    assert overlap_span.output["contradiction_pair_count"] == 0
+    assert overlap_span.output["contradiction_basis_types"] == []
 
 
 def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> None:
@@ -1101,6 +1107,10 @@ def test_build_reliability_assessment_uses_overlap_signal_without_conflict_seman
             "signal_type": "cross_document_overlap",
         }
     ]
+    assert projection["contradiction_detected"] is False
+    assert projection["contradiction_count"] == 0
+    assert projection["contradiction_pair_count"] == 0
+    assert projection["contradiction_basis_types"] == []
     assert projection["reliability"]["score"] == "medium"
     assert projection["reliability"]["cap_reason"] == "source_overlap"
 
@@ -1123,6 +1133,10 @@ def test_build_reliability_assessment_no_signal_serializes_stable_empty_shape() 
     projection = build_reliability_projection(reliability)
     assert projection["source_overlap_detected"] is False
     assert projection["source_overlap_pairs"] == []
+    assert projection["contradiction_detected"] is False
+    assert projection["contradiction_count"] == 0
+    assert projection["contradiction_pair_count"] == 0
+    assert projection["contradiction_basis_types"] == []
     assert projection["reliability"]["score"] == "high"
     assert projection["reliability"]["cap_reason"] is None
 
@@ -1794,6 +1808,96 @@ def test_build_reliability_projection_does_not_mutate_canonical_object() -> None
     assert serialize_reliability(reliability) == before
 
 
+def test_build_reliability_projection_derives_contradiction_metrics_from_final_canonical_entries() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+            ),
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="version",
+                value_a="v2",
+                value_b="v3",
+            ),
+            ContradictionPair(
+                chunk_a_id="c",
+                chunk_b_id="d",
+                basis="effective_date",
+                value_a="2024-04-01",
+                value_b="2025-04-01",
+            ),
+        ),
+    )
+
+    projection = build_reliability_projection(reliability)
+
+    assert projection["contradiction_detected"] is True
+    assert projection["contradiction_count"] == 3
+    assert projection["contradiction_pair_count"] == 2
+    assert projection["contradiction_basis_types"] == ["effective_date", "version"]
+    assert projection["reliability"]["evidence"]["contradiction"]["pairs"] == [
+        {
+            "chunk_a_id": "a",
+            "chunk_b_id": "b",
+            "basis": "effective_date",
+            "value_a": "2024-03-01",
+            "value_b": "2025-03-01",
+        },
+        {
+            "chunk_a_id": "a",
+            "chunk_b_id": "b",
+            "basis": "version",
+            "value_a": "v2",
+            "value_b": "v3",
+        },
+        {
+            "chunk_a_id": "c",
+            "chunk_b_id": "d",
+            "basis": "effective_date",
+            "value_a": "2024-04-01",
+            "value_b": "2025-04-01",
+        },
+    ]
+
+
+def test_build_reliability_projection_uses_canonical_mirror_dedup_for_metrics() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(
+            ContradictionPair(
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+            ),
+            ContradictionPair(
+                chunk_a_id="b",
+                chunk_b_id="a",
+                basis="effective_date",
+                value_a="2025-03-01",
+                value_b="2024-03-01",
+            ),
+        ),
+    )
+
+    projection = build_reliability_projection(reliability)
+
+    assert projection["contradiction_detected"] is True
+    assert projection["contradiction_count"] == 1
+    assert projection["contradiction_pair_count"] == 1
+    assert projection["contradiction_basis_types"] == ["effective_date"]
+
+
 def test_build_reliability_projection_is_stable_for_empty_default_object() -> None:
     projection = build_reliability_projection(
         build_reliability_assessment(top_score=None, result_count=0)
@@ -1803,6 +1907,10 @@ def test_build_reliability_projection_is_stable_for_empty_default_object() -> No
     assert projection["reliability"]["evidence"] == {}
     assert projection["source_overlap_detected"] is False
     assert projection["source_overlap_pairs"] == []
+    assert projection["contradiction_detected"] is False
+    assert projection["contradiction_count"] == 0
+    assert projection["contradiction_pair_count"] == 0
+    assert projection["contradiction_basis_types"] == []
     assert projection["reliability"]["score"] == "low"
     assert projection["reliability"]["cap_reason"] is None
 
@@ -1974,6 +2082,10 @@ def test_search_route_traces_variant_summary(
     }
     assert metadata["source_overlap_detected"] is False
     assert metadata["source_overlap_pairs"] == []
+    assert metadata["contradiction_detected"] is False
+    assert metadata["contradiction_count"] == 0
+    assert metadata["contradiction_pair_count"] == 0
+    assert metadata["contradiction_basis_types"] == []
     assert fake_trace.update_calls == [
         {
             "output": {"result_count": 0},
@@ -1990,6 +2102,10 @@ def test_search_route_traces_variant_summary(
                 },
                 "source_overlap_detected": False,
                 "source_overlap_pairs": [],
+                "contradiction_detected": False,
+                "contradiction_count": 0,
+                "contradiction_pair_count": 0,
+                "contradiction_basis_types": [],
                 "variant_mode": "multi",
                 "query_variant_count": 3,
                 "extra_embedded_queries": 2,

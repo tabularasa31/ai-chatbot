@@ -1,9 +1,17 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-29 (UTC) — contradiction adjudication docs (canonical vs observability)
+**Last updated:** 2026-03-29 (UTC) — full capture trace mode docs
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
+
+## ✅ DOCS / CONFIG (2026-03-29) — full trace capture mode (`FULL_CAPTURE_MODE`)
+
+- ✅ **`FULL_CAPTURE_MODE`:** documented env flag (default `true`) that short-circuits adaptive sampling for 100% trace capture; `false` preserves existing tenant / high-volume heuristics.
+- ✅ **Langfuse annotations:** documented metadata `sampling_mode` and `sampling_mode:*` tags for filtering.
+- ✅ **`docs/07-observability-rollout.md`:** Railway env list + “Trace sampling” section + AC-12 note.
+- ✅ **`docs/04-features.md`:** FI-115 observability subsection points to config/service paths and rollout doc.
+- ✅ **`docs/IMPLEMENTED_FEATURES.md`:** registry row for the capability.
 
 ## ✅ COMPLETED (2026-03-28) — contradiction reliability policy
 

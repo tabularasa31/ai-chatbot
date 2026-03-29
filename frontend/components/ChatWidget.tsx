@@ -1,11 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+
+export type ChatWidgetBelowAssistantContext = {
+  messageIndex: number;
+  userQuestion: string;
+  assistantContent: string;
+};
 
 interface ChatWidgetProps {
   clientId: string;
   locale?: string | null;
+  /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
+  renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
 }
 
 const CHAT9_SITE_URL =
@@ -33,7 +41,17 @@ function formatApiDetail(detail: unknown, fallback: string): string {
   return fallback;
 }
 
-export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
+function precedingUserQuestion(
+  messages: Array<{ role: string; content: string }>,
+  assistantIndex: number
+): string {
+  for (let i = assistantIndex - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return messages[i].content;
+  }
+  return "";
+}
+
+export function ChatWidget({ clientId, locale, renderBelowAssistant }: ChatWidgetProps) {
   const [messages, setMessages] = useState<
     Array<{ role: string; content: string }>
   >([]);
@@ -234,6 +252,13 @@ export function ChatWidget({ clientId, locale }: ChatWidgetProps) {
             >
               {msg.content}
             </div>
+            {msg.role === "assistant" && renderBelowAssistant
+              ? renderBelowAssistant({
+                  messageIndex: i,
+                  userQuestion: precedingUserQuestion(messages, i),
+                  assistantContent: msg.content,
+                })
+              : null}
           </div>
         ))}
       </div>

@@ -19,6 +19,7 @@ ContradictionAdjudicationStatus = Literal[
     "skipped_global_config",
     "skipped_client_setting",
     "skipped_missing_client_key",
+    "skipped_fact_limit",
     "completed",
     "completed_with_errors",
     "failed_open",
@@ -131,10 +132,14 @@ def build_contradiction_adjudication_run(
     error_count: int = 0,
     model: str | None = None,
     items: Sequence[FactAdjudicationResult] = (),
+    applied_to_any_fact: bool | None = None,
 ) -> ContradictionAdjudicationRun:
+    resolved_applied = (
+        sent_count > 0 if applied_to_any_fact is None else applied_to_any_fact
+    )
     return ContradictionAdjudicationRun(
         enabled=enabled,
-        applied_to_any_fact=completed_count > 0,
+        applied_to_any_fact=resolved_applied,
         status=status,
         candidate_count=candidate_count,
         sent_count=sent_count,
@@ -233,6 +238,16 @@ def adjudicate_contradictions(
         )
         for candidate in candidates[:max_facts]
     ]
+
+    if not sent_candidates:
+        return build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_fact_limit",
+            candidate_count=candidate_count,
+            sent_count=0,
+            model=model,
+            applied_to_any_fact=False,
+        )
 
     started_at = perf_counter()
     try:

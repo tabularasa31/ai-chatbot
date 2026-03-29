@@ -2093,17 +2093,17 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
         False,
     )
 
-    evidence = _build_contradiction_adjudication_evidence(
+    _canonical, obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=(pair,),
         final_results=[(first, 0.9), (second, 0.88)],
         client=client,
         api_key="sk-test",
     )
 
-    assert evidence.run.status == "skipped_global_config"
-    assert evidence.run.enabled is False
-    assert evidence.run.candidate_count == 1
-    assert evidence.items == ()
+    assert _canonical is None
+    assert obs.status == "skipped_global_config"
+    assert obs.enabled is False
+    assert obs.candidate_count == 1
 
     monkeypatch.setattr(
         "backend.search.service.settings.contradiction_adjudication_enabled",
@@ -2112,16 +2112,16 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
     client.settings = {"retrieval": {}}
     db_session.commit()
 
-    evidence = _build_contradiction_adjudication_evidence(
+    _canonical, obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=(pair,),
         final_results=[(first, 0.9), (second, 0.88)],
         client=client,
         api_key="sk-test",
     )
 
-    assert evidence.run.status == "skipped_client_setting"
-    assert evidence.run.enabled is True
-    assert evidence.items == ()
+    assert _canonical is None
+    assert obs.status == "skipped_client_setting"
+    assert obs.enabled is False
 
 
 def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact_limit_skip(
@@ -2207,19 +2207,20 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
         fake_adjudicate_contradictions,
     )
 
-    evidence = _build_contradiction_adjudication_evidence(
+    canonical, _obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=pairs,
         final_results=[(first, 0.9), (second, 0.88)],
         client=client,
         api_key="sk-test",
     )
 
-    assert evidence.run.sent_count == 1
-    assert [item.fact_id for item in evidence.items] == ["fact_001", "fact_002"]
-    assert evidence.items[0].adjudication is not None
-    assert evidence.items[0].adjudication.verdict == "confirmed"
-    assert evidence.items[1].adjudication is not None
-    assert evidence.items[1].adjudication.skip_reason == "fact_limit"
+    assert canonical is not None
+    assert canonical.run.sent_count == 1
+    assert [item.fact_id for item in canonical.items] == ["fact_001", "fact_002"]
+    assert canonical.items[0].adjudication is not None
+    assert canonical.items[0].adjudication.verdict == "confirmed"
+    assert canonical.items[1].adjudication is not None
+    assert canonical.items[1].adjudication.skip_reason == "fact_limit"
 
 
 def test_contradiction_adjudication_fail_open_keeps_deterministic_reliability(
@@ -2257,6 +2258,7 @@ def test_contradiction_adjudication_fail_open_keeps_deterministic_reliability(
         result_count=5,
         contradiction_pairs=(pair,),
         contradiction_adjudication=adjudication,
+        contradiction_adjudication_observability=adjudication.run,
     )
 
     assert reliability.score == "high"
@@ -2323,6 +2325,49 @@ def test_adjudicate_contradictions_records_partial_malformed_item_as_error(
     assert run.items[0].adjudication.verdict == "confirmed"
     assert run.items[1].fact_id == "fact_002"
     assert run.items[1].adjudication.error == "invalid_verdict"
+
+
+def test_adjudicate_contradictions_skips_empty_batch_without_openai_call(
+    mock_openai_client: Mock,
+) -> None:
+    run = adjudicate_contradictions(
+        [
+            ContradictionAdjudicationCandidate(
+                fact_id="fact_001",
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+                preview_a="Chunk A",
+                preview_b="Chunk B",
+            ),
+        ],
+        api_key="sk-test",
+        model="gpt-4o-mini",
+        max_facts=0,
+        preview_chars=120,
+        max_tokens=300,
+    )
+    assert run.status == "skipped_fact_limit"
+    assert run.sent_count == 0
+    mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_serialize_reliability_omits_contradiction_adjudication_for_observability_only() -> None:
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_adjudication=None,
+        contradiction_adjudication_observability=build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_no_candidates",
+            candidate_count=0,
+            model="gpt-4o-mini",
+        ),
+    )
+    payload = serialize_reliability(reliability)
+    assert "contradiction_adjudication" not in payload["evidence"]
 
 
 def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:

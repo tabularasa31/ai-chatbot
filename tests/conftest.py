@@ -153,6 +153,7 @@ def mock_openai_client():
     # Patch where get_openai_client is used (not where defined) so imports see the mock
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client), \
          patch("backend.search.service.get_openai_client", return_value=mock_client), \
+         patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client), \
          patch(

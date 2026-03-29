@@ -10,8 +10,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
+from backend.search.contradiction_adjudication import (
+    ContradictionAdjudication,
+    ContradictionAdjudicationCandidate,
+    FactAdjudicationResult,
+    adjudicate_contradictions,
+    build_contradiction_adjudication_run,
+)
 from backend.search.service import (
+    AdjudicatedContradiction,
     ContradictionPair,
+    ContradictionAdjudicationEvidence,
     SourceOverlapPair,
     apply_script_boost,
     bm25_search_chunks,
@@ -1911,8 +1920,123 @@ def test_build_reliability_projection_is_stable_for_empty_default_object() -> No
     assert projection["contradiction_count"] == 0
     assert projection["contradiction_pair_count"] == 0
     assert projection["contradiction_basis_types"] == []
+    assert projection["contradiction_adjudication_enabled"] is False
+    assert projection["contradiction_adjudication_applied_to_any_fact"] is False
+    assert projection["contradiction_adjudication_status"] == "disabled"
+    assert projection["contradiction_adjudication_candidate_count"] == 0
+    assert projection["contradiction_adjudication_sent_count"] == 0
+    assert projection["contradiction_adjudication_completed_count"] == 0
+    assert projection["contradiction_adjudication_confirmed_count"] == 0
+    assert projection["contradiction_adjudication_rejected_count"] == 0
+    assert projection["contradiction_adjudication_inconclusive_count"] == 0
+    assert projection["contradiction_adjudication_error_count"] == 0
     assert projection["reliability"]["score"] == "low"
     assert projection["reliability"]["cap_reason"] is None
+
+
+def test_build_reliability_projection_includes_adjudication_execution_and_verdict_aggregates() -> None:
+    pair = ContradictionPair(
+        chunk_a_id="a",
+        chunk_b_id="b",
+        basis="effective_date",
+        value_a="2024-03-01",
+        value_b="2025-03-01",
+    )
+    adjudication = ContradictionAdjudicationEvidence(
+        run=build_contradiction_adjudication_run(
+            enabled=True,
+            status="completed_with_errors",
+            candidate_count=2,
+            sent_count=1,
+            completed_count=1,
+            confirmed_count=1,
+            error_count=1,
+            model="gpt-4o-mini",
+        ),
+        items=(
+            AdjudicatedContradiction(
+                fact_id="fact_001",
+                pair=pair,
+                adjudication=ContradictionAdjudication(
+                    verdict="confirmed",
+                    model="gpt-4o-mini",
+                ),
+            ),
+            AdjudicatedContradiction(
+                fact_id="fact_002",
+                pair=pair,
+                adjudication=ContradictionAdjudication(
+                    model="gpt-4o-mini",
+                    skip_reason="fact_limit",
+                ),
+            ),
+        ),
+    )
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(pair,),
+        contradiction_adjudication=adjudication,
+    )
+
+    payload = serialize_reliability(reliability)
+    projection = build_reliability_projection(reliability)
+
+    assert payload["evidence"]["contradiction"]["pairs"] == [
+        {
+            "chunk_a_id": "a",
+            "chunk_b_id": "b",
+            "basis": "effective_date",
+            "value_a": "2024-03-01",
+            "value_b": "2025-03-01",
+        }
+    ]
+    assert payload["evidence"]["contradiction_adjudication"]["items"] == [
+        {
+            "fact_id": "fact_001",
+            "pair": {
+                "chunk_a_id": "a",
+                "chunk_b_id": "b",
+                "basis": "effective_date",
+                "value_a": "2024-03-01",
+                "value_b": "2025-03-01",
+            },
+            "adjudication": {
+                "verdict": "confirmed",
+                "rationale": None,
+                "model": "gpt-4o-mini",
+                "skip_reason": None,
+                "error": None,
+            },
+        },
+        {
+            "fact_id": "fact_002",
+            "pair": {
+                "chunk_a_id": "a",
+                "chunk_b_id": "b",
+                "basis": "effective_date",
+                "value_a": "2024-03-01",
+                "value_b": "2025-03-01",
+            },
+            "adjudication": {
+                "verdict": None,
+                "rationale": None,
+                "model": "gpt-4o-mini",
+                "skip_reason": "fact_limit",
+                "error": None,
+            },
+        },
+    ]
+    assert projection["contradiction_adjudication_enabled"] is True
+    assert projection["contradiction_adjudication_applied_to_any_fact"] is True
+    assert projection["contradiction_adjudication_status"] == "completed_with_errors"
+    assert projection["contradiction_adjudication_candidate_count"] == 2
+    assert projection["contradiction_adjudication_sent_count"] == 1
+    assert projection["contradiction_adjudication_completed_count"] == 1
+    assert projection["contradiction_adjudication_confirmed_count"] == 1
+    assert projection["contradiction_adjudication_rejected_count"] == 0
+    assert projection["contradiction_adjudication_inconclusive_count"] == 0
+    assert projection["contradiction_adjudication_error_count"] == 1
 
 
 def test_search_result_bundle_default_reliability_matches_canonical_empty_state() -> None:
@@ -1923,6 +2047,282 @@ def test_search_result_bundle_default_reliability_matches_canonical_empty_state(
     assert serialize_reliability(bundle.reliability) == serialize_reliability(
         build_reliability_assessment(top_score=None, result_count=0)
     )
+
+
+def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting_disables_layer(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _build_contradiction_adjudication_evidence
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="adj-disabled@example.com")
+    client = _create_client(db_session, user, name="Adj Disabled")
+    client.settings = {
+        "retrieval": {
+            "contradiction_adjudication": {
+                "enabled": True,
+            }
+        }
+    }
+    db_session.commit()
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="Reset password effective date March 2024.",
+        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="Reset password effective date March 2025.",
+        metadata_json={"chunk_index": 1, "effective_date": "2025-03-01"},
+    )
+    pair = ContradictionPair(
+        chunk_a_id=str(first.id),
+        chunk_b_id=str(second.id),
+        basis="effective_date",
+        value_a="2024-03-01",
+        value_b="2025-03-01",
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_enabled",
+        False,
+    )
+
+    evidence = _build_contradiction_adjudication_evidence(
+        contradiction_pairs=(pair,),
+        final_results=[(first, 0.9), (second, 0.88)],
+        client=client,
+        api_key="sk-test",
+    )
+
+    assert evidence.run.status == "skipped_global_config"
+    assert evidence.run.enabled is False
+    assert evidence.run.candidate_count == 1
+    assert evidence.items == ()
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_enabled",
+        True,
+    )
+    client.settings = {"retrieval": {}}
+    db_session.commit()
+
+    evidence = _build_contradiction_adjudication_evidence(
+        contradiction_pairs=(pair,),
+        final_results=[(first, 0.9), (second, 0.88)],
+        client=client,
+        api_key="sk-test",
+    )
+
+    assert evidence.run.status == "skipped_client_setting"
+    assert evidence.run.enabled is True
+    assert evidence.items == ()
+
+
+def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact_limit_skip(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+) -> None:
+    from backend.models import Embedding
+    from backend.search.service import _build_contradiction_adjudication_evidence
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="adj-enabled@example.com")
+    client = _create_client(db_session, user, name="Adj Enabled")
+    client.settings = {
+        "retrieval": {
+            "contradiction_adjudication": {
+                "enabled": True,
+            }
+        }
+    }
+    db_session.commit()
+
+    first = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="Reset password effective date March 2024 and version v2.",
+        metadata_json={"chunk_index": 0, "effective_date": "2024-03-01", "version": "v2"},
+    )
+    second = Embedding(
+        id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        chunk_text="Reset password effective date March 2025 and version v3.",
+        metadata_json={"chunk_index": 1, "effective_date": "2025-03-01", "version": "v3"},
+    )
+    pairs = (
+        ContradictionPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            basis="effective_date",
+            value_a="2024-03-01",
+            value_b="2025-03-01",
+        ),
+        ContradictionPair(
+            chunk_a_id=str(first.id),
+            chunk_b_id=str(second.id),
+            basis="version",
+            value_a="v2",
+            value_b="v3",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_max_facts",
+        1,
+    )
+
+    def fake_adjudicate_contradictions(candidates, **kwargs):
+        assert [candidate.fact_id for candidate in candidates] == ["fact_001", "fact_002"]
+        return build_contradiction_adjudication_run(
+            enabled=True,
+            status="completed",
+            candidate_count=2,
+            sent_count=1,
+            completed_count=1,
+            confirmed_count=1,
+            model="gpt-4o-mini",
+            items=[
+                FactAdjudicationResult(
+                    fact_id="fact_001",
+                    adjudication=ContradictionAdjudication(
+                        verdict="confirmed",
+                        model="gpt-4o-mini",
+                    ),
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "backend.search.service.adjudicate_contradictions",
+        fake_adjudicate_contradictions,
+    )
+
+    evidence = _build_contradiction_adjudication_evidence(
+        contradiction_pairs=pairs,
+        final_results=[(first, 0.9), (second, 0.88)],
+        client=client,
+        api_key="sk-test",
+    )
+
+    assert evidence.run.sent_count == 1
+    assert [item.fact_id for item in evidence.items] == ["fact_001", "fact_002"]
+    assert evidence.items[0].adjudication is not None
+    assert evidence.items[0].adjudication.verdict == "confirmed"
+    assert evidence.items[1].adjudication is not None
+    assert evidence.items[1].adjudication.skip_reason == "fact_limit"
+
+
+def test_contradiction_adjudication_fail_open_keeps_deterministic_reliability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pair = ContradictionPair(
+        chunk_a_id="a",
+        chunk_b_id="b",
+        basis="effective_date",
+        value_a="2024-03-01",
+        value_b="2025-03-01",
+    )
+    adjudication = ContradictionAdjudicationEvidence(
+        run=build_contradiction_adjudication_run(
+            enabled=True,
+            status="failed_open",
+            candidate_count=1,
+            sent_count=1,
+            error_count=1,
+            model="gpt-4o-mini",
+        ),
+        items=(
+            AdjudicatedContradiction(
+                fact_id="fact_001",
+                pair=pair,
+                adjudication=ContradictionAdjudication(
+                    model="gpt-4o-mini",
+                    error="timeout",
+                ),
+            ),
+        ),
+    )
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=(pair,),
+        contradiction_adjudication=adjudication,
+    )
+
+    assert reliability.score == "high"
+    assert reliability.cap_reason is None
+    projection = build_reliability_projection(reliability)
+    assert projection["contradiction_detected"] is True
+    assert projection["contradiction_adjudication_status"] == "failed_open"
+    assert projection["contradiction_adjudication_error_count"] == 1
+
+
+def test_adjudicate_contradictions_records_partial_malformed_item_as_error(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(
+            message=Mock(
+                content=(
+                    '{"items":['
+                    '{"fact_id":"fact_001","verdict":"confirmed","rationale":"Metadata disagrees clearly."},'
+                    '{"fact_id":"fact_002","verdict":"maybe"}'
+                    "]}"
+                )
+            )
+        )
+    ]
+
+    run = adjudicate_contradictions(
+        [
+            ContradictionAdjudicationCandidate(
+                fact_id="fact_001",
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="effective_date",
+                value_a="2024-03-01",
+                value_b="2025-03-01",
+                preview_a="Chunk A",
+                preview_b="Chunk B",
+            ),
+            ContradictionAdjudicationCandidate(
+                fact_id="fact_002",
+                chunk_a_id="a",
+                chunk_b_id="b",
+                basis="version",
+                value_a="v2",
+                value_b="v3",
+                preview_a="Chunk A",
+                preview_b="Chunk B",
+            ),
+        ],
+        api_key="sk-test",
+        model="gpt-4o-mini",
+        max_facts=5,
+        preview_chars=120,
+        max_tokens=300,
+    )
+
+    assert run.status == "completed_with_errors"
+    assert run.candidate_count == 2
+    assert run.sent_count == 2
+    assert run.completed_count == 1
+    assert run.confirmed_count == 1
+    assert run.error_count == 1
+    assert run.items[0].fact_id == "fact_001"
+    assert run.items[0].adjudication.verdict == "confirmed"
+    assert run.items[1].fact_id == "fact_002"
+    assert run.items[1].adjudication.error == "invalid_verdict"
 
 
 def test_detect_source_overlaps_ignores_pairs_from_same_document() -> None:
@@ -2106,6 +2506,16 @@ def test_search_route_traces_variant_summary(
                 "contradiction_count": 0,
                 "contradiction_pair_count": 0,
                 "contradiction_basis_types": [],
+                "contradiction_adjudication_enabled": False,
+                "contradiction_adjudication_applied_to_any_fact": False,
+                "contradiction_adjudication_status": "disabled",
+                "contradiction_adjudication_candidate_count": 0,
+                "contradiction_adjudication_sent_count": 0,
+                "contradiction_adjudication_completed_count": 0,
+                "contradiction_adjudication_confirmed_count": 0,
+                "contradiction_adjudication_rejected_count": 0,
+                "contradiction_adjudication_inconclusive_count": 0,
+                "contradiction_adjudication_error_count": 0,
                 "variant_mode": "multi",
                 "query_variant_count": 3,
                 "extra_embedded_queries": 2,

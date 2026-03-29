@@ -219,6 +219,21 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | POST | `/widget/chat` | Public widget chat by `clientId` |
 | POST | `/widget/escalate` | Public widget manual escalation |
 
+### Internal manual QA (Eval)
+
+Internal testers only; separate **`EVAL_JWT_SECRET`** (not dashboard JWT). See **`docs/04-features.md`** §10.
+
+**`bot_id`** in eval is the same string as **`clientId`** in the widget embed URL (`embed.js?clientId=ch_…`), i.e. dashboard **public id** — **not** the secret `api_key`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/eval/login` | Tester username/password → eval `access_token` |
+| POST | `/eval/sessions` | Create eval session (`bot_id` = client `public_id` / widget `clientId`); same readiness rules as `/widget/chat` |
+| POST | `/eval/sessions/{id}/results` | Append pass/fail result (snapshot question + answer) |
+| GET | `/eval/sessions/{id}/results` | List results (owner session only) |
+
+Frontend: **`/eval/login`**, **`/eval/chat?bot_id=ch_…`**. CLI: **`scripts/create_tester.py`**.
+
 ---
 
 ## Embed Widget

@@ -58,6 +58,7 @@ Implemented in code:
 - `llm-generation`
 - reliability score propagation
 - contradiction observability projection (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`)
+- optional contradiction **adjudication** projection fields (`contradiction_adjudication_*`) sourced from the observability run, not from canonical `evidence` alone — see `docs/04-features.md` (Retrieval contradiction observability + shadow adjudication)
 - deferred sampling with promotion for low-reliability and escalated requests
 - promotion metadata for both deferred and already-sampled traces
 

@@ -35,7 +35,10 @@ export default function BlogIndexPage() {
   const posts = getAllBlogPosts();
 
   return (
-    <div className="min-h-screen bg-[#0A0A0F] font-['Inter']">
+    <div
+      className="min-h-screen bg-[#0A0A0F] font-['Inter']"
+      style={{ colorScheme: "dark" }}
+    >
       <Navigation />
       <main>
         <section className="mx-auto max-w-7xl px-6 py-20 md:py-28">
@@ -46,7 +49,7 @@ export default function BlogIndexPage() {
             <h1 className="mt-6 text-5xl text-[#FAF5FF] md:text-6xl">
               Clear thinking for AI chat, support, and product teams.
             </h1>
-            <p className="mt-6 text-xl leading-8 text-[#FAF5FF]/70">
+            <p className="mt-6 text-xl leading-8 text-[#AFA8BF]">
               Articles for operators and decision-makers who want practical
               ways to use AI chat without adding complexity.
             </p>

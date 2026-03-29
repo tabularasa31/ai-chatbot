@@ -8,9 +8,9 @@ from typing import Any, Dict
 import jwt
 
 from backend.core.config import settings
+from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 
 logger = logging.getLogger(__name__)
-from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 
 EVAL_JWT_TYP = EVAL_TESTER_JWT_TYP
 ALGORITHM = "HS256"

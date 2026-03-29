@@ -63,6 +63,10 @@ class DebugInfoResponse(BaseModel):
     best_rank_score: Optional[float] = None
     best_confidence_score: Optional[float] = None
     confidence_source: Optional[Literal["vector_similarity", "rank_score", "none"]] = None
+    contradiction_detected: bool = False
+    contradiction_count: int = 0
+    contradiction_pair_count: int = 0
+    contradiction_basis_types: list[str] = Field(default_factory=list)
     chunks: list[DebugChunkResponse]
     validation: Optional[dict] = None
 
@@ -174,6 +178,10 @@ def chat_debug(
         best_rank_score=debug_dict.get("best_rank_score"),
         best_confidence_score=debug_dict.get("best_confidence_score"),
         confidence_source=debug_dict.get("confidence_source"),
+        contradiction_detected=bool(debug_dict.get("contradiction_detected", False)),
+        contradiction_count=int(debug_dict.get("contradiction_count", 0)),
+        contradiction_pair_count=int(debug_dict.get("contradiction_pair_count", 0)),
+        contradiction_basis_types=list(debug_dict.get("contradiction_basis_types", [])),
         chunks=[
             DebugChunkResponse(
                 document_id=c["document_id"],

@@ -304,7 +304,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Client
-    from backend.search.service import build_reliability_assessment
+    from backend.search.service import ContradictionPair, build_reliability_assessment
 
     class FakeSpan:
         def end(self, **kwargs: object) -> None:
@@ -345,7 +345,26 @@ def test_process_chat_message_adds_variant_summary_to_trace(
             best_rank_score=0.93,
             best_confidence_score=0.91,
             confidence_source="vector_similarity",
-            reliability=build_reliability_assessment(top_score=0.93, result_count=5),
+            reliability=build_reliability_assessment(
+                top_score=0.93,
+                result_count=5,
+                contradiction_pairs=(
+                    ContradictionPair(
+                        chunk_a_id="a",
+                        chunk_b_id="b",
+                        basis="effective_date",
+                        value_a="2024-03-01",
+                        value_b="2025-03-01",
+                    ),
+                    ContradictionPair(
+                        chunk_a_id="a",
+                        chunk_b_id="b",
+                        basis="version",
+                        value_a="v2",
+                        value_b="v3",
+                    ),
+                ),
+            ),
             variant_mode="multi",
             query_variant_count=3,
             extra_embedded_queries=2,
@@ -398,12 +417,38 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     assert fake_trace.update_calls[-1]["metadata"]["retrieval_duration_ms"] == 18.4
     assert fake_trace.update_calls[-1]["metadata"]["reliability"] == {
         "base_score": "high",
-        "score": "high",
-        "cap": None,
-        "cap_reason": None,
-        "signals": [],
-        "evidence": {},
+        "score": "low",
+        "cap": "low",
+        "cap_reason": "contradiction",
+        "signals": [{"kind": "contradiction"}],
+        "evidence": {
+            "contradiction": {
+                "pairs": [
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "effective_date",
+                        "value_a": "2024-03-01",
+                        "value_b": "2025-03-01",
+                    },
+                    {
+                        "chunk_a_id": "a",
+                        "chunk_b_id": "b",
+                        "basis": "version",
+                        "value_a": "v2",
+                        "value_b": "v3",
+                    },
+                ]
+            }
+        },
     }
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_detected"] is True
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_count"] == 2
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_pair_count"] == 1
+    assert fake_trace.update_calls[-1]["metadata"]["contradiction_basis_types"] == [
+        "effective_date",
+        "version",
+    ]
     assert fake_trace.update_calls[-1]["tags"] == ["variants:multi"]
 
 
@@ -1848,6 +1893,10 @@ def test_debug_with_embeddings_vector_mode(
     assert data["debug"]["mode"] == "hybrid"
     assert data["debug"]["confidence_source"] == "vector_similarity"
     assert data["debug"]["best_confidence_score"] > 0.0
+    assert data["debug"]["contradiction_detected"] is False
+    assert data["debug"]["contradiction_count"] == 0
+    assert data["debug"]["contradiction_pair_count"] == 0
+    assert data["debug"]["contradiction_basis_types"] == []
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)

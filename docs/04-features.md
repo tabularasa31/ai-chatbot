@@ -236,6 +236,31 @@ Rollout note:
 - review the share of single-fact cases, same-pair `2+` fact cases, multi-pair cases, and the rate of outcomes that would flip versus the old behavior
 - define an acceptable flip-rate threshold first; if the observed flip rate exceeds it, require product review or gate rollout behind a feature flag
 
+### Retrieval contradiction observability projection
+
+Canonical reliability continues to answer "what the system believes" via `score`, `cap_reason`, `signals`, and `evidence`. Observability-only contradiction metrics now sit alongside that payload in trace/debug projections to answer "how much contradiction evidence was present and of what shape" without parsing nested evidence manually.
+
+Projection invariants:
+
+- the only contradiction source of truth is final canonical `reliability.evidence.contradiction.pairs`
+- despite the historical name, `pairs` is a flat list of fact-level canonical contradiction entries
+- each entry already passed canonical filtering, mirror-aware dedupe, and threshold policy before projection reads it
+- `contradiction_count` counts canonical fact entries, not logical pairs
+- `contradiction_pair_count` aggregates those entries by the same orientation-insensitive logical pair identity used by canonical contradiction dedupe: `(chunk_a_id, chunk_b_id)` ignoring order
+- `contradiction_basis_types` is a first-seen traversal-order dedup, not a semantic sort
+
+Current derived fields:
+
+- `contradiction_detected`
+- `contradiction_count`
+- `contradiction_pair_count`
+- `contradiction_basis_types`
+
+Governance note:
+
+- these fields are projection-only observability/debug helpers, not part of the canonical product decision contract
+- `contradiction_basis_types` is suitable for aggregation only while `basis` remains a small controlled vocabulary and does not include dynamic values
+
 ---
 
 ## 5. RAG Chat Pipeline

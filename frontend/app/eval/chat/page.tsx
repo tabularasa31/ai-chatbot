@@ -1,8 +1,8 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChatWidget } from "@/components/ChatWidget";
+import { ChatWidget, type ChatWidgetBelowAssistantContext } from "@/components/ChatWidget";
 import { EvalRatingPanel } from "@/components/eval/EvalRatingPanel";
 import { evalApiBase, getEvalToken } from "@/lib/evalAuth";
 
@@ -105,21 +105,24 @@ function EvalChatContent() {
     });
   }, []);
 
-  const renderBelowAssistant = useMemo(() => {
-    if (!evalSessionId) return undefined;
-    return (ctx: { messageIndex: number; userQuestion: string; assistantContent: string }) => (
-      <EvalRatingPanel
-        apiBase={apiBase}
-        evalSessionId={evalSessionId}
-        messageIndex={ctx.messageIndex}
-        userQuestion={ctx.userQuestion}
-        botAnswer={ctx.assistantContent}
-        saved={savedMessageIndexes.has(ctx.messageIndex)}
-        onSaved={markSaved}
-        getToken={getEvalToken}
-      />
-    );
-  }, [apiBase, evalSessionId, savedMessageIndexes, markSaved]);
+  const renderBelowAssistant = useCallback(
+    function evalRenderBelowAssistant(ctx: ChatWidgetBelowAssistantContext) {
+      if (!evalSessionId) return null;
+      return (
+        <EvalRatingPanel
+          apiBase={apiBase}
+          evalSessionId={evalSessionId}
+          messageIndex={ctx.messageIndex}
+          userQuestion={ctx.userQuestion}
+          botAnswer={ctx.assistantContent}
+          saved={savedMessageIndexes.has(ctx.messageIndex)}
+          onSaved={markSaved}
+          getToken={getEvalToken}
+        />
+      );
+    },
+    [apiBase, evalSessionId, savedMessageIndexes, markSaved],
+  );
 
   if (!botId) {
     return (

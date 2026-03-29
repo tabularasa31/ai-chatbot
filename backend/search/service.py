@@ -7,7 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Any, Literal
+from typing import Literal
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session

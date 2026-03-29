@@ -28,6 +28,17 @@ def _merge_tags(*tag_lists: list[str] | None) -> list[str]:
     return merged
 
 
+def _safe_host_preview(host: str | None) -> str:
+    """Return a non-sensitive host preview for startup diagnostics."""
+    if not host:
+        return "<missing>"
+    if "://" not in host:
+        return host
+    scheme, rest = host.split("://", 1)
+    domain = rest.split("/", 1)[0]
+    return f"{scheme}://{domain}"
+
+
 class _TraceClientProtocol(Protocol):
     def trace(self, **kwargs: Any) -> Any:
         ...
@@ -534,7 +545,14 @@ class ObservabilityService:
             and settings.langfuse_public_key
             and settings.langfuse_secret_key
         ):
-            logger.info("Langfuse disabled: missing configuration")
+            logger.warning(
+                "Langfuse disabled: missing configuration",
+                extra={
+                    "langfuse_host_present": bool(settings.langfuse_host),
+                    "langfuse_public_key_present": bool(settings.langfuse_public_key),
+                    "langfuse_secret_key_present": bool(settings.langfuse_secret_key),
+                },
+            )
             return
         try:
             from langfuse import Langfuse  # type: ignore
@@ -542,13 +560,42 @@ class ObservabilityService:
             logger.warning("Langfuse SDK is not installed; observability stays disabled")
             return
         try:
+            logger.warning(
+                "Initializing Langfuse observability",
+                extra={
+                    "langfuse_host": _safe_host_preview(settings.langfuse_host),
+                    "langfuse_public_key_prefix": (
+                        settings.langfuse_public_key[:6]
+                        if settings.langfuse_public_key
+                        else None
+                    ),
+                    "langfuse_secret_key_prefix": (
+                        settings.langfuse_secret_key[:6]
+                        if settings.langfuse_secret_key
+                        else None
+                    ),
+                },
+            )
             self._client = Langfuse(
                 host=settings.langfuse_host,
                 public_key=settings.langfuse_public_key,
                 secret_key=settings.langfuse_secret_key,
             )
+            auth_check = None
+            auth_check_method = getattr(self._client, "auth_check", None)
+            if callable(auth_check_method):
+                try:
+                    auth_check = bool(auth_check_method())
+                except Exception:
+                    logger.exception("Langfuse auth_check failed")
             self._enabled = True
-            logger.info("Langfuse observability initialized")
+            logger.warning(
+                "Langfuse observability initialized",
+                extra={
+                    "langfuse_host": _safe_host_preview(settings.langfuse_host),
+                    "langfuse_auth_check": auth_check,
+                },
+            )
         except Exception:
             logger.exception("Failed to initialize Langfuse; observability stays disabled")
             self.reset()

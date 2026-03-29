@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:?check_same_thread=False")
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret")
+os.environ.setdefault("EVAL_JWT_SECRET", "test-eval-jwt-secret-min-32-chars!!")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 # Valid Fernet key for tests (generate with Fernet.generate_key())
 os.environ.setdefault("ENCRYPTION_KEY", "7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=")

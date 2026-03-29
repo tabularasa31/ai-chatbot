@@ -289,6 +289,7 @@ git push -u origin feature/documents
 ```bash
 DATABASE_URL=postgresql://...
 JWT_SECRET=<generate random 32-char string>
+EVAL_JWT_SECRET=<separate random secret for internal /eval/* tester JWT; min 32 chars>
 ENVIRONMENT=production
 ENCRYPTION_KEY=<Fernet key for per-client OpenAI key storage>
 # Also Brevo, FRONTEND_URL, CORS_ALLOWED_ORIGINS, etc. (see .env.example)

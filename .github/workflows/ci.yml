@@ -29,6 +29,7 @@ jobs:
     env:
       DATABASE_URL: sqlite:///:memory:?check_same_thread=False
       JWT_SECRET: test-secret-key-min-32-chars-long!!
+      EVAL_JWT_SECRET: test-eval-jwt-secret-min-32-chars-long!!
       ENVIRONMENT: test
       ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
       OPENAI_API_KEY: sk-test

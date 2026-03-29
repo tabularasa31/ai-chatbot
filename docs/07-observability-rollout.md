@@ -21,6 +21,7 @@ Configure `chat9-api` env:
 - `LANGFUSE_PUBLIC_KEY`
 - `LANGFUSE_SECRET_KEY`
 - `OBSERVABILITY_CAPTURE_FULL_PROMPTS`
+- `FULL_CAPTURE_MODE` — when `true` (default), every eligible request is traced and adaptive sampling is skipped; set `false` in production at scale to use tenant heuristics below
 - `TRACE_SAMPLE_RATE`
 - `TRACE_HIGH_VOLUME_THRESHOLD`
 - `TRACE_HIGH_VOLUME_SAMPLE_RATE`
@@ -72,6 +73,12 @@ Implemented as heuristic/interim behavior:
 - cost estimation
 - in-process tenant sampling counters
 - bounded in-memory deferred trace buffering
+
+## Trace sampling
+
+- **`FULL_CAPTURE_MODE`:** `true` records 100% of traces that pass the Langfuse client gate (early-stage / low-traffic). `false` restores adaptive sampling: new-tenant boost, high-volume downsample, default `TRACE_SAMPLE_RATE`, and `force_trace` overrides — unchanged from prior behavior.
+- **Tenant counters:** when `tenant_id` is present, per-tenant totals and rolling-window counts are still updated in full-capture mode so toggling `FULL_CAPTURE_MODE` at runtime (same process) does not reset adaptive classification. Requests without a tenant id behave as before (no tenant counter state).
+- **Analysis fields:** each materialized root trace includes metadata `sampling_mode` (`full_capture` or `adaptive`) alongside existing `sampling_reason` (`full_capture`, `forced`, `new-tenant`, `high-volume`, `default`). A tag `sampling_mode:full_capture` or `sampling_mode:adaptive` is merged into the trace tag list for Langfuse filters.
 
 ## Query Variant Cost Metrics
 
@@ -188,7 +195,7 @@ Quick Answers stage exists as a placeholder, but there is no real quick-answer s
 No restart/recovery test against a real Langfuse deployment has been added yet.
 
 `AC-12` Partial.
-Sampling logic and forced-promotion rules exist, but shared/distributed rate tracking is not implemented.
+Sampling logic and forced-promotion rules exist; an explicit `FULL_CAPTURE_MODE` switch can disable adaptive sampling for full capture environments. Shared/distributed rate tracking is not implemented.
 
 ## Remaining Gaps
 

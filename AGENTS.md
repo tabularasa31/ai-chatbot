@@ -12,12 +12,12 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 |-------|----------------|
 | Backend | Python 3.11, FastAPI, Pydantic v2, SQLAlchemy, Alembic |
 | Database | PostgreSQL 14+ with **pgvector** (production); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
-| Auth | JWT, bcrypt, email verification (Brevo HTTP API) |
+| Auth | JWT, bcrypt, email verification (Brevo HTTP API); internal eval QA (`/eval/*`) uses a separate signing secret `EVAL_JWT_SECRET` |
 | LLM | OpenAI API (per-client key / client settings; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |
 | Widget | Dedicated Next.js routes (`/widget`), API calls; some public endpoints in `backend/routes/widget.py` and `backend/widget/` |
 
-Deployment: typically Railway (API + Postgres), frontend on Vercel. Environment variables: `backend/core/config.py` (required: `DATABASE_URL`, `JWT_SECRET`, etc.).
+Deployment: typically Railway (API + Postgres), frontend on Vercel. Environment variables: `backend/core/config.py` (required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`, etc.). Langfuse / trace sampling knobs include `FULL_CAPTURE_MODE` and `TRACE_*` (see `docs/07-observability-rollout.md`).
 
 ---
 

@@ -12,6 +12,7 @@ import bcrypt
 import jwt
 
 from .config import settings
+from .jwt_kinds import EVAL_TESTER_JWT_TYP, USER_ACCESS_JWT_TYP
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
@@ -46,16 +47,20 @@ def decode_access_token(token: str) -> str | None:
     """Decode JWT token and return user_id (sub claim), or None if invalid/expired."""
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-        return payload.get("sub")
     except jwt.ExpiredSignatureError:
         return None
     except jwt.PyJWTError:
         return None
+    # Never treat internal eval tester JWTs as user sessions (even if mis-signed).
+    if payload.get("typ") == EVAL_TESTER_JWT_TYP:
+        return None
+    return payload.get("sub")
 
 
 def create_access_token(data: Dict[str, Any]) -> str:
     """Создаёт JWT-токен с payload и сроком жизни 24 часа."""
     to_encode = data.copy()
+    to_encode.setdefault("typ", USER_ACCESS_JWT_TYP)
     now = dt.datetime.now(dt.timezone.utc)
     expire = now + dt.timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     to_encode.update({"exp": expire, "iat": now})

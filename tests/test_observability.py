@@ -212,6 +212,7 @@ def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
     monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
     monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
     monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
@@ -248,6 +249,7 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
     monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
     monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
 
@@ -263,10 +265,54 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     assert service._client.traces[0].init_kwargs["metadata"]["sampling_reason"] == "forced"
 
 
+def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    trace_a = service.begin_trace(
+        name="rag-query",
+        session_id="sess-a",
+        tenant_id="tenant-full",
+    )
+    trace_b = service.begin_trace(
+        name="rag-query",
+        session_id="sess-b",
+        tenant_id="tenant-full",
+    )
+
+    assert trace_a.sampled is True
+    assert trace_b.sampled is True
+    assert len(service._client.traces) == 2
+    for fake_trace in service._client.traces:
+        meta = fake_trace.init_kwargs["metadata"]
+        assert meta["sampling_reason"] == "full_capture"
+        assert meta["sampling_mode"] == "full_capture"
+        assert "sampling_mode:full_capture" in fake_trace.init_kwargs["tags"]
+
+
+def test_full_capture_mode_still_advances_tenant_counters(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
+
+    service.begin_trace(name="rag-query", session_id="s1", tenant_id="tenant-counter")
+    service.begin_trace(name="rag-query", session_id="s2", tenant_id="tenant-counter")
+
+    assert service._tenant_query_counts["tenant-counter"] == 2
+
+
 def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
     monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
     monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 1.0)
 
@@ -284,6 +330,7 @@ def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
     assert len(service._client.traces) == 1
     assert service._client.traces[0].updates[0]["tags"] == [
         "tenant:tenant-merge",
+        "sampling_mode:adaptive",
         "variants:multi",
     ]
 
@@ -294,6 +341,7 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
     monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
     monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
     monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
@@ -347,5 +395,6 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     assert materialized.updates[0]["metadata"]["query_variant_count"] == 3
     assert materialized.updates[0]["tags"] == [
         "tenant:tenant-variants",
+        "sampling_mode:adaptive",
         "variants:multi",
     ]

@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-28 (contradiction reliability policy)
+**Last updated:** 2026-03-29 (internal Eval QA + widget chat gate)
 
 ---
 
@@ -10,7 +10,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|--------------|
-| Registration, JWT login | Users, JWT sessions | `backend/auth/`, `POST /auth/register`, `POST /auth/login` |
+| Registration, JWT login | Users, JWT sessions; access tokens carry `typ=chat9_user` | `backend/auth/`, `backend/core/security.py`, `backend/core/jwt_kinds.py`, `POST /auth/register`, `POST /auth/login` |
 | Email verification | Brevo email, token | `POST /auth/verify-email`, verify UI |
 | Forgot password | Email request + token reset (1h TTL), rate limit | `POST /auth/forgot-password`, `POST /auth/reset-password` |
 | Admin flag | `is_admin` for admin metrics | `User.is_admin`, `GET /admin/metrics/*` |
@@ -25,6 +25,7 @@
 | Per-client OpenAI key | Encrypted in DB, PATCH client | `PATCH /clients/me`, `backend/core/crypto.py` |
 | **FI-DISC v1** | Single tenant-wide response detail level (detailed / standard / corporate), hard limits in prompt | `GET`/`PUT /clients/me/disclosure`, `backend/disclosure_config.py`, `backend/chat/service.py`, UI `/settings/disclosure` |
 | **FI-KYC** | Widget signing secret, rotation | `POST /clients/me/kyc/secret`, `status`, `rotate`; UI `/settings/widget` |
+| **Eval QA (internal MVP)** | Testers table, eval sessions/results; separate `EVAL_JWT_SECRET` + `typ=eval_tester`; `/eval/login`, `/eval/sessions`, results CRUD (append-only); CLI `scripts/create_tester.py`; Next `/eval/login`, `/eval/chat`; shared client readiness with widget | `backend/eval/*`, `backend/models.py` (`Tester`, `EvalSession`, `EvalResult`), migration `eval_qa_mvp_v1`, `tests/test_eval.py`, `docs/04-features.md` §10 |
 
 ---
 
@@ -66,6 +67,7 @@
 | **FI-ESC (widget)** | Optional `locale` on session init and `/widget/chat`; `POST /widget/escalate` (public); response includes `chat_ended` | `backend/routes/widget.py`, `frontend/app/widget/escalate/route.ts`, `ChatWidget.tsx` |
 | **FI-038** | “Powered by Chat9” footer | `frontend/components/ChatWidget.tsx` |
 | Widget rate limits | 20/min on `POST /widget/session/init`, `/widget/chat`, `/widget/escalate` | slowapi, `backend/routes/widget.py` |
+| **Widget chat gate** | Single eligibility check (exists, active, OpenAI key non-empty) for `/widget/chat`, `/widget/escalate`, and eval session create | `backend/clients/widget_chat_gate.py` |
 | **embed.js** | Passes `navigator.language` as `locale` into iframe URL | `backend/static/embed.js` |
 
 ---
@@ -95,6 +97,7 @@
 | **FI-026** | GitHub Actions on `main` + `deploy`: backend Ruff + pytest + coverage; frontend ESLint + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
 | Coverage hardening (2026-03-24) | Added high-risk regression tests for escalation state machine, manual escalation endpoint, auth reset flow, and retrieval edge/error paths; stable `/search` OpenAI error contract (`503`) | `tests/test_chat.py`, `tests/test_escalation.py`, `tests/test_auth.py`, `tests/test_search.py`, `tests/pgvector_tests/test_search_pgvector.py`, `backend/search/routes.py` |
 | Retrieval observability (2026-03-28) | Root traces for chat + `/search`; query-variant cost/latency fields; explicit BM25 expansion metadata (`bm25_expansion_mode`, variant eval counts, merged hit counts); tenant-tag-preserving variant segmentation; regression coverage for sampled/deferred traces and symmetric BM25 retrieval behavior | `backend/observability/service.py`, `backend/search/service.py`, `tests/test_observability.py`, `tests/test_search.py`, `tests/test_chat.py`, `tests/pgvector_tests/test_search_pgvector.py` |
+| Full trace capture toggle (2026-03-29) | `FULL_CAPTURE_MODE` env (default `true`) disables adaptive sampling for early/low-traffic setups; `false` keeps prior heuristics. Traces get `sampling_mode` metadata + tag | `backend/core/config.py`, `backend/observability/service.py`, `tests/test_observability.py`, `docs/07-observability-rollout.md`, `docs/04-features.md` |
 | Developer test runbook | Engineer-focused grouped test commands for local/CI runs | `docs/06-developer-test-runbook.md` |
 | Deploy | `main` vs `deploy`, Vercel + Railway; promote via PR after green CI | see `PROGRESS.md` → Infrastructure |
 

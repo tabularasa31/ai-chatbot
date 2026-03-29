@@ -580,6 +580,12 @@ class ObservabilityService:
         tenant_id: str | None,
         force_trace: bool,
     ) -> tuple[bool, str]:
+        if settings.full_capture_mode:
+            # Keep tenant counters in sync with adaptive path so a later FULL_CAPTURE_MODE=false
+            # toggle does not reset new-tenant / high-volume classification.
+            if tenant_id is not None:
+                self._record_tenant_query(tenant_id)
+            return True, "full_capture"
         if force_trace:
             return True, "forced"
         if tenant_id is None:
@@ -611,7 +617,15 @@ class ObservabilityService:
         if metadata:
             merged_metadata.update(metadata)
         merged_metadata.setdefault("sampling_reason", sampling_reason)
-        merged_tags = _merge_tags(init_kwargs.get("tags"), tags)
+        sampling_mode_value = (
+            "full_capture" if sampling_reason == "full_capture" else "adaptive"
+        )
+        merged_metadata.setdefault("sampling_mode", sampling_mode_value)
+        merged_tags = _merge_tags(
+            init_kwargs.get("tags"),
+            tags,
+            [f"sampling_mode:{sampling_mode_value}"],
+        )
         trace_obj = _safe_construct(
             self._client.trace,
             name=init_kwargs["name"],

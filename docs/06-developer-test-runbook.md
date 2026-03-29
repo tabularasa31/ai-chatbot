@@ -80,6 +80,22 @@ Optional targeted pgvector hybrid retrieval checks:
 pytest -q -m pgvector tests/pgvector_tests/test_search_pgvector.py -k "hybrid or isolation"
 ```
 
+## Internal eval QA (`/eval/*`)
+
+Requires `EVAL_JWT_SECRET` in the environment (see `tests/conftest.py` default for local pytest).
+
+```bash
+pytest -q tests/test_eval.py
+```
+
+Create an internal tester (uses app DB from `DATABASE_URL` / `.env`):
+
+```bash
+PYTHONPATH=. python scripts/create_tester.py --username anna --password 'your-secret'
+```
+
+Manual UI: **`/eval/chat?bot_id=<widget clientId>`** — same value as `embed.js?clientId=ch_…` (public id), not the tenant `api_key`.
+
 ## Coverage Snapshot (backend, SQLite-only)
 
 ```bash
@@ -103,5 +119,6 @@ make coverage-all
 1) P0 Smoke  
 2) Auth Reset Flow + Escalation group  
 3) RAG Edge Cases  
-4) pgvector Integration (separate job with PostgreSQL service)  
-5) Coverage Snapshot
+4) Internal eval (`tests/test_eval.py`, CI env includes `EVAL_JWT_SECRET`)  
+5) pgvector Integration (separate job with PostgreSQL service)  
+6) Coverage Snapshot

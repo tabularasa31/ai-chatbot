@@ -22,6 +22,7 @@ from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.routes.public import public_router
 from backend.routes.widget import widget_router
+from backend.eval.routes import eval_router
 from backend.search.routes import search_router
 from backend.escalation.routes import escalation_router
 
@@ -82,6 +83,7 @@ app.include_router(chat_router, prefix="/chat")
 app.include_router(escalation_router)
 app.include_router(public_router)
 app.include_router(widget_router)
+app.include_router(eval_router)
 
 
 @app.get("/health")

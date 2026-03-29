@@ -139,7 +139,8 @@ function EvalChatContent() {
   const renderBelowAssistant = useCallback(
     function evalRenderBelowAssistant(ctx: ChatWidgetBelowAssistantContext) {
       if (!evalSessionId) return null;
-      // MVP: escalation handoff lines are still normal assistant bubbles (rateable).
+      // MVP: escalation handoff lines are still assistant bubbles and are rateable; they may add
+      // noise if you later aggregate eval scores as “model quality” without filtering by turn type.
       return (
         <EvalRatingPanel
           apiBase={apiBase}

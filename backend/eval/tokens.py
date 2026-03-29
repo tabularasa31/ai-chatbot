@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import uuid
 from typing import Any, Dict
 
 import jwt
 
 from backend.core.config import settings
+
+logger = logging.getLogger(__name__)
 from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 
 EVAL_JWT_TYP = EVAL_TESTER_JWT_TYP
@@ -21,6 +24,10 @@ class EvalJwtSecretMissing(Exception):
 def _eval_secret() -> str:
     s = settings.eval_jwt_secret
     if not isinstance(s, str) or not s.strip():
+        logger.error(
+            "eval_jwt_misconfigured: EVAL_JWT_SECRET is missing or blank; "
+            "eval login and protected /eval routes cannot run (HTTP 503)"
+        )
         raise EvalJwtSecretMissing
     return s.strip()
 

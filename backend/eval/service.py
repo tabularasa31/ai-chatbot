@@ -4,8 +4,9 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from backend.clients.widget_chat_gate import WidgetChatClientGateError, get_client_eligible_for_widget_chat
 from backend.eval.schemas import EvalResultCreateRequest
-from backend.models import Client, EvalResult, EvalSession, Tester
+from backend.models import EvalResult, EvalSession, Tester
 
 
 def authenticate_tester(username: str, password: str, db: Session) -> Tester | None:
@@ -21,14 +22,15 @@ def authenticate_tester(username: str, password: str, db: Session) -> Tester | N
 
 
 def assert_bot_ready_for_widget_chat(bot_id: str, db: Session) -> None:
-    """Same preconditions as POST /widget/chat for this public_id."""
-    client = db.query(Client).filter(Client.public_id == bot_id).first()
-    if not client:
-        raise ValueError("bot_not_found")
-    if not client.is_active:
-        raise ValueError("bot_inactive")
-    if not client.openai_api_key or not str(client.openai_api_key).strip():
-        raise ValueError("bot_openai_not_configured")
+    """Same preconditions as POST /widget/chat (shared gate in clients.widget_chat_gate)."""
+    try:
+        get_client_eligible_for_widget_chat(db, bot_id)
+    except WidgetChatClientGateError as e:
+        if e.reason == WidgetChatClientGateError.NOT_FOUND:
+            raise ValueError("bot_not_found") from e
+        if e.reason == WidgetChatClientGateError.INACTIVE:
+            raise ValueError("bot_inactive") from e
+        raise ValueError("bot_openai_not_configured") from e
 
 
 def create_eval_session(tester_id: uuid.UUID, bot_id: str, db: Session) -> EvalSession:

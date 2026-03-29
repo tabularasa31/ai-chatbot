@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
+from backend.clients.widget_chat_gate import WidgetChatClientGateError, get_client_eligible_for_widget_chat
 from backend.clients.service import get_kyc_decrypted_keys_for_validation
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
@@ -137,18 +138,17 @@ def widget_chat(
     PUBLIC endpoint for embedded widget.
     No authentication required (clientId = permission).
     """
-    client = db.query(Client).filter(Client.public_id == client_id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-
-    if not client.is_active:
-        raise HTTPException(status_code=403, detail="Client is not active")
-
-    if not client.openai_api_key:
+    try:
+        client = get_client_eligible_for_widget_chat(db, client_id)
+    except WidgetChatClientGateError as e:
+        if e.reason == WidgetChatClientGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Client not found") from e
+        if e.reason == WidgetChatClientGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Client is not active") from e
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
-        )
+        ) from e
 
     try:
         sid = uuid.UUID(session_id) if session_id else uuid.uuid4()
@@ -188,16 +188,17 @@ def widget_escalate(
     db: Session = Depends(get_db),
 ) -> ManualEscalateResponse:
     """Manual escalation for embedded widget (public clientId + session)."""
-    client = db.query(Client).filter(Client.public_id == client_id).first()
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    if not client.is_active:
-        raise HTTPException(status_code=403, detail="Client is not active")
-    if not client.openai_api_key:
+    try:
+        client = get_client_eligible_for_widget_chat(db, client_id)
+    except WidgetChatClientGateError as e:
+        if e.reason == WidgetChatClientGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Client not found") from e
+        if e.reason == WidgetChatClientGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Client is not active") from e
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
-        )
+        ) from e
     try:
         sid = uuid.UUID(session_id)
     except (ValueError, TypeError):

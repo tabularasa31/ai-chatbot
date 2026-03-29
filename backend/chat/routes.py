@@ -63,6 +63,21 @@ class DebugInfoResponse(BaseModel):
     best_rank_score: Optional[float] = None
     best_confidence_score: Optional[float] = None
     confidence_source: Optional[Literal["vector_similarity", "rank_score", "none"]] = None
+    contradiction_detected: bool = False
+    contradiction_count: int = 0
+    contradiction_pair_count: int = 0
+    contradiction_basis_types: list[str] = Field(default_factory=list)
+    contradiction_adjudication_enabled: bool = False
+    contradiction_adjudication_applied_to_any_fact: bool = False
+    contradiction_adjudication_status: str = "disabled"
+    contradiction_adjudication_candidate_count: int = 0
+    contradiction_adjudication_sent_count: int = 0
+    contradiction_adjudication_completed_count: int = 0
+    contradiction_adjudication_confirmed_count: int = 0
+    contradiction_adjudication_rejected_count: int = 0
+    contradiction_adjudication_inconclusive_count: int = 0
+    contradiction_adjudication_error_count: int = 0
+    reliability: Optional[dict] = None
     chunks: list[DebugChunkResponse]
     validation: Optional[dict] = None
 
@@ -174,6 +189,41 @@ def chat_debug(
         best_rank_score=debug_dict.get("best_rank_score"),
         best_confidence_score=debug_dict.get("best_confidence_score"),
         confidence_source=debug_dict.get("confidence_source"),
+        contradiction_detected=bool(debug_dict.get("contradiction_detected", False)),
+        contradiction_count=int(debug_dict.get("contradiction_count", 0)),
+        contradiction_pair_count=int(debug_dict.get("contradiction_pair_count", 0)),
+        contradiction_basis_types=list(debug_dict.get("contradiction_basis_types", [])),
+        contradiction_adjudication_enabled=bool(
+            debug_dict.get("contradiction_adjudication_enabled", False)
+        ),
+        contradiction_adjudication_applied_to_any_fact=bool(
+            debug_dict.get("contradiction_adjudication_applied_to_any_fact", False)
+        ),
+        contradiction_adjudication_status=str(
+            debug_dict.get("contradiction_adjudication_status", "disabled")
+        ),
+        contradiction_adjudication_candidate_count=int(
+            debug_dict.get("contradiction_adjudication_candidate_count", 0)
+        ),
+        contradiction_adjudication_sent_count=int(
+            debug_dict.get("contradiction_adjudication_sent_count", 0)
+        ),
+        contradiction_adjudication_completed_count=int(
+            debug_dict.get("contradiction_adjudication_completed_count", 0)
+        ),
+        contradiction_adjudication_confirmed_count=int(
+            debug_dict.get("contradiction_adjudication_confirmed_count", 0)
+        ),
+        contradiction_adjudication_rejected_count=int(
+            debug_dict.get("contradiction_adjudication_rejected_count", 0)
+        ),
+        contradiction_adjudication_inconclusive_count=int(
+            debug_dict.get("contradiction_adjudication_inconclusive_count", 0)
+        ),
+        contradiction_adjudication_error_count=int(
+            debug_dict.get("contradiction_adjudication_error_count", 0)
+        ),
+        reliability=debug_dict.get("reliability"),
         chunks=[
             DebugChunkResponse(
                 document_id=c["document_id"],

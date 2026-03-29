@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-28  
+**Last updated:** 2026-03-29  
 **Status:** Production (getchat9.live)
 
 ---
@@ -235,6 +235,50 @@ Rollout note:
 - sample production-like traces before enabling the policy by default
 - review the share of single-fact cases, same-pair `2+` fact cases, multi-pair cases, and the rate of outcomes that would flip versus the old behavior
 - define an acceptable flip-rate threshold first; if the observed flip rate exceeds it, require product review or gate rollout behind a feature flag
+
+### Retrieval contradiction observability projection
+
+Canonical reliability continues to answer "what the system believes" via `score`, `cap_reason`, `signals`, and `evidence`. Observability-only contradiction metrics now sit alongside that payload in trace/debug projections to answer "how much contradiction evidence was present and of what shape" without parsing nested evidence manually.
+
+Projection invariants:
+
+- the only contradiction source of truth is final canonical `reliability.evidence.contradiction.pairs`
+- despite the historical name, `pairs` is a flat list of fact-level canonical contradiction entries
+- each entry already passed canonical filtering, mirror-aware dedupe, and threshold policy before projection reads it
+- `contradiction_count` counts canonical fact entries, not logical pairs
+- `contradiction_pair_count` aggregates those entries by the same orientation-insensitive logical pair identity used by canonical contradiction dedupe: `(chunk_a_id, chunk_b_id)` ignoring order
+- `contradiction_basis_types` is a first-seen traversal-order dedup, not a semantic sort
+
+Current derived fields:
+
+- `contradiction_detected`
+- `contradiction_count`
+- `contradiction_pair_count`
+- `contradiction_basis_types`
+
+Governance note:
+
+- these fields are projection-only observability/debug helpers, not part of the canonical product decision contract
+- `contradiction_basis_types` is suitable for aggregation only while `basis` remains a small controlled vocabulary and does not include dynamic values
+
+### Contradiction LLM adjudication (optional shadow layer)
+
+After deterministic overlap + metadata contradiction detection, the backend may optionally run a **shadow** LLM pass that classifies each contradiction **fact** (`basis`, `value_a`, `value_b`) as `confirmed` / `rejected` / `inconclusive`. This does **not** change retrieval `score`, `cap`, or `cap_reason`; deterministic contradiction policy remains the only source of truth for product behavior.
+
+**Two separate data surfaces (do not conflate them):**
+
+| Surface | Where it lives | Serialized in `serialize_reliability`? | Purpose |
+|--------|----------------|----------------------------------------|---------|
+| **Canonical adjudication payload** | `reliability.evidence.contradiction_adjudication` | Yes, when present | Persisted shadow output only after a **non-empty** adjudication batch was sent to the model (`sent_count > 0`): run summary + per-fact items. |
+| **Observability-only run** | `RetrievalReliability.contradiction_adjudication_observability` (in-memory on the reliability object) | **No** | Run-level status for **every** retrieval that evaluates the layer: `skipped_no_candidates`, `skipped_global_config`, `skipped_client_setting`, `skipped_missing_client_key`, `skipped_fact_limit`, `completed`, `completed_with_errors`, `failed_open`, etc. |
+
+**Discipline for future work:**
+
+- **Operational metrics** for the shadow layer (whether the layer ran, skipped, how many facts were candidates vs sent, error counts) must come from **observability** and from trace/debug **projection** fields derived from it — not by inferring from canonical `evidence` alone.
+- **Canonical `evidence.contradiction_adjudication`** is absent on skip-only paths; do not treat “missing” as “disabled” without reading observability status.
+- Conversely, **product decisions** (caps, signals) still come only from deterministic `evidence.contradiction` and policy; do not use adjudication verdicts for scoring until explicitly designed and gated.
+
+Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-tenant `Client.settings.retrieval.contradiction_adjudication.enabled`, and the tenant’s OpenAI key when the layer executes.
 
 ---
 

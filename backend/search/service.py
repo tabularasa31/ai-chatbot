@@ -14,12 +14,21 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
-from backend.models import Document, Embedding
+from backend.models import Client, Document, Embedding
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
     format_embedding_results,
     format_query_embedding_preview,
     truncate_text,
+)
+from backend.search.contradiction_adjudication import (
+    ContradictionAdjudication,
+    ContradictionAdjudicationCandidate,
+    ContradictionAdjudicationRun,
+    adjudicate_contradictions,
+    build_contradiction_adjudication_run,
+    serialize_contradiction_adjudication,
+    serialize_contradiction_adjudication_run,
 )
 
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -65,6 +74,8 @@ LOW_RELIABILITY_SCORE_THRESHOLD = 0.45
 WEAK_RECALL_RESULT_COUNT_THRESHOLD = 2
 CONTRADICTION_DATE_KEYS: tuple[str, ...] = ("effective_date",)
 CONTRADICTION_VERSION_KEYS: tuple[str, ...] = ("version", "revision")
+CONTRADICTION_ADJUDICATION_SETTINGS_KEY = "contradiction_adjudication"
+CONTRADICTION_ADJUDICATION_FACT_LIMIT_SKIP_REASON = "fact_limit"
 
 
 @dataclass(frozen=True)
@@ -98,11 +109,12 @@ class ReliabilityEvidence:
 
     source_overlap: SourceOverlapEvidence | None = None
     contradiction: "ContradictionEvidence | None" = None
+    contradiction_adjudication: "ContradictionAdjudicationEvidence | None" = None
 
 
 @dataclass(frozen=True)
 class ContradictionPair:
-    """Structured contradiction evidence for one overlap-admitted pair."""
+    """Canonical contradiction fact entry for one overlap-admitted logical pair."""
 
     chunk_a_id: str
     chunk_b_id: str
@@ -113,9 +125,26 @@ class ContradictionPair:
 
 @dataclass(frozen=True)
 class ContradictionEvidence:
-    """Debug/trace-only contradiction evidence kept under canonical reliability."""
+    """Canonical contradiction evidence; `pairs` is a flat fact-level entry list."""
 
     pairs: tuple[ContradictionPair, ...] = ()
+
+
+@dataclass(frozen=True)
+class AdjudicatedContradiction:
+    """One deterministic contradiction fact plus its optional adjudication payload."""
+
+    fact_id: str
+    pair: ContradictionPair
+    adjudication: ContradictionAdjudication | None = None
+
+
+@dataclass(frozen=True)
+class ContradictionAdjudicationEvidence:
+    """Run-level adjudication summary plus per-fact linked results."""
+
+    run: ContradictionAdjudicationRun
+    items: tuple[AdjudicatedContradiction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -136,6 +165,8 @@ class RetrievalReliability:
     cap_reason: ReliabilityCapReason | None = None
     signals: tuple[ReliabilitySignal, ...] = ()
     evidence: ReliabilityEvidence = field(default_factory=ReliabilityEvidence)
+    """Shadow-layer adjudication run for traces/debug only; never serialized in `serialize_reliability`."""
+    contradiction_adjudication_observability: ContradictionAdjudicationRun | None = None
 
     @property
     def source_overlap_detected(self) -> bool:
@@ -170,6 +201,21 @@ def serialize_contradiction_pair(pair: ContradictionPair) -> dict[str, object]:
     }
 
 
+def serialize_adjudicated_contradiction(
+    item: AdjudicatedContradiction,
+) -> dict[str, object]:
+    """Serialize one adjudicated contradiction without mutating the source object."""
+    return {
+        "fact_id": item.fact_id,
+        "pair": serialize_contradiction_pair(item.pair),
+        "adjudication": (
+            serialize_contradiction_adjudication(item.adjudication)
+            if item.adjudication is not None
+            else None
+        ),
+    }
+
+
 def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object]:
     """Serialize the canonical reliability object with stable empty containers."""
     evidence: dict[str, object] = {}
@@ -187,6 +233,16 @@ def serialize_reliability(reliability: RetrievalReliability) -> dict[str, object
                 for pair in contradiction_evidence.pairs
             ]
         }
+    contradiction_adjudication = reliability.evidence.contradiction_adjudication
+    if contradiction_adjudication is not None:
+        adjudication_payload = serialize_contradiction_adjudication_run(
+            contradiction_adjudication.run
+        )
+        adjudication_payload["items"] = [
+            serialize_adjudicated_contradiction(item)
+            for item in contradiction_adjudication.items
+        ]
+        evidence["contradiction_adjudication"] = adjudication_payload
     return {
         "base_score": reliability.base_score,
         "score": reliability.score,
@@ -201,10 +257,16 @@ def build_reliability_projection(
     reliability: RetrievalReliability,
 ) -> dict[str, object]:
     """Project canonical reliability into trace/debug-friendly payloads."""
+    reliability_payload = serialize_reliability(reliability)
     return {
-        "reliability": serialize_reliability(reliability),
+        "reliability": reliability_payload,
         "source_overlap_detected": reliability.source_overlap_detected,
         "source_overlap_pairs": reliability.source_overlap_pairs,
+        **_build_contradiction_projection_fields(reliability_payload),
+        **_build_contradiction_adjudication_projection_fields(
+            reliability_payload,
+            reliability.contradiction_adjudication_observability,
+        ),
     }
 
 
@@ -260,9 +322,142 @@ def _contradiction_identity(
     )
 
 
+def _logical_overlap_pair_identity_from_ids(
+    chunk_a_id: str,
+    chunk_b_id: str,
+) -> tuple[str, str]:
+    """Return the orientation-insensitive identity for one logical overlap pair."""
+    return tuple(sorted((chunk_a_id, chunk_b_id)))
+
+
 def _logical_overlap_pair_identity(pair: ContradictionPair) -> tuple[str, str]:
     """Return the orientation-insensitive identity for one logical overlap pair."""
-    return tuple(sorted((pair.chunk_a_id, pair.chunk_b_id)))
+    return _logical_overlap_pair_identity_from_ids(pair.chunk_a_id, pair.chunk_b_id)
+
+
+def _build_contradiction_projection_fields(
+    reliability_payload: dict[str, object],
+) -> dict[str, object]:
+    """Derive observability-only contradiction metrics from final canonical payload."""
+    contradiction_pairs_payload: list[dict[str, object]] = []
+    evidence_payload = reliability_payload.get("evidence")
+    if isinstance(evidence_payload, dict):
+        contradiction_payload = evidence_payload.get("contradiction")
+        if isinstance(contradiction_payload, dict):
+            pairs_payload = contradiction_payload.get("pairs")
+            if isinstance(pairs_payload, list):
+                contradiction_pairs_payload = [
+                    pair_payload
+                    for pair_payload in pairs_payload
+                    if isinstance(pair_payload, dict)
+                ]
+
+    contradiction_count = len(contradiction_pairs_payload)
+    if contradiction_count == 0:
+        return {
+            "contradiction_detected": False,
+            "contradiction_count": 0,
+            "contradiction_pair_count": 0,
+            "contradiction_basis_types": [],
+        }
+
+    contradiction_basis_types: list[str] = []
+    seen_basis_types: set[str] = set()
+    logical_pair_identities: set[tuple[str, str]] = set()
+
+    for pair_payload in contradiction_pairs_payload:
+        basis = pair_payload.get("basis")
+        if isinstance(basis, str) and basis not in seen_basis_types:
+            seen_basis_types.add(basis)
+            contradiction_basis_types.append(basis)
+
+        chunk_a_id = pair_payload.get("chunk_a_id")
+        chunk_b_id = pair_payload.get("chunk_b_id")
+        if isinstance(chunk_a_id, str) and isinstance(chunk_b_id, str):
+            logical_pair_identities.add(
+                _logical_overlap_pair_identity_from_ids(chunk_a_id, chunk_b_id)
+            )
+
+    return {
+        "contradiction_detected": True,
+        "contradiction_count": contradiction_count,
+        "contradiction_pair_count": len(logical_pair_identities),
+        "contradiction_basis_types": contradiction_basis_types,
+    }
+
+
+def _build_contradiction_adjudication_projection_fields(
+    reliability_payload: dict[str, object],
+    observability: ContradictionAdjudicationRun | None,
+) -> dict[str, object]:
+    """Derive observability-only adjudication metrics (prefer shadow run over canonical evidence)."""
+    defaults = {
+        "contradiction_adjudication_enabled": False,
+        "contradiction_adjudication_applied_to_any_fact": False,
+        "contradiction_adjudication_status": "disabled",
+        "contradiction_adjudication_candidate_count": 0,
+        "contradiction_adjudication_sent_count": 0,
+        "contradiction_adjudication_completed_count": 0,
+        "contradiction_adjudication_confirmed_count": 0,
+        "contradiction_adjudication_rejected_count": 0,
+        "contradiction_adjudication_inconclusive_count": 0,
+        "contradiction_adjudication_error_count": 0,
+    }
+
+    if observability is not None:
+        return {
+            "contradiction_adjudication_enabled": observability.enabled,
+            "contradiction_adjudication_applied_to_any_fact": observability.applied_to_any_fact,
+            "contradiction_adjudication_status": observability.status,
+            "contradiction_adjudication_candidate_count": observability.candidate_count,
+            "contradiction_adjudication_sent_count": observability.sent_count,
+            "contradiction_adjudication_completed_count": observability.completed_count,
+            "contradiction_adjudication_confirmed_count": observability.confirmed_count,
+            "contradiction_adjudication_rejected_count": observability.rejected_count,
+            "contradiction_adjudication_inconclusive_count": observability.inconclusive_count,
+            "contradiction_adjudication_error_count": observability.error_count,
+        }
+
+    evidence_payload = reliability_payload.get("evidence")
+    if not isinstance(evidence_payload, dict):
+        return defaults
+
+    adjudication_payload = evidence_payload.get("contradiction_adjudication")
+    if not isinstance(adjudication_payload, dict):
+        return defaults
+
+    return {
+        "contradiction_adjudication_enabled": bool(
+            adjudication_payload.get("enabled", False)
+        ),
+        "contradiction_adjudication_applied_to_any_fact": bool(
+            adjudication_payload.get("applied_to_any_fact", False)
+        ),
+        "contradiction_adjudication_status": str(
+            adjudication_payload.get("status", "disabled")
+        ),
+        "contradiction_adjudication_candidate_count": int(
+            adjudication_payload.get("candidate_count", 0)
+        ),
+        "contradiction_adjudication_sent_count": int(
+            adjudication_payload.get("sent_count", 0)
+        ),
+        "contradiction_adjudication_completed_count": int(
+            adjudication_payload.get("completed_count", 0)
+        ),
+        "contradiction_adjudication_confirmed_count": int(
+            adjudication_payload.get("confirmed_count", 0)
+        ),
+        "contradiction_adjudication_rejected_count": int(
+            adjudication_payload.get("rejected_count", 0)
+        ),
+        "contradiction_adjudication_inconclusive_count": int(
+            adjudication_payload.get("inconclusive_count", 0)
+        ),
+        "contradiction_adjudication_error_count": int(
+            adjudication_payload.get("error_count", 0)
+        ),
+    }
 
 
 def _is_valid_contradiction_pair(pair: ContradictionPair) -> bool:
@@ -447,6 +642,179 @@ def detect_metadata_contradictions(
     return tuple(contradiction_pairs)
 
 
+def _client_contradiction_adjudication_enabled(client: Client | None) -> bool:
+    """Resolve per-client contradiction adjudication override from JSON settings."""
+    if client is None or not isinstance(client.settings, dict):
+        return False
+    retrieval_settings = client.settings.get("retrieval")
+    if not isinstance(retrieval_settings, dict):
+        return False
+    contradiction_settings = retrieval_settings.get(
+        CONTRADICTION_ADJUDICATION_SETTINGS_KEY
+    )
+    if not isinstance(contradiction_settings, dict):
+        return False
+    return contradiction_settings.get("enabled") is True
+
+
+def _candidate_preview_text(embedding: Embedding) -> str:
+    """Return one stable preview source for contradiction adjudication."""
+    return embedding.chunk_text or ""
+
+
+def _candidate_adjudication_metadata(
+    embedding: Embedding,
+    *,
+    basis: str,
+) -> dict[str, object]:
+    """Return only compact metadata relevant for contradiction adjudication."""
+    metadata = embedding.metadata_json if isinstance(embedding.metadata_json, dict) else {}
+    relevant: dict[str, object] = {
+        "chunk_index": metadata.get("chunk_index"),
+        "basis_value": metadata.get(basis),
+    }
+    filename = metadata.get("filename")
+    if isinstance(filename, str) and filename.strip():
+        relevant["filename"] = filename
+    return relevant
+
+
+def _build_contradiction_adjudication_evidence(
+    *,
+    contradiction_pairs: tuple[ContradictionPair, ...],
+    final_results: list[tuple[Embedding, float]],
+    client: Client | None,
+    api_key: str | None,
+) -> tuple[ContradictionAdjudicationEvidence | None, ContradictionAdjudicationRun]:
+    """
+    Build shadow adjudication observability plus optional canonical adjudication evidence.
+
+    Skip-only states never produce canonical `evidence.contradiction_adjudication`;
+    they only populate the returned observability run for traces/debug.
+    Canonical adjudication evidence is present only after a non-empty LLM batch
+    (`sent_count > 0`) or a failed-open path that attempted a batch.
+    """
+    model = settings.contradiction_adjudication_model
+    effective_pairs = _evaluate_contradiction_policy(contradiction_pairs).effective_pairs
+    candidate_count = len(effective_pairs)
+
+    if candidate_count == 0:
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_no_candidates",
+            candidate_count=0,
+            model=model,
+        )
+
+    if not settings.contradiction_adjudication_enabled:
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_global_config",
+            candidate_count=candidate_count,
+            model=model,
+        )
+
+    if not _client_contradiction_adjudication_enabled(client):
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_client_setting",
+            candidate_count=candidate_count,
+            model=model,
+        )
+
+    if not api_key:
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_missing_client_key",
+            candidate_count=candidate_count,
+            model=model,
+        )
+
+    candidates_by_id = {str(embedding.id): embedding for embedding, _ in final_results}
+    adjudication_candidates: list[ContradictionAdjudicationCandidate] = []
+    ordered_pairs: list[tuple[str, ContradictionPair]] = []
+    for index, pair in enumerate(effective_pairs, start=1):
+        first = candidates_by_id.get(pair.chunk_a_id)
+        second = candidates_by_id.get(pair.chunk_b_id)
+        if first is None or second is None:
+            continue
+        fact_id = f"fact_{index:03d}"
+        ordered_pairs.append((fact_id, pair))
+        adjudication_candidates.append(
+            ContradictionAdjudicationCandidate(
+                fact_id=fact_id,
+                chunk_a_id=pair.chunk_a_id,
+                chunk_b_id=pair.chunk_b_id,
+                basis=pair.basis,
+                value_a=pair.value_a,
+                value_b=pair.value_b,
+                preview_a=_candidate_preview_text(first),
+                preview_b=_candidate_preview_text(second),
+                metadata_a=_candidate_adjudication_metadata(first, basis=pair.basis),
+                metadata_b=_candidate_adjudication_metadata(second, basis=pair.basis),
+            )
+        )
+
+    if not adjudication_candidates:
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_no_candidates",
+            candidate_count=candidate_count,
+            model=model,
+        )
+
+    max_facts = settings.contradiction_adjudication_max_facts
+    if max_facts <= 0:
+        return None, build_contradiction_adjudication_run(
+            enabled=False,
+            status="skipped_fact_limit",
+            candidate_count=candidate_count,
+            sent_count=0,
+            model=model,
+            applied_to_any_fact=False,
+        )
+
+    run = adjudicate_contradictions(
+        adjudication_candidates,
+        api_key=api_key,
+        model=model,
+        max_facts=max_facts,
+        preview_chars=settings.contradiction_adjudication_preview_chars,
+        max_tokens=settings.contradiction_adjudication_max_tokens,
+    )
+
+    if run.sent_count == 0:
+        return None, run
+
+    adjudication_by_fact_id = {
+        item.fact_id: item.adjudication
+        for item in run.items
+    }
+    items: list[AdjudicatedContradiction] = []
+    for position, (fact_id, pair) in enumerate(ordered_pairs, start=1):
+        adjudication = adjudication_by_fact_id.get(fact_id)
+        if adjudication is None and position > run.sent_count:
+            adjudication = ContradictionAdjudication(
+                skip_reason=CONTRADICTION_ADJUDICATION_FACT_LIMIT_SKIP_REASON,
+                model=run.model,
+            )
+        items.append(
+            AdjudicatedContradiction(
+                fact_id=fact_id,
+                pair=pair,
+                adjudication=adjudication,
+            )
+        )
+
+    return (
+        ContradictionAdjudicationEvidence(
+            run=run,
+            items=tuple(items),
+        ),
+        run,
+    )
+
+
 def build_reliability_assessment(
     *,
     top_score: float | None,
@@ -455,6 +823,8 @@ def build_reliability_assessment(
     source_overlap_pairs: tuple[SourceOverlapPair, ...] = (),
     source_overlap_similarity_threshold: float | None = None,
     contradiction_pairs: tuple[ContradictionPair, ...] = (),
+    contradiction_adjudication: ContradictionAdjudicationEvidence | None = None,
+    contradiction_adjudication_observability: ContradictionAdjudicationRun | None = None,
 ) -> RetrievalReliability:
     """
     Build the canonical retrieval reliability object in one place.
@@ -494,7 +864,7 @@ def build_reliability_assessment(
         score = "medium"
 
     evidence = ReliabilityEvidence()
-    if source_overlap_pairs or effective_contradiction_pairs:
+    if source_overlap_pairs or effective_contradiction_pairs or contradiction_adjudication:
         evidence = ReliabilityEvidence(
             source_overlap=(
                 SourceOverlapEvidence(
@@ -509,6 +879,7 @@ def build_reliability_assessment(
                 if effective_contradiction_pairs
                 else None
             ),
+            contradiction_adjudication=contradiction_adjudication,
         )
 
     return RetrievalReliability(
@@ -518,6 +889,7 @@ def build_reliability_assessment(
         cap_reason=cap_reason,
         signals=_build_reliability_signals(signal_kinds),
         evidence=evidence,
+        contradiction_adjudication_observability=contradiction_adjudication_observability,
     )
 
 
@@ -1657,6 +2029,17 @@ def search_similar_chunks_detailed(
         final_results,
         source_overlap_pairs,
     )
+    client_row: Client | None = None
+    if settings.contradiction_adjudication_enabled and hasattr(db, "query"):
+        client_row = db.query(Client).filter(Client.id == client_id).first()
+    contradiction_adjudication, contradiction_adjudication_observability = (
+        _build_contradiction_adjudication_evidence(
+            contradiction_pairs=contradiction_pairs,
+            final_results=final_results,
+            client=client_row,
+            api_key=api_key,
+        )
+    )
     reliability = build_reliability_assessment(
         top_score=final_results[0][1] if final_results else None,
         result_count=len(final_results),
@@ -1664,6 +2047,8 @@ def search_similar_chunks_detailed(
         source_overlap_pairs=source_overlap_pairs,
         source_overlap_similarity_threshold=0.75,
         contradiction_pairs=contradiction_pairs,
+        contradiction_adjudication=contradiction_adjudication,
+        contradiction_adjudication_observability=contradiction_adjudication_observability,
     )
     if trace is not None:
         # The historical span name is preserved for continuity; payload semantics are overlap-only.

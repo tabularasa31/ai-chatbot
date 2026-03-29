@@ -1,6 +1,6 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-28 (UTC) — contradiction reliability policy
+**Last updated:** 2026-03-29 (UTC) — contradiction adjudication docs (canonical vs observability)
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
@@ -12,6 +12,18 @@
 - ✅ **Canonical logical-pair handling:** mirrored `(a, b)` / `(b, a)` contradiction emissions no longer double-count for thresholding or dedupe.
 - ✅ **Precedence + reason semantics:** contradiction short-circuits overlap capping once threshold is reached, and `cap_reason="contradiction"` remains visible even when the base score was already `low`.
 - ✅ **Docs + regression sync:** updated product docs, feature registry, and search/chat tests to match the new contradiction policy.
+
+## ✅ COMPLETED (2026-03-29) — contradiction observability projection
+
+- ✅ **Projection-only contradiction metrics:** `build_reliability_projection()` now emits `contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, and `contradiction_basis_types` without changing canonical reliability semantics.
+- ✅ **Canonical-source invariant:** derived metrics read only final canonical contradiction evidence under `reliability.evidence.contradiction.pairs`; the historical `pairs` name remains documented as flat fact-level entries.
+- ✅ **Trace/debug propagation:** the new fields now appear automatically in `source-overlap-check`, root metadata for `/search` and chat traces, and `run_debug()` output through the shared projection path.
+- ✅ **Regression coverage + docs sync:** added projection semantics tests for count vs pair-count, stable basis ordering, mirror-dedup behavior, and propagation coverage across search/chat/debug surfaces.
+
+## 📄 DOCS (2026-03-29) — contradiction LLM adjudication (two-source model)
+
+- ✅ **`docs/04-features.md`:** documented optional shadow adjudication, the split between canonical `evidence.contradiction_adjudication` (only when a batch was sent) vs `contradiction_adjudication_observability` (not serialized; skip/completed status for traces), and discipline for metrics vs product scoring.
+- ✅ **`docs/07-observability-rollout.md`:** noted that `contradiction_adjudication_*` projection fields are tied to the observability path; pointer to product doc.
 
 ---
 

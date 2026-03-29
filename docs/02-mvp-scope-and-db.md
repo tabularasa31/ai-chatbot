@@ -150,6 +150,36 @@ user_sessions   -- v2+ cross-session analytics; table exists, app logic minimal 
 └─ INDEX (client_id, user_id)
 ```
 
+#### Internal manual QA (Eval)
+
+Not tenant-scoped; internal testers only. Migration `eval_qa_mvp_v1`. See `docs/04-features.md` §10.
+
+```sql
+testers
+├─ id (PK, UUID)
+├─ username (UNIQUE, NOT NULL)
+├─ password (TEXT, plain MVP — internal only)
+├─ is_active (BOOLEAN)
+└─ created_at (TIMESTAMP)
+
+eval_sessions
+├─ id (PK, UUID)
+├─ tester_id (FK → testers, NOT NULL)
+├─ bot_id (VARCHAR — client public_id, ch_…)
+├─ started_at (TIMESTAMP)
+└─ INDEX (tester_id), (bot_id), (tester_id, started_at)
+
+eval_results
+├─ id (PK, UUID)
+├─ session_id (FK → eval_sessions, NOT NULL)
+├─ question, bot_answer (TEXT — snapshots)
+├─ verdict ('pass' | 'fail')
+├─ error_category (nullable enum-like string)
+├─ comment (nullable)
+└─ created_at (TIMESTAMP)
+-- CHECK constraints on verdict / category / comment (see migration)
+```
+
 #### Chat Messages
 ```sql
 messages

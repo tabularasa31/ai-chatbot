@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-28  
+**Last updated:** 2026-03-29  
 **Status:** Production (getchat9.live)
 
 ---
@@ -260,6 +260,25 @@ Governance note:
 
 - these fields are projection-only observability/debug helpers, not part of the canonical product decision contract
 - `contradiction_basis_types` is suitable for aggregation only while `basis` remains a small controlled vocabulary and does not include dynamic values
+
+### Contradiction LLM adjudication (optional shadow layer)
+
+After deterministic overlap + metadata contradiction detection, the backend may optionally run a **shadow** LLM pass that classifies each contradiction **fact** (`basis`, `value_a`, `value_b`) as `confirmed` / `rejected` / `inconclusive`. This does **not** change retrieval `score`, `cap`, or `cap_reason`; deterministic contradiction policy remains the only source of truth for product behavior.
+
+**Two separate data surfaces (do not conflate them):**
+
+| Surface | Where it lives | Serialized in `serialize_reliability`? | Purpose |
+|--------|----------------|----------------------------------------|---------|
+| **Canonical adjudication payload** | `reliability.evidence.contradiction_adjudication` | Yes, when present | Persisted shadow output only after a **non-empty** adjudication batch was sent to the model (`sent_count > 0`): run summary + per-fact items. |
+| **Observability-only run** | `RetrievalReliability.contradiction_adjudication_observability` (in-memory on the reliability object) | **No** | Run-level status for **every** retrieval that evaluates the layer: `skipped_no_candidates`, `skipped_global_config`, `skipped_client_setting`, `skipped_missing_client_key`, `skipped_fact_limit`, `completed`, `completed_with_errors`, `failed_open`, etc. |
+
+**Discipline for future work:**
+
+- **Operational metrics** for the shadow layer (whether the layer ran, skipped, how many facts were candidates vs sent, error counts) must come from **observability** and from trace/debug **projection** fields derived from it — not by inferring from canonical `evidence` alone.
+- **Canonical `evidence.contradiction_adjudication`** is absent on skip-only paths; do not treat “missing” as “disabled” without reading observability status.
+- Conversely, **product decisions** (caps, signals) still come only from deterministic `evidence.contradiction` and policy; do not use adjudication verdicts for scoring until explicitly designed and gated.
+
+Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-tenant `Client.settings.retrieval.contradiction_adjudication.enabled`, and the tenant’s OpenAI key when the layer executes.
 
 ---
 

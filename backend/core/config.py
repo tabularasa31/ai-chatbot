@@ -30,6 +30,26 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
+    contradiction_adjudication_enabled: bool = Field(
+        False,
+        alias="CONTRADICTION_ADJUDICATION_ENABLED",
+    )
+    contradiction_adjudication_model: str = Field(
+        "gpt-4o-mini",
+        alias="CONTRADICTION_ADJUDICATION_MODEL",
+    )
+    contradiction_adjudication_max_facts: int = Field(
+        5,
+        alias="CONTRADICTION_ADJUDICATION_MAX_FACTS",
+    )
+    contradiction_adjudication_preview_chars: int = Field(
+        160,
+        alias="CONTRADICTION_ADJUDICATION_PREVIEW_CHARS",
+    )
+    contradiction_adjudication_max_tokens: int = Field(
+        500,
+        alias="CONTRADICTION_ADJUDICATION_MAX_TOKENS",
+    )
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")

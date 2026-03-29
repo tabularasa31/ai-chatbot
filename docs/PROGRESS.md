@@ -1,6 +1,6 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-03-29 (UTC) — contradiction observability projection
+**Last updated:** 2026-03-29 (UTC) — contradiction adjudication docs (canonical vs observability)
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
@@ -19,6 +19,11 @@
 - ✅ **Canonical-source invariant:** derived metrics read only final canonical contradiction evidence under `reliability.evidence.contradiction.pairs`; the historical `pairs` name remains documented as flat fact-level entries.
 - ✅ **Trace/debug propagation:** the new fields now appear automatically in `source-overlap-check`, root metadata for `/search` and chat traces, and `run_debug()` output through the shared projection path.
 - ✅ **Regression coverage + docs sync:** added projection semantics tests for count vs pair-count, stable basis ordering, mirror-dedup behavior, and propagation coverage across search/chat/debug surfaces.
+
+## 📄 DOCS (2026-03-29) — contradiction LLM adjudication (two-source model)
+
+- ✅ **`docs/04-features.md`:** documented optional shadow adjudication, the split between canonical `evidence.contradiction_adjudication` (only when a batch was sent) vs `contradiction_adjudication_observability` (not serialized; skip/completed status for traces), and discipline for metrics vs product scoring.
+- ✅ **`docs/07-observability-rollout.md`:** noted that `contradiction_adjudication_*` projection fields are tied to the observability path; pointer to product doc.
 
 ---
 

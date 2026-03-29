@@ -1897,6 +1897,10 @@ def test_debug_with_embeddings_vector_mode(
     assert data["debug"]["contradiction_count"] == 0
     assert data["debug"]["contradiction_pair_count"] == 0
     assert data["debug"]["contradiction_basis_types"] == []
+    assert data["debug"]["contradiction_adjudication_enabled"] is False
+    assert data["debug"]["contradiction_adjudication_status"] == "skipped_no_candidates"
+    assert data["debug"]["contradiction_adjudication_candidate_count"] == 0
+    assert data["debug"]["contradiction_adjudication_sent_count"] == 0
     assert len(data["debug"]["chunks"]) >= 1
     chunk = data["debug"]["chunks"][0]
     assert chunk["document_id"] == str(doc.id)
@@ -1904,6 +1908,82 @@ def test_debug_with_embeddings_vector_mode(
     assert chunk["score"] >= 0.3
     assert "preview" in chunk
     assert "42" in chunk["preview"] or "answer" in chunk["preview"].lower()
+
+
+def test_debug_response_includes_adjudication_fields_and_reliability_payload(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="debugadj@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debug Adjudication Client"},
+    )
+    set_client_openai_key(client, token)
+
+    monkeypatch.setattr(
+        "backend.chat.routes.run_debug",
+        lambda **kwargs: (
+            "42",
+            10,
+            {
+                "mode": "hybrid",
+                "best_rank_score": 0.9,
+                "best_confidence_score": 0.9,
+                "confidence_source": "vector_similarity",
+                "contradiction_detected": True,
+                "contradiction_count": 1,
+                "contradiction_pair_count": 1,
+                "contradiction_basis_types": ["effective_date"],
+                "contradiction_adjudication_enabled": True,
+                "contradiction_adjudication_applied_to_any_fact": True,
+                "contradiction_adjudication_status": "completed",
+                "contradiction_adjudication_candidate_count": 1,
+                "contradiction_adjudication_sent_count": 1,
+                "contradiction_adjudication_completed_count": 1,
+                "contradiction_adjudication_confirmed_count": 1,
+                "contradiction_adjudication_rejected_count": 0,
+                "contradiction_adjudication_inconclusive_count": 0,
+                "contradiction_adjudication_error_count": 0,
+                "reliability": {
+                    "score": "medium",
+                    "evidence": {
+                        "contradiction": {"pairs": [{"basis": "effective_date"}]},
+                        "contradiction_adjudication": {
+                            "status": "completed",
+                            "items": [{"fact_id": "fact_001"}],
+                        },
+                    },
+                },
+                "chunks": [
+                    {
+                        "document_id": str(uuid.uuid4()),
+                        "score": 0.9,
+                        "preview": "preview",
+                    }
+                ],
+                "validation": {"is_valid": True},
+            },
+        ),
+    )
+
+    response = client.post(
+        "/chat/debug",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "What changed?"},
+    )
+    assert response.status_code == 200
+    debug = response.json()["debug"]
+    assert debug["contradiction_adjudication_enabled"] is True
+    assert debug["contradiction_adjudication_applied_to_any_fact"] is True
+    assert debug["contradiction_adjudication_status"] == "completed"
+    assert debug["contradiction_adjudication_candidate_count"] == 1
+    assert debug["contradiction_adjudication_sent_count"] == 1
+    assert debug["contradiction_adjudication_completed_count"] == 1
+    assert debug["contradiction_adjudication_confirmed_count"] == 1
+    assert debug["reliability"]["evidence"]["contradiction_adjudication"]["status"] == "completed"
 
 
 def test_debug_with_embeddings_keyword_mode(

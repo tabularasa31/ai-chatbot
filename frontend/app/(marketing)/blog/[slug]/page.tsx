@@ -97,7 +97,10 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0A0F] font-['Inter']">
+    <div
+      className="min-h-screen bg-[#0A0A0F] font-['Inter']"
+      style={{ colorScheme: "dark" }}
+    >
       <Navigation />
       <main>
         <script
@@ -106,23 +109,23 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
         />
 
         <article className="mx-auto max-w-4xl px-6 py-16 md:py-24">
-          <div className="rounded-3xl border border-[#1E1E2E] bg-[#0F1016] p-8 md:p-12">
+          <div className="rounded-3xl border border-[#232338] bg-[#11131B] p-8 md:p-12">
             <p className="text-sm uppercase tracking-[0.24em] text-[#38BDF8]">
               Chat9 Blog
             </p>
 
-            <h1 className="mt-6 text-4xl text-[#FAF5FF] md:text-6xl">
+            <h1 className="mt-6 text-4xl text-[#E6E0F0] md:text-6xl">
               {post.title}
             </h1>
 
-            <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-[#FAF5FF]/55">
+            <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-[#A9A3BA]">
               <span>{post.formattedDate}</span>
               <span className="h-1 w-1 rounded-full bg-[#FAF5FF]/30" />
               <span>{post.readingTimeMinutes} min read</span>
             </div>
 
             {post.excerpt ? (
-              <p className="mt-8 text-xl leading-8 text-[#FAF5FF]/72">
+              <p className="mt-8 text-xl leading-8 text-[#AFA8BF]">
                 {post.excerpt}
               </p>
             ) : null}
@@ -131,7 +134,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
               {post.tags.map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-full border border-[#1E1E2E] bg-[#12121A] px-3 py-1 text-xs uppercase tracking-[0.18em] text-[#38BDF8]"
+                  className="rounded-full border border-[#26314A] bg-[#10141D] px-3 py-1 text-xs uppercase tracking-[0.18em] text-[#5EC8FF]"
                 >
                   {tag}
                 </span>
@@ -161,7 +164,7 @@ export default function BlogArticlePage({ params }: BlogArticlePageProps) {
                 <p className="text-sm uppercase tracking-[0.24em] text-[#38BDF8]">
                   Keep reading
                 </p>
-                <h2 className="mt-3 text-3xl text-[#FAF5FF]">
+                <h2 className="mt-3 text-3xl text-[#E6E0F0]">
                   Related articles
                 </h2>
               </div>

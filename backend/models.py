@@ -461,6 +461,12 @@ class TenantProfile(Base):
     support_email = Column(Text, nullable=True)
     support_urls = Column(JSON, nullable=False, default=list)
     escalation_policy = Column(Text, nullable=True)
+    extraction_status = Column(
+        String(16),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )  # 'pending' | 'done' | 'failed'
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
     client = relationship("Client")

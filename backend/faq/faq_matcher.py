@@ -59,8 +59,8 @@ def _env_int(name: str, default: int) -> int:
 def _faq_thresholds() -> tuple[float, float, int]:
     # Backward-compatible defaults (can be overridden via env).
     direct_threshold = _env_float("FAQ_DIRECT_THRESHOLD", 0.92)
-    context_threshold = _env_float("FAQ_CONTEXT_THRESHOLD", 0.75)
-    context_max_items = _env_int("FAQ_CONTEXT_MAX_ITEMS", 3)
+    context_threshold = _env_float("FAQ_CONTEXT_THRESHOLD", 0.70)
+    context_max_items = _env_int("FAQ_CONTEXT_MAX_ITEMS", 2)
     # Contract safety: never let thresholds invert.
     if context_threshold > direct_threshold:
         context_threshold = direct_threshold

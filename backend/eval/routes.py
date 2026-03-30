@@ -1,12 +1,11 @@
-from __future__ import annotations
-
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
+from backend.core.limiter import limiter
 from backend.eval.deps import get_current_tester
 from backend.eval.schemas import (
     EvalLoginRequest,
@@ -32,7 +31,9 @@ eval_router = APIRouter(prefix="/eval", tags=["eval"])
 
 
 @eval_router.post("/login", response_model=EvalTokenResponse)
+@limiter.limit("10/minute")
 def eval_login(
+    request: Request,
     body: EvalLoginRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> EvalTokenResponse:

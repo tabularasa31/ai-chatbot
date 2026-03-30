@@ -12,6 +12,9 @@ from backend.core.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
+# Maximum characters kept from an LLM-returned rationale string.
+_RATIONALE_TRUNCATE_LIMIT = 220
+
 ContradictionAdjudicationVerdict = Literal["confirmed", "rejected", "inconclusive"]
 ContradictionAdjudicationStatus = Literal[
     "disabled",
@@ -327,7 +330,7 @@ def adjudicate_contradictions(
         if rationale is not None and not isinstance(rationale, str):
             rationale = None
         if isinstance(rationale, str):
-            rationale = _truncate_preview(rationale, limit=220)
+            rationale = _truncate_preview(rationale, limit=_RATIONALE_TRUNCATE_LIMIT)
         results_by_fact_id[fact_id] = ContradictionAdjudication(
             verdict=verdict,
             rationale=rationale,

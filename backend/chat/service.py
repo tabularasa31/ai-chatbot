@@ -240,7 +240,7 @@ class RetrievalContext:
     bm25_merged_hit_count_before_cap: int = 0
     bm25_merged_hit_count_after_cap: int = 0
     retrieval_duration_ms: float = 0.0
-    vector_similarities: list[float] | None = None
+    vector_similarities: list[float | None] | None = None
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1141,7 +1141,8 @@ def process_chat_message(
     if (
         retrieval.vector_similarities is not None
         and retrieval.vector_similarities
-        and all(sim < threshold for sim in retrieval.vector_similarities)
+        and all(sim is not None for sim in retrieval.vector_similarities)
+        and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
     ):
         reject_text = build_reject_response(
             reason=RejectReason.LOW_RETRIEVAL_SCORE,

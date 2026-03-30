@@ -16,6 +16,7 @@ from backend.observability import TraceHandle
 LLM_MODEL = "gpt-4o-mini"
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
+MAX_CACHE_SIZE = 2048
 
 _cache: dict[str, tuple[float, bool, str]] = {}
 
@@ -32,6 +33,16 @@ def _cache_get(key: str) -> tuple[bool, str] | None:
 
 
 def _cache_set(key: str, relevant: bool, reason: str) -> None:
+    # Keep memory bounded across requests.
+    if len(_cache) >= MAX_CACHE_SIZE and key not in _cache:
+        # Prefer eviction of expired items; otherwise drop the one with earliest expiry.
+        expired_keys = [k for k, v in _cache.items() if time.time() > v[0]]
+        if expired_keys:
+            for k in expired_keys[: max(1, len(expired_keys))]:
+                _cache.pop(k, None)
+        if len(_cache) >= MAX_CACHE_SIZE:
+            oldest_key = min(_cache.items(), key=lambda item: item[1][0])[0]
+            _cache.pop(oldest_key, None)
     _cache[key] = (time.time() + CACHE_TTL_SECONDS, relevant, reason)
 
 
@@ -126,18 +137,35 @@ def check_relevance_precheck(
         reason = str(parsed.get("reason", "")) or "unknown"
         return relevant, reason
 
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(_call_llm)
     try:
-        with ThreadPoolExecutor(max_workers=1) as ex:
-            future = ex.submit(_call_llm)
-            relevant, reason = future.result(timeout=TIMEOUT_SECONDS)
+        relevant, reason = future.result(timeout=TIMEOUT_SECONDS)
     except TimeoutError:
         if span is not None:
-            span.end(output={"relevant": True, "reason": "timeout"}, metadata={"timeout": True})
+            span.end(
+                output={"relevant": True, "reason": "timeout"},
+                metadata={"timeout": True},
+            )
+        # Don't wait for the potentially stuck OpenAI request thread.
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
         return True, "timeout", None
     except Exception:
         if span is not None:
             span.end(output={"relevant": True, "reason": "error"}, metadata={"error": True})
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
         return True, "error", None
+    else:
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import logging
 import uuid
 from typing import Iterable
 
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session
 from backend.core.openai_client import get_openai_client
 from backend.models import TenantFaq as TenantFaqModel
 from backend.tenant_knowledge.schemas import FaqCandidate
+
+logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 DEDUP_SIMILARITY_THRESHOLD = 0.92
@@ -95,37 +98,43 @@ def upsert_faq_candidates(
     openai_client = get_openai_client(api_key)
 
     for candidate in faq_candidates:
-        if candidate.confidence is None or candidate.confidence < 0.5:
-            continue
+        try:
+            if candidate.confidence is None or candidate.confidence < 0.5:
+                continue
 
-        question = candidate.question.strip()
-        answer = candidate.answer.strip()
-        if not question or not answer:
-            continue
+            question = candidate.question.strip()
+            answer = candidate.answer.strip()
+            if not question or not answer:
+                continue
 
-        embedding_resp = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=question,
-        )
-        question_embedding = embedding_resp.data[0].embedding  # 1536 floats
-
-        if not _dedupe_existing_faq_by_similarity(
-            db=db,
-            tenant_id=tenant_id,
-            question_embedding=question_embedding,
-        ):
-            approved = candidate.confidence >= 0.85
-            db.add(
-                TenantFaqModel(
-                    tenant_id=tenant_id,
-                    question=question,
-                    answer=answer,
-                    question_embedding=question_embedding,
-                    confidence=float(candidate.confidence),
-                    source=candidate.source,
-                    approved=approved,
-                )
+            embedding_resp = openai_client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=question,
             )
+            question_embedding = embedding_resp.data[0].embedding  # 1536 floats
+
+            if not _dedupe_existing_faq_by_similarity(
+                db=db,
+                tenant_id=tenant_id,
+                question_embedding=question_embedding,
+            ):
+                approved = candidate.confidence >= 0.85
+                db.add(
+                    TenantFaqModel(
+                        tenant_id=tenant_id,
+                        question=question,
+                        answer=answer,
+                        question_embedding=question_embedding,
+                        confidence=float(candidate.confidence),
+                        source=candidate.source,
+                        approved=approved,
+                    )
+                )
+        except Exception:
+            # Best-effort: don't let one bad candidate break the whole batch.
+            logger.exception("Failed to upsert FAQ candidate (tenant_id=%s)", tenant_id)
+            db.rollback()
+            continue
 
     db.commit()
 

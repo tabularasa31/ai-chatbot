@@ -26,6 +26,7 @@ def _has_table(name: str) -> bool:
 def upgrade() -> None:
     bind = op.get_bind()
     is_postgres = getattr(bind.dialect, "name", "") == "postgresql"
+    json_default = sa.text("'[]'::jsonb") if is_postgres else sa.text("'[]'")
 
     # Create tenant_profiles
     if not _has_table("tenant_profiles"):
@@ -33,11 +34,11 @@ def upgrade() -> None:
             "tenant_profiles",
             sa.Column("tenant_id", sa.UUID(), primary_key=True, nullable=False),
             sa.Column("product_name", sa.Text(), nullable=True),
-            sa.Column("modules", sa.JSON(), nullable=False, server_default=sa.text("'[]'::jsonb")),
-            sa.Column("glossary", sa.JSON(), nullable=False, server_default=sa.text("'[]'::jsonb")),
-            sa.Column("aliases", sa.JSON(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+            sa.Column("modules", sa.JSON(), nullable=False, server_default=json_default),
+            sa.Column("glossary", sa.JSON(), nullable=False, server_default=json_default),
+            sa.Column("aliases", sa.JSON(), nullable=False, server_default=json_default),
             sa.Column("support_email", sa.Text(), nullable=True),
-            sa.Column("support_urls", sa.JSON(), nullable=False, server_default=sa.text("'[]'::jsonb")),
+            sa.Column("support_urls", sa.JSON(), nullable=False, server_default=json_default),
             sa.Column("escalation_policy", sa.Text(), nullable=True),
             sa.Column("updated_at", sa.DateTime(), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
             sa.ForeignKeyConstraint(["tenant_id"], ["clients.id"], ondelete="CASCADE"),

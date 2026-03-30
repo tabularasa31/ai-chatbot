@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
 
 EXTRACTION_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
+
+logger = logging.getLogger(__name__)
 
 
 def _truncate_to_approx_tokens(text: str, max_tokens: int = 6000) -> str:
@@ -267,7 +270,8 @@ def run_extract_tenant_knowledge_for_document(
         merge_into_profile(
             db,
             tenant_id=tenant_id,
-            product_name=product_name_norm.capitalize() if product_name_norm else None,
+            # Preserve extracted casing; only trim/collapse spaces upstream.
+            product_name=product_name_norm if product_name_norm else None,
             product_name_confidence=float(product_conf),
             modules=modules,
             glossary_entries=glossary_entries,
@@ -290,5 +294,6 @@ def run_extract_tenant_knowledge_for_document(
 
     except Exception:
         # Best-effort job: never fail embeddings pipeline.
+        logger.exception("Tenant knowledge extraction failed for document_id=%s", document_id)
         return
 

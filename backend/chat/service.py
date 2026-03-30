@@ -57,8 +57,11 @@ from backend.search.service import (
     build_variant_trace_metadata,
     build_variant_trace_tag,
     default_retrieval_reliability,
+    embed_queries,
+    expand_query,
     search_similar_chunks_detailed,
 )
+from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
 from backend.guards.injection_detector import detect_prompt_injection
 from backend.guards.relevance_checker import check_relevance_precheck
 from backend.guards.reject_response import RejectReason, build_reject_response
@@ -135,6 +138,9 @@ def retrieve_context(
     api_key: str,
     top_k: int = 5,
     trace: TraceHandle | None = None,
+    precomputed_query_variants: list[str] | None = None,
+    precomputed_variant_vectors: list[list[float]] | None = None,
+    precomputed_embedding_api_request_count: int | None = None,
 ) -> "RetrievalContext":
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
@@ -151,6 +157,9 @@ def retrieve_context(
         db=db,
         api_key=api_key,
         trace=trace,
+        precomputed_query_variants=precomputed_query_variants,
+        precomputed_variant_vectors=precomputed_variant_vectors,
+        precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
     )
     results = bundle.results
 
@@ -265,6 +274,7 @@ def build_rag_prompt(
     disclosure_config: dict[str, Any] | None = None,
     tenant_product_name: str | None = None,
     topic_hint: str | None = None,
+    faq_context_items: list[FAQRow] | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -318,6 +328,17 @@ def build_rag_prompt(
         system_rules = f"{system_rules}\n{tenant_guard}"
 
     system_rules = f"{system_rules}\n{disclosure_block}\n"
+    if faq_context_items:
+        faq_block = "\n".join(
+            [f"Q: {item.question}\nA: {item.answer}" for item in faq_context_items]
+        )
+        system_rules += f"""
+VERIFIED FAQ CANDIDATES
+Use these as high-priority tenant hints if they are relevant to the user question.
+Do not treat them as exclusive truth when retrieved documents provide more specific or newer evidence.
+
+{faq_block}
+"""
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -342,6 +363,7 @@ def build_rag_messages(
     disclosure_config: dict[str, Any] | None = None,
     tenant_product_name: str | None = None,
     topic_hint: str | None = None,
+    faq_context_items: list[FAQRow] | None = None,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -351,6 +373,7 @@ def build_rag_messages(
         disclosure_config=disclosure_config,
         tenant_product_name=tenant_product_name,
         topic_hint=topic_hint,
+        faq_context_items=faq_context_items,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -368,6 +391,7 @@ def generate_answer(
     disclosure_config: dict[str, Any] | None = None,
     tenant_product_name: str | None = None,
     topic_hint: str | None = None,
+    faq_context_items: list[FAQRow] | None = None,
     trace: TraceHandle | None = None,
 ) -> tuple[str, int]:
     """
@@ -391,6 +415,7 @@ def generate_answer(
         disclosure_config=disclosure_config,
         tenant_product_name=tenant_product_name,
         topic_hint=topic_hint,
+        faq_context_items=faq_context_items,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -1122,13 +1147,83 @@ def process_chat_message(
                 ]
             )
 
+    # --- FAQ matching (Phase 3) ---
+    # Reuse a single embedding payload for both FAQ matching and vector retrieval.
+    query_variants = expand_query(redacted_question)
+    variant_vectors = embed_queries(query_variants, api_key=api_key)
+    base_question_embedding = variant_vectors[0] if variant_vectors else []
+
+    try:
+        faq_match = match_faq(
+            tenant_id=client_id,
+            question=redacted_question,
+            question_embedding=base_question_embedding,
+            db=db,
+        )
+    except Exception:
+        # Observability should still reflect the degradation path.
+        faq_match = FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="faq_match_error_degraded_to_rag_only",
+        )
+
+    retrieval_skipped = faq_match.strategy == "faq_direct"
+    generation_skipped = faq_match.strategy == "faq_direct"
+
+    faq_match_span = trace.span(
+        name="faq_match",
+        input={"question_preview": redacted_question[:80]},
+    )
+    faq_match_span.end(
+        metadata={
+            "tenant_id": str(client_id),
+            "strategy": faq_match.strategy,
+            "top_score": faq_match.top_score,
+            "faq_ids": [str(item.id) for item in faq_match.faq_items],
+            "selected_faq_id": faq_match.selected_faq_id,
+            "direct_guard_used": faq_match.direct_guard_used,
+            "direct_guard_passed": faq_match.direct_guard_passed,
+            "decision_reason": faq_match.decision_reason,
+            "retrieval_skipped": retrieval_skipped,
+            "generation_skipped": generation_skipped,
+        },
+    )
+
+    if faq_match.strategy == "faq_direct":
+        direct_answer = faq_match.faq_items[0].answer if faq_match.faq_items else ""
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            direct_answer,
+            [],
+            0,
+            optional_entity_types=optional_entity_types,
+        )
+        trace.update(
+            output={"answer": direct_answer, "source": "faq_direct"},
+            metadata={"chat_ended": False, "escalated": False, "retrieval_skipped": True},
+        )
+        return (direct_answer, [], 0, False)
+
+    faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
+
     retrieval = retrieve_context(
-        client_id,
-        redacted_question,
-        db,
-        api_key,
+        client_id=client_id,
+        question=redacted_question,
+        db=db,
+        api_key=api_key,
         top_k=5,
         trace=trace,
+        precomputed_query_variants=query_variants,
+        precomputed_variant_vectors=variant_vectors,
+        precomputed_embedding_api_request_count=1,
     )
     chunk_texts = retrieval.chunk_texts
     scores = retrieval.scores
@@ -1175,6 +1270,7 @@ def process_chat_message(
         disclosure_config=disclosure_cfg,
         tenant_product_name=tenant_product_name_for_guard,
         topic_hint=topic_hint_for_guard,
+        faq_context_items=faq_context_items,
         trace=trace,
     )
 

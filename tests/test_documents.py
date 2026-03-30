@@ -463,7 +463,7 @@ def test_refresh_url_source_returns_429_inside_cooldown(
         normalized_domain="docs.example.com",
         status=SourceStatus.ready,
         crawl_schedule=SourceSchedule.weekly,
-        last_refresh_requested_at=datetime.utcnow(),
+        last_refresh_requested_at=datetime.now(timezone.utc),
         pages_indexed=0,
         chunks_created=0,
         tokens_used=0,
@@ -472,7 +472,7 @@ def test_refresh_url_source_returns_429_inside_cooldown(
     db_session.add(source)
     db_session.commit()
 
-    monkeypatch.setattr("backend.documents.url_service._utcnow", lambda: datetime.utcnow())
+    monkeypatch.setattr("backend.documents.url_service._utcnow", lambda: datetime.now(timezone.utc))
 
     response = client.post(
         f"/documents/sources/{source.id}/refresh",

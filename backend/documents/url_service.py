@@ -1028,7 +1028,11 @@ def _index_pages(
     """Fetch, extract, and index each URL.
 
     Returns (indexed_urls, failures, chunks_created).
-    Raises _CrawlAborted if the crawl must stop early (e.g. bad OpenAI key).
+    Raises _CrawlAborted if the crawl must stop early — currently triggered by
+    HTTPException with status {400, 401, 500} from _upsert_page_document (covers
+    OpenAI auth failures and upstream embedding errors, but not exclusively).
+    TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
+    status-code matching alone.
     """
     root_html = _fetch_page_html(source.url) or ""
     source.metadata_json = {

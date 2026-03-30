@@ -216,7 +216,7 @@ function EvalChatContent() {
       <div className="absolute left-[-96px] top-[-80px] h-72 w-72 rounded-full bg-[#E879F9]/18 blur-3xl" />
       <div className="absolute bottom-[-120px] right-[-32px] h-80 w-80 rounded-full bg-[#38BDF8]/16 blur-3xl" />
 
-      <div className="relative mx-auto flex h-screen max-w-7xl flex-col px-3 py-3 sm:px-4 sm:py-4">
+      <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col px-3 py-3 sm:px-4 sm:py-4">
         <div className="mb-3 rounded-[28px] border border-white/80 bg-white/86 px-4 py-4 shadow-[0_22px_70px_rgba(15,23,42,0.1)] backdrop-blur sm:px-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
@@ -243,15 +243,17 @@ function EvalChatContent() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1">
-          <ChatWidget
-            clientId={botId}
-            locale={locale}
-            badge="UI Eval"
-            title="Проверка ответов бота"
-            subtitle="Светлый интерфейс для QA: проверяйте сценарии, оценивайте ответы и быстро подмечайте слабые места."
-            renderBelowAssistant={renderBelowAssistant}
-          />
+        <div className="flex flex-1 justify-center">
+          <div className="flex h-[min(72vh,600px)] w-full max-w-4xl min-h-[520px]">
+            <ChatWidget
+              clientId={botId}
+              locale={locale}
+              badge="UI Eval"
+              title="Проверка ответов бота"
+              subtitle="Светлый интерфейс для QA: проверяйте сценарии, оценивайте ответы и быстро подмечайте слабые места."
+              renderBelowAssistant={renderBelowAssistant}
+            />
+          </div>
         </div>
       </div>
     </div>

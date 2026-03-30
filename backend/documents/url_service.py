@@ -958,8 +958,11 @@ def trigger_refresh(
 ) -> UrlSource:
     source = get_url_source(source_id, client.id, db)
     now = _utcnow()
-    if source.last_refresh_requested_at and now - source.last_refresh_requested_at < dt.timedelta(hours=1):
-        remaining = dt.timedelta(hours=1) - (now - source.last_refresh_requested_at)
+    last_refresh = source.last_refresh_requested_at
+    if last_refresh is not None and last_refresh.tzinfo is None:
+        last_refresh = last_refresh.replace(tzinfo=dt.timezone.utc)
+    if last_refresh and now - last_refresh < dt.timedelta(hours=1):
+        remaining = dt.timedelta(hours=1) - (now - last_refresh)
         minutes = max(1, int(remaining.total_seconds() // 60))
         raise HTTPException(
             status_code=429,

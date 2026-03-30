@@ -473,3 +473,39 @@ def test_guard_error_degrades_to_context(
     assert metadata["direct_guard_used"] is True
     assert metadata["direct_guard_passed"] is False
 
+
+def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
+    mock_openai_client: Mock,
+) -> None:
+    from backend.chat.service import generate_answer
+
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Answer from FAQ hint"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=12)
+
+    faq_item = FAQRow(
+        id=uuid.uuid4(),
+        question="How to reset password?",
+        answer="Use the reset link from login page.",
+        approved=True,
+        score=0.88,
+    )
+
+    answer, tokens = generate_answer(
+        "How can I reset password?",
+        context_chunks=[],
+        api_key="sk-test",
+        faq_context_items=[faq_item],
+    )
+
+    assert answer == "Answer from FAQ hint"
+    assert tokens == 12
+
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["messages"][0]["role"] == "system"
+    system_prompt = call_kwargs["messages"][0]["content"]
+    assert "VERIFIED FAQ CANDIDATES" in system_prompt
+    assert "Q: How to reset password?" in system_prompt
+    assert "A: Use the reset link from login page." in system_prompt
+

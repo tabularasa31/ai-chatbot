@@ -405,7 +405,9 @@ def generate_answer(
         Tuple of (answer_text, total_tokens).
         If context_chunks is empty, returns ("I don't have information about this.", 0).
     """
-    if not context_chunks:
+    # For faq_context strategy we may intentionally have no retrieval chunks,
+    # but still want generation to use VERIFIED FAQ CANDIDATES hints.
+    if not context_chunks and not faq_context_items:
         return ("I don't have information about this.", 0)
 
     system_prompt, user_message = build_rag_messages(

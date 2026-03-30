@@ -237,3 +237,45 @@ def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) 
     assert result.direct_guard_used is True
     assert result.direct_guard_passed is True
 
+
+def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
+    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setenv("FAQ_APPROVED_PROMOTION_DELTA", "0.02")
+
+    top_unapproved = FAQRow(
+        id=uuid.uuid4(),
+        question="How to reset password quickly?",
+        answer="Unapproved answer.",
+        approved=False,
+        score=0.95,
+    )
+    second_approved = FAQRow(
+        id=uuid.uuid4(),
+        question="How to reset password?",
+        answer="Use the reset link.",
+        approved=True,
+        score=0.94,
+    )
+
+    monkeypatch.setattr(
+        "backend.faq.faq_matcher._fetch_top_faq_rows",
+        lambda **_: _fake_rows(top_unapproved, second_approved),
+    )
+    monkeypatch.setattr(
+        "backend.faq.faq_matcher.direct_applicability_guard",
+        lambda **_: True,
+    )
+
+    result = match_faq(
+        tenant_id=uuid.uuid4(),
+        question="How can I reset password?",
+        question_embedding=[0.1] * 1536,
+        db=Mock(),
+    )
+
+    assert result.strategy == "faq_direct"
+    assert result.selected_faq_id == str(second_approved.id)
+    assert result.faq_items == [second_approved]
+    assert result.decision_reason == "approved_promoted_high_score_guard_passed"
+

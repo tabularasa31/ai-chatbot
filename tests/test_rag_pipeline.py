@@ -327,6 +327,75 @@ def test_langfuse_faq_match_span(
     assert metadata["generation_skipped"] is False
 
 
+def test_upstream_query_embedding_span_present_with_precomputed_path(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_trace = _FakeTrace()
+    monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
+
+    cl_row, api_key = _create_client(client, db_session, email="embed-span@example.com")
+    _insert_single_chunk(db_session, client_id=cl_row.id)
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_prompt_injection",
+        lambda _text: SimpleNamespace(detected=False, pattern=None),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.check_relevance_precheck",
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+    )
+    monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
+
+    monkeypatch.setattr(
+        "backend.chat.service.match_faq",
+        lambda **_: FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="test",
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *_, **__: RetrievalContext(
+            chunk_texts=["Retrieved chunk"],
+            document_ids=[uuid.uuid4()],
+            scores=[0.9],
+            mode="hybrid",
+            best_rank_score=0.9,
+            best_confidence_score=0.9,
+            confidence_source="vector_similarity",
+            reliability=build_reliability_assessment(top_score=0.9, result_count=2),
+            vector_similarities=None,
+        ),
+    )
+    monkeypatch.setattr("backend.chat.service.generate_answer", lambda *_, **__: ("Answer", 1))
+    monkeypatch.setattr(
+        "backend.chat.service.validate_answer",
+        lambda *_, **__: {"is_valid": True, "confidence": 1.0, "reason": "grounded"},
+    )
+
+    process_chat_message(
+        cl_row.id,
+        "Reset password",
+        uuid.uuid4(),
+        db_session,
+        api_key=api_key,
+    )
+
+    embedding_spans = fake_trace.spans.get("query-embedding")
+    assert embedding_spans and embedding_spans[-1].end_calls
+    payload = embedding_spans[-1].end_calls[-1].get("output")
+    assert isinstance(payload, dict)
+    assert payload["embedding_api_request_count"] == 1
+    assert payload["upstream_precomputed"] is True
+
+
 def test_faq_direct_skips_retrieval_and_generation(
     client: TestClient,
     db_session: Session,

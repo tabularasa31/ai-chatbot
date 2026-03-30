@@ -68,6 +68,18 @@ def _faq_thresholds() -> tuple[float, float, int]:
     return direct_threshold, context_threshold, context_max_items
 
 
+def _approved_promotion_delta() -> float:
+    """
+    Optional safety knob for approved-biased direct candidate selection.
+    If an approved candidate is close enough to the absolute top score,
+    we allow it to be considered for direct path.
+    """
+    delta = _env_float("FAQ_APPROVED_PROMOTION_DELTA", 0.02)
+    if delta < 0:
+        return 0.0
+    return delta
+
+
 def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:
     """
     SQLite tests store pgvector as TEXT.
@@ -252,15 +264,24 @@ def match_faq(
     direct_guard_used = False
     direct_guard_passed = False
 
+    approved_candidates = [r for r in rows if r.approved and r.score > direct_threshold]
+    best_approved = approved_candidates[0] if approved_candidates else None
+    promotion_delta = _approved_promotion_delta()
+    promoted_approved = (
+        best_approved is not None
+        and best_approved.score >= (top_score - promotion_delta)
+    )
+    direct_candidate = best_approved if promoted_approved else top
+
     # High-confidence direct path: score + approved + guard.
-    if top_score > direct_threshold and top.approved:
+    if direct_candidate.score > direct_threshold and direct_candidate.approved:
         direct_guard_used = True
         try:
             direct_guard_passed = bool(
                 direct_applicability_guard(
                     question=question,
-                    faq_question=top.question,
-                    faq_answer=top.answer,
+                    faq_question=direct_candidate.question,
+                    faq_answer=direct_candidate.answer,
                 )
             )
         except Exception:
@@ -270,24 +291,32 @@ def match_faq(
         if direct_guard_passed:
             return FAQMatchResult(
                 strategy="faq_direct",
-                faq_items=[top],
+                faq_items=[direct_candidate],
                 top_score=top_score,
-                selected_faq_id=str(top.id),
+                selected_faq_id=str(direct_candidate.id),
                 direct_guard_used=True,
                 direct_guard_passed=True,
-                decision_reason="approved_high_score_guard_passed",
+                decision_reason=(
+                    "approved_promoted_high_score_guard_passed"
+                    if promoted_approved and direct_candidate.id != top.id
+                    else "approved_high_score_guard_passed"
+                ),
             )
 
         # Approved but guard failed or was uncertain → context path.
         # In this phase we add only the top FAQ as a precision hint.
         return FAQMatchResult(
             strategy="faq_context",
-            faq_items=[top],
+            faq_items=[direct_candidate],
             top_score=top_score,
-            selected_faq_id=str(top.id),
+            selected_faq_id=str(direct_candidate.id),
             direct_guard_used=True,
             direct_guard_passed=False,
-            decision_reason="high_score_guard_failed_or_error",
+            decision_reason=(
+                "approved_promoted_high_score_guard_failed_or_error"
+                if promoted_approved and direct_candidate.id != top.id
+                else "high_score_guard_failed_or_error"
+            ),
         )
 
     # High-score (but not approved): context path with only top FAQ.

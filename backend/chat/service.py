@@ -52,6 +52,7 @@ from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
+    EMBEDDING_MODEL,
     RetrievalReliability,
     build_reliability_projection,
     build_variant_trace_metadata,
@@ -1152,7 +1153,28 @@ def process_chat_message(
     # --- FAQ matching (Phase 3) ---
     # Reuse a single embedding payload for both FAQ matching and vector retrieval.
     query_variants = expand_query(redacted_question)
+    query_embedding_span = trace.span(
+        name="query-embedding",
+        input={
+            "query_variants": query_variants,
+            "query_variant_count": len(query_variants),
+            "variant_mode": "multi" if len(query_variants) > 1 else "single",
+            "model": EMBEDDING_MODEL,
+            "upstream_precomputed": True,
+        },
+    )
+    embedding_started_at = perf_counter()
     variant_vectors = embed_queries(query_variants, api_key=api_key)
+    query_embedding_span.end(
+        output={
+            "embedded_query_count": len(variant_vectors),
+            "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
+            "embedding_api_request_count": 1,
+            "extra_embedding_api_requests": 0,
+            "duration_ms": round((perf_counter() - embedding_started_at) * 1000, 2),
+            "upstream_precomputed": True,
+        }
+    )
     base_question_embedding = variant_vectors[0] if variant_vectors else []
 
     try:

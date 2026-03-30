@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   api,
   type DocumentHealthStatus,
@@ -163,6 +163,9 @@ function stopRowClick(event: React.MouseEvent<HTMLElement>) {
 
 export default function KnowledgePage() {
   const router = useRouter();
+  const pathname = usePathname();
+  const botIdMatch = pathname.match(/^\/dashboard\/bots\/([^/]+)\/knowledge$/);
+  const botId = botIdMatch?.[1];
   const [activeTab, setActiveTab] = useState<"documents" | "profile" | "faq">("documents");
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
@@ -197,6 +200,7 @@ export default function KnowledgePage() {
   const [profileError, setProfileError] = useState("");
   const [newModule, setNewModule] = useState("");
   const [newSupportUrl, setNewSupportUrl] = useState("");
+  const [profileEditingField, setProfileEditingField] = useState<"product_name" | "modules" | "support_email" | "support_urls" | null>(null);
   const [faqItems, setFaqItems] = useState<KnowledgeFaqItem[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [faqFilter, setFaqFilter] = useState<"all" | "pending" | "approved" | "docs" | "logs">("all");
@@ -207,6 +211,7 @@ export default function KnowledgePage() {
   const [editingFaqId, setEditingFaqId] = useState<string | null>(null);
   const [editingFaqQuestion, setEditingFaqQuestion] = useState("");
   const [editingFaqAnswer, setEditingFaqAnswer] = useState("");
+  const [removingFaqIds, setRemovingFaqIds] = useState<string[]>([]);
 
   function setTab(tab: "documents" | "profile" | "faq") {
     const next = new URLSearchParams(
@@ -216,7 +221,7 @@ export default function KnowledgePage() {
     else next.set("tab", tab);
     const query = next.toString();
     setActiveTab(tab);
-    router.replace(`/knowledge${query ? `?${query}` : ""}`);
+    router.replace(`${pathname}${query ? `?${query}` : ""}`);
   }
 
   function hasProfileChanges(): boolean {
@@ -245,7 +250,7 @@ export default function KnowledgePage() {
     setProfileLoading(true);
     setProfileError("");
     try {
-      const next = await api.knowledge.getProfile();
+      const next = await api.knowledge.getProfile(botId);
       setProfile(next);
       setProfileDraft(next);
     } catch (err) {
@@ -266,7 +271,7 @@ export default function KnowledgePage() {
         docs: { approved: "all" as const, source: "docs" as const },
         logs: { approved: "all" as const, source: "logs" as const },
       };
-      const data = await api.knowledge.listFaq(mapping[faqFilter]);
+      const data = await api.knowledge.listFaq(mapping[faqFilter], botId);
       setFaqItems(data.items);
       setPendingCount(data.pending_count);
     } catch (err) {
@@ -324,7 +329,7 @@ export default function KnowledgePage() {
   useEffect(() => {
     if (!profile || profile.extraction_status !== "pending") return;
     const timer = window.setInterval(async () => {
-      const next = await api.knowledge.getProfile();
+      const next = await api.knowledge.getProfile(botId);
       const wasPending = profile.extraction_status === "pending";
       setProfile(next);
       setProfileDraft((prev) => prev ?? next);
@@ -565,11 +570,21 @@ export default function KnowledgePage() {
               <div className="text-sm font-medium text-slate-700">Extracted profile</div>
               <label className="block">
                 <span className="mb-1 block text-xs text-slate-500">Product name</span>
-                <input
-                  value={profileDraft.product_name ?? ""}
-                  onChange={(e) => setProfileDraft({ ...profileDraft, product_name: e.target.value || null })}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
+                {profileEditingField === "product_name" ? (
+                  <input
+                    value={profileDraft.product_name ?? ""}
+                    onChange={(e) => setProfileDraft({ ...profileDraft, product_name: e.target.value || null })}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setProfileEditingField("product_name")}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    {profileDraft.product_name ?? "—"}
+                  </button>
+                )}
               </label>
               <div>
                 <span className="mb-1 block text-xs text-slate-500">Modules</span>
@@ -577,39 +592,61 @@ export default function KnowledgePage() {
                   {profileDraft.modules.map((module) => (
                     <span key={module} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
                       {module}
-                      <button
-                        type="button"
-                        onClick={() => setProfileDraft({ ...profileDraft, modules: profileDraft.modules.filter((m) => m !== module) })}
-                        className="text-slate-400 hover:text-slate-600"
-                      >
-                        ×
-                      </button>
+                      {profileEditingField === "modules" && (
+                        <button
+                          type="button"
+                          onClick={() => setProfileDraft({ ...profileDraft, modules: profileDraft.modules.filter((m) => m !== module) })}
+                          className="text-slate-400 hover:text-slate-600"
+                        >
+                          ×
+                        </button>
+                      )}
                     </span>
                   ))}
                 </div>
-                <div className="mt-2 flex gap-2">
-                  <input value={newModule} onChange={(e) => setNewModule(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Add module" />
+                {profileEditingField === "modules" ? (
+                  <div className="mt-2 flex gap-2">
+                    <input value={newModule} onChange={(e) => setNewModule(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="Add module" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const value = newModule.trim();
+                        if (!value || profileDraft.modules.includes(value)) return;
+                        setProfileDraft({ ...profileDraft, modules: [...profileDraft.modules, value] });
+                        setNewModule("");
+                      }}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => {
-                      const value = newModule.trim();
-                      if (!value || profileDraft.modules.includes(value)) return;
-                      setProfileDraft({ ...profileDraft, modules: [...profileDraft.modules, value] });
-                      setNewModule("");
-                    }}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                    onClick={() => setProfileEditingField("modules")}
+                    className="mt-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                   >
-                    Add
+                    Edit modules
                   </button>
-                </div>
+                )}
               </div>
               <label className="block">
                 <span className="mb-1 block text-xs text-slate-500">Support email</span>
-                <input
-                  value={profileDraft.support_email ?? ""}
-                  onChange={(e) => setProfileDraft({ ...profileDraft, support_email: e.target.value || null })}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                />
+                {profileEditingField === "support_email" ? (
+                  <input
+                    value={profileDraft.support_email ?? ""}
+                    onChange={(e) => setProfileDraft({ ...profileDraft, support_email: e.target.value || null })}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setProfileEditingField("support_email")}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    {profileDraft.support_email ?? "—"}
+                  </button>
+                )}
               </label>
               <div>
                 <span className="mb-1 block text-xs text-slate-500">Support URLs</span>
@@ -617,31 +654,43 @@ export default function KnowledgePage() {
                   {profileDraft.support_urls.map((url) => (
                     <div key={url} className="flex items-center gap-2 text-sm">
                       <span className="truncate text-slate-700">{url}</span>
-                      <button
-                        type="button"
-                        onClick={() => setProfileDraft({ ...profileDraft, support_urls: profileDraft.support_urls.filter((u) => u !== url) })}
-                        className="text-red-400 hover:text-red-600"
-                      >
-                        Remove
-                      </button>
+                      {profileEditingField === "support_urls" && (
+                        <button
+                          type="button"
+                          onClick={() => setProfileDraft({ ...profileDraft, support_urls: profileDraft.support_urls.filter((u) => u !== url) })}
+                          className="text-red-400 hover:text-red-600"
+                        >
+                          Remove
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
-                <div className="mt-2 flex gap-2">
-                  <input value={newSupportUrl} onChange={(e) => setNewSupportUrl(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="https://..." />
+                {profileEditingField === "support_urls" ? (
+                  <div className="mt-2 flex gap-2">
+                    <input value={newSupportUrl} onChange={(e) => setNewSupportUrl(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="https://..." />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const value = newSupportUrl.trim();
+                        if (!value || profileDraft.support_urls.includes(value)) return;
+                        setProfileDraft({ ...profileDraft, support_urls: [...profileDraft.support_urls, value] });
+                        setNewSupportUrl("");
+                      }}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={() => {
-                      const value = newSupportUrl.trim();
-                      if (!value || profileDraft.support_urls.includes(value)) return;
-                      setProfileDraft({ ...profileDraft, support_urls: [...profileDraft.support_urls, value] });
-                      setNewSupportUrl("");
-                    }}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+                    onClick={() => setProfileEditingField("support_urls")}
+                    className="mt-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                   >
-                    Add
+                    Edit URLs
                   </button>
-                </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -655,7 +704,7 @@ export default function KnowledgePage() {
                         modules: profileDraft.modules,
                         support_email: profileDraft.support_email,
                         support_urls: profileDraft.support_urls,
-                      });
+                      }, botId);
                       setProfile(updated);
                       setProfileDraft(updated);
                       setProfileSaved(true);
@@ -670,7 +719,10 @@ export default function KnowledgePage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setProfileDraft(profile)}
+                  onClick={() => {
+                    setProfileDraft(profile);
+                    setProfileEditingField(null);
+                  }}
                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                 >
                   Cancel
@@ -737,7 +789,7 @@ export default function KnowledgePage() {
             onClick={async () => {
               setApprovingAll(true);
               try {
-                await api.knowledge.approveAll();
+                await api.knowledge.approveAll(botId);
                 setFaqSaved("All pending FAQ accepted.");
                 await loadFaq();
               } catch (err) {
@@ -779,7 +831,10 @@ export default function KnowledgePage() {
             {faqItems.map((item) => {
               const isEditing = editingFaqId === item.id;
               return (
-                <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div
+                  key={item.id}
+                  className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all duration-200 ${removingFaqIds.includes(item.id) ? "opacity-0 scale-[0.98]" : "opacity-100 scale-100"}`}
+                >
                   {isEditing ? (
                     <div className="space-y-3">
                       {item.approved && <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">Will require re-approval</div>}
@@ -792,7 +847,7 @@ export default function KnowledgePage() {
                           onClick={async () => {
                             try {
                               setUpdatingFaqId(item.id);
-                              await api.knowledge.updateFaq(item.id, { question: editingFaqQuestion, answer: editingFaqAnswer });
+                              await api.knowledge.updateFaq(item.id, { question: editingFaqQuestion, answer: editingFaqAnswer }, botId);
                               setEditingFaqId(null);
                               setFaqSaved(item.approved ? "Saved. Re-approval required." : "Saved.");
                               await loadFaq();
@@ -830,7 +885,7 @@ export default function KnowledgePage() {
                                 onClick={async () => {
                                   try {
                                     setUpdatingFaqId(item.id);
-                                    await api.knowledge.approveFaq(item.id);
+                                    await api.knowledge.approveFaq(item.id, botId);
                                     await loadFaq();
                                   } catch (err) {
                                     setFaqError(err instanceof Error ? err.message : "Failed to approve FAQ");
@@ -847,16 +902,20 @@ export default function KnowledgePage() {
                                 disabled={updatingFaqId === item.id}
                                 onClick={async () => {
                                   const snapshot = faqItems;
-                                  setFaqItems((prev) => prev.filter((i) => i.id !== item.id));
+                                  setRemovingFaqIds((prev) => [...prev, item.id]);
+                                  window.setTimeout(() => {
+                                    setFaqItems((prev) => prev.filter((i) => i.id !== item.id));
+                                  }, 140);
                                   try {
                                     setUpdatingFaqId(item.id);
-                                    await api.knowledge.rejectFaq(item.id);
+                                    await api.knowledge.rejectFaq(item.id, botId);
                                     await loadFaq();
                                   } catch (err) {
                                     setFaqItems(snapshot);
                                     setFaqError(err instanceof Error ? err.message : "Failed to reject FAQ");
                                   } finally {
                                     setUpdatingFaqId(null);
+                                    setRemovingFaqIds((prev) => prev.filter((id) => id !== item.id));
                                   }
                                 }}
                                 className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 disabled:opacity-50"

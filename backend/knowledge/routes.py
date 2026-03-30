@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user, require_verified_user
 from backend.clients.service import get_client_by_user
-from backend.core.db import SessionLocal, get_db
+from backend.core import db as core_db
+from backend.core.db import get_db
 from backend.core.openai_client import get_openai_client
 from backend.knowledge.schemas import (
     KnowledgeFaqApproveAllResponse,
@@ -21,9 +22,9 @@ from backend.knowledge.schemas import (
     KnowledgeProfilePatchRequest,
     KnowledgeProfileResponse,
 )
-from backend.models import TenantFaq, TenantProfile, User
+from backend.models import Client, TenantFaq, TenantProfile, User
 
-knowledge_router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+knowledge_router = APIRouter(tags=["knowledge"])
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 
@@ -46,13 +47,35 @@ def _faq_or_404(db: Session, *, tenant_id: uuid.UUID, faq_id: uuid.UUID) -> Tena
     return faq
 
 
+def _resolve_client_for_knowledge(
+    *,
+    db: Session,
+    current_user: User,
+    bot_id: Optional[str],
+) -> Client:
+    if bot_id is None:
+        client = get_client_by_user(current_user.id, db)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        return client
+
+    client = (
+        db.query(Client)
+        .filter(Client.public_id == bot_id, Client.user_id == current_user.id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return client
+
+
 def _generate_faq_embedding_background(
     *,
     faq_id: uuid.UUID,
     question: str,
     api_key: str,
 ) -> None:
-    db = SessionLocal()
+    db = core_db.SessionLocal()
     try:
         faq = db.get(TenantFaq, faq_id)
         if faq is None:
@@ -71,14 +94,16 @@ def _generate_faq_embedding_background(
         db.close()
 
 
-@knowledge_router.get("/profile", response_model=KnowledgeProfileResponse)
+@knowledge_router.get("/knowledge/profile", response_model=KnowledgeProfileResponse)
+@knowledge_router.get(
+    "/api/v1/bots/{bot_id}/knowledge/profile", response_model=KnowledgeProfileResponse
+)
 def get_knowledge_profile(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeProfileResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     profile = _profile_or_404(db, client.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
@@ -92,21 +117,25 @@ def get_knowledge_profile(
     )
 
 
-@knowledge_router.patch("/profile", response_model=KnowledgeProfileResponse)
+@knowledge_router.patch("/knowledge/profile", response_model=KnowledgeProfileResponse)
+@knowledge_router.patch(
+    "/api/v1/bots/{bot_id}/knowledge/profile", response_model=KnowledgeProfileResponse
+)
 def patch_knowledge_profile(
     payload: KnowledgeProfilePatchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeProfileResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     profile = _profile_or_404(db, client.id)
 
     if "product_name" in payload.model_fields_set:
         profile.product_name = payload.product_name
     if "modules" in payload.model_fields_set and payload.modules is not None:
         profile.modules = payload.modules
+    if "glossary" in payload.model_fields_set and payload.glossary is not None:
+        profile.glossary = payload.glossary
     if "support_email" in payload.model_fields_set:
         profile.support_email = payload.support_email
     if "support_urls" in payload.model_fields_set and payload.support_urls is not None:
@@ -127,7 +156,8 @@ def patch_knowledge_profile(
     )
 
 
-@knowledge_router.get("/faq", response_model=KnowledgeFaqListResponse)
+@knowledge_router.get("/knowledge/faq", response_model=KnowledgeFaqListResponse)
+@knowledge_router.get("/api/v1/bots/{bot_id}/knowledge/faq", response_model=KnowledgeFaqListResponse)
 def list_knowledge_faq(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -135,10 +165,9 @@ def list_knowledge_faq(
     source: Literal["docs", "logs", "swagger", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqListResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
 
     query = db.query(TenantFaq).filter(TenantFaq.tenant_id == client.id)
     if approved == "true":
@@ -180,16 +209,19 @@ def list_knowledge_faq(
     )
 
 
-@knowledge_router.post("/faq/{faq_id}/approve", response_model=KnowledgeFaqApproveResponse)
+@knowledge_router.post("/knowledge/faq/{faq_id}/approve", response_model=KnowledgeFaqApproveResponse)
+@knowledge_router.post(
+    "/api/v1/bots/{bot_id}/knowledge/faq/{faq_id}/approve",
+    response_model=KnowledgeFaqApproveResponse,
+)
 def approve_faq(
     faq_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqApproveResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
     faq.approved = True
     db.add(faq)
@@ -206,29 +238,35 @@ def approve_faq(
     return KnowledgeFaqApproveResponse(id=faq.id, approved=True)
 
 
-@knowledge_router.post("/faq/{faq_id}/reject", response_model=KnowledgeFaqRejectResponse)
+@knowledge_router.post("/knowledge/faq/{faq_id}/reject", response_model=KnowledgeFaqRejectResponse)
+@knowledge_router.post(
+    "/api/v1/bots/{bot_id}/knowledge/faq/{faq_id}/reject",
+    response_model=KnowledgeFaqRejectResponse,
+)
 def reject_faq(
     faq_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqRejectResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
     db.delete(faq)
     db.commit()
     return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
 
 
-@knowledge_router.post("/faq/approve-all", response_model=KnowledgeFaqApproveAllResponse)
+@knowledge_router.post("/knowledge/faq/approve-all", response_model=KnowledgeFaqApproveAllResponse)
+@knowledge_router.post(
+    "/api/v1/bots/{bot_id}/knowledge/faq/approve-all",
+    response_model=KnowledgeFaqApproveAllResponse,
+)
 def approve_all_faq(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqApproveAllResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     updated = (
         db.query(TenantFaq)
         .filter(TenantFaq.tenant_id == client.id, TenantFaq.approved.is_(False))
@@ -238,17 +276,20 @@ def approve_all_faq(
     return KnowledgeFaqApproveAllResponse(approved_count=int(updated))
 
 
-@knowledge_router.put("/faq/{faq_id}", response_model=KnowledgeFaqItemResponse)
+@knowledge_router.put("/knowledge/faq/{faq_id}", response_model=KnowledgeFaqItemResponse)
+@knowledge_router.put(
+    "/api/v1/bots/{bot_id}/knowledge/faq/{faq_id}",
+    response_model=KnowledgeFaqItemResponse,
+)
 def update_faq(
     faq_id: uuid.UUID,
     payload: KnowledgeFaqUpdateRequest,
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqItemResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
 
     question_changed = payload.question.strip() != faq.question.strip()
@@ -280,15 +321,18 @@ def update_faq(
     )
 
 
-@knowledge_router.delete("/faq/{faq_id}", response_model=KnowledgeFaqRejectResponse)
+@knowledge_router.delete("/knowledge/faq/{faq_id}", response_model=KnowledgeFaqRejectResponse)
+@knowledge_router.delete(
+    "/api/v1/bots/{bot_id}/knowledge/faq/{faq_id}",
+    response_model=KnowledgeFaqRejectResponse,
+)
 def delete_faq(
     faq_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Optional[str] = None,
 ) -> KnowledgeFaqRejectResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
     db.delete(faq)
     db.commit()

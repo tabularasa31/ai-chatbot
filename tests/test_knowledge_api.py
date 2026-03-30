@@ -24,6 +24,10 @@ def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[str, C
     return token, client_row
 
 
+def _kbase(client_row: Client) -> str:
+    return f"/api/v1/bots/{client_row.public_id}/knowledge"
+
+
 def test_get_profile(client: TestClient, db_session: Session) -> None:
     token, client_row = _create_client(client, db_session, email="kapi-profile@example.com")
     profile = TenantProfile(
@@ -40,7 +44,7 @@ def test_get_profile(client: TestClient, db_session: Session) -> None:
     db_session.add(profile)
     db_session.commit()
 
-    resp = client.get("/knowledge/profile", headers={"Authorization": f"Bearer {token}"})
+    resp = client.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["product_name"] == "Acme API"
@@ -64,7 +68,7 @@ def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
     db_session.commit()
 
     resp = client.patch(
-        "/knowledge/profile",
+        f"{_kbase(client_row)}/profile",
         headers={"Authorization": f"Bearer {token}"},
         json={"product_name": "Acme API v2"},
     )
@@ -97,7 +101,7 @@ def test_get_faq_filters(client: TestClient, db_session: Session) -> None:
     db_session.commit()
 
     resp = client.get(
-        "/knowledge/faq?approved=false",
+        f"{_kbase(client_row)}/faq?approved=false",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200, resp.text
@@ -130,7 +134,7 @@ def test_approve_all_count(client: TestClient, db_session: Session) -> None:
     db_session.commit()
 
     resp = client.post(
-        "/knowledge/faq/approve-all",
+        f"{_kbase(client_row)}/faq/approve-all",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200, resp.text
@@ -151,10 +155,45 @@ def test_edit_resets_approved(client: TestClient, db_session: Session) -> None:
     db_session.refresh(faq)
 
     resp = client.put(
-        f"/knowledge/faq/{faq.id}",
+        f"{_kbase(client_row)}/faq/{faq.id}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How exactly?", "answer": "Like this."},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["approved"] is False
+
+
+def test_approve_generates_embedding(client: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(client, db_session, email="kapi-approve-embed@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="Webhook retries?",
+        answer="Up to 5 times",
+        approved=False,
+        source="docs",
+        question_embedding=None,
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = client.post(
+        f"{_kbase(client_row)}/faq/{faq.id}/approve",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    db_session.refresh(faq)
+    assert faq.approved is True
+    assert faq.question_embedding is not None
+
+
+def test_wrong_tenant_404(client: TestClient, db_session: Session) -> None:
+    token1, client1 = _create_client(client, db_session, email="kapi-owner-1@example.com")
+    _token2, client2 = _create_client(client, db_session, email="kapi-owner-2@example.com")
+
+    resp = client.get(
+        f"/api/v1/bots/{client2.public_id}/knowledge/profile",
+        headers={"Authorization": f"Bearer {token1}"},
+    )
+    assert resp.status_code == 404, resp.text
 

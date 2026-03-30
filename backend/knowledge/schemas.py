@@ -21,6 +21,7 @@ class KnowledgeProfileResponse(BaseModel):
 class KnowledgeProfilePatchRequest(BaseModel):
     product_name: Optional[str] = None
     modules: Optional[list[str]] = None
+    glossary: Optional[list[dict]] = None
     support_email: Optional[str] = None
     support_urls: Optional[list[str]] = None
 

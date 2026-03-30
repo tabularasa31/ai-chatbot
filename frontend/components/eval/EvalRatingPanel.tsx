@@ -65,13 +65,7 @@ export function EvalRatingPanel({
     return (
       <div className="rounded-[22px] border border-[#BBF7D0] bg-[linear-gradient(180deg,#F7FEF8_0%,#ECFDF3_100%)] px-4 py-3 text-sm text-[#166534] shadow-[0_16px_34px_rgba(34,197,94,0.1)]">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-[#15803D]">
-            <CheckCheck size={14} />
-            Saved
-          </span>
-          <span className="text-sm font-semibold">
-            Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}
-          </span>
+          <span className="text-sm font-semibold">Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}</span>
         </div>
         {frozen.verdict === "fail" && frozen.error_category ? (
           <p className="mt-2 text-sm text-[#166534]">
@@ -156,13 +150,7 @@ export function EvalRatingPanel({
     <div className="rounded-[22px] border border-[#DCE5F2] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,251,255,0.98)_100%)] px-4 py-4 shadow-[0_18px_40px_rgba(148,163,184,0.12)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#2563EB]">
-            UI Eval
-          </p>
           <h4 className="mt-1 text-sm font-semibold text-[#0F172A]">Оцените ответ ассистента</h4>
-          <p className="mt-1 text-xs leading-5 text-[#64748B]">
-            Выберите итог, а для fail при необходимости уточните категорию и комментарий.
-          </p>
         </div>
         <div className="inline-flex rounded-full border border-[#DCE5F2] bg-white p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.95)]">
           <button
@@ -255,14 +243,11 @@ export function EvalRatingPanel({
       ) : null}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-xs leading-5 text-[#64748B]">
-          Pass можно сохранить сразу. Для fail комментарий обязателен только в категории «Другое».
-        </p>
         <button
           type="button"
           disabled={saving || (!canSavePass && !canSaveFail)}
           onClick={handleSave}
-          className="inline-flex items-center justify-center rounded-full bg-[linear-gradient(135deg,#0F172A_0%,#2563EB_45%,#E879F9_100%)] px-4 py-2.5 text-sm font-semibold text-white shadow-[0_18px_34px_rgba(37,99,235,0.24)] transition hover:-translate-y-0.5 hover:shadow-[0_22px_40px_rgba(37,99,235,0.28)] disabled:translate-y-0 disabled:cursor-not-allowed disabled:bg-[#CBD5E1] disabled:shadow-none"
+          className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {saving ? "Сохранение..." : "Сохранить оценку"}
         </button>

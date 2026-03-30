@@ -2,7 +2,6 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Bot, ClipboardCheck } from "lucide-react";
 import { ChatWidget, type ChatWidgetBelowAssistantContext } from "@/components/ChatWidget";
 import { EvalRatingPanel } from "@/components/eval/EvalRatingPanel";
 import { evalApiBase, getEvalToken, removeEvalToken } from "@/lib/evalAuth";
@@ -212,44 +211,17 @@ function EvalChatContent() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F4F7FB] font-['Inter']">
-      <div className="absolute left-[-96px] top-[-80px] h-72 w-72 rounded-full bg-[#E879F9]/18 blur-3xl" />
-      <div className="absolute bottom-[-120px] right-[-32px] h-80 w-80 rounded-full bg-[#38BDF8]/16 blur-3xl" />
-
-      <div className="relative mx-auto flex min-h-screen max-w-7xl flex-col px-3 py-3 sm:px-4 sm:py-4">
-        <div className="mb-3 rounded-[28px] border border-white/80 bg-white/86 px-4 py-4 shadow-[0_22px_70px_rgba(15,23,42,0.1)] backdrop-blur sm:px-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#DBEAFE] bg-[#EEF5FF] px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#2563EB]">
-                <ClipboardCheck size={14} />
-                UI Eval
-              </div>
-              <h1 className="mt-3 text-2xl font-semibold tracking-[-0.04em] text-[#0F172A] sm:text-[2rem]">
-                Ручная проверка диалога
-              </h1>
-              <p className="mt-2 max-w-3xl text-sm leading-7 text-[#64748B]">
-                Тестируйте ответы в светлом брендированном интерфейсе и сохраняйте оценку прямо под каждой репликой ассистента.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#DCE5F2] bg-white px-3 py-2 text-xs font-medium text-[#475569]">
-                <Bot size={14} />
-                {botId}
-              </div>
-              <div className="inline-flex items-center rounded-full bg-[#ECFDF3] px-3 py-2 text-xs font-medium text-[#166534]">
-                Eval session active
-              </div>
-            </div>
-          </div>
+    <div className="min-h-screen bg-[#F4F7FB] font-['Inter']">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-3 py-3 sm:px-4 sm:py-4">
+        <div className="mb-3 flex items-center justify-between gap-4 px-2 py-1 text-sm font-medium text-[#334155]">
+          <span className="text-[#2563EB]">UI Evals</span>
+          <span className="flex-1 text-center text-[#0F172A]">Ручная проверка диалога</span>
+          <span className="text-[#475569]">{botId}</span>
         </div>
 
         <div className="flex flex-1 justify-center">
-          <div className="flex h-[min(72vh,600px)] w-full max-w-4xl min-h-[520px]">
-            <ChatWidget
-              clientId={botId}
-              locale={locale}
-              renderBelowAssistant={renderBelowAssistant}
-            />
+          <div className="flex h-[600px] w-full max-w-4xl">
+            <ChatWidget clientId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
           </div>
         </div>
       </div>

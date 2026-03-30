@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-29 (internal Eval QA + widget chat gate)
+**Last updated:** 2026-03-30 (FAQ match phase 3 refinements)
 
 ---
 
@@ -54,6 +54,9 @@
 | **FI-034** | LLM answer validation; fallback on low confidence; debug output also exposes retrieval contradiction observability fields (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`) alongside `validation` | `validate_answer()`, `POST /chat/debug` |
 | **FI-043 + privacy hardening** | Regex PII redaction before OpenAI plus encrypted original storage, redacted-safe logs/escalations, tenant privacy settings, `pii_events` audit log, original-content access/delete controls, retention cleanup, Privacy Log UI + CSV export | `backend/chat/pii.py`, `backend/chat/service.py`, `backend/escalation/service.py`, `backend/admin/routes.py`, `frontend/app/(app)/settings/privacy/page.tsx`, `frontend/app/(app)/admin/privacy/page.tsx` |
 | **FI-ESC v1** | L2 escalation: tickets (DB + tenant email), triggers (low similarity, no chunks, human phrase, manual), OpenAI JSON handoff UX, `chat_ended` on `POST /chat` | `backend/escalation/`, `process_chat_message`, `POST /chat/{session_id}/escalate`, JWT `GET/POST /escalations*`, migration `fi_esc_v1` |
+| Tenant knowledge extraction (Phase 1) | After embeddings finish: extract `tenant_profiles` (product name, modules, glossary, aliases, support contacts) and generate `tenant_faq` candidates (best-effort, never blocks indexing) | `backend/tenant_knowledge/*`, `backend/embeddings/service.py`, migration `add_tenant_profiles_and_faq.py` |
+| Relevance guard (Phase 2) | Regex prompt-injection detection + LLM relevance pre-check (timeout + in-memory cache) + low-retrieval early reject; guard instructions are applied after escalation paths; `OPENAI_REQUEST_TIMEOUT_SECONDS` and `RELEVANCE_RETRIEVAL_THRESHOLD` tune behavior | `backend/guards/*`, `backend/chat/service.py`, `backend/search/service.py`, env `OPENAI_REQUEST_TIMEOUT_SECONDS`, `RELEVANCE_RETRIEVAL_THRESHOLD` |
+| FAQ match (Phase 3) | Post-relevance FAQ hybrid routing with `faq_direct`/`faq_context`/`rag_only`, guarded direct path, single embedding reuse across FAQ + retrieval, FAQ hints in prompt, and stable `faq_match` span contract (`top_score` = best raw candidate score, `selected_score` = selected FAQ score) | `backend/faq/faq_matcher.py`, `backend/chat/service.py`, `backend/search/service.py`, `tests/test_faq_matcher.py`, `tests/test_rag_pipeline.py` |
 | Sessions / logs / feedback | Session list, logs, thumbs, ideal answer, bad answers | `GET /chat/sessions`, logs, feedback, bad-answers |
 
 ---

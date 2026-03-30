@@ -443,6 +443,55 @@ class Embedding(Base):
     document = relationship("Document", back_populates="embeddings")
 
 
+class TenantProfile(Base):
+    """Per-tenant (client) extracted knowledge profile."""
+
+    __tablename__ = "tenant_profiles"
+
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    product_name = Column(Text, nullable=True)
+    modules = Column(JSON, nullable=False, default=list)
+    glossary = Column(JSON, nullable=False, default=list)
+    aliases = Column(JSON, nullable=False, default=list)
+    support_email = Column(Text, nullable=True)
+    support_urls = Column(JSON, nullable=False, default=list)
+    escalation_policy = Column(Text, nullable=True)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    client = relationship("Client")
+
+
+class TenantFaq(Base):
+    """Per-tenant FAQ candidates extracted from documentation."""
+
+    __tablename__ = "tenant_faq"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    question_embedding = Column(Vector(1536), nullable=True)
+    confidence = Column(Float, nullable=True)
+    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger'
+    approved = Column(Boolean, nullable=False, default=False, server_default="false")
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    client = relationship("Client")
+
 
 class Chat(Base):
     __tablename__ = "chats"

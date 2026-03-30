@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from openai import OpenAI
 
 from backend.core.crypto import decrypt_value
+from backend.core.config import settings
 
 
 def get_openai_client(encrypted_key: Optional[str]) -> OpenAI:
@@ -33,4 +34,7 @@ def get_openai_client(encrypted_key: Optional[str]) -> OpenAI:
             status_code=500,
             detail="Failed to decrypt OpenAI API key.",
         ) from e
-    return OpenAI(api_key=decrypted_key)
+    return OpenAI(
+        api_key=decrypted_key,
+        timeout=settings.openai_request_timeout_seconds,
+    )

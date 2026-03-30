@@ -130,7 +130,39 @@ def client(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
 def mock_openai_client():
     """Mock get_openai_client for all tests — no real API calls."""
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(data=[Mock(embedding=[0.1] * 1536)])
+
+    def _embeddings_create(*args: object, **kwargs: object) -> Mock:
+        # OpenAI embeddings returns one embedding per input element.
+        inp = kwargs.get("input")
+        if isinstance(inp, str):
+            count = 1
+        elif isinstance(inp, list):
+            count = len(inp)
+        else:
+            count = 1
+        configured_data = getattr(
+            mock_client.embeddings.create.return_value,
+            "data",
+            None,
+        )
+
+        # If a test configured explicit return_value.data, respect it.
+        if isinstance(configured_data, list) and configured_data:
+            if len(configured_data) == count:
+                data_out = configured_data
+            elif len(configured_data) == 1:
+                data_out = [configured_data[0] for _ in range(count)]
+            else:
+                # Best-effort: cycle/trim to match the expected count.
+                data_out = (configured_data * (count // len(configured_data) + 1))[:count]
+            return Mock(data=data_out)
+
+        return Mock(data=[Mock(embedding=[0.1] * 1536) for _ in range(count)])
+
+    mock_client.embeddings.create.side_effect = _embeddings_create
+    mock_client.embeddings.create.return_value = Mock(
+        data=[Mock(embedding=[0.1] * 1536)]
+    )
     mock_client.chat.completions.create.return_value = Mock(
         choices=[Mock(message=Mock(content="AI response"))],
         usage=Mock(total_tokens=100),
@@ -157,6 +189,9 @@ def mock_openai_client():
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client), \
+         patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
+         patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \
+         patch("backend.guards.relevance_checker.get_openai_client", return_value=mock_client), \
          patch(
              "backend.escalation.openai_escalation.get_openai_client",
              return_value=mock_esc_client,

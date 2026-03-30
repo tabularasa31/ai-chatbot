@@ -907,6 +907,9 @@ class SearchResultBundle:
 
     results: list[tuple[Embedding, float]]
     best_vector_similarity: float | None = None
+    # For each returned final chunk: cosine similarity from vector-candidate stage.
+    # If a chunk came only from lexical/BM25 path (no vector candidate), value is None.
+    vector_similarities: list[float | None] | None = None
     best_keyword_score: float | None = None
     has_lexical_signal: bool = False
     query_variants: list[str] | None = None
@@ -1713,6 +1716,9 @@ def search_similar_chunks_detailed(
     *,
     api_key: str,
     trace: TraceHandle | None = None,
+    precomputed_query_variants: list[str] | None = None,
+    precomputed_variant_vectors: list[list[float]] | None = None,
+    precomputed_embedding_api_request_count: int | None = None,
 ) -> SearchResultBundle:
     """
     Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
@@ -1721,7 +1727,15 @@ def search_similar_chunks_detailed(
     Python cosine search. Downstream ranking and observability stages are shared.
     """
     retrieval_started_at = perf_counter()
-    query_variants = expand_query(query)
+
+    use_precomputed = (
+        precomputed_query_variants is not None
+        and precomputed_variant_vectors is not None
+        and precomputed_query_variants
+        and len(precomputed_query_variants) == len(precomputed_variant_vectors)
+    )
+
+    query_variants = precomputed_query_variants if use_precomputed else expand_query(query)
     query_variant_count = len(query_variants)
     variant_mode = _variant_mode_for_count(query_variant_count)
     extra_variant_count = max(query_variant_count - 1, 0)
@@ -1738,18 +1752,28 @@ def search_similar_chunks_detailed(
             }
         )
 
-    embedding_started_at = perf_counter()
-    variant_vectors, embedding_api_request_count = embed_queries_with_stats(
-        query_variants,
-        api_key=api_key,
-    )
-    query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
-    embedded_query_count = len(query_variants)
-    extra_embedded_queries = max(embedded_query_count - 1, 0)
-    extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
-    trace_query_vector = variant_vectors[0] if variant_vectors else []
+    if use_precomputed:
+        variant_vectors = precomputed_variant_vectors or []
+        embedding_api_request_count = int(precomputed_embedding_api_request_count or 1)
+        query_embedding_duration_ms = 0.0
+        embedded_query_count = len(variant_vectors)
+        extra_embedded_queries = max(embedded_query_count - 1, 0)
+        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
+        trace_query_vector = variant_vectors[0] if variant_vectors else []
+        # Intentionally skip `query-embedding` span: embeddings were computed upstream.
+    else:
+        embedding_started_at = perf_counter()
+        variant_vectors, embedding_api_request_count = embed_queries_with_stats(
+            query_variants,
+            api_key=api_key,
+        )
+        query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
+        embedded_query_count = len(query_variants)
+        extra_embedded_queries = max(embedded_query_count - 1, 0)
+        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
+        trace_query_vector = variant_vectors[0] if variant_vectors else []
     query_script_bucket = detect_query_script_bucket(query)
-    if trace is not None:
+    if trace is not None and not use_precomputed:
         trace.span(
             name="query-embedding",
             input={
@@ -2001,6 +2025,11 @@ def search_similar_chunks_detailed(
         top_k=top_k,
     )
     final_results = mmr_selection.results
+    vector_similarity_by_id = {emb.id: sim for emb, sim in vector_candidates}
+    vector_similarities: list[float | None] = [
+        float(vector_similarity_by_id[emb.id]) if emb.id in vector_similarity_by_id else None
+        for emb, _ in final_results
+    ]
     if trace is not None:
         trace.span(
             name="mmr-pass",
@@ -2069,6 +2098,7 @@ def search_similar_chunks_detailed(
     return SearchResultBundle(
         results=final_results,
         best_vector_similarity=best_vector_similarity,
+        vector_similarities=vector_similarities,
         best_keyword_score=best_keyword_score,
         has_lexical_signal=has_lexical_signal,
         query_variants=query_variants,

@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import re
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from backend.core.openai_client import get_openai_client
+from backend.models import Document, DocumentType, Embedding
+from backend.tenant_knowledge.faq_service import upsert_faq_candidates
+from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
+from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
+from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
+
+
+EXTRACTION_MODEL = "gpt-4o-mini"
+EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+def _truncate_to_approx_tokens(text: str, max_tokens: int = 6000) -> str:
+    # Repo uses ~4 chars/token for lightweight guarding.
+    max_chars = max_tokens * 4
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars]
+
+
+def _count_term_occurrences(haystack: str, needle: str) -> int:
+    needle = (needle or "").strip()
+    if not needle:
+        return 0
+    pattern = re.escape(needle)
+    return len(re.findall(pattern, haystack, flags=re.IGNORECASE))
+
+
+def _confidence_from_count(count: int) -> float:
+    # Phase 1 spec-inspired normalization: explicit multi → high; single → medium; none → low.
+    if count >= 2:
+        return 0.9
+    if count == 1:
+        return 0.6
+    return 0.3
+
+
+def _support_email_and_urls(support_contacts: list[object]) -> tuple[str | None, list[str]]:
+    email: str | None = None
+    urls: list[str] = []
+    for raw in support_contacts:
+        if not isinstance(raw, str):
+            continue
+        value = raw.strip()
+        if not value:
+            continue
+        if "@" in value and not value.lower().startswith("http"):
+            if email is None:
+                email = value
+            continue
+        if value.lower().startswith("http"):
+            urls.append(value)
+    # dedupe urls
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for u in urls:
+        key = u.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(u)
+    return email, deduped
+
+
+def _faq_confidence(question: str, combined_text: str) -> float:
+    tokens = [t for t in re.findall(r"\w+", question.casefold()) if len(t) >= 4]
+    if not tokens:
+        return 0.3
+    total = 0
+    for t in tokens[:8]:
+        total += _count_term_occurrences(combined_text, t)
+        if total >= 2:
+            break
+    return _confidence_from_count(2 if total >= 2 else (1 if total == 1 else 0))
+
+
+def _product_confidence(product_name: str, combined_text: str) -> float:
+    return _confidence_from_count(_count_term_occurrences(combined_text, product_name))
+
+
+def _glossary_confidence(term: str, combined_text: str, definition: str | None) -> float:
+    count = _count_term_occurrences(combined_text, term)
+    if count >= 2:
+        return 0.9
+    if count == 1:
+        # If we also have a definition, treat as medium rather than noise.
+        return 0.6 if definition else 0.3
+    return 0.3
+
+
+def run_extract_tenant_knowledge_for_document(
+    *,
+    document_id: uuid.UUID,
+    db: Session,
+    api_key: str,
+) -> None:
+    """
+    Extract structured tenant knowledge after successful document embedding.
+
+    Important: this job must be best-effort; exceptions should not break embedding runs.
+    """
+    try:
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            return
+        tenant_id = doc.client_id
+
+        rows = (
+            db.query(Embedding)
+            .filter(Embedding.document_id == document_id)
+            .filter(Embedding.chunk_text.isnot(None))
+            .order_by(func.length(Embedding.chunk_text).desc())
+            .limit(40)
+            .all()
+        )
+        chunks = [r.chunk_text for r in rows if r.chunk_text and r.chunk_text.strip()]
+        if not chunks:
+            return
+
+        combined_text = _truncate_to_approx_tokens("\n\n".join(chunks), max_tokens=6000)
+
+        openai_client = get_openai_client(api_key)
+
+        system_prompt = (
+            "You are a knowledge extraction assistant.\n"
+            "Extract structured data ONLY from the provided documentation.\n"
+            "Return ONLY what is explicitly stated. Do NOT infer,\n"
+            "generalize, or add external knowledge. If a field is absent — return null or [].\n"
+        )
+        user_prompt = (
+            "Extract from the following documentation:\n"
+            f"{combined_text}\n"
+            "Return JSON with this exact schema:\n"
+            "{\n"
+            '  "product_name": "string or null",\n'
+            '  "modules": ["string"],\n'
+            '  "glossary_terms": [{"term": "str", "definition": "str or null"}],\n'
+            '  "support_contacts": ["email or URL"],\n'
+            '  "faq_candidates": [{"question": "str", "answer": "str"}]\n'
+            "}\n"
+            "Return ONLY the JSON object. No explanation. No markdown.\n"
+        )
+
+        response = openai_client.chat.completions.create(
+            model=EXTRACTION_MODEL,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        raw_content = response.choices[0].message.content or "{}"
+        import json
+
+        extracted = json.loads(raw_content)
+        if not isinstance(extracted, dict):
+            return
+
+        product_name = extracted.get("product_name")
+        product_name_norm = product_name.strip() if isinstance(product_name, str) else None
+
+        modules: list[str] = []
+        for m in extracted.get("modules") or []:
+            if not isinstance(m, str):
+                continue
+            value = m.strip()
+            if not value:
+                continue
+            modules.append(value)
+        # dedupe modules
+        dedup_modules: list[str] = []
+        seen_mods: set[str] = set()
+        for m in modules:
+            key = m.casefold()
+            if key in seen_mods:
+                continue
+            seen_mods.add(key)
+            dedup_modules.append(m)
+        modules = dedup_modules
+
+        glossary_entries: list[GlossaryEntry] = []
+        raw_glossary = extracted.get("glossary_terms") or []
+        if isinstance(raw_glossary, list):
+            for item in raw_glossary:
+                if not isinstance(item, dict):
+                    continue
+                term = item.get("term")
+                definition = item.get("definition")
+                if not isinstance(term, str) or not term.strip():
+                    continue
+                definition_str = definition.strip() if isinstance(definition, str) and definition.strip() else None
+                conf = _glossary_confidence(term, combined_text, definition_str)
+                glossary_entries.append(
+                    GlossaryEntry(
+                        term=term.strip(),
+                        definition=definition_str,
+                        confidence=conf,
+                        source="docs",
+                    )
+                )
+
+        support_contacts = extracted.get("support_contacts") or []
+        support_email, support_urls = _support_email_and_urls(
+            support_contacts if isinstance(support_contacts, list) else []
+        )
+        support_email_conf = (
+            _confidence_from_count(_count_term_occurrences(combined_text, support_email))
+            if support_email
+            else 0.0
+        )
+
+        faq_candidates: list[FaqCandidate] = []
+        raw_faq = extracted.get("faq_candidates") or []
+        if isinstance(raw_faq, list):
+            seen_questions: set[str] = set()
+            for item in raw_faq:
+                if not isinstance(item, dict):
+                    continue
+                q = item.get("question")
+                a = item.get("answer")
+                if not isinstance(q, str) or not isinstance(a, str):
+                    continue
+                question = q.strip()
+                answer = a.strip()
+                if len(question) < 10 or len(answer) < 20:
+                    continue
+                norm_q = question.casefold()
+                if norm_q in seen_questions:
+                    continue
+                seen_questions.add(norm_q)
+                conf = _faq_confidence(question, combined_text)
+                faq_candidates.append(
+                    FaqCandidate(
+                        question=question,
+                        answer=answer,
+                        confidence=conf,
+                        source="docs",
+                    )
+                )
+
+        # Swagger/OpenAPI parsing without extra LLM calls.
+        aliases: list[AliasEntry] = []
+        if doc.file_type == DocumentType.swagger:
+            openapi_modules, openapi_glossary, openapi_aliases = extract_openapi_knowledge(
+                swagger_text=combined_text
+            )
+            # Union modules; glossary merge will prioritize confidence.
+            modules = list({m.casefold(): m for m in (modules + openapi_modules)}.values())
+            glossary_entries.extend(openapi_glossary)
+            aliases = openapi_aliases
+
+        # product_name confidence from occurrences.
+        product_conf = (
+            _product_confidence(product_name_norm, combined_text)
+            if product_name_norm
+            else 0.0
+        )
+
+        updated_at = datetime.now(timezone.utc)
+        merge_into_profile(
+            db,
+            tenant_id=tenant_id,
+            product_name=product_name_norm.capitalize() if product_name_norm else None,
+            product_name_confidence=float(product_conf),
+            modules=modules,
+            glossary_entries=glossary_entries,
+            support_email=support_email,
+            support_email_confidence=float(support_email_conf),
+            support_urls=support_urls,
+            escalation_policy=None,
+            aliases=aliases,
+            updated_at=updated_at,
+        )
+
+        # Upsert FAQ candidates (medium/high only, duplicates skipped).
+        if faq_candidates:
+            upsert_faq_candidates(
+                db=db,
+                tenant_id=tenant_id,
+                faq_candidates=faq_candidates,
+                api_key=api_key,
+            )
+
+    except Exception:
+        # Best-effort job: never fail embeddings pipeline.
+        return
+

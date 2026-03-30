@@ -157,6 +157,9 @@ def mock_openai_client():
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client), \
+         patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
+         patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \
+         patch("backend.guards.relevance_checker.get_openai_client", return_value=mock_client), \
          patch(
              "backend.escalation.openai_escalation.get_openai_client",
              return_value=mock_esc_client,

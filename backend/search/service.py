@@ -907,6 +907,7 @@ class SearchResultBundle:
 
     results: list[tuple[Embedding, float]]
     best_vector_similarity: float | None = None
+    vector_similarities: list[float] | None = None
     best_keyword_score: float | None = None
     has_lexical_signal: bool = False
     query_variants: list[str] | None = None
@@ -2001,6 +2002,10 @@ def search_similar_chunks_detailed(
         top_k=top_k,
     )
     final_results = mmr_selection.results
+    vector_similarity_by_id = {emb.id: sim for emb, sim in vector_candidates}
+    vector_similarities = [
+        float(vector_similarity_by_id.get(emb.id, 0.0)) for emb, _ in final_results
+    ]
     if trace is not None:
         trace.span(
             name="mmr-pass",
@@ -2069,6 +2074,7 @@ def search_similar_chunks_detailed(
     return SearchResultBundle(
         results=final_results,
         best_vector_similarity=best_vector_similarity,
+        vector_similarities=vector_similarities,
         best_keyword_score=best_keyword_score,
         has_lexical_signal=has_lexical_signal,
         query_variants=query_variants,

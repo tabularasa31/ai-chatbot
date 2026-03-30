@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   api,
   type DocumentHealthStatus,
@@ -163,8 +163,7 @@ function stopRowClick(event: React.MouseEvent<HTMLElement>) {
 
 export default function KnowledgePage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const activeTab = (searchParams.get("tab") ?? "documents") as "documents" | "profile" | "faq";
+  const [activeTab, setActiveTab] = useState<"documents" | "profile" | "faq">("documents");
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [sources, setSources] = useState<UrlSource[]>([]);
@@ -210,10 +209,13 @@ export default function KnowledgePage() {
   const [editingFaqAnswer, setEditingFaqAnswer] = useState("");
 
   function setTab(tab: "documents" | "profile" | "faq") {
-    const next = new URLSearchParams(searchParams.toString());
+    const next = new URLSearchParams(
+      typeof window === "undefined" ? "" : window.location.search
+    );
     if (tab === "documents") next.delete("tab");
     else next.set("tab", tab);
     const query = next.toString();
+    setActiveTab(tab);
     router.replace(`/knowledge${query ? `?${query}` : ""}`);
   }
 
@@ -288,6 +290,17 @@ export default function KnowledgePage() {
 
   useEffect(() => {
     void load();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (tab === "profile" || tab === "faq") {
+      setActiveTab(tab);
+    } else {
+      setActiveTab("documents");
+    }
   }, []);
 
   useEffect(() => {

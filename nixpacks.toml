@@ -1,9 +1,0 @@
-[phases.install]
-# Railway/Railpack installs deps in an isolated install phase.
-# Ensure backend requirements are available in that phase and install from them directly.
-onlyIncludeFiles = ["backend/requirements.txt"]
-cmds = [
-  "python -m venv /app/.venv",
-  "pip install -r backend/requirements.txt",
-]
-

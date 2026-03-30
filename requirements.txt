@@ -1,2 +1,0 @@
-# Local dev shortcut — single source of truth is backend/requirements.txt
--r backend/requirements.txt

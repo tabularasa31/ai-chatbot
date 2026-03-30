@@ -71,13 +71,13 @@ def create_client_route(
 
 @clients_router.get("/me", response_model=ClientMeResponse)
 def get_my_client(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClientMeResponse:
     """
     Get current user's client (protected JWT).
 
-    Returns 404 if no client yet.
+    Returns 403 if email not verified, 404 if no client yet.
     """
     client = get_client_by_user(current_user.id, db)
     if not client:
@@ -112,7 +112,7 @@ def rotate_kyc_secret_route(
 
 @clients_router.get("/me/kyc/status", response_model=KycStatusResponse)
 def kyc_status_route(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KycStatusResponse:
     """Return KYC secret presence and identified-session metrics."""
@@ -122,7 +122,7 @@ def kyc_status_route(
 
 @clients_router.get("/me/disclosure", response_model=DisclosureConfigResponse)
 def get_disclosure_route(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DisclosureConfigResponse:
     """Tenant-wide response detail level (same for all users and channels)."""
@@ -143,7 +143,7 @@ def put_disclosure_route(
 
 @clients_router.get("/me/privacy", response_model=PrivacyConfigResponse)
 def get_privacy_route(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> PrivacyConfigResponse:
     data = get_redaction_config_for_user(current_user.id, db)

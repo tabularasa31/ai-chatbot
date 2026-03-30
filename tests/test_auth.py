@@ -92,6 +92,20 @@ def test_login_user_not_found(client: TestClient) -> None:
     assert response.status_code == 401
 
 
+def test_login_unverified_user_returns_403(client: TestClient) -> None:
+    """Login with registered but unverified email returns 403."""
+    client.post(
+        "/auth/register",
+        json={"email": "unverified@example.com", "password": "SecurePass1!"},
+    )
+    response = client.post(
+        "/auth/login",
+        json={"email": "unverified@example.com", "password": "SecurePass1!"},
+    )
+    assert response.status_code == 403
+    assert "verified" in response.json()["detail"].lower()
+
+
 def test_get_me_authenticated(client: TestClient, db_session) -> None:
     """Protected route returns user when valid token provided."""
     from tests.conftest import register_and_verify_user

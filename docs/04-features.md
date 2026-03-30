@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-30 (FAQ match Phase 3 + observability clarifications)  
+**Last updated:** 2026-03-30 (FAQ Phase 3 + Knowledge Profile/FAQ dashboard)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -222,6 +222,23 @@ Observability for this layer is emitted through a single `faq_match` span with s
 - `selected_score` (score of the FAQ selected for direct/context decisioning)
 - `direct_guard_used`, `direct_guard_passed`, `decision_reason`
 - `retrieval_skipped`, `generation_skipped`
+
+### Knowledge dashboard API and UI (Phase 3)
+
+Knowledge now has dedicated profile/FAQ workflows in addition to document sources:
+
+- API endpoints:
+  - `GET/PATCH /knowledge/profile`
+  - `GET /knowledge/faq`
+  - `POST /knowledge/faq/{id}/approve`
+  - `POST /knowledge/faq/{id}/reject`
+  - `POST /knowledge/faq/approve-all`
+  - `PUT/DELETE /knowledge/faq/{id}`
+- `tenant_profiles.extraction_status` is exposed to UI (`pending | done | failed`) and used for polling.
+- Dashboard `Knowledge` page supports subtabs:
+  - `Documents` (existing table/workflow)
+  - `Profile` (`?tab=profile`) for extracted profile review/edit and glossary read-only inspection
+  - `FAQ` (`?tab=faq`) for FAQ moderation (accept/reject/edit/approve-all, pending counter, filters, optimistic reject UX)
 
 **Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive tenant sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
 

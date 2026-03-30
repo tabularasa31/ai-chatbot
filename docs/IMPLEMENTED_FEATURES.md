@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-03-30 (FAQ match phase 3 refinements)
+**Last updated:** 2026-03-30 (FAQ phase 3 + Knowledge Profile/FAQ dashboard)
 
 ---
 
@@ -57,6 +57,7 @@
 | Tenant knowledge extraction (Phase 1) | After embeddings finish: extract `tenant_profiles` (product name, modules, glossary, aliases, support contacts) and generate `tenant_faq` candidates (best-effort, never blocks indexing) | `backend/tenant_knowledge/*`, `backend/embeddings/service.py`, migration `add_tenant_profiles_and_faq.py` |
 | Relevance guard (Phase 2) | Regex prompt-injection detection + LLM relevance pre-check (timeout + in-memory cache) + low-retrieval early reject; guard instructions are applied after escalation paths; `OPENAI_REQUEST_TIMEOUT_SECONDS` and `RELEVANCE_RETRIEVAL_THRESHOLD` tune behavior | `backend/guards/*`, `backend/chat/service.py`, `backend/search/service.py`, env `OPENAI_REQUEST_TIMEOUT_SECONDS`, `RELEVANCE_RETRIEVAL_THRESHOLD` |
 | FAQ match (Phase 3) | Post-relevance FAQ hybrid routing with `faq_direct`/`faq_context`/`rag_only`, guarded direct path, single embedding reuse across FAQ + retrieval, FAQ hints in prompt, and stable `faq_match` span contract (`top_score` = best raw candidate score, `selected_score` = selected FAQ score) | `backend/faq/faq_matcher.py`, `backend/chat/service.py`, `backend/search/service.py`, `tests/test_faq_matcher.py`, `tests/test_rag_pipeline.py` |
+| Knowledge API (Profile + FAQ) | Tenant knowledge endpoints for profile and FAQ moderation: `GET/PATCH /knowledge/profile`, `GET /knowledge/faq`, `POST /knowledge/faq/{id}/approve`, `POST /knowledge/faq/{id}/reject`, `POST /knowledge/faq/approve-all`, `PUT/DELETE /knowledge/faq/{id}`; extraction status exposed as profile field | `backend/knowledge/routes.py`, `backend/knowledge/schemas.py`, `backend/main.py`, `backend/models.py`, `tests/test_knowledge_api.py` |
 | Sessions / logs / feedback | Session list, logs, thumbs, ideal answer, bad answers | `GET /chat/sessions`, logs, feedback, bad-answers |
 
 ---
@@ -82,6 +83,7 @@
 | **FI-UI** | Dark brand, navbar, auth pages, post-login transition | `frontend/components/Navbar.tsx`, auth pages, `AuthTransition` |
 | **UI-NAV** | Persistent sidebar (icons, active state, Settings/Admin sections); slim fixed navbar (brand + email + logout only) | `frontend/components/Sidebar.tsx`, `frontend/components/Navbar.tsx`, `frontend/app/(app)/layout.tsx` |
 | **Knowledge hub** | `/knowledge` (replaces `/documents`): file upload + URL source ingestion, unified indexed sources table with type badges, status, schedule, indexed counts, health, row actions, inline expandable source detail, and per-page deletion for indexed URL pages | `frontend/app/(app)/knowledge/page.tsx` |
+| Knowledge subtabs (Phase 3 UI) | `/knowledge` now supports tabbed views: `Documents` (existing), `Profile` (`?tab=profile`) with extracted profile editing + extraction status + glossary accordion, and `FAQ` (`?tab=faq`) with moderation workflow (accept/reject/accept-all/edit, pending counter, filters, extraction-driven polling) | `frontend/app/(app)/knowledge/page.tsx`, `frontend/lib/api.ts` |
 | **Code snippets UX** | Inline copy icon on embed / Node.js / debug answer blocks (shared component, light/dark tone) | `frontend/components/ui/code-block-with-copy.tsx` |
 | **Agents** | `/settings`: OpenAI API key management (moved from Dashboard); status banners; save/update/remove flow | `frontend/app/(app)/settings/page.tsx` |
 | Dashboard, **Knowledge**, Logs, Review, Debug, **Escalations** | Main app sections | `frontend/app/(app)/` |

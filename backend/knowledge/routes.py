@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user, require_verified_user
 from backend.clients.service import get_client_by_user
-from backend.core.crypto import decrypt_value
 from backend.core import db as core_db
 from backend.core.db import get_db
 from backend.core.openai_client import get_openai_client
@@ -30,6 +29,16 @@ knowledge_router = APIRouter(tags=["knowledge"])
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 logger = logging.getLogger(__name__)
+
+
+def _get_or_create_profile(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
+    profile = db.get(TenantProfile, tenant_id)
+    if profile is None:
+        profile = TenantProfile(tenant_id=tenant_id)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return profile
 
 
 def _profile_or_404(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
@@ -83,8 +92,7 @@ def _generate_faq_embedding_background(
         faq = db.get(TenantFaq, faq_id)
         if faq is None:
             return
-        api_key = decrypt_value(encrypted_api_key)
-        openai_client = get_openai_client(api_key)
+        openai_client = get_openai_client(encrypted_api_key)
         response = openai_client.embeddings.create(
             model=EMBEDDING_MODEL,
             input=question,
@@ -112,7 +120,7 @@ def get_knowledge_profile(
     bot_id: Optional[str] = None,
 ) -> KnowledgeProfileResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
-    profile = _profile_or_404(db, client.id)
+    profile = _get_or_create_profile(db, client.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
         modules=list(profile.modules or []),

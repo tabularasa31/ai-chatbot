@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated, Literal, Optional
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import get_current_user, require_verified_user
 from backend.clients.service import get_client_by_user
+from backend.core.crypto import decrypt_value
 from backend.core import db as core_db
 from backend.core.db import get_db
 from backend.core.openai_client import get_openai_client
@@ -27,6 +29,7 @@ from backend.models import Client, TenantFaq, TenantProfile, User
 knowledge_router = APIRouter(tags=["knowledge"])
 
 EMBEDDING_MODEL = "text-embedding-3-small"
+logger = logging.getLogger(__name__)
 
 
 def _profile_or_404(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
@@ -73,13 +76,14 @@ def _generate_faq_embedding_background(
     *,
     faq_id: uuid.UUID,
     question: str,
-    api_key: str,
+    encrypted_api_key: str,
 ) -> None:
     db = core_db.SessionLocal()
     try:
         faq = db.get(TenantFaq, faq_id)
         if faq is None:
             return
+        api_key = decrypt_value(encrypted_api_key)
         openai_client = get_openai_client(api_key)
         response = openai_client.embeddings.create(
             model=EMBEDDING_MODEL,
@@ -89,6 +93,10 @@ def _generate_faq_embedding_background(
         db.add(faq)
         db.commit()
     except Exception:
+        logger.exception(
+            "Failed to generate FAQ embedding in background (faq_id=%s)",
+            faq_id,
+        )
         db.rollback()
     finally:
         db.close()
@@ -232,7 +240,7 @@ def approve_faq(
             _generate_faq_embedding_background,
             faq_id=faq.id,
             question=faq.question,
-            api_key=client.openai_api_key,
+            encrypted_api_key=client.openai_api_key,
         )
 
     return KnowledgeFaqApproveResponse(id=faq.id, approved=True)
@@ -262,17 +270,35 @@ def reject_faq(
     response_model=KnowledgeFaqApproveAllResponse,
 )
 def approve_all_faq(
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     bot_id: Optional[str] = None,
 ) -> KnowledgeFaqApproveAllResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
+    missing_embedding = (
+        db.query(TenantFaq.id, TenantFaq.question)
+        .filter(
+            TenantFaq.tenant_id == client.id,
+            TenantFaq.approved.is_(False),
+            TenantFaq.question_embedding.is_(None),
+        )
+        .all()
+    )
     updated = (
         db.query(TenantFaq)
         .filter(TenantFaq.tenant_id == client.id, TenantFaq.approved.is_(False))
         .update({TenantFaq.approved: True}, synchronize_session=False)
     )
     db.commit()
+    if client.openai_api_key:
+        for faq_id, question in missing_embedding:
+            background_tasks.add_task(
+                _generate_faq_embedding_background,
+                faq_id=faq_id,
+                question=question,
+                encrypted_api_key=client.openai_api_key,
+            )
     return KnowledgeFaqApproveAllResponse(approved_count=int(updated))
 
 
@@ -295,7 +321,8 @@ def update_faq(
     question_changed = payload.question.strip() != faq.question.strip()
     faq.question = payload.question.strip()
     faq.answer = payload.answer.strip()
-    faq.approved = False
+    if question_changed:
+        faq.approved = False
     if question_changed:
         faq.question_embedding = None
     db.add(faq)
@@ -307,7 +334,7 @@ def update_faq(
             _generate_faq_embedding_background,
             faq_id=faq.id,
             question=faq.question,
-            api_key=client.openai_api_key,
+            encrypted_api_key=client.openai_api_key,
         )
 
     return KnowledgeFaqItemResponse(

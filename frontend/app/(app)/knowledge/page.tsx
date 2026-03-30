@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   api,
@@ -161,6 +161,37 @@ function stopRowClick(event: React.MouseEvent<HTMLElement>) {
   event.stopPropagation();
 }
 
+function KnowledgeTabs({
+  activeTab,
+  onChange,
+}: {
+  activeTab: "documents" | "profile" | "faq";
+  onChange: (tab: "documents" | "profile" | "faq") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
+      <button
+        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "documents" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+        onClick={() => onChange("documents")}
+      >
+        Documents
+      </button>
+      <button
+        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "profile" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+        onClick={() => onChange("profile")}
+      >
+        Profile
+      </button>
+      <button
+        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "faq" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+        onClick={() => onChange("faq")}
+      >
+        FAQ
+      </button>
+    </div>
+  );
+}
+
 export default function KnowledgePage() {
   const router = useRouter();
   const pathname = usePathname();
@@ -212,6 +243,7 @@ export default function KnowledgePage() {
   const [editingFaqQuestion, setEditingFaqQuestion] = useState("");
   const [editingFaqAnswer, setEditingFaqAnswer] = useState("");
   const [removingFaqIds, setRemovingFaqIds] = useState<string[]>([]);
+  const faqItemsRef = useRef<KnowledgeFaqItem[]>([]);
 
   function setTab(tab: "documents" | "profile" | "faq") {
     const next = new URLSearchParams(
@@ -246,7 +278,7 @@ export default function KnowledgePage() {
     return "Low";
   }
 
-  async function loadProfile() {
+  const loadProfile = useCallback(async () => {
     setProfileLoading(true);
     setProfileError("");
     try {
@@ -258,9 +290,9 @@ export default function KnowledgePage() {
     } finally {
       setProfileLoading(false);
     }
-  }
+  }, [botId]);
 
-  async function loadFaq() {
+  const loadFaq = useCallback(async () => {
     setFaqLoading(true);
     setFaqError("");
     try {
@@ -274,14 +306,16 @@ export default function KnowledgePage() {
       const data = await api.knowledge.listFaq(mapping[faqFilter], botId);
       setFaqItems(data.items);
       setPendingCount(data.pending_count);
+      return data;
     } catch (err) {
       setFaqError(err instanceof Error ? err.message : "Failed to load FAQ");
+      return null;
     } finally {
       setFaqLoading(false);
     }
-  }
+  }, [botId, faqFilter]);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const data = await api.documents.listSources();
       setDocuments(data.documents);
@@ -291,11 +325,11 @@ export default function KnowledgePage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -311,40 +345,9 @@ export default function KnowledgePage() {
   useEffect(() => {
     if (activeTab === "profile") void loadProfile();
     if (activeTab === "faq") void loadFaq();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, faqFilter]);
+  }, [activeTab, loadFaq, loadProfile]);
 
-  useEffect(() => {
-    const shouldPoll = sources.some((source) => POLLABLE_SOURCE_STATUSES.has(source.status));
-    if (!shouldPoll) return;
-    const timer = window.setInterval(() => {
-      void load();
-      if (expandedSourceId && detail && detail.id === expandedSourceId && POLLABLE_SOURCE_STATUSES.has(detail.status) && !isEditing) {
-        void loadDetail(expandedSourceId);
-      }
-    }, 10000);
-    return () => window.clearInterval(timer);
-  }, [sources, expandedSourceId, detail, isEditing]);
-
-  useEffect(() => {
-    if (!profile || profile.extraction_status !== "pending") return;
-    const timer = window.setInterval(async () => {
-      const next = await api.knowledge.getProfile(botId);
-      const wasPending = profile.extraction_status === "pending";
-      setProfile(next);
-      setProfileDraft((prev) => prev ?? next);
-      if (wasPending && next.extraction_status === "done") {
-        const before = faqItems.length;
-        await loadFaq();
-        const added = Math.max(0, faqItems.length - before);
-        setFaqSaved(`New knowledge extracted! ${added} FAQ suggestions added.`);
-      }
-    }, 5000);
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile?.extraction_status]);
-
-  async function loadDetail(sourceId: string) {
+  const loadDetail = useCallback(async (sourceId: string) => {
     try {
       setDetailLoading(true);
       const next = await api.documents.getSourceById(sourceId);
@@ -356,7 +359,41 @@ export default function KnowledgePage() {
     } finally {
       setDetailLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    const shouldPoll = sources.some((source) => POLLABLE_SOURCE_STATUSES.has(source.status));
+    if (!shouldPoll) return;
+    const timer = window.setInterval(() => {
+      void load();
+      if (expandedSourceId && detail && detail.id === expandedSourceId && POLLABLE_SOURCE_STATUSES.has(detail.status) && !isEditing) {
+        void loadDetail(expandedSourceId);
+      }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [sources, expandedSourceId, detail, isEditing, load, loadDetail]);
+
+  useEffect(() => {
+    faqItemsRef.current = faqItems;
+  }, [faqItems]);
+
+  useEffect(() => {
+    if (!profile || profile.extraction_status !== "pending") return;
+    const timer = window.setInterval(async () => {
+      const next = await api.knowledge.getProfile(botId);
+      const wasPending = profile.extraction_status === "pending";
+      setProfile(next);
+      setProfileDraft((prev) => prev ?? next);
+      if (wasPending && next.extraction_status === "done") {
+        const before = faqItemsRef.current.length;
+        const nextFaq = await loadFaq();
+        const after = nextFaq?.items.length ?? before;
+        const added = Math.max(0, after - before);
+        setFaqSaved(`New knowledge extracted! ${added} FAQ suggestions added.`);
+      }
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [botId, profile, loadFaq]);
 
   async function toggleDetail(sourceId: string) {
     if (expandedSourceId === sourceId) {
@@ -555,11 +592,7 @@ export default function KnowledgePage() {
           <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-          <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("documents")}>Documents</button>
-          <button className="rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white">Profile</button>
-          <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("faq")}>FAQ</button>
-        </div>
+        <KnowledgeTabs activeTab="profile" onChange={setTab} />
         {profileError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{profileError}</div>}
         {profileSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">Profile updated</div>}
         {profileLoading || !profileDraft ? (
@@ -774,11 +807,7 @@ export default function KnowledgePage() {
           <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
-        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-          <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("documents")}>Documents</button>
-          <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("profile")}>Profile</button>
-          <button className="rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white">FAQ</button>
-        </div>
+        <KnowledgeTabs activeTab="faq" onChange={setTab} />
         <div className="flex flex-wrap items-center gap-3">
           <span className={`rounded-full px-3 py-1 text-xs font-medium ${pendingCount > 0 ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
             {pendingCount} pending review
@@ -977,11 +1006,7 @@ export default function KnowledgePage() {
           </button>
         </div>
       </div>
-      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-        <button className="rounded-md bg-violet-600 px-3 py-1.5 text-sm text-white">Documents</button>
-        <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("profile")}>Profile</button>
-        <button className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-100" onClick={() => setTab("faq")}>FAQ</button>
-      </div>
+      <KnowledgeTabs activeTab="documents" onChange={setTab} />
 
       {showUrlForm && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

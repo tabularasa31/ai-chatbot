@@ -163,6 +163,53 @@ def test_edit_resets_approved(client: TestClient, db_session: Session) -> None:
     assert resp.json()["approved"] is False
 
 
+def test_edit_answer_only_keeps_approved(client: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(client, db_session, email="kapi-edit-answer@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="How exactly?",
+        answer="Old answer",
+        approved=True,
+        source="docs",
+        question_embedding=[0.1] * 1536,
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = client.put(
+        f"{_kbase(client_row)}/faq/{faq.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"question": "How exactly?", "answer": "New answer"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["approved"] is True
+
+
+def test_approve_all_generates_embedding_for_missing(client: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(client, db_session, email="kapi-approve-all-embed@example.com")
+    faq = TenantFaq(
+        tenant_id=client_row.id,
+        question="How retries work?",
+        answer="They retry up to 5 times.",
+        approved=False,
+        source="docs",
+        question_embedding=None,
+    )
+    db_session.add(faq)
+    db_session.commit()
+    db_session.refresh(faq)
+
+    resp = client.post(
+        f"{_kbase(client_row)}/faq/approve-all",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    db_session.refresh(faq)
+    assert faq.approved is True
+    assert faq.question_embedding is not None
+
+
 def test_approve_generates_embedding(client: TestClient, db_session: Session) -> None:
     token, client_row = _create_client(client, db_session, email="kapi-approve-embed@example.com")
     faq = TenantFaq(

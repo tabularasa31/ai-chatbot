@@ -1,0 +1,2 @@
+"""Knowledge profile/FAQ endpoints."""
+

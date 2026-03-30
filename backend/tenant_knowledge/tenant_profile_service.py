@@ -146,6 +146,7 @@ def merge_into_profile(
             support_email=None,
             support_urls=[],
             escalation_policy=None,
+            extraction_status="pending",
         )
         db.add(row)
 
@@ -171,6 +172,7 @@ def merge_into_profile(
             row.escalation_policy = escalation_policy.strip()
 
     row.aliases = _merge_aliases(row.aliases if isinstance(row.aliases, list) else None, aliases)
+    row.extraction_status = "done"
     row.updated_at = updated_at
     db.add(row)
     db.commit()

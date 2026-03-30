@@ -9,7 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
-from backend.models import Document, DocumentType, Embedding
+from backend.models import Document, DocumentType, Embedding, TenantProfile
 from backend.tenant_knowledge.faq_service import upsert_faq_candidates
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
@@ -295,5 +295,13 @@ def run_extract_tenant_knowledge_for_document(
     except Exception:
         # Best-effort job: never fail embeddings pipeline.
         logger.exception("Tenant knowledge extraction failed for document_id=%s", document_id)
+        try:
+            profile = db.get(TenantProfile, tenant_id)
+            if profile is not None:
+                profile.extraction_status = "failed"
+                db.add(profile)
+                db.commit()
+        except Exception:
+            db.rollback()
         return
 

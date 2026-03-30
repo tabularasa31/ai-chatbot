@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-29 (internal Eval QA documented)  
+**Last updated:** 2026-03-30 (FAQ match Phase 3 + observability clarifications)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -204,6 +204,24 @@ Retrieval is instrumented with Langfuse-style traces for both chat requests and 
 - timing split (`retrieval_duration_ms`, `query-embedding`, `vector-search`)
 
 The `bm25-search` span keeps the lexical inputs and merged lexical output explicit, including compact winner provenance for merged hits. This makes it possible to compare p50/p95 latency for single-vs-multi vector expansion and asymmetric-vs-symmetric lexical expansion without changing the default retrieval behavior first. The production review template lives in `docs/qa/FI-115-query-variant-cost.md`.
+
+### FAQ match routing (Phase 3)
+
+After injection detection and relevance pre-check, chat requests run a tenant FAQ semantic match layer before retrieval:
+
+- `faq_direct` — direct FAQ answer allowed only for high-score approved FAQ and a passed cheap applicability guard.
+- `faq_context` — FAQ candidates are injected into the system prompt as `VERIFIED FAQ CANDIDATES` hints, then normal retrieval + generation runs.
+- `rag_only` — FAQ is ignored for low-score cases.
+
+Embedding generation is done once per request and reused by both FAQ match and retrieval candidate acquisition.
+
+Observability for this layer is emitted through a single `faq_match` span with stable metadata:
+
+- `strategy`, `faq_ids`, `selected_faq_id`
+- `top_score` (best raw FAQ candidate score)
+- `selected_score` (score of the FAQ selected for direct/context decisioning)
+- `direct_guard_used`, `direct_guard_passed`, `decision_reason`
+- `retrieval_skipped`, `generation_skipped`
 
 **Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive tenant sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
 

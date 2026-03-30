@@ -1071,6 +1071,9 @@ def process_chat_message(
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
     # --- Normal RAG ---
+    # NOTE: relevance pre-check intentionally runs AFTER escalation paths (T-1/T-2/T-3).
+    # Escalations are triggered by explicit user signals (e.g. "speak to human")
+    # and are always valid regardless of topic relevance.
     relevant, relevance_reason, profile = check_relevance_precheck(
         tenant_id=client_id,
         user_question=redacted_question,

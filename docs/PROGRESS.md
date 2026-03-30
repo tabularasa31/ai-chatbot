@@ -138,9 +138,9 @@
 ### Bug fixes & tech debt
 
 - ✅ **FI-026: GitHub Actions CI** (в `main`; промот в `deploy` через PR)
-  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to **`main`** and **`deploy`** — job **Backend (pytest + ruff)** (Python 3.11): `pip install -r backend/requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend --cov-report=term-missing` (SQLite test env в workflow); job **Frontend (eslint + build)** (Node 20): `npm ci`, `npm run lint`, `npm run build` с `NEXT_PUBLIC_API_URL=https://ci.invalid`
+  - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): on `push` / `pull_request` to **`main`** and **`deploy`** — job **Backend (pytest + ruff)** (Python 3.11): `pip install -r requirements.txt`, `ruff check backend`, `pytest tests/ -q --cov=backend --cov-report=term-missing` (SQLite test env в workflow); job **Frontend (eslint + build)** (Node 20): `npm ci`, `npm run lint`, `npm run build` с `NEXT_PUBLIC_API_URL=https://ci.invalid`
   - [`backend/ruff.toml`](../backend/ruff.toml): E/F/W; `extend-exclude` migrations; per-file `E402` для поздних импортов в `main.py` и `chat/service.py`
-  - [`backend/requirements.txt`](../backend/requirements.txt): `ruff>=0.3.0`, `pgvector>=0.2.0` (импорт `backend.models` в тестах)
+  - [`requirements.txt`](../requirements.txt): `ruff>=0.3.0`, `pgvector>=0.2.0` (импорт `backend.models` в тестах)
   - [`tests/test_admin_metrics.py`](../tests/test_admin_metrics.py) — `public_id` / `owner_email` / `has_openai_key`; мелкий фикс `f`-string в `backend/documents/service.py`
   - [`.gitignore`](../.gitignore): `.venv-ci/`
   - Доки: `TOMORROW_PLAN`, `BACKLOG_TECH_DEBT`, `IMPLEMENTED_FEATURES`, [`README.md`](../README.md#ci-github-actions) (локальные тесты: [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md))
@@ -200,7 +200,7 @@
   - SQLite (тесты): Python cosine только для vector candidate acquisition; дальше тот же BM25 → RRF → reranking → post-ranking flow по in-memory candidate pool после merge/dedup/truncation
   - lexical participation определяется отдельно от reranker lexical feature: overlap в candidate pool включает hybrid contract даже там, где raw BM25 scores плоские/нестабильные
   - Debug API: режим и confidence semantics выровнены с production path; `chunks[].score` отражает финальный pipeline score, `best_confidence_score` остаётся vector-derived
-  - Зависимость: `backend/requirements.txt` → `rank-bm25>=0.2.2`
+  - Зависимость: `requirements.txt` → `rank-bm25>=0.2.2`
 - ✅ **FI-115** — observability for deterministic query variants before retrieval
   - root traces now carry `variant_mode`, `query_variant_count`, `extra_embedded_queries`, `extra_embedding_api_requests`, `extra_vector_search_calls`, `retrieval_duration_ms`
   - search stages expose `query-expansion`, `query-embedding`, and richer `vector-search` payloads for latency/cost comparison

@@ -102,7 +102,7 @@ On every **push** and **pull request** to **`main`** and **`deploy`**, GitHub ru
 
 For grouped developer-focused test commands (P0 smoke, auth reset, escalation, RAG edge cases, pgvector), see [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md).
 
-**Local checks** (after `pip install -r backend/requirements.txt`):
+**Local checks** (after `pip install -r requirements.txt`):
 
 ```bash
 ruff check backend

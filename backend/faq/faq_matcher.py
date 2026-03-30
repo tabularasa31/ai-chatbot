@@ -27,6 +27,7 @@ class FAQMatchResult:
     faq_items: list[FAQRow]
 
     top_score: float | None
+    selected_score: float | None
     selected_faq_id: str | None
 
     direct_guard_used: bool
@@ -253,6 +254,7 @@ def match_faq(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
+            selected_score=None,
             selected_faq_id=None,
             direct_guard_used=False,
             direct_guard_passed=False,
@@ -293,6 +295,7 @@ def match_faq(
                 strategy="faq_direct",
                 faq_items=[direct_candidate],
                 top_score=top_score,
+                selected_score=direct_candidate.score,
                 selected_faq_id=str(direct_candidate.id),
                 direct_guard_used=True,
                 direct_guard_passed=True,
@@ -309,6 +312,7 @@ def match_faq(
             strategy="faq_context",
             faq_items=[direct_candidate],
             top_score=top_score,
+            selected_score=direct_candidate.score,
             selected_faq_id=str(direct_candidate.id),
             direct_guard_used=True,
             direct_guard_passed=False,
@@ -325,6 +329,7 @@ def match_faq(
             strategy="faq_context",
             faq_items=[top],
             top_score=top_score,
+            selected_score=top.score,
             selected_faq_id=str(top.id),
             direct_guard_used=False,
             direct_guard_passed=False,
@@ -340,6 +345,7 @@ def match_faq(
                 strategy="rag_only",
                 faq_items=[],
                 top_score=top_score,
+                selected_score=top.score,
                 selected_faq_id=str(top.id),
                 direct_guard_used=False,
                 direct_guard_passed=False,
@@ -349,6 +355,7 @@ def match_faq(
             strategy="faq_context",
             faq_items=context_items,
             top_score=top_score,
+            selected_score=top.score,
             selected_faq_id=str(top.id),
             direct_guard_used=direct_guard_used,
             direct_guard_passed=direct_guard_passed,
@@ -360,6 +367,7 @@ def match_faq(
         strategy="rag_only",
         faq_items=[],
         top_score=top_score,
+        selected_score=top.score,
         selected_faq_id=str(top.id),
         direct_guard_used=False,
         direct_guard_passed=False,

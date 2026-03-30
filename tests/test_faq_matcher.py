@@ -50,6 +50,7 @@ def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.strategy == "faq_direct"
     assert result.faq_items == [top]
+    assert result.selected_score == top.score
     assert result.direct_guard_used is True
     assert result.direct_guard_passed is True
     assert result.selected_faq_id == str(top.id)
@@ -85,6 +86,7 @@ def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.strategy == "faq_context"
     assert result.faq_items == [top]
+    assert result.selected_score == top.score
     assert result.direct_guard_used is False
     assert result.direct_guard_passed is False
     assert result.decision_reason == "high_score_not_approved"
@@ -120,6 +122,7 @@ def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert result.strategy == "faq_context"
     assert result.faq_items == [top]
+    assert result.selected_score == top.score
     assert result.direct_guard_used is True
     assert result.direct_guard_passed is False
     assert result.decision_reason == "high_score_guard_failed_or_error"
@@ -276,6 +279,7 @@ def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.Monke
 
     assert result.strategy == "faq_direct"
     assert result.selected_faq_id == str(second_approved.id)
+    assert result.selected_score == second_approved.score
     assert result.faq_items == [second_approved]
     assert result.decision_reason == "approved_promoted_high_score_guard_passed"
 

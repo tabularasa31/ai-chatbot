@@ -47,6 +47,7 @@ Implemented in code:
 - root `rag-query` traces
 - root `search-request` traces for direct `/search` calls
 - `quick-answers-check` placeholder stage
+- `faq_match` decision span for FAQ hybrid routing (`faq_direct` / `faq_context` / `rag_only`)
 - `query-expansion`
 - `query-embedding`
 - `vector-search`
@@ -108,6 +109,19 @@ Parent trace metadata and tags:
 - `embedding_api_request_count`
 - `extra_embedding_api_requests`
 - `duration_ms`
+
+`faq_match` span metadata:
+
+- `strategy`
+- `faq_ids`
+- `selected_faq_id`
+- `top_score` (absolute top FAQ candidate score before selection bias/promotion)
+- `selected_score` (score of the FAQ candidate actually selected for decisioning)
+- `direct_guard_used`
+- `direct_guard_passed`
+- `decision_reason`
+- `retrieval_skipped`
+- `generation_skipped`
 
 `vector-search` span output:
 

@@ -135,6 +135,7 @@ def test_embedding_once(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
+            selected_score=None,
             selected_faq_id=None,
             direct_guard_used=False,
             direct_guard_passed=False,
@@ -208,6 +209,7 @@ def test_faq_context_in_prompt(
             strategy="faq_context",
             faq_items=[faq_item],
             top_score=0.9,
+            selected_score=0.9,
             selected_faq_id=str(faq_item.id),
             direct_guard_used=False,
             direct_guard_passed=False,
@@ -287,6 +289,7 @@ def test_langfuse_faq_match_span(
             strategy="faq_context",
             faq_items=[faq_item],
             top_score=0.81,
+            selected_score=0.81,
             selected_faq_id=str(faq_item.id),
             direct_guard_used=True,
             direct_guard_passed=False,
@@ -318,6 +321,7 @@ def test_langfuse_faq_match_span(
     assert metadata["strategy"] == "faq_context"
     assert metadata["tenant_id"] == str(cl_row.id)
     assert metadata["top_score"] == 0.81
+    assert metadata["selected_score"] == 0.81
     assert metadata["faq_ids"] == [str(faq_item.id)]
     assert metadata["selected_faq_id"] == str(faq_item.id)
     assert metadata["direct_guard_used"] is True
@@ -354,6 +358,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
+            selected_score=None,
             selected_faq_id=None,
             direct_guard_used=False,
             direct_guard_passed=False,
@@ -427,6 +432,7 @@ def test_faq_direct_skips_retrieval_and_generation(
             strategy="faq_direct",
             faq_items=[faq_row],
             top_score=0.99,
+            selected_score=0.99,
             selected_faq_id=str(faq_row.id),
             direct_guard_used=True,
             direct_guard_passed=True,

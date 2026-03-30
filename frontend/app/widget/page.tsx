@@ -24,8 +24,8 @@ function WidgetContent() {
 
   return (
     <div className="flex min-h-screen items-start justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F3F7FD_100%)] p-3 font-['Inter'] sm:p-4">
-      <div className="flex h-[min(72vh,600px)] w-full max-w-4xl min-h-[520px]">
-        <ChatWidget clientId={clientId} locale={locale} compact />
+      <div className="flex h-[600px] w-full max-w-4xl">
+        <ChatWidget clientId={clientId} locale={locale} />
       </div>
     </div>
   );

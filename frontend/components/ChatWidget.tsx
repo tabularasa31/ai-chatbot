@@ -179,35 +179,31 @@ export function ChatWidget({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#E2E8F0] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.12)]">
-      <div className="border-b border-[#E2E8F0] bg-[#F8FAFC] px-5 py-4 sm:px-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E879F9] text-[#0A0A0F] shadow-[0_10px_24px_rgba(232,121,249,0.28)]">
-            <MessageCircle size={20} />
-          </div>
-          <div className="min-w-0">
-            <div className="text-[1.05rem] font-medium tracking-[-0.02em] text-[#1B1A22]">
-              Chat9 Assistant
-            </div>
-            <div className="text-sm text-[#7C6F87]">Online</div>
-          </div>
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#DCE3EF] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.12)]">
+      <div className="bg-[#0A0A0F]/50 border-b border-[#1E1E2E] px-6 py-4 flex items-center gap-3 flex-shrink-0">
+        <div className="w-10 h-10 bg-[#E879F9] rounded-full flex items-center justify-center">
+          <MessageCircle size={20} className="text-[#0A0A0F]" />
+        </div>
+        <div>
+          <div className="text-[#FAF5FF] font-medium">Chat9 Assistant</div>
+          <div className="text-[#FAF5FF]/60 text-sm">Online</div>
         </div>
       </div>
 
       <div
         ref={messagesRef}
-        className={cn("min-h-0 flex-1 overflow-y-auto bg-[#FFFFFF] px-4 sm:px-6", compact ? "py-4" : "py-6")}
+        className={cn("min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-6", compact ? "text-[13px]" : "")}
       >
         {(activeTicket || chatClosed) && (
           <div className={cn("mb-4 flex flex-wrap gap-2", compact ? "mb-3" : "mb-4")}>
             {activeTicket ? (
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#D7E2F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
                 <Ticket size={14} />
                 Ticket {activeTicket}
               </div>
             ) : null}
             {chatClosed ? (
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#D7E2F0] bg-[#F8FAFC] px-3 py-1.5 text-xs font-medium text-[#475569]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
                 <Lock size={14} />
                 Chat closed
               </div>
@@ -216,8 +212,8 @@ export function ChatWidget({
         )}
 
         {messages.length === 0 && !loading ? (
-          <div className={cn("flex h-full items-start justify-center text-center", compact ? "min-h-[180px] pt-8" : "min-h-[320px] pt-14")}>
-            <p className={cn("text-[#8A7A96]", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
+          <div className="flex h-full min-h-[320px] items-start justify-center pt-14 text-center">
+            <p className={cn("text-slate-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
           </div>
         ) : (
           <div className="space-y-5">
@@ -225,7 +221,7 @@ export function ChatWidget({
               if (msg.role === "user") {
                 return (
                   <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[18px] rounded-br-[8px] border border-[#D9E2EC] bg-[#EEF3F9] px-4 py-3 text-[15px] leading-6 text-[#334155] shadow-[0_12px_24px_rgba(148,163,184,0.10)]">
+                    <div className="max-w-[85%] rounded-[18px] rounded-br-[8px] border border-slate-200 bg-slate-100 px-4 py-3 text-[15px] leading-6 text-slate-700 shadow-[0_10px_22px_rgba(148,163,184,0.08)]">
                       <p className="whitespace-pre-wrap">{msg.content}</p>
                     </div>
                   </div>
@@ -238,10 +234,10 @@ export function ChatWidget({
                   <div className="flex items-end gap-3">
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-[18px] rounded-bl-[8px] px-4 py-3 text-[15px] leading-6 shadow-[0_12px_24px_rgba(148,163,184,0.10)]",
+                        "max-w-[85%] rounded-[18px] rounded-bl-[8px] px-4 py-3 text-[15px] leading-6 shadow-[0_10px_22px_rgba(148,163,184,0.08)]",
                         isError
                           ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-                          : "border border-[#D9E2EC] bg-[#F8FAFC] text-[#334155]",
+                          : "border border-slate-200 bg-white text-slate-700",
                       )}
                     >
                       <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -263,7 +259,7 @@ export function ChatWidget({
 
             {loading ? (
               <div className="flex items-end gap-3">
-                <div className="rounded-[18px] rounded-bl-[8px] border border-[#D9E2EC] bg-[#F8FAFC] px-4 py-3 shadow-[0_12px_24px_rgba(148,163,184,0.10)]">
+                <div className="rounded-[18px] rounded-bl-[8px] border border-slate-200 bg-white px-4 py-3 shadow-[0_10px_22px_rgba(148,163,184,0.08)]">
                   <span className="flex h-6 items-center gap-1.5">
                     <span className="h-1.5 w-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:-0.3s]" />
                     <span className="h-1.5 w-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:-0.15s]" />
@@ -276,25 +272,25 @@ export function ChatWidget({
         )}
       </div>
 
-      <div className={cn("border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 sm:px-5", compact ? "py-3" : "py-4")}>
+      <div className={cn("border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 sm:px-6", compact ? "py-3" : "py-4")}>
         <div className="relative">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSend()}
-              placeholder={chatClosed ? "Chat closed" : "Type a message..."}
-              disabled={loading || chatClosed}
-              className="w-full rounded-[20px] border border-[#D9E2EC] bg-white px-4 py-3 pr-12 text-[15px] text-[#334155] outline-none transition focus:border-[#CBD5E1] focus:ring-2 focus:ring-[#E2E8F0] disabled:cursor-not-allowed disabled:bg-[#F8FAFC] disabled:text-[#94A3B8]"
-            />
-            <button
-              type="button"
-              onClick={handleSend}
-              disabled={!canSend}
-              className="absolute inset-y-0 right-4 inline-flex items-center text-[#94A3B8] transition hover:text-[#475569] disabled:cursor-not-allowed disabled:text-[#CBD5E1]"
-              aria-label="Send message"
-            >
-              <SendHorizontal size={18} />
-            </button>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSend()}
+            placeholder={chatClosed ? "Chat closed" : "Type a message..."}
+            disabled={loading || chatClosed}
+            className="w-full rounded-[20px] border border-slate-200 bg-white px-4 py-3 pr-12 text-[15px] text-slate-700 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+          />
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={!canSend}
+            className="absolute inset-y-0 right-4 inline-flex items-center text-slate-400 transition hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-300"
+            aria-label="Send message"
+          >
+            <SendHorizontal size={18} />
+          </button>
         </div>
 
         <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

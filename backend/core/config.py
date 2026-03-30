@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = Field("http://localhost:3000", alias="FRONTEND_URL")
     BREVO_API_KEY: Optional[str] = Field(None, alias="BREVO_API_KEY")
 
+    # Transport-level request timeout for OpenAI HTTP calls.
+    # Helps avoid tail latency accumulation on logical (application-level) timeouts.
+    openai_request_timeout_seconds: float = Field(
+        10.0,
+        alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

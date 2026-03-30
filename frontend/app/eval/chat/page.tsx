@@ -248,9 +248,6 @@ function EvalChatContent() {
             <ChatWidget
               clientId={botId}
               locale={locale}
-              badge="UI Eval"
-              title="Проверка ответов бота"
-              subtitle="Светлый интерфейс для QA: проверяйте сценарии, оценивайте ответы и быстро подмечайте слабые места."
               renderBelowAssistant={renderBelowAssistant}
             />
           </div>

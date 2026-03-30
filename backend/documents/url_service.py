@@ -992,14 +992,24 @@ class _CrawlAborted(Exception):
     """Raised when the crawl loop terminates early (e.g. bad OpenAI key)."""
 
 
-def _plan_crawl(
-    source: UrlSource,
-    db: "Session",
-) -> tuple[list[str], list[str], int]:
-    """Discover URLs and compute which ones to crawl.
+@dataclass
+class _CrawlPlan:
+    """Result of URL discovery: what to crawl and capacity constraints."""
+    urls: list[str]
+    discovered_urls: list[str]
+    remaining_capacity: int
 
-    Returns (urls_to_crawl, all_discovered_urls, remaining_capacity).
-    """
+
+@dataclass
+class _CrawlResult:
+    """Outcome of the indexing loop."""
+    indexed_urls: set[str]
+    failures: list[dict[str, str]]
+    chunks_created: int
+
+
+def _plan_crawl(source: UrlSource, db: "Session") -> _CrawlPlan:
+    """Discover URLs and compute which ones to crawl."""
     existing_docs = db.query(Document).filter(Document.source_id == source.id).all()
     existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
     allowed_total, remaining_capacity = _allowed_source_document_total(
@@ -1015,19 +1025,19 @@ def _plan_crawl(
     prioritized_existing_urls = [url for url in discovered_urls if url in existing_urls]
     new_urls = [url for url in discovered_urls if url not in existing_urls]
     urls = prioritized_existing_urls + new_urls[: max(0, allowed_total - len(prioritized_existing_urls))]
-    return urls, discovered_urls, remaining_capacity
+    return _CrawlPlan(urls=urls, discovered_urls=discovered_urls, remaining_capacity=remaining_capacity)
 
 
 def _index_pages(
     source: UrlSource,
     run: UrlSourceRun,
-    urls: list[str],
+    plan: _CrawlPlan,
     api_key: str,
     db: "Session",
-) -> tuple[set[str], list[dict[str, str]], int]:
+) -> _CrawlResult:
     """Fetch, extract, and index each URL.
 
-    Returns (indexed_urls, failures, chunks_created).
+    Returns a _CrawlResult.
     Raises _CrawlAborted if the crawl must stop early — currently triggered by
     HTTPException with status {400, 401, 500} from _upsert_page_document (covers
     OpenAI auth failures and upstream embedding errors, but not exclusively).
@@ -1045,7 +1055,7 @@ def _index_pages(
     failures: list[dict[str, str]] = []
     chunks_created = 0
 
-    for url in urls:
+    for url in plan.urls:
         html = _fetch_page_html(url)
         if not html:
             failures.append({"url": url, "reason": "Could not fetch HTML"})
@@ -1071,18 +1081,14 @@ def _index_pages(
         if source.pages_indexed and source.pages_indexed % 5 == 0:
             db.commit()
 
-    return indexed_urls, failures, chunks_created
+    return _CrawlResult(indexed_urls=indexed_urls, failures=failures, chunks_created=chunks_created)
 
 
 def _finalize_crawl(
     source: UrlSource,
     run: UrlSourceRun,
-    indexed_urls: set[str],
-    failures: list[dict[str, str]],
-    chunks_created: int,
-    discovered_urls: list[str],
-    urls: list[str],
-    remaining_capacity: int,
+    plan: _CrawlPlan,
+    result: _CrawlResult,
     started: float,
     db: "Session",
 ) -> None:
@@ -1094,33 +1100,33 @@ def _finalize_crawl(
         .all()
     )
     for doc in stale_docs:
-        if doc.source_url and doc.source_url not in indexed_urls:
+        if doc.source_url and doc.source_url not in result.indexed_urls:
             db.delete(doc)
 
-    failure_ratio = (len(failures) / len(urls)) if urls else 0.0
+    failure_ratio = (len(result.failures) / len(plan.urls)) if plan.urls else 0.0
     source.last_crawled_at = _utcnow()
     source.next_crawl_at = _schedule_next_run(source.crawl_schedule)
-    source.pages_found = len(urls)
-    source.pages_indexed = len(indexed_urls)
-    source.chunks_created = chunks_created
+    source.pages_found = len(plan.urls)
+    source.pages_indexed = len(result.indexed_urls)
+    source.chunks_created = result.chunks_created
     source.warning_message = None
     source.error_message = None
-    if len(discovered_urls) > len(urls):
+    if len(plan.discovered_urls) > len(plan.urls):
         source.warning_message = (
-            f"Knowledge capacity reached. Indexed {len(urls)} of about {len(discovered_urls)} discovered pages."
+            f"Knowledge capacity reached. Indexed {len(plan.urls)} of about {len(plan.discovered_urls)} discovered pages."
         )
         source.metadata_json = {
             **(source.metadata_json or {}),
             "limit_reached": True,
             "capacity_limited": True,
-            "remaining_capacity": remaining_capacity,
+            "remaining_capacity": plan.remaining_capacity,
         }
     else:
         source.metadata_json = {
             **(source.metadata_json or {}),
             "limit_reached": False,
             "capacity_limited": False,
-            "remaining_capacity": remaining_capacity,
+            "remaining_capacity": plan.remaining_capacity,
         }
 
     if failure_ratio > 0.3:
@@ -1131,8 +1137,8 @@ def _finalize_crawl(
         source.status = SourceStatus.ready
         _mark_run_finished(run, status=SourceStatus.ready.value)
 
-    run.pages_indexed = len(indexed_urls)
-    run.failed_urls = failures
+    run.pages_indexed = len(result.indexed_urls)
+    run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
 
@@ -1164,20 +1170,17 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
         db.refresh(run)
 
         started = time.monotonic()
-        urls, discovered_urls, remaining_capacity = _plan_crawl(source, db)
-        source.pages_found = len(discovered_urls)
-        run.pages_found = len(discovered_urls)
+        plan = _plan_crawl(source, db)
+        source.pages_found = len(plan.discovered_urls)
+        run.pages_found = len(plan.discovered_urls)
         db.commit()
 
         try:
-            indexed_urls, failures, chunks_created = _index_pages(source, run, urls, api_key, db)
+            result = _index_pages(source, run, plan, api_key, db)
         except _CrawlAborted:
             return
 
-        _finalize_crawl(
-            source, run, indexed_urls, failures, chunks_created,
-            discovered_urls, urls, remaining_capacity, started, db,
-        )
+        _finalize_crawl(source, run, plan, result, started, db)
     except Exception as exc:
         logger.exception("URL crawl failed for source %s", source_id)
         source = db.query(UrlSource).filter(UrlSource.id == source_id).first()

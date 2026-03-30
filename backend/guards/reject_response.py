@@ -26,11 +26,18 @@ def build_reject_response(
     if reason == RejectReason.INJECTION_DETECTED:
         return "Я не могу выполнить этот запрос."
 
-    product_name = (profile.product_name if profile and profile.product_name else None) or "данному продукту"
-    if topic_hint:
-        return (
-            f"Я отвечаю только на вопросы по {product_name}. "
-            f"Попробуйте спросить о: {topic_hint}."
-        )
+    product_name = (
+        profile.product_name if profile and profile.product_name else None
+    ) or "данному продукту"
+
+    if reason in (RejectReason.NOT_RELEVANT, RejectReason.LOW_RETRIEVAL_SCORE):
+        if topic_hint:
+            return (
+                f"Я отвечаю только на вопросы по {product_name}. "
+                f"Попробуйте спросить о: {topic_hint}."
+            )
+        return f"Я отвечаю только на вопросы по {product_name}."
+
+    # Defensive fallback: should never happen.
     return f"Я отвечаю только на вопросы по {product_name}."
 

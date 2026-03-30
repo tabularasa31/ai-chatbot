@@ -243,7 +243,11 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
             )
         except Exception:
             # Extraction is intentionally best-effort.
-            pass
+            logger.warning(
+                "Tenant knowledge extraction failed for document_id=%s",
+                document_id,
+                exc_info=True,
+            )
     except Exception:
         logger.exception("Background embedding failed for document %s", document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()

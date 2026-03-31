@@ -70,6 +70,40 @@ class Settings(BaseSettings):
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
     )
 
+    # ── Phase 4: Chat-log analysis ─────────────────────────────────────────
+    # Messages fetched per analysis job run
+    log_analysis_batch_size: int = Field(1000, alias="LOG_ANALYSIS_BATCH_SIZE")
+    # Cosine similarity threshold for message clustering
+    log_cluster_similarity_threshold: float = Field(
+        0.82, alias="LOG_CLUSTER_SIMILARITY_THRESHOLD"
+    )
+    # Minimum messages in a cluster to generate a FAQ candidate
+    log_cluster_min_size: int = Field(3, alias="LOG_CLUSTER_MIN_SIZE")
+    # Maximum FAQ candidates created per job run
+    max_faq_per_run: int = Field(20, alias="MAX_FAQ_PER_RUN")
+    # Minimum confidence to auto-approve a FAQ (skip human review)
+    faq_confidence_auto_accept: float = Field(0.85, alias="FAQ_CONFIDENCE_AUTO_ACCEPT")
+    # Hours between cron-triggered analysis runs
+    log_analysis_cron_hours: int = Field(24, alias="LOG_ANALYSIS_CRON_HOURS")
+    # Threshold: number of new messages that triggers an analysis job
+    log_analysis_threshold_messages: int = Field(
+        100, alias="LOG_ANALYSIS_THRESHOLD_MESSAGES"
+    )
+    # Minimum cluster size for alias extraction
+    alias_min_cluster_size: int = Field(5, alias="ALIAS_MIN_CLUSTER_SIZE")
+    # Minimum lexical diversity for alias extraction (0-1)
+    alias_min_diversity: float = Field(0.6, alias="ALIAS_MIN_DIVERSITY")
+    # Days after which unused message embeddings are deleted
+    log_embeddings_retention_days: int = Field(
+        90, alias="LOG_EMBEDDINGS_RETENTION_DAYS"
+    )
+    # Messages per embedding API call
+    embedding_batch_size: int = Field(100, alias="EMBEDDING_BATCH_SIZE")
+    # Seconds to sleep between embedding batches (rate limiting)
+    embedding_batch_delay_sec: float = Field(0.5, alias="EMBEDDING_BATCH_DELAY_SEC")
+    # Maximum job duration before timeout (seconds)
+    max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

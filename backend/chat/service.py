@@ -694,6 +694,28 @@ def _persist_assistant_only(
     db.commit()
 
 
+def _trigger_log_analysis_threshold(
+    client_id: uuid.UUID,
+    api_key: str,
+) -> None:
+    """Increment message counter and enqueue analysis job if threshold is reached.
+
+    Opens its own DB session inside the daemon thread — never touches the
+    request-scoped session, which is not thread-safe.
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            from backend.jobs.analyze_chat_logs import increment_and_check_threshold
+
+            increment_and_check_threshold(tenant_id=client_id, api_key=api_key)
+        except Exception:
+            logger.debug("Log analysis threshold check failed", exc_info=True)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def process_chat_message(
     client_id: uuid.UUID,
     question: str,
@@ -1391,6 +1413,10 @@ def process_chat_message(
         tokens_used,
         optional_entity_types=optional_entity_types,
     )
+
+    # Phase 4: fire-and-forget threshold check — never blocks the response.
+    _trigger_log_analysis_threshold(client_id, api_key)
+
     trace.update(
         output={"answer": answer},
         metadata={

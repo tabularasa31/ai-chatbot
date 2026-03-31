@@ -34,7 +34,7 @@ function EvalStateMessage({
   description: string;
 }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#F4F7FB] px-4 py-10 font-['Inter']">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-50 px-4 py-10 font-['Inter']">
       <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-[#E879F9]/18 blur-3xl" />
       <div className="absolute bottom-[-96px] right-[-40px] h-72 w-72 rounded-full bg-[#38BDF8]/18 blur-3xl" />
       <div
@@ -211,20 +211,22 @@ function EvalChatContent() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F4F7FB] font-['Inter']">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-3 py-3 sm:px-4 sm:py-4">
-        <div className="mb-3 flex items-center justify-between gap-4 px-2 py-1 text-sm font-medium text-[#334155]">
-          <span className="text-[#2563EB]">UI Evals</span>
-          <span className="flex-1 text-center text-[#0F172A]">Ручная проверка диалога</span>
-          <span className="text-[#475569]">{botId}</span>
+    <div className="flex min-h-screen flex-col bg-gray-50 font-['Inter']">
+      <header className="border-b border-gray-200 bg-white px-8 py-4">
+        <div className="flex items-center justify-between">
+          <span className="text-[#a855f7] font-medium hover:text-[#9333ea] transition-colors cursor-default">
+            UI Evals
+          </span>
+          <h1 className="text-gray-900 font-medium">Ручная проверка диалога</h1>
+          <span className="text-gray-500 text-sm">{botId}</span>
         </div>
+      </header>
 
-        <div className="flex flex-1 justify-center">
-          <div className="flex h-[600px] w-full max-w-4xl">
-            <ChatWidget clientId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
-          </div>
+      <main className="flex flex-1 items-center justify-center p-8">
+        <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-lg shadow-lg">
+          <ChatWidget clientId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
         </div>
-      </div>
+      </main>
     </div>
   );
 }
@@ -233,7 +235,7 @@ export default function EvalChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-[#F4F7FB] px-4 text-sm text-[#64748B]">
+        <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 text-sm text-[#64748B]">
           Загрузка...
         </div>
       }

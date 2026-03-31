@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, CheckCheck, Flag, MessageSquareText } from "lucide-react";
+import { AlertTriangle, Check, MessageSquare, Tag } from "lucide-react";
 import { cn } from "@/components/ui/utils";
 
 const CATEGORIES: { value: string; label: string }[] = [
@@ -63,18 +63,19 @@ export function EvalRatingPanel({
 
   if (saved && frozen) {
     return (
-      <div className="rounded-[22px] border border-[#BBF7D0] bg-[linear-gradient(180deg,#F7FEF8_0%,#ECFDF3_100%)] px-4 py-3 text-sm text-[#166534] shadow-[0_16px_34px_rgba(34,197,94,0.1)]">
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold">Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}</span>
+          <Check size={14} className="text-emerald-600" />
+          <span className="font-semibold">Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}</span>
         </div>
         {frozen.verdict === "fail" && frozen.error_category ? (
-          <p className="mt-2 text-sm text-[#166534]">
+          <p className="mt-1.5 text-sm text-emerald-700">
             Категория:{" "}
             {CATEGORIES.find((c) => c.value === frozen.error_category)?.label ?? frozen.error_category}
           </p>
         ) : null}
         {frozen.comment ? (
-          <p className="mt-2 text-sm leading-6 text-[#166534]">Комментарий: {frozen.comment}</p>
+          <p className="mt-1.5 text-sm text-emerald-700">Комментарий: {frozen.comment}</p>
         ) : null}
       </div>
     );
@@ -85,7 +86,7 @@ export function EvalRatingPanel({
   }
 
   const canSavePass = verdict === "pass";
-  const canSaveFail = verdict === "fail" && (errorCategory !== "other" || comment.trim().length > 0);
+  const canSaveFail = verdict === "fail" && errorCategory.trim().length > 0 && comment.trim().length > 0;
 
   async function handleSave() {
     if (!verdict) return;
@@ -147,53 +148,53 @@ export function EvalRatingPanel({
   }
 
   return (
-    <div className="rounded-[22px] border border-[#DCE5F2] bg-[linear-gradient(180deg,rgba(255,255,255,0.98)_0%,rgba(248,251,255,0.98)_100%)] px-4 py-4 shadow-[0_18px_40px_rgba(148,163,184,0.12)]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h4 className="mt-1 text-sm font-semibold text-[#0F172A]">Оцените ответ ассистента</h4>
-        </div>
-        <div className="inline-flex rounded-full border border-[#DCE5F2] bg-white p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.95)]">
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-3">
+        <h4 className="text-sm font-medium text-gray-900">Оцените ответ ассистента</h4>
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={() => {
-              setVerdict("pass");
+              setVerdict(verdict === "pass" ? null : "pass");
               setErrorCategory("");
               setSaveError("");
             }}
             className={cn(
-              "inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition",
+              "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "pass"
-                ? "bg-[#DCFCE7] text-[#166534] shadow-sm"
-                : "text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A]",
+                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
+                : "border-gray-200 bg-white text-gray-600 hover:border-emerald-400 hover:text-emerald-600",
             )}
           >
-            <CheckCheck size={14} />
+            <Check size={13} />
             Pass
           </button>
           <button
             type="button"
             onClick={() => {
-              setVerdict("fail");
+              setVerdict(verdict === "fail" ? null : "fail");
               setSaveError("");
             }}
             className={cn(
-              "inline-flex items-center gap-2 rounded-full px-3 py-2 text-xs font-semibold transition",
+              "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "fail"
-                ? "bg-[#FEE2E2] text-[#B91C1C] shadow-sm"
-                : "text-[#64748B] hover:bg-[#F8FAFC] hover:text-[#0F172A]",
+                ? "border-red-500 bg-red-50 text-red-700"
+                : "border-gray-200 bg-white text-gray-600 hover:border-red-400 hover:text-red-600",
             )}
           >
-            <AlertTriangle size={14} />
+            <AlertTriangle size={13} />
             Fail
           </button>
         </div>
       </div>
 
-      {verdict === "fail" ? (
-        <div className="mt-4 grid gap-3 rounded-[18px] border border-[#E2E8F0] bg-white/90 p-4">
+      {/* Fail details */}
+      {verdict === "fail" && (
+        <div className="space-y-3 mt-3">
           <div>
-            <label className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#64748B]">
-              <Flag size={13} />
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+              <Tag size={12} />
               Категория
             </label>
             <select
@@ -202,7 +203,7 @@ export function EvalRatingPanel({
                 setErrorCategory(e.target.value);
                 setSaveError("");
               }}
-              className="w-full rounded-2xl border border-[#D6E1F0] bg-white px-4 py-3 text-sm text-[#0F172A] outline-none transition focus:border-[#60A5FA] focus:ring-4 focus:ring-[#DBEAFE]"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
             >
               <option value="">Выберите категорию</option>
               {CATEGORIES.map((c) => (
@@ -214,8 +215,8 @@ export function EvalRatingPanel({
           </div>
 
           <div>
-            <label className="mb-2 inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#64748B]">
-              <MessageSquareText size={13} />
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+              <MessageSquare size={12} />
               Комментарий
             </label>
             <textarea
@@ -224,34 +225,32 @@ export function EvalRatingPanel({
                 setComment(e.target.value);
                 setSaveError("");
               }}
-              placeholder={
-                errorCategory === "other"
-                  ? "Комментарий обязателен для «Другое»"
-                  : "Что именно пошло не так?"
-              }
+              placeholder="Что именно пошло не так?"
               rows={3}
-              className="w-full rounded-2xl border border-[#D6E1F0] bg-white px-4 py-3 text-sm leading-6 text-[#0F172A] outline-none transition focus:border-[#60A5FA] focus:ring-4 focus:ring-[#DBEAFE]"
+              className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm leading-6 text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
             />
           </div>
         </div>
-      ) : null}
+      )}
 
-      {saveError ? (
-        <div className="mt-3 rounded-2xl border border-[#FECACA] bg-[#FFF1F2] px-4 py-3 text-sm text-[#B91C1C]">
+      {saveError && (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {saveError}
         </div>
-      ) : null}
+      )}
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          disabled={saving || (!canSavePass && !canSaveFail)}
-          onClick={handleSave}
-          className="inline-flex items-center justify-center rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {saving ? "Сохранение..." : "Сохранить оценку"}
-        </button>
-      </div>
+      {verdict && (
+        <div className="mt-4">
+          <button
+            type="button"
+            disabled={saving || (!canSavePass && !canSaveFail)}
+            onClick={handleSave}
+            className="rounded-lg bg-[#a855f7] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea] disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            {saving ? "Сохранение..." : "Сохранить оценку"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

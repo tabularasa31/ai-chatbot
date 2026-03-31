@@ -20,7 +20,6 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -345,8 +344,6 @@ def _find_existing_faq(
 ) -> TenantFaq | None:
     """Return existing FAQ with cosine similarity >= threshold, or None."""
     from backend.tenant_knowledge.faq_service import DEDUP_SIMILARITY_THRESHOLD
-    import math as _math
-
     try:
         distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
         row = (

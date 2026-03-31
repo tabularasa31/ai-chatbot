@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  LifeBuoy,
   Lock,
   MessageCircle,
-  SendHorizontal,
+  Send,
   Ticket,
 } from "lucide-react";
 import { cn } from "@/components/ui/utils";
@@ -59,12 +58,6 @@ function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: nu
   return "";
 }
 
-function widgetFooterText(chatClosed: boolean, sessionId: string): string {
-  if (chatClosed) return "Диалог завершён. Начните новую сессию на сайте, чтобы продолжить.";
-  if (sessionId) return "AI отвечает по базе знаний и может передать диалог в поддержку.";
-  return "Задайте вопрос, и бот постарается помочь до подключения команды поддержки.";
-}
-
 export function ChatWidget({
   clientId,
   locale,
@@ -75,7 +68,6 @@ export function ChatWidget({
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingEscalate, setLoadingEscalate] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -83,7 +75,6 @@ export function ChatWidget({
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
-  const canEscalate = Boolean(sessionId) && !chatClosed && !loadingEscalate && !loading;
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -144,58 +135,26 @@ export function ChatWidget({
     }
   };
 
-  const handleEscalate = async () => {
-    if (!canEscalate) return;
-    setLoadingEscalate(true);
-    try {
-      const params = new URLSearchParams({ clientId, session_id: sessionId });
-      const res = await fetch(`/widget/escalate?${params}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trigger: "user_request", user_note: null }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          formatApiDetail((err as { detail?: unknown }).detail, `API error: ${res.status}`),
-        );
-      }
-      const data = (await res.json()) as { message: string; ticket_number: string };
-      const raw = data.message.includes("[[escalation_ticket:")
-        ? data.message
-        : `${data.message}\n\n[[escalation_ticket:${data.ticket_number}]]`;
-      applyAssistantMessage(raw, false);
-    } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "error",
-          content: error instanceof Error ? error.message : "Could not reach support",
-        },
-      ]);
-    } finally {
-      setLoadingEscalate(false);
-    }
-  };
-
   return (
-    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden rounded-[28px] border border-[#DCE3EF] bg-white shadow-[0_28px_90px_rgba(15,23,42,0.12)]">
-      <div className="bg-[#0A0A0F]/50 border-b border-[#1E1E2E] px-6 py-4 flex items-center gap-3 flex-shrink-0">
-        <div className="w-10 h-10 bg-[#E879F9] rounded-full flex items-center justify-center">
-          <MessageCircle size={20} className="text-[#0A0A0F]" />
+    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
+      {/* Header */}
+      <div className="bg-[#1a1a1a] px-6 py-4 flex items-center gap-3 flex-shrink-0">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#e879f9] to-[#a855f7] flex items-center justify-center flex-shrink-0">
+          <MessageCircle size={22} className="text-white" />
         </div>
         <div>
-          <div className="text-[#FAF5FF] font-medium">Chat9 Assistant</div>
-          <div className="text-[#FAF5FF]/60 text-sm">Online</div>
+          <div className="text-white font-medium">Chat9 Assistant</div>
+          <div className="text-gray-400 text-sm">Online</div>
         </div>
       </div>
 
+      {/* Messages */}
       <div
         ref={messagesRef}
-        className={cn("min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-6", compact ? "text-[13px]" : "")}
+        className={cn("min-h-0 flex-1 overflow-y-auto bg-white p-6", compact ? "text-[13px]" : "")}
       >
         {(activeTicket || chatClosed) && (
-          <div className={cn("mb-4 flex flex-wrap gap-2", compact ? "mb-3" : "mb-4")}>
+          <div className={cn("flex flex-wrap gap-2", compact ? "mb-3" : "mb-4")}>
             {activeTicket ? (
               <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
                 <Ticket size={14} />
@@ -213,7 +172,7 @@ export function ChatWidget({
 
         {messages.length === 0 && !loading ? (
           <div className="flex h-full min-h-[320px] items-start justify-center pt-14 text-center">
-            <p className={cn("text-slate-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
+            <p className={cn("text-gray-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
           </div>
         ) : (
           <div className="space-y-5">
@@ -221,8 +180,8 @@ export function ChatWidget({
               if (msg.role === "user") {
                 return (
                   <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-[18px] rounded-br-[8px] border border-slate-200 bg-slate-100 px-4 py-3 text-[15px] leading-6 text-slate-700 shadow-[0_10px_22px_rgba(148,163,184,0.08)]">
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
+                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                     </div>
                   </div>
                 );
@@ -234,13 +193,13 @@ export function ChatWidget({
                   <div className="flex items-end gap-3">
                     <div
                       className={cn(
-                        "max-w-[85%] rounded-[18px] rounded-bl-[8px] px-4 py-3 text-[15px] leading-6 shadow-[0_10px_22px_rgba(148,163,184,0.08)]",
+                        "max-w-[85%] rounded-2xl px-4 py-2",
                         isError
                           ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-                          : "border border-slate-200 bg-white text-slate-700",
+                          : "bg-gray-100 text-gray-800",
                       )}
                     >
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
                     </div>
                   </div>
 
@@ -259,11 +218,11 @@ export function ChatWidget({
 
             {loading ? (
               <div className="flex items-end gap-3">
-                <div className="rounded-[18px] rounded-bl-[8px] border border-slate-200 bg-white px-4 py-3 shadow-[0_10px_22px_rgba(148,163,184,0.08)]">
+                <div className="rounded-2xl bg-gray-100 px-4 py-3">
                   <span className="flex h-6 items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#94A3B8] animate-bounce [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#94A3B8] animate-bounce" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" />
                   </span>
                 </div>
               </div>
@@ -272,50 +231,38 @@ export function ChatWidget({
         )}
       </div>
 
-      <div className={cn("border-t border-[#E2E8F0] bg-[#F8FAFC] px-4 sm:px-6", compact ? "py-3" : "py-4")}>
-        <div className="relative">
+      {/* Input area */}
+      <div className={cn("border-t border-gray-200 bg-white px-4 sm:px-6", compact ? "py-3" : "py-4")}>
+        <div className="flex items-center gap-3">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
             placeholder={chatClosed ? "Chat closed" : "Type a message..."}
             disabled={loading || chatClosed}
-            className="w-full rounded-[20px] border border-slate-200 bg-white px-4 py-3 pr-12 text-[15px] text-slate-700 outline-none transition focus:border-slate-400 focus:ring-2 focus:ring-slate-200 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-[#a855f7] focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
           />
           <button
             type="button"
             onClick={handleSend}
             disabled={!canSend}
-            className="absolute inset-y-0 right-4 inline-flex items-center text-slate-400 transition hover:text-slate-600 disabled:cursor-not-allowed disabled:text-slate-300"
+            className="flex-shrink-0 p-3 bg-[#a855f7] hover:bg-[#9333ea] disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
             aria-label="Send message"
           >
-            <SendHorizontal size={18} />
+            <Send size={18} />
           </button>
         </div>
 
-        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <button
-            type="button"
-            onClick={handleEscalate}
-            disabled={!canEscalate}
-            className="inline-flex items-center justify-center gap-2 self-start rounded-full border border-[#E2D7EB] bg-white px-3.5 py-2 text-sm font-medium text-[#6E6880] transition hover:border-[#E879F9]/40 hover:bg-[#FBF3FE] hover:text-[#221F2D] disabled:cursor-not-allowed disabled:text-[#A7A1B5]"
+        <div className="mt-2 text-center">
+          <a
+            href={CHAT9_SITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 transition hover:text-gray-600"
           >
-            <LifeBuoy size={15} />
-            {loadingEscalate ? "Connecting..." : "Talk to support"}
-          </button>
-
-          <div className="flex flex-col gap-1 text-left sm:text-right">
-            <p className="text-xs leading-5 text-[#7A748A]">{widgetFooterText(chatClosed, sessionId)}</p>
-            <a
-              href={CHAT9_SITE_URL}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-[#64748B] transition hover:text-[#475569]"
-            >
-              Powered by Chat9
-              <span aria-hidden="true">→</span>
-            </a>
-          </div>
+            Powered by Chat9
+            <span aria-hidden="true">→</span>
+          </a>
         </div>
       </div>
     </div>

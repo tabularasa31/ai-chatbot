@@ -6,6 +6,7 @@
       "runtimeExecutable": "node_modules/.bin/next",
       "runtimeArgs": ["dev"],
       "port": 3000,
+      "autoPort": true,
       "cwd": "frontend"
     },
     {

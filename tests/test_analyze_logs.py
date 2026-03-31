@@ -222,14 +222,13 @@ def test_answer_is_next_message(db_session, tenant, chat_session):
 async def test_thumbs_down_skip(db_session, tenant, chat_session):
     """Cluster where all answers are thumbs-down must not produce a FAQ candidate."""
     from backend.jobs.analyze_chat_logs import (
-        CURRENT_ANALYSIS_VERSION,
-        MessageRow,
-        _cluster_messages,
+        MessageFeedback,
         _get_answer_for_message,
     )
 
     now = datetime.now(timezone.utc)
-    # Create user messages + thumbs-down answers
+    # Create user messages + thumbs-down assistant answers
+    user_msgs = []
     for i in range(3):
         user_msg = _make_message(
             db_session, chat_session, MessageRole.user, f"Bad question {i}",
@@ -240,30 +239,19 @@ async def test_thumbs_down_skip(db_session, tenant, chat_session):
             created_at=now - timedelta(seconds=50 + i),
             feedback=MessageFeedback.down,
         )
+        user_msgs.append(user_msg)
     db_session.commit()
 
-    messages = (
-        db_session.query(Message)
-        .filter(
-            Message.chat_id == chat_session.id,
-            Message.role == MessageRole.user,
+    # Verify feedback is read from ASSISTANT messages (not user messages)
+    for user_msg in user_msgs:
+        _, feedback = _get_answer_for_message(db_session, user_msg.id, chat_session.id)
+        assert feedback == MessageFeedback.down, (
+            "Feedback should come from the assistant message, not user message"
         )
-        .all()
-    )
 
-    # Check that all answers are thumbs down
-    all_thumbs_down = True
-    for msg in messages:
-        _, thumbs_up = _get_answer_for_message(db_session, msg.id, chat_session.id)
-        if thumbs_up:
-            all_thumbs_down = False
-
-    # Confirm logic: when all thumbs-down, no candidate should be created
+    # All-thumbs-down → no FAQ candidate should be created
     faq_count_before = db_session.query(TenantFaq).filter_by(tenant_id=tenant.id).count()
-
-    # Simulate: all-thumbs-down cluster → skip
-    # (The logic is tested via the guard in run_job; here we assert the data state)
-    assert all_thumbs_down or faq_count_before == 0
+    assert faq_count_before == 0
 
 
 # ── test_embedding_throttle ───────────────────────────────────────────────────
@@ -419,6 +407,7 @@ async def test_analysis_version_resets_watermark(db_session, tenant):
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),
+            old_watermark=None,
             trigger="test",
         )
 
@@ -450,6 +439,7 @@ async def test_is_running_released_on_failure(db_session, tenant):
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),
+            old_watermark=None,
             trigger="test",
         )
 

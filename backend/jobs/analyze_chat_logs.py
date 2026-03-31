@@ -67,6 +67,7 @@ class ClusterMember:
     message: MessageRow
     answer: str | None
     has_thumbs_up: bool
+    feedback: MessageFeedback = MessageFeedback.none
 
 
 # ── Embedding helpers ─────────────────────────────────────────────────────────
@@ -147,12 +148,15 @@ def _get_answer_for_message(
     db: Session,
     msg_id: uuid.UUID,
     conversation_id: uuid.UUID,
-) -> tuple[str | None, bool]:
-    """Return (answer_text, has_thumbs_up) for the next assistant message after msg_id."""
-    # Find the user message's created_at
+) -> tuple[str | None, MessageFeedback]:
+    """Return (answer_text, assistant_feedback) for the next assistant message after msg_id.
+
+    Feedback is read from the ASSISTANT message, not the user message — thumbs
+    up/down is only written on assistant turns in the chat API.
+    """
     user_msg = db.query(Message).filter(Message.id == msg_id).first()
     if user_msg is None:
-        return None, False
+        return None, MessageFeedback.none
 
     assistant_msg = (
         db.query(Message)
@@ -165,10 +169,9 @@ def _get_answer_for_message(
         .first()
     )
     if assistant_msg is None:
-        return None, False
+        return None, MessageFeedback.none
 
-    has_thumbs_up = assistant_msg.feedback == MessageFeedback.up
-    return assistant_msg.content, has_thumbs_up
+    return assistant_msg.content, assistant_msg.feedback
 
 
 def _get_cached_embeddings(
@@ -415,14 +418,27 @@ def _create_faq_candidate(
 
 # ── Idempotency / lock ────────────────────────────────────────────────────────
 
-def try_acquire_job_lock(db: Session, tenant_id: uuid.UUID) -> datetime | None:
-    """Atomically set is_running=True and record job start time.
+def try_acquire_job_lock(
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> tuple[datetime, datetime | None] | None:
+    """Atomically set is_running=True; record new watermark for next run.
 
-    Returns the recorded start timestamp, or None if already running.
+    Returns (job_start_time, old_watermark) on success, or None if already running.
+
+    The caller must load messages using old_watermark (the previous run's start
+    time), NOT job_start_time — setting last_run_started_at=NOW() establishes
+    the watermark for the *next* run, not the current one.
     """
     from sqlalchemy import update as sa_update
 
+    state = _get_or_create_state(db, tenant_id)
+    if state.is_running:
+        return None
+
+    old_watermark = state.last_run_started_at
     now = datetime.now(timezone.utc)
+
     result = db.execute(
         sa_update(LogAnalysisState)
         .where(
@@ -435,8 +451,8 @@ def try_acquire_job_lock(db: Session, tenant_id: uuid.UUID) -> datetime | None:
     db.commit()
     row = result.fetchone()
     if row is None:
-        return None  # already running
-    return now
+        return None  # race — another process grabbed the lock
+    return now, old_watermark
 
 
 def enqueue_log_analysis_job(
@@ -445,20 +461,22 @@ def enqueue_log_analysis_job(
     api_key: str,
     trigger: str = "manual",
 ) -> bool:
-    """Acquire lock and run job in current thread.
+    """Acquire lock and launch job in a daemon thread with its own DB session.
 
     Returns True if job was started, False if already running.
     """
     _get_or_create_state(db, tenant_id)
-    job_start = try_acquire_job_lock(db, tenant_id)
-    if job_start is None:
+    result = try_acquire_job_lock(db, tenant_id)
+    if result is None:
         logger.debug("Log analysis already running for tenant %s", tenant_id)
         return False
+
+    job_start, old_watermark = result
 
     import threading
     t = threading.Thread(
         target=_run_job_sync,
-        args=(tenant_id, api_key, db, job_start, trigger),
+        args=(tenant_id, api_key, job_start, old_watermark, trigger),
         daemon=True,
     )
     t.start()
@@ -470,18 +488,22 @@ def enqueue_log_analysis_job(
 def _run_job_sync(
     tenant_id: uuid.UUID,
     api_key: str,
-    db: Session,
     job_start: datetime,
+    old_watermark: datetime | None,
     trigger: str,
 ) -> None:
-    """Synchronous entry point — wraps the async job in a new event loop."""
+    """Entry point for daemon thread — opens its own DB session, runs async job."""
+    from backend.core.db import SessionLocal
+
+    db = SessionLocal()
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(
-            run_job(tenant_id, api_key, db, job_start, trigger)
+            run_job(tenant_id, api_key, db, job_start, old_watermark, trigger)
         )
     finally:
         loop.close()
+        db.close()
 
 
 async def run_job(
@@ -489,9 +511,15 @@ async def run_job(
     api_key: str,
     db: Session,
     job_start: datetime,
+    old_watermark: datetime | None,
     trigger: str = "manual",
 ) -> None:
-    """Core analysis job: load messages → embed → cluster → FAQ → aliases."""
+    """Core analysis job: load messages → embed → cluster → FAQ → aliases.
+
+    old_watermark is the previous run's last_run_started_at — used as the
+    lower bound for loading messages in THIS run.  job_start (already written
+    to last_run_started_at) becomes the watermark for the NEXT run.
+    """
     from backend.jobs.alias_extractor import extract_and_merge_aliases
 
     faq_count = 0
@@ -521,13 +549,13 @@ async def run_job(
                 )
             )
             db.commit()
-            state = _get_or_create_state(db, tenant_id)
+            old_watermark = None  # full reprocess
 
-        # ── Load messages ────────────────────────────────────────────────────
+        # ── Load messages using the PREVIOUS watermark ───────────────────────
         messages = _load_messages(
             db,
             tenant_id,
-            state.last_run_started_at,
+            old_watermark,
             settings.log_analysis_batch_size,
         )
         if len(messages) < settings.log_cluster_min_size:
@@ -554,65 +582,35 @@ async def run_job(
                 )
                 break
 
-            # Collect answers for each member
+            # Collect answers — feedback read from assistant messages only
             members: list[ClusterMember] = []
-            all_thumbs_down = True
             for msg in cluster:
-                answer_text, thumbs_up = _get_answer_for_message(
+                answer_text, feedback = _get_answer_for_message(
                     db, msg.id, msg.conversation_id
                 )
                 if answer_text:
-                    cm = ClusterMember(msg, answer_text, thumbs_up)
-                    members.append(cm)
-                    if thumbs_up or cm.message.content:
-                        all_thumbs_down = all_thumbs_down and (
-                            db.query(Message)
-                            .filter(Message.id == msg.id)
-                            .first()
-                            .feedback
-                            == MessageFeedback.down
+                    members.append(
+                        ClusterMember(
+                            message=msg,
+                            answer=answer_text,
+                            has_thumbs_up=(feedback == MessageFeedback.up),
+                            feedback=feedback,
                         )
+                    )
 
             if not members:
                 continue
 
-            # Per spec: skip if ALL answers are thumbs-down
-            has_any_non_down = any(
-                not (
-                    db.query(Message)
-                    .filter(Message.id == m.message.id)
-                    .with_entities(Message.feedback)
-                    .scalar()
-                    == MessageFeedback.down
-                )
-                for m in members
-            )
-            if not has_any_non_down:
+            # Skip cluster if ALL assistant answers are thumbs-down
+            if all(m.feedback == MessageFeedback.down for m in members):
                 continue
 
-            # Best answer: thumbs_up > no feedback > skip thumbs_down
-            best = None
-            for m in members:
-                fb = (
-                    db.query(Message)
-                    .filter(Message.id == m.message.id)
-                    .with_entities(Message.feedback)
-                    .scalar()
-                )
-                if fb == MessageFeedback.up:
-                    best = m
-                    break
+            # Best answer: thumbs_up > no feedback (none) > skip thumbs_down
+            best = next((m for m in members if m.has_thumbs_up), None)
             if best is None:
-                for m in members:
-                    fb = (
-                        db.query(Message)
-                        .filter(Message.id == m.message.id)
-                        .with_entities(Message.feedback)
-                        .scalar()
-                    )
-                    if fb != MessageFeedback.down:
-                        best = m
-                        break
+                best = next(
+                    (m for m in members if m.feedback != MessageFeedback.down), None
+                )
             if best is None:
                 continue
 
@@ -624,7 +622,7 @@ async def run_job(
                 faq_count += 1
 
             # Prepare alias extraction input
-            alias_inputs.append([m.content for m in cluster])
+            alias_inputs.append([m.message.content for m in members])
 
         # ── Alias extraction (async, throttled) ──────────────────────────────
         alias_count = await extract_and_merge_aliases(
@@ -682,17 +680,18 @@ def _finalize_job(
 # ── Threshold trigger helper ──────────────────────────────────────────────────
 
 def increment_and_check_threshold(
-    db: Session,
     tenant_id: uuid.UUID,
     api_key: str,
 ) -> None:
     """Increment messages_since_last_run; enqueue job if threshold reached.
 
-    Must be called in a background thread — never blocks the request path.
+    Opens its own DB session — safe to call from any background thread.
     """
-    try:
-        from sqlalchemy import update as sa_update
+    from backend.core.db import SessionLocal
+    from sqlalchemy import update as sa_update
 
+    db = SessionLocal()
+    try:
         _get_or_create_state(db, tenant_id)
 
         db.execute(
@@ -706,10 +705,7 @@ def increment_and_check_threshold(
 
         state = _get_or_create_state(db, tenant_id)
         threshold = settings.log_analysis_threshold_messages
-        if (
-            state.messages_since_last_run >= threshold
-            and not state.is_running
-        ):
+        if state.messages_since_last_run >= threshold and not state.is_running:
             enqueue_log_analysis_job(
                 db=db,
                 tenant_id=tenant_id,
@@ -720,6 +716,8 @@ def increment_and_check_threshold(
         logger.exception(
             "increment_and_check_threshold failed for tenant %s", tenant_id
         )
+    finally:
+        db.close()
 
 
 # ── Retention cron ────────────────────────────────────────────────────────────

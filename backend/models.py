@@ -494,7 +494,85 @@ class TenantFaq(Base):
     confidence = Column(Float, nullable=True)
     source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger'
     approved = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Phase 4: explainability fields (only populated for source='logs')
+    cluster_size = Column(Integer, nullable=True)
+    source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    client = relationship("Client")
+
+
+class LogAnalysisState(Base):
+    """Per-tenant state for the chat-log analysis job (Phase 4)."""
+
+    __tablename__ = "log_analysis_state"
+
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    last_run_at = Column(DateTime, nullable=True)
+    # Primary watermark: timestamp-based, resilient to UUID/sharded IDs
+    last_run_started_at = Column(DateTime, nullable=True)
+    # Auxiliary watermark: last processed message ID for dedup within batch
+    last_processed_id = Column(
+        PG_UUID(as_uuid=True),
+        nullable=True,
+    )
+    messages_since_last_run = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    is_running = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    last_run_status = Column(Text, nullable=True)  # 'ok' | 'failed' | 'skipped_no_data'
+    last_run_faq_created = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    last_run_aliases_created = Column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    analysis_version = Column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+
+    client = relationship("Client")
+
+
+class MessageEmbedding(Base):
+    """Embeddings for individual chat messages (Phase 4 — log analysis)."""
+
+    __tablename__ = "message_embeddings"
+
+    message_id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    embedding = Column(Vector(1536), nullable=False)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    last_used_at = Column(DateTime, nullable=False, default=_utcnow)
 
     client = relationship("Client")
 

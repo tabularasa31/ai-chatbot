@@ -1,6 +1,6 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-01 (UTC) — aligned /chat/debug with public pipeline, soft rejection texts
+**Last updated:** 2026-04-01 (UTC) — aligned /chat/debug with public pipeline, soft rejection texts, single injection detection per request
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
@@ -37,6 +37,11 @@
 - ✅ Added: `test_run_debug_does_not_create_db_records` (no Chat/Message written).
 - ✅ Added: `test_run_debug_guard_reject_shows_strategy_and_reject_reason`.
 - ✅ Added: `test_chat_debug_endpoint_exposes_pipeline_fields`.
+
+### Follow-up fixes (same session)
+
+- ✅ **Single injection detection** — `run_chat_pipeline` gains optional `precomputed_injection` param; `process_chat_message` passes its already-computed `injection_result` so `detect_injection` is called exactly once per request, not twice.
+- ✅ **Missing test imports** — `from backend.guards.reject_response import RejectReason, build_reject_response` added to `tests/test_relevance_guard.py`; updated assertions were failing with `NameError` before this fix.
 
 ---
 

@@ -296,6 +296,7 @@ def run_chat_pipeline(
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     trace: "TraceHandle | None" = None,
+    precomputed_injection: Any | None = None,
 ) -> ChatPipelineResult:
     """
     Pure RAG pipeline — no DB writes, no escalation actions, no observability side effects.
@@ -316,7 +317,11 @@ def run_chat_pipeline(
     never pushes events to queues, never warms caches, never writes audit/observability.
     """
     # --- 1. Injection detection ---
-    injection_result = detect_injection(question, tenant_id=str(client_id), api_key=api_key)
+    injection_result = (
+        precomputed_injection
+        if precomputed_injection is not None
+        else detect_injection(question, tenant_id=str(client_id), api_key=api_key)
+    )
     if injection_result.detected:
         reject_text = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
         return ChatPipelineResult(
@@ -337,7 +342,29 @@ def run_chat_pipeline(
 
     # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
     query_variants = expand_query(question)
+    if trace is not None:
+        _embed_span = trace.span(
+            name="query-embedding",
+            input={
+                "query_variants": query_variants,
+                "query_variant_count": len(query_variants),
+                "variant_mode": "multi" if len(query_variants) > 1 else "single",
+                "upstream_precomputed": True,
+            },
+        )
+    _embed_start = perf_counter()
     variant_vectors = embed_queries(query_variants, api_key=api_key)
+    if trace is not None:
+        _embed_span.end(
+            output={
+                "embedded_query_count": len(variant_vectors),
+                "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
+                "embedding_api_request_count": 1,
+                "extra_embedding_api_requests": 0,
+                "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
+                "upstream_precomputed": True,
+            }
+        )
     base_question_embedding = variant_vectors[0] if variant_vectors else []
 
     # --- 3. FAQ matching ---
@@ -358,6 +385,28 @@ def run_chat_pipeline(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="faq_match_error_degraded_to_rag_only",
+        )
+
+    if trace is not None:
+        _faq_span = trace.span(
+            name="faq_match",
+            input={"question_preview": question[:80]},
+        )
+        _retrieval_skipped = faq_match.strategy == "faq_direct"
+        _faq_span.end(
+            metadata={
+                "tenant_id": str(client_id),
+                "strategy": faq_match.strategy,
+                "top_score": faq_match.top_score,
+                "selected_score": faq_match.selected_score,
+                "faq_ids": [str(item.id) for item in faq_match.faq_items],
+                "selected_faq_id": faq_match.selected_faq_id,
+                "direct_guard_used": faq_match.direct_guard_used,
+                "direct_guard_passed": faq_match.direct_guard_passed,
+                "decision_reason": faq_match.decision_reason,
+                "retrieval_skipped": _retrieval_skipped,
+                "generation_skipped": _retrieval_skipped,
+            },
         )
 
     if faq_match.strategy == "faq_direct":
@@ -1408,6 +1457,7 @@ def process_chat_message(
         user_context_line=user_context_line,
         disclosure_config=disclosure_cfg,
         trace=trace,
+        precomputed_injection=injection_result,
     )
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).

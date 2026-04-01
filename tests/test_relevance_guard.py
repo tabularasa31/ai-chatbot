@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import RetrievalContext, process_chat_message
+from backend.guards.reject_response import RejectReason, build_reject_response
 from backend.models import Client, TenantProfile
 from backend.search.service import build_reliability_assessment
 
@@ -71,7 +72,8 @@ def test_injection_rejects_before_rag(
     assert chat_ended is False
     assert docs == []
     assert tokens_used == 0
-    assert answer == "Я не могу выполнить этот запрос."
+    expected = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
+    assert answer == expected
 
 
 def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
@@ -186,7 +188,8 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     assert chat_ended is False
     assert docs == []
     assert tokens_used == 0
-    assert answer.startswith("Я отвечаю только на вопросы по Product.")
+    assert answer.startswith("Извините")
+    assert "Product" in answer
     assert "ModA" in answer
 
 

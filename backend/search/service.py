@@ -1105,18 +1105,24 @@ def lexical_safe_query_variants(
     return variants or [query]
 
 
-def embed_query(query: str, *, api_key: str) -> list[float]:
+def embed_query(
+    query: str,
+    *,
+    api_key: str,
+    timeout: float | None = None,
+) -> list[float]:
     """
     Embed a search query using OpenAI embeddings API.
 
     Args:
         query: Text to embed.
         api_key: OpenAI API key.
+        timeout: Optional HTTP timeout (seconds); defaults to global OpenAI timeout.
 
     Returns:
         1536-dimensional embedding vector.
     """
-    openai_client = get_openai_client(api_key)
+    openai_client = get_openai_client(api_key, timeout=timeout)
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=query,
@@ -1124,11 +1130,16 @@ def embed_query(query: str, *, api_key: str) -> list[float]:
     return response.data[0].embedding
 
 
-def embed_queries(queries: list[str], *, api_key: str) -> list[list[float]]:
+def embed_queries(
+    queries: list[str],
+    *,
+    api_key: str,
+    timeout: float | None = None,
+) -> list[list[float]]:
     """Embed multiple search queries in one OpenAI API round-trip."""
     if not queries:
         return []
-    openai_client = get_openai_client(api_key)
+    openai_client = get_openai_client(api_key, timeout=timeout)
     response = openai_client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=queries,

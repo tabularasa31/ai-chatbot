@@ -63,7 +63,7 @@ from backend.search.service import (
     search_similar_chunks_detailed,
 )
 from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
-from backend.guards.injection_detector import detect_prompt_injection
+from backend.guards.injection_detector import detect_injection
 from backend.guards.relevance_checker import check_relevance_precheck
 from backend.guards.reject_response import RejectReason, build_reject_response
 
@@ -833,12 +833,24 @@ def process_chat_message(
     tenant_product_name_for_guard: str | None = None
     topic_hint_for_guard: str | None = None
 
+    injection_start = perf_counter()
     injection_span = trace.span(
-        name="injection_detector",
+        name="injection_check",
         input={"question_preview": redacted_question[:80]},
     )
-    injection_result = detect_prompt_injection(redacted_question)
-    injection_span.end(output={"detected": injection_result.detected, "pattern": injection_result.pattern})
+    injection_result = detect_injection(
+        redacted_question,
+        tenant_id=str(client_id),
+        api_key=api_key,
+    )
+    injection_latency_ms = round((perf_counter() - injection_start) * 1000, 2)
+    injection_span.end(output={
+        "detected": injection_result.detected,
+        "level": injection_result.level,
+        "method": injection_result.method,
+        "latency_ms": injection_latency_ms,
+        "semantic_score": injection_result.score,
+    })
 
     if injection_result.detected:
         reject_text = build_reject_response(

@@ -70,6 +70,20 @@ class Settings(BaseSettings):
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
     )
 
+    # ── Injection detector v2 ────────────────────────────────────────────
+    injection_semantic_threshold: float = Field(
+        0.82,
+        alias="INJECTION_SEMANTIC_THRESHOLD",
+    )
+    injection_semantic_timeout_sec: float = Field(
+        2.0,
+        alias="INJECTION_SEMANTIC_TIMEOUT_SEC",
+    )
+    injection_semantic_enabled: bool = Field(
+        True,
+        alias="INJECTION_SEMANTIC_ENABLED",
+    )
+
     # ── Phase 4: Chat-log analysis ─────────────────────────────────────────
     # Messages fetched per analysis job run
     log_analysis_batch_size: int = Field(1000, alias="LOG_ANALYSIS_BATCH_SIZE")

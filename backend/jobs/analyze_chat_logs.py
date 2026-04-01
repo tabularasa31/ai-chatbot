@@ -422,13 +422,13 @@ def try_acquire_job_lock(
     db: Session,
     tenant_id: uuid.UUID,
 ) -> tuple[datetime, datetime | None] | None:
-    """Atomically set is_running=True; record new watermark for next run.
+    """Atomically set is_running=True.
 
     Returns (job_start_time, old_watermark) on success, or None if already running.
 
-    The caller must load messages using old_watermark (the previous run's start
-    time), NOT job_start_time — setting last_run_started_at=NOW() establishes
-    the watermark for the *next* run, not the current one.
+    The watermark (last_run_started_at) is NOT advanced here — it is written
+    in _finalize_job based on the last message actually processed, so that a
+    partial batch or early exit does not skip messages that were never loaded.
     """
     from sqlalchemy import update as sa_update
 
@@ -445,7 +445,7 @@ def try_acquire_job_lock(
             LogAnalysisState.tenant_id == tenant_id,
             LogAnalysisState.is_running == False,  # noqa: E712
         )
-        .values(is_running=True, last_run_started_at=now)
+        .values(is_running=True)
         .returning(LogAnalysisState.tenant_id)
     )
     db.commit()
@@ -526,6 +526,7 @@ async def run_job(
     alias_count = 0
     status = "ok"
     last_msg_id: uuid.UUID | None = None
+    last_msg_created_at: datetime | None = None
     job_started_mono = time.monotonic()
 
     try:
@@ -634,28 +635,42 @@ async def run_job(
 
         if messages:
             last_msg_id = messages[-1].id
+            last_msg_created_at = messages[-1].created_at
 
     except Exception as exc:
         status = "failed"
         logger.error("Log analysis job failed for tenant %s: %s", tenant_id, exc, exc_info=True)
 
     finally:
-        _finalize_job(db, tenant_id, last_msg_id, faq_count, alias_count, status)
+        _finalize_job(
+            db, tenant_id, last_msg_id, last_msg_created_at,
+            faq_count, alias_count, status, job_start,
+        )
 
 
 def _finalize_job(
     db: Session,
     tenant_id: uuid.UUID,
     last_msg_id: uuid.UUID | None,
+    last_msg_created_at: datetime | None,
     faq_count: int,
     alias_count: int,
     status: str,
+    job_start: datetime,
 ) -> None:
     from sqlalchemy import update as sa_update
+
+    # Advance the watermark only as far as messages were actually processed.
+    # If the batch was partial or the job exited early, this ensures the next
+    # run resumes from the last processed timestamp rather than skipping the
+    # remainder of the backlog.  When nothing was processed (empty/skipped),
+    # advance to job_start so the next run does not re-scan an empty range.
+    new_watermark = last_msg_created_at if last_msg_created_at is not None else job_start
 
     values: dict = {
         "is_running": False,
         "last_run_at": datetime.now(timezone.utc),
+        "last_run_started_at": new_watermark,
         "messages_since_last_run": 0,
         "last_run_status": status,
         "last_run_faq_created": faq_count,

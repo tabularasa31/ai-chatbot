@@ -61,10 +61,11 @@ STRUCTURAL_PATTERNS: list[str] = [
     r"#{1,6}\s*(system|instruction|prompt|override|admin)\b(?=\s*$|\s*[#:\[\(\n])",
     r"---+\s*(system|reset|new.?prompt|override)\b\s*---+",
     r"```\s*(system|prompt|instruction|admin)\b",
-    # Context reset phrases (language-independent ASCII terms)
-    r"\bnew\s+conversation\b",
-    r"\breset\s+(context|history|instructions?)\b",
-    r"\bclear\s+(context|history|instructions?)\b",
+    # Context reset directives — require "your" to target the AI explicitly.
+    # Broad phrases like "new conversation" or "reset my history" are excluded
+    # because they appear frequently in benign product-help queries; semantic
+    # detection (level 2) handles injection attempts that use natural language.
+    r"\b(?:reset|clear)\s+your\s+(context|history|instructions?)\b",
 ]
 
 LEET_PATTERNS: list[str] = [

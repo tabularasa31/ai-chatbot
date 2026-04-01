@@ -118,8 +118,10 @@ def test_embedding_once(
     _insert_single_chunk(db_session, client_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",
@@ -171,8 +173,10 @@ def test_faq_context_in_prompt(
     _insert_single_chunk(db_session, client_id=cl_row.id, chunk_text="Some docs chunk.")
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",
@@ -252,8 +256,10 @@ def test_langfuse_faq_match_span(
     _insert_single_chunk(db_session, client_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",
@@ -343,8 +349,10 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     _insert_single_chunk(db_session, client_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",
@@ -409,8 +417,10 @@ def test_faq_direct_skips_retrieval_and_generation(
     cl_row, api_key = _create_client(client, db_session, email="faq-direct@example.com")
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",
@@ -475,8 +485,10 @@ def test_guard_error_degrades_to_context(
     _insert_single_chunk(db_session, client_id=cl_row.id)
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_precheck",

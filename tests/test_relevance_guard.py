@@ -42,8 +42,10 @@ def test_injection_rejects_before_rag(
     cl_row, api_key = _create_client(client, db_session, email="inj@example.com")
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=True, pattern="x"),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=True, level=1, method="structural", pattern="x", score=None,
+        ),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -80,8 +82,10 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
     cl_row, api_key = _create_client(client, db_session, email="lowmix@example.com")
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
     monkeypatch.setattr(
@@ -139,8 +143,10 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     cl_row, api_key = _create_client(client, db_session, email="lownone@example.com")
 
     monkeypatch.setattr(
-        "backend.chat.service.detect_prompt_injection",
-        lambda _text: SimpleNamespace(detected=False, pattern=None),
+        "backend.chat.service.detect_injection",
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        ),
     )
     profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
     monkeypatch.setattr(

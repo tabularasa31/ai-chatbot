@@ -1,42 +1,7 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-01 (UTC) — aligned /chat/debug with public pipeline, soft rejection texts
+**Last updated:** 2026-03-29 (UTC) — full capture trace mode docs
 **Overall status:** ✅ MVP feature-complete, deployed to production
-
----
-
-## ✅ COMPLETED (2026-04-01) — aligned `/chat/debug` with public chat pipeline + soft rejection texts
-
-### `run_chat_pipeline` — shared pure pipeline
-
-- ✅ **`ChatPipelineResult` dataclass** (`backend/chat/service.py`): structured result covering `user_output` (raw_answer, final_answer, tokens_used), `decision` (strategy, reject_reason, flags, validation_outcome), `retrieval`, `validation`, `escalation` (compute-only), and `faq_match` for debug.
-- ✅ **`run_chat_pipeline`** — pure function with invariant stage order: injection → embed → FAQ → relevance → retrieve → low-retrieval guard → generate → validate → escalation decision. No DB writes, no escalation side effects, no observability.
-- ✅ **`process_chat_message`** refactored to call `run_chat_pipeline` for the Normal RAG branch; escalation state machine and all side effects (DB persist, ticket creation, trace) remain in `process_chat_message`.
-- ✅ **`run_debug`** replaced with a call to `run_chat_pipeline`; now mirrors all guard/FAQ/RAG decisions of the public chat without persisting anything.
-
-### Debug response enhancements
-
-- ✅ **`ChatDebugResponse`** gains `raw_answer` field — shows what the LLM generated before validation fallback.
-- ✅ **`DebugInfoResponse`** gains `strategy`, `reject_reason`, `is_reject`, `is_faq_direct`, `validation_applied`, `validation_outcome`.
-
-### Soft rejection texts (`backend/guards/reject_response.py`)
-
-- ✅ **`RejectReason.INSUFFICIENT_CONFIDENCE`** added for validation-fallback path.
-- ✅ **Out-of-domain bucket** (`NOT_RELEVANT`, `LOW_RETRIEVAL_SCORE`): «Извините, но я не могу помочь с этим вопросом. Я могу ответить на вопросы по {product_name} или его настройкам[, например про {topic_hint}].»
-- ✅ **Injection bucket** (`INJECTION_DETECTED`): «Извините, но я не могу помочь с этим запросом. Я могу ответить на вопросы по {product_name}, если нужно.»
-- ✅ **Low-confidence bucket** (`INSUFFICIENT_CONFIDENCE`): «Сейчас у меня недостаточно информации, чтобы надёжно ответить. Попробуйте уточнить вопрос или задать его иначе[, например про {topic_hint}].»
-- ✅ All texts use `product_name` from `TenantProfile` with `"данному продукту"` fallback.
-
-### Tests
-
-- ✅ `test_chat_no_embeddings` updated to expect new INSUFFICIENT_CONFIDENCE text.
-- ✅ `test_debug_no_embeddings` updated; now also asserts `validation_outcome == "fallback"`.
-- ✅ Added: `test_build_reject_response_*` (6 cases for all rejection semantics).
-- ✅ Added: `test_run_chat_pipeline_injection_detected`, `test_run_chat_pipeline_not_relevant`.
-- ✅ Added: `test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text`.
-- ✅ Added: `test_run_debug_does_not_create_db_records` (no Chat/Message written).
-- ✅ Added: `test_run_debug_guard_reject_shows_strategy_and_reject_reason`.
-- ✅ Added: `test_chat_debug_endpoint_exposes_pipeline_fields`.
 
 ---
 

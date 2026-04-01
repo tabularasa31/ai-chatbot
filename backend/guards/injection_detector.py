@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
 
 from backend.core.config import settings
@@ -54,12 +53,14 @@ def normalize(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 STRUCTURAL_PATTERNS: list[str] = [
-    # Pseudo-system blocks (brackets, XML, markdown, fences)
+    # Pseudo-system blocks (brackets, XML, markdown, fences).
+    # Trailing \\b avoids prefix hits (e.g. systemd); heading lookahead avoids
+    # benign titles like "### system requirements".
     r"\[\s*(system|admin|root|operator|developer|instruction|prompt)\s*\]",
-    r"<\s*(system|admin|prompt|instruction|override)\s*[/>]",
-    r"#{1,6}\s*(system|instruction|prompt|override|admin)",
-    r"---+\s*(system|reset|new.?prompt|override)\s*---+",
-    r"```\s*(system|prompt|instruction|admin)",
+    r"<\s*(system|admin|prompt|instruction|override)\b\s*[/>]",
+    r"#{1,6}\s*(system|instruction|prompt|override|admin)\b(?=\s*$|\s*[#:\[\(\n])",
+    r"---+\s*(system|reset|new.?prompt|override)\b\s*---+",
+    r"```\s*(system|prompt|instruction|admin)\b",
     # Context reset phrases (language-independent ASCII terms)
     r"\bnew\s+conversation\b",
     r"\breset\s+(context|history|instructions?)\b",
@@ -113,7 +114,11 @@ def _get_reference_embeddings(api_key: str) -> list[list[float]]:
     if _reference_embeddings is None:
         from backend.guards.injection_seeds import INJECTION_SEEDS
 
-        _reference_embeddings = embed_queries(INJECTION_SEEDS, api_key=api_key)
+        _reference_embeddings = embed_queries(
+            INJECTION_SEEDS,
+            api_key=api_key,
+            timeout=settings.injection_semantic_timeout_sec,
+        )
     return _reference_embeddings
 
 
@@ -131,11 +136,17 @@ def detect_injection_semantic(
 ) -> InjectionDetectionResult:
     """Level 2: semantic similarity with injection seeds.
 
-    Uses ThreadPoolExecutor for timeout control (same pattern as
-    relevance_checker).  On timeout or error → pass-through.
+    Uses the OpenAI HTTP client timeout (``INJECTION_SEMANTIC_TIMEOUT_SEC``)
+    so requests are cancelled at the transport layer instead of leaving work
+    running in a background thread after a futures timeout.
+    On timeout or error → pass-through.
     """
-    def _run() -> InjectionDetectionResult:
-        embedding = embed_query(text, api_key=api_key)
+    try:
+        embedding = embed_query(
+            text,
+            api_key=api_key,
+            timeout=settings.injection_semantic_timeout_sec,
+        )
         ref_embeddings = _get_reference_embeddings(api_key)
         max_score = max(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
@@ -157,20 +168,11 @@ def detect_injection_semantic(
             score=max_score,
             normalized_input=normalized,
         )
-
-    ex = ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(_run)
-    try:
-        return future.result(timeout=settings.injection_semantic_timeout_sec)
-    except FuturesTimeoutError:
-        logger.warning("Semantic injection check timeout")
     except Exception as e:
-        logger.error("Semantic injection check error: %s", e)
-    finally:
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
+        if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
+            logger.warning("Semantic injection check timeout: %s", e)
+        else:
+            logger.error("Semantic injection check error: %s", e)
 
     return InjectionDetectionResult(
         detected=False,

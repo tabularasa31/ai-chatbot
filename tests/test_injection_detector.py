@@ -19,14 +19,14 @@ from backend.guards.injection_detector import (
 
 # ───────────────────────────── helpers ────────────────────────────────────
 
-def _fake_embed_query(text: str, *, api_key: str) -> list[float]:
+def _fake_embed_query(text: str, *, api_key: str, **kwargs: object) -> list[float]:
     """Return a deterministic fake embedding based on content."""
     if "ignore" in text.lower() or "забудь" in text.lower() or "無視" in text.lower():
         return [1.0, 0.0, 0.0]
     return [0.0, 1.0, 0.0]
 
 
-def _fake_embed_queries(texts: list[str], *, api_key: str) -> list[list[float]]:
+def _fake_embed_queries(texts: list[str], *, api_key: str, **kwargs: object) -> list[list[float]]:
     """Return fake seed embeddings — all point in the 'injection' direction."""
     return [[1.0, 0.0, 0.0]] * len(texts)
 
@@ -211,6 +211,9 @@ class TestNoFalsePositiveStructural:
         "ما هي سياسة الإرجاع؟",
         "Can you help me with my order?",
         "I need system administrator contact info",
+        "### system requirements",
+        "## prompt engineering guide",
+        "``` systemd unit file example",
     ])
     def test_normal_questions_not_detected(self, text: str) -> None:
         r = detect_injection_structural(text)
@@ -314,10 +317,10 @@ class TestSeedsCached:
         call_count = 0
         original = _fake_embed_queries
 
-        def counting_embed_queries(texts, *, api_key):
+        def counting_embed_queries(texts, *, api_key, **kwargs: object):
             nonlocal call_count
             call_count += 1
-            return original(texts, api_key=api_key)
+            return original(texts, api_key=api_key, **kwargs)
 
         with patch(
             "backend.guards.injection_detector.embed_queries",
@@ -340,10 +343,10 @@ class TestLevel1SkipsLevel2:
         embed_called = False
         original = _fake_embed_query
 
-        def tracking_embed(text, *, api_key):
+        def tracking_embed(text, *, api_key, **kwargs: object):
             nonlocal embed_called
             embed_called = True
-            return original(text, api_key=api_key)
+            return original(text, api_key=api_key, **kwargs)
 
         with patch(
             "backend.guards.injection_detector.embed_query",
@@ -362,13 +365,12 @@ class TestLevel1SkipsLevel2:
 
 class TestSemanticTimeout:
     def test_timeout_returns_false(self) -> None:
-        import time
+        """HTTP-layer timeout surfaces as an exception; guard passes through."""
 
-        def slow_embed(text, *, api_key):
-            time.sleep(5)
-            return [0.0, 0.0, 0.0]
+        def timeout_embed(text: str, *, api_key: str, **kwargs: object):
+            raise TimeoutError("simulated request timeout")
 
-        with patch("backend.guards.injection_detector.embed_query", slow_embed), \
+        with patch("backend.guards.injection_detector.embed_query", timeout_embed), \
              patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
              patch("backend.guards.injection_detector.settings") as mock_settings:
             mock_settings.injection_semantic_threshold = 0.82
@@ -386,7 +388,7 @@ class TestSemanticTimeout:
 
 class TestSemanticError:
     def test_embed_error_returns_false(self) -> None:
-        def broken_embed(text, *, api_key):
+        def broken_embed(text: str, *, api_key: str, **kwargs: object):
             raise RuntimeError("API error")
 
         with patch("backend.guards.injection_detector.embed_query", broken_embed), \
@@ -409,7 +411,7 @@ class TestSemanticDisabled:
     def test_disabled_skips_embed(self) -> None:
         embed_called = False
 
-        def tracking_embed(text, *, api_key):
+        def tracking_embed(text: str, *, api_key: str, **kwargs: object):
             nonlocal embed_called
             embed_called = True
             return [0.0, 0.0, 0.0]

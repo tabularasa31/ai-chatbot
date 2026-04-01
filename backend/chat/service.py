@@ -46,13 +46,11 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
-    TenantProfile,
 )
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
-    EMBEDDING_MODEL,
     RetrievalReliability,
     build_reliability_projection,
     build_variant_trace_metadata,
@@ -488,7 +486,6 @@ def run_chat_pipeline(
     validation_applied = True
     validation_outcome: Literal["valid", "fallback", "skipped"] = "valid"
     final_answer = raw_answer
-    reliability_score = retrieval.reliability.score
 
     if validation.get("reason") == "validation_skipped":
         validation_outcome = "skipped"
@@ -498,7 +495,6 @@ def run_chat_pipeline(
             profile=profile,
         )
         validation_outcome = "fallback"
-        reliability_score = "low"
 
     # --- 9. Escalation decision (compute only, no side effects) ---
     escalate, esc_trigger = should_escalate(

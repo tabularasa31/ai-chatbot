@@ -27,7 +27,7 @@ def upgrade() -> None:
             "source_message_ids",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
-            server_default="'[]'",
+            server_default=sa.text("'[]'"),
         ),
     )
 

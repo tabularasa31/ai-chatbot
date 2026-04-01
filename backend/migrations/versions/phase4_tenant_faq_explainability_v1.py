@@ -1,6 +1,6 @@
 """Phase 4: add cluster_size and source_message_ids to tenant_faq.
 
-Revision ID: phase4_tenant_faq_explainability_v1
+Revision ID: phase4_faq_explain_v1
 Revises: phase4_log_analysis_state_v1
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "phase4_tenant_faq_explainability_v1"
+revision = "phase4_faq_explain_v1"
 down_revision = "phase4_log_analysis_state_v1"
 branch_labels = None
 depends_on = None

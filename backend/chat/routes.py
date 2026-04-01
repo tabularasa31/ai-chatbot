@@ -80,20 +80,12 @@ class DebugInfoResponse(BaseModel):
     reliability: Optional[dict] = None
     chunks: list[DebugChunkResponse]
     validation: Optional[dict] = None
-    # Pipeline decision fields (added alongside retrieval info)
-    strategy: Optional[Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]] = None
-    reject_reason: Optional[Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"]] = None
-    is_reject: bool = False
-    is_faq_direct: bool = False
-    validation_applied: bool = False
-    validation_outcome: Optional[Literal["valid", "fallback", "skipped"]] = None
 
 
 class ChatDebugResponse(BaseModel):
     """Response from chat debug endpoint."""
 
     answer: str
-    raw_answer: Optional[str] = None
     tokens_used: int
     debug: DebugInfoResponse
 
@@ -241,16 +233,9 @@ def chat_debug(
             for c in debug_dict["chunks"]
         ],
         validation=debug_dict.get("validation"),
-        strategy=debug_dict.get("strategy"),
-        reject_reason=debug_dict.get("reject_reason"),
-        is_reject=bool(debug_dict.get("is_reject", False)),
-        is_faq_direct=bool(debug_dict.get("is_faq_direct", False)),
-        validation_applied=bool(debug_dict.get("validation_applied", False)),
-        validation_outcome=debug_dict.get("validation_outcome"),
     )
     return ChatDebugResponse(
         answer=answer,
-        raw_answer=debug_dict.get("raw_answer"),
         tokens_used=tokens_used,
         debug=debug_resp,
     )

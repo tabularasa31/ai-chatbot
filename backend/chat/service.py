@@ -46,11 +46,13 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    TenantProfile,
 )
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
+    EMBEDDING_MODEL,
     RetrievalReliability,
     build_reliability_projection,
     build_variant_trace_metadata,
@@ -249,276 +251,6 @@ class RetrievalContext:
     bm25_merged_hit_count_after_cap: int = 0
     retrieval_duration_ms: float = 0.0
     vector_similarities: list[float | None] | None = None
-
-
-@dataclass
-class ChatPipelineResult:
-    """
-    Result of the pure RAG pipeline, with no side effects.
-
-    Blocks:
-      user_output  — raw_answer, final_answer, tokens_used
-      decision     — strategy, reject_reason, flags, validation outcome
-      retrieval    — full RetrievalContext (None for guard_reject / faq_direct)
-      validation   — raw dict from validate_answer (None if skipped)
-      escalation   — recommended flag + trigger (compute only, no ticket created)
-      debug        — faq_match result for diagnostic use
-    """
-
-    # user_output
-    raw_answer: str
-    final_answer: str
-    tokens_used: int
-    # decision
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Optional[Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"]]
-    is_reject: bool
-    is_faq_direct: bool
-    validation_applied: bool
-    validation_outcome: Optional[Literal["valid", "fallback", "skipped"]]
-    # retrieval
-    retrieval: Optional[RetrievalContext]
-    # validation
-    validation: Optional[dict]
-    # escalation (pure computation, no side effects)
-    escalation_recommended: bool
-    escalation_trigger: Any  # EscalationTrigger | None
-    # debug extras
-    faq_match: Any = None  # FAQMatchResult | None
-
-
-def run_chat_pipeline(
-    client_id: uuid.UUID,
-    question: str,
-    db: Session,
-    *,
-    api_key: str,
-    user_context_line: str | None = None,
-    disclosure_config: dict[str, Any] | None = None,
-    trace: "TraceHandle | None" = None,
-) -> ChatPipelineResult:
-    """
-    Pure RAG pipeline — no DB writes, no escalation actions, no observability side effects.
-
-    Invariant stage order:
-      1. detect_prompt_injection  → guard_reject(injection)
-      2. embed queries            (reused for FAQ + retrieval)
-      3. match_faq                → faq_direct short-circuit or faq_context enrichment
-      4. check_relevance_precheck → guard_reject(not_relevant)  [skipped for faq_direct]
-      5. retrieve_context
-      6. low-retrieval guard      → guard_reject(low_retrieval)
-      7. generate_answer
-      8. validate_answer          → optional fallback(insufficient_confidence)
-      9. should_escalate          (compute only, no ticket creation)
-
-    Never writes to DB, never creates/modifies Chat/Message,
-    never triggers escalation actions, never increments metrics,
-    never pushes events to queues, never warms caches, never writes audit/observability.
-    """
-    # --- 1. Injection detection ---
-    injection_result = detect_injection(question, tenant_id=str(client_id), api_key=api_key)
-    if injection_result.detected:
-        reject_text = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
-        return ChatPipelineResult(
-            raw_answer=reject_text,
-            final_answer=reject_text,
-            tokens_used=0,
-            strategy="guard_reject",
-            reject_reason="injection",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-        )
-
-    # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
-    query_variants = expand_query(question)
-    variant_vectors = embed_queries(query_variants, api_key=api_key)
-    base_question_embedding = variant_vectors[0] if variant_vectors else []
-
-    # --- 3. FAQ matching ---
-    try:
-        faq_match = match_faq(
-            tenant_id=client_id,
-            question=question,
-            question_embedding=base_question_embedding,
-            db=db,
-        )
-    except Exception:
-        faq_match = FAQMatchResult(
-            strategy="rag_only",
-            faq_items=[],
-            top_score=None,
-            selected_score=None,
-            selected_faq_id=None,
-            direct_guard_used=False,
-            direct_guard_passed=False,
-            decision_reason="faq_match_error_degraded_to_rag_only",
-        )
-
-    if faq_match.strategy == "faq_direct":
-        direct_answer = faq_match.faq_items[0].answer if faq_match.faq_items else ""
-        return ChatPipelineResult(
-            raw_answer=direct_answer,
-            final_answer=direct_answer,
-            tokens_used=0,
-            strategy="faq_direct",
-            reject_reason=None,
-            is_reject=False,
-            is_faq_direct=True,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-        )
-
-    # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
-    relevant, relevance_reason, profile = check_relevance_precheck(
-        tenant_id=client_id,
-        user_question=question,
-        db=db,
-        api_key=api_key,
-        trace=trace,
-    )
-    if not relevant:
-        reject_text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
-        return ChatPipelineResult(
-            raw_answer=reject_text,
-            final_answer=reject_text,
-            tokens_used=0,
-            strategy="guard_reject",
-            reject_reason="not_relevant",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-        )
-
-    tenant_product_name: str | None = profile.product_name if profile else None
-    topic_hint: str | None = None
-    if profile and isinstance(profile.modules, list) and profile.modules:
-        topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
-
-    faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
-        "faq_context" if faq_context_items else "rag_only"
-    )
-
-    # --- 5. Retrieve context ---
-    retrieval = retrieve_context(
-        client_id=client_id,
-        question=question,
-        db=db,
-        api_key=api_key,
-        top_k=5,
-        trace=trace,
-        precomputed_query_variants=query_variants,
-        precomputed_variant_vectors=variant_vectors,
-        precomputed_embedding_api_request_count=1,
-    )
-
-    # --- 6. Low-retrieval guard ---
-    try:
-        threshold = float(os.getenv("RELEVANCE_RETRIEVAL_THRESHOLD", "0.35"))
-    except Exception:
-        threshold = 0.35
-
-    if (
-        retrieval.vector_similarities is not None
-        and retrieval.vector_similarities
-        and all(sim is not None for sim in retrieval.vector_similarities)
-        and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
-    ):
-        reject_text = build_reject_response(
-            reason=RejectReason.LOW_RETRIEVAL_SCORE,
-            profile=profile,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_text,
-            final_answer=reject_text,
-            tokens_used=0,
-            strategy="guard_reject",
-            reject_reason="low_retrieval",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=retrieval,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-        )
-
-    # --- 7. Generate answer ---
-    raw_answer, tokens_used = generate_answer(
-        question,
-        retrieval.chunk_texts,
-        api_key=api_key,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_config,
-        tenant_product_name=tenant_product_name,
-        topic_hint=topic_hint,
-        faq_context_items=faq_context_items,
-        trace=trace,
-    )
-
-    # --- 8. Validate answer ---
-    validation = validate_answer(
-        question,
-        raw_answer,
-        retrieval.chunk_texts,
-        api_key=api_key,
-        trace=trace,
-    )
-    validation_applied = True
-    validation_outcome: Literal["valid", "fallback", "skipped"] = "valid"
-    final_answer = raw_answer
-
-    if validation.get("reason") == "validation_skipped":
-        validation_outcome = "skipped"
-    elif not validation["is_valid"] and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD:
-        final_answer = build_reject_response(
-            reason=RejectReason.INSUFFICIENT_CONFIDENCE,
-            profile=profile,
-        )
-        validation_outcome = "fallback"
-
-    # --- 9. Escalation decision (compute only, no side effects) ---
-    escalate, esc_trigger = should_escalate(
-        retrieval.best_confidence_score,
-        len(retrieval.chunk_texts),
-        validation=validation,
-    )
-
-    return ChatPipelineResult(
-        raw_answer=raw_answer,
-        final_answer=final_answer,
-        tokens_used=int(tokens_used),
-        strategy=strategy,
-        reject_reason=None,
-        is_reject=False,
-        is_faq_direct=False,
-        validation_applied=validation_applied,
-        validation_outcome=validation_outcome,
-        retrieval=retrieval,
-        validation=validation,
-        escalation_recommended=escalate,
-        escalation_trigger=esc_trigger,
-        faq_match=faq_match,
-    )
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1096,6 +828,11 @@ def process_chat_message(
         )
         return (quick_answer, [], 0, False)
 
+    # --- Phase 2 guards (injection + relevance) ---
+    tenant_profile_for_guard: TenantProfile | None = None
+    tenant_product_name_for_guard: str | None = None
+    topic_hint_for_guard: str | None = None
+
     injection_start = perf_counter()
     injection_span = trace.span(
         name="injection_check",
@@ -1395,70 +1132,222 @@ def process_chat_message(
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
-    # --- Normal RAG pipeline ---
-    # NOTE: run_chat_pipeline runs AFTER escalation paths (T-1/T-2/T-3).
-    # Escalations are triggered by explicit user signals and are always valid
-    # regardless of topic relevance. The pipeline handles injection → FAQ →
-    # relevance → retrieve → generate → validate → escalation decision.
-    result = run_chat_pipeline(
-        client_id,
-        redacted_question,
-        db,
+    # --- Normal RAG ---
+    # NOTE: relevance pre-check intentionally runs AFTER escalation paths (T-1/T-2/T-3).
+    # Escalations are triggered by explicit user signals (e.g. "speak to human")
+    # and are always valid regardless of topic relevance.
+    relevant, relevance_reason, profile = check_relevance_precheck(
+        tenant_id=client_id,
+        user_question=redacted_question,
+        db=db,
         api_key=api_key,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_cfg,
         trace=trace,
     )
-
-    # Guard rejects and faq_direct: persist and return immediately (no escalation).
-    if result.is_reject or result.is_faq_direct:
+    if not relevant:
+        tenant_profile_for_guard = profile
+        reject_text = build_reject_response(
+            reason=RejectReason.NOT_RELEVANT,
+            profile=tenant_profile_for_guard,
+        )
         _persist_turn(
             db,
             chat,
             client_id,
             question,
-            result.final_answer,
+            reject_text,
             [],
-            result.tokens_used,
+            0,
             optional_entity_types=optional_entity_types,
         )
-        source_map = {
-            "injection": "guard_reject_injection",
-            "not_relevant": "guard_reject_not_relevant",
-            "low_retrieval": "guard_reject_low_retrieval",
-        }
-        source = (
-            source_map.get(result.reject_reason or "", "guard_reject")
-            if result.is_reject
-            else "faq_direct"
-        )
         trace.update(
-            output={"answer": result.final_answer, "source": source},
+            output={"answer": reject_text, "source": "guard_reject_not_relevant"},
             metadata={
                 "chat_ended": False,
                 "escalated": False,
-                "strategy": result.strategy,
-                "reject_reason": result.reject_reason,
-                "retrieval_skipped": result.is_faq_direct,
+                "reject_reason": str(relevance_reason),
             },
         )
-        return (result.final_answer, [], result.tokens_used, False)
+        return (reject_text, [], 0, False)
 
-    # Normal RAG / faq_context path: handle escalation side effects, then persist.
-    retrieval = result.retrieval
-    assert retrieval is not None  # only None for guard_reject / faq_direct
-    document_ids = list(dict.fromkeys(retrieval.document_ids))
-    scores = retrieval.scores
-    chunk_texts = retrieval.chunk_texts
-    answer = result.final_answer
-    tokens_used = result.tokens_used
-    validation = result.validation or {}
-    escalate = result.escalation_recommended
-    esc_trigger = result.escalation_trigger
-    reliability_score = (
-        "low" if result.validation_outcome == "fallback"
-        else retrieval.reliability.score
+    tenant_profile_for_guard = profile
+    if tenant_profile_for_guard is not None:
+        tenant_product_name_for_guard = tenant_profile_for_guard.product_name
+        if (
+            isinstance(tenant_profile_for_guard.modules, list)
+            and tenant_profile_for_guard.modules
+        ):
+            topic_hint_for_guard = ", ".join(
+                [
+                    str(m)
+                    for m in tenant_profile_for_guard.modules[:3]
+                    if str(m).strip()
+                ]
+            )
+
+    # --- FAQ matching (Phase 3) ---
+    # Reuse a single embedding payload for both FAQ matching and vector retrieval.
+    query_variants = expand_query(redacted_question)
+    query_embedding_span = trace.span(
+        name="query-embedding",
+        input={
+            "query_variants": query_variants,
+            "query_variant_count": len(query_variants),
+            "variant_mode": "multi" if len(query_variants) > 1 else "single",
+            "model": EMBEDDING_MODEL,
+            "upstream_precomputed": True,
+        },
     )
+    embedding_started_at = perf_counter()
+    variant_vectors = embed_queries(query_variants, api_key=api_key)
+    query_embedding_span.end(
+        output={
+            "embedded_query_count": len(variant_vectors),
+            "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
+            "embedding_api_request_count": 1,
+            "extra_embedding_api_requests": 0,
+            "duration_ms": round((perf_counter() - embedding_started_at) * 1000, 2),
+            "upstream_precomputed": True,
+        }
+    )
+    base_question_embedding = variant_vectors[0] if variant_vectors else []
+
+    try:
+        faq_match = match_faq(
+            tenant_id=client_id,
+            question=redacted_question,
+            question_embedding=base_question_embedding,
+            db=db,
+        )
+    except Exception:
+        # Observability should still reflect the degradation path.
+        faq_match = FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="faq_match_error_degraded_to_rag_only",
+        )
+
+    retrieval_skipped = faq_match.strategy == "faq_direct"
+    generation_skipped = faq_match.strategy == "faq_direct"
+
+    faq_match_span = trace.span(
+        name="faq_match",
+        input={"question_preview": redacted_question[:80]},
+    )
+    faq_match_span.end(
+        metadata={
+            "tenant_id": str(client_id),
+            "strategy": faq_match.strategy,
+            "top_score": faq_match.top_score,
+            "selected_score": faq_match.selected_score,
+            "faq_ids": [str(item.id) for item in faq_match.faq_items],
+            "selected_faq_id": faq_match.selected_faq_id,
+            "direct_guard_used": faq_match.direct_guard_used,
+            "direct_guard_passed": faq_match.direct_guard_passed,
+            "decision_reason": faq_match.decision_reason,
+            "retrieval_skipped": retrieval_skipped,
+            "generation_skipped": generation_skipped,
+        },
+    )
+
+    if faq_match.strategy == "faq_direct":
+        direct_answer = faq_match.faq_items[0].answer if faq_match.faq_items else ""
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            direct_answer,
+            [],
+            0,
+            optional_entity_types=optional_entity_types,
+        )
+        trace.update(
+            output={"answer": direct_answer, "source": "faq_direct"},
+            metadata={"chat_ended": False, "escalated": False, "retrieval_skipped": True},
+        )
+        return (direct_answer, [], 0, False)
+
+    faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
+
+    retrieval = retrieve_context(
+        client_id=client_id,
+        question=redacted_question,
+        db=db,
+        api_key=api_key,
+        top_k=5,
+        trace=trace,
+        precomputed_query_variants=query_variants,
+        precomputed_variant_vectors=variant_vectors,
+        precomputed_embedding_api_request_count=1,
+    )
+    chunk_texts = retrieval.chunk_texts
+    scores = retrieval.scores
+    document_ids = list(dict.fromkeys(retrieval.document_ids))
+
+    # Retrieval relevance fallback (Phase 2):
+    # if every retrieved chunk has low vector similarity, reject early.
+    try:
+        threshold = float(os.getenv("RELEVANCE_RETRIEVAL_THRESHOLD", "0.35"))
+    except Exception:
+        threshold = 0.35
+
+    if (
+        retrieval.vector_similarities is not None
+        and retrieval.vector_similarities
+        and all(sim is not None for sim in retrieval.vector_similarities)
+        and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
+    ):
+        reject_text = build_reject_response(
+            reason=RejectReason.LOW_RETRIEVAL_SCORE,
+            profile=tenant_profile_for_guard,
+        )
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            reject_text,
+            [],
+            0,
+            optional_entity_types=optional_entity_types,
+        )
+        trace.update(
+            output={"answer": reject_text, "source": "guard_reject_low_retrieval"},
+            metadata={"chat_ended": False, "escalated": False, "reject_reason": "low_retrieval"},
+        )
+        return (reject_text, [], 0, False)
+
+    answer, tokens_used = generate_answer(
+        redacted_question,
+        chunk_texts,
+        api_key=api_key,
+        user_context_line=user_context_line,
+        disclosure_config=disclosure_cfg,
+        tenant_product_name=tenant_product_name_for_guard,
+        topic_hint=topic_hint_for_guard,
+        faq_context_items=faq_context_items,
+        trace=trace,
+    )
+
+    validation = validate_answer(
+        redacted_question,
+        answer,
+        chunk_texts,
+        api_key=api_key,
+        trace=trace,
+    )
+    reliability_score = retrieval.reliability.score
+    if (
+        not validation["is_valid"]
+        and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD
+    ):
+        answer = FALLBACK_LOW_CONFIDENCE_ANSWER
+        reliability_score = "low"
 
     escalation_decision_span = trace.span(
         name="escalation-check",
@@ -1468,6 +1357,11 @@ def process_chat_message(
             "validation": validation,
             "reliability_score": reliability_score,
         },
+    )
+    escalate, esc_trigger = should_escalate(
+        retrieval.best_confidence_score,
+        len(chunk_texts),
+        validation=validation,
     )
     escalation_decision_span.end(
         output={
@@ -1535,30 +1429,18 @@ def process_chat_message(
     # Phase 4: fire-and-forget threshold check — never blocks the response.
     _trigger_log_analysis_threshold(client_id, api_key)
 
-    faq_match = result.faq_match
     trace.update(
         output={"answer": answer},
         metadata={
             "chat_ended": bool(chat.ended_at),
             "escalated": bool(escalate),
             "escalation_trigger": esc_trigger.value if esc_trigger else None,
-            "strategy": result.strategy,
-            "validation_outcome": result.validation_outcome,
             "retrieval_mode": retrieval.mode,
             "best_rank_score": retrieval.best_rank_score,
             "best_confidence_score": retrieval.best_confidence_score,
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
-            **(
-                {
-                    "faq_strategy": faq_match.strategy,
-                    "faq_top_score": faq_match.top_score,
-                    "faq_selected_score": faq_match.selected_score,
-                }
-                if faq_match is not None
-                else {}
-            ),
             **build_reliability_projection(retrieval.reliability),
             **build_variant_trace_metadata(retrieval),
         },
@@ -1575,17 +1457,11 @@ def run_debug(
     api_key: str,
 ) -> tuple[str, int, dict]:
     """
-    Run full RAG pipeline for debug purposes — no DB persistence, no escalation,
-    no observability side effects.
-
-    Mirrors the public chat pipeline (injection guard → FAQ → relevance →
-    retrieve → generate → validate) via run_chat_pipeline, so debug responses
-    match production decisions for guard/FAQ/RAG scenarios.
+    Run RAG pipeline for debug: retrieval + answer, no DB persistence.
 
     Returns:
-        Tuple of (final_answer, tokens_used, debug_dict).
-        debug_dict includes strategy, reject_reason, validation_outcome,
-        raw_answer vs final_answer, retrieval details, and validation payload.
+        Tuple of (answer, tokens_used, debug_dict).
+        debug_dict: {"mode": str, "chunks": [{"document_id": str, "score": float, "preview": str}]}
     """
     client_row = db.query(Client).filter(Client.id == client_id).first()
     optional_entity_types = _client_optional_entity_types(client_row)
@@ -1593,60 +1469,42 @@ def run_debug(
         question,
         optional_entity_types=optional_entity_types,
     ).redacted_text
-
+    retrieval = retrieve_context(client_id, redacted_question, db, api_key, top_k=5)
+    chunk_texts = retrieval.chunk_texts
+    document_ids = retrieval.document_ids
+    scores = retrieval.scores
+    mode = retrieval.mode
     disclosure_cfg: dict[str, Any] | None = None
     if client_row and isinstance(client_row.disclosure_config, dict):
         disclosure_cfg = client_row.disclosure_config
-
-    result = run_chat_pipeline(
-        client_id,
+    answer, tokens_used = generate_answer(
         redacted_question,
-        db,
+        chunk_texts,
         api_key=api_key,
         disclosure_config=disclosure_cfg,
     )
 
-    retrieval = result.retrieval
-    if retrieval is not None:
-        chunks_debug = [
-            {
-                "document_id": str(doc_id),
-                "score": score,
-                "preview": (text[:200] + "..." if len(text) > 200 else text),
-            }
-            for doc_id, score, text in zip(
-                retrieval.document_ids, retrieval.scores, retrieval.chunk_texts
-            )
-        ]
-        reliability_projection = build_reliability_projection(retrieval.reliability)
-        debug: dict[str, Any] = {
-            "mode": retrieval.mode,
-            "best_rank_score": retrieval.best_rank_score,
-            "best_confidence_score": retrieval.best_confidence_score,
-            "confidence_source": retrieval.confidence_source,
-            **reliability_projection,
-            "chunks": chunks_debug,
+    chunks_debug = [
+        {
+            "document_id": str(doc_id),
+            "score": score,
+            "preview": (text[:200] + "..." if len(text) > 200 else text),
         }
-    else:
-        debug = {
-            "mode": "none",
-            "best_rank_score": None,
-            "best_confidence_score": None,
-            "confidence_source": None,
-            "reliability": None,
-            "chunks": [],
-        }
+        for doc_id, score, text in zip(document_ids, scores, chunk_texts)
+    ]
 
-    debug["validation"] = result.validation
-    debug["strategy"] = result.strategy
-    debug["reject_reason"] = result.reject_reason
-    debug["is_reject"] = result.is_reject
-    debug["is_faq_direct"] = result.is_faq_direct
-    debug["validation_applied"] = result.validation_applied
-    debug["validation_outcome"] = result.validation_outcome
-    debug["raw_answer"] = result.raw_answer
-
-    return (result.final_answer, result.tokens_used, debug)
+    debug = {
+        "mode": mode,
+        "best_rank_score": retrieval.best_rank_score,
+        "best_confidence_score": retrieval.best_confidence_score,
+        "confidence_source": retrieval.confidence_source,
+        **build_reliability_projection(retrieval.reliability),
+        "chunks": chunks_debug,
+        "validation": validate_answer(
+            redacted_question, answer, chunk_texts, api_key=api_key
+        ),
+    }
+    return (answer, tokens_used, debug)
 
 
 def get_chat_history(

@@ -175,10 +175,10 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
     return "\n".join(lines)
 
 
-def _notify_tenant_new_ticket(client: Client, ticket: EscalationTicket, db: Session) -> None:
+def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Session) -> None:
     user = db.query(User).filter(User.id == client.user_id).first()
     if not user or not user.email:
-        logger.warning("No tenant email for client_id=%s", client.id)
+        logger.warning("No client owner email for client_id=%s", client.id)
         return
     base = settings.FRONTEND_URL.rstrip("/")
     body = (
@@ -285,9 +285,9 @@ def create_escalation_ticket(
         db.refresh(ticket)
 
     try:
-        _notify_tenant_new_ticket(client, ticket, db)
+        _notify_client_new_ticket(client, ticket, db)
     except Exception as e:  # noqa: BLE001
-        logger.warning("notify tenant failed (ticket still created): %s", e)
+        logger.warning("notify client owner failed (ticket still created): %s", e)
 
     return ticket
 

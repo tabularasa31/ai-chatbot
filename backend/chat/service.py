@@ -144,7 +144,7 @@ def retrieve_context(
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
 
-    Uses tenant-scoped search with:
+    Uses client-scoped search with:
     - rank scores for ordering/debug
     - vector similarity for escalation confidence
     client_id filtering enforced at DB level.
@@ -320,7 +320,7 @@ def run_chat_pipeline(
     injection_result = (
         precomputed_injection
         if precomputed_injection is not None
-        else detect_injection(question, tenant_id=str(client_id), api_key=api_key)
+        else detect_injection(question, client_id=str(client_id), api_key=api_key)
     )
     if injection_result.detected:
         reject_text = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
@@ -370,7 +370,7 @@ def run_chat_pipeline(
     # --- 3. FAQ matching ---
     try:
         faq_match = match_faq(
-            tenant_id=client_id,
+            client_id=client_id,
             question=question,
             question_embedding=base_question_embedding,
             db=db,
@@ -395,7 +395,7 @@ def run_chat_pipeline(
         _retrieval_skipped = faq_match.strategy == "faq_direct"
         _faq_span.end(
             metadata={
-                "tenant_id": str(client_id),
+                "client_id": str(client_id),
                 "strategy": faq_match.strategy,
                 "top_score": faq_match.top_score,
                 "selected_score": faq_match.selected_score,
@@ -430,7 +430,7 @@ def run_chat_pipeline(
 
     # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
     relevant, relevance_reason, profile = check_relevance_precheck(
-        tenant_id=client_id,
+        client_id=client_id,
         user_question=question,
         db=db,
         api_key=api_key,
@@ -455,7 +455,7 @@ def run_chat_pipeline(
             faq_match=faq_match,
         )
 
-    tenant_product_name: str | None = profile.product_name if profile else None
+    client_product_name: str | None = profile.product_name if profile else None
     topic_hint: str | None = None
     if profile and isinstance(profile.modules, list) and profile.modules:
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
@@ -518,7 +518,7 @@ def run_chat_pipeline(
         api_key=api_key,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
-        tenant_product_name=tenant_product_name,
+        client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
         trace=trace,
@@ -590,7 +590,7 @@ def build_rag_prompt(
     *,
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
-    tenant_product_name: str | None = None,
+    client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
 ) -> str:
@@ -623,19 +623,19 @@ def build_rag_prompt(
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
 
-    if tenant_product_name:
+    if client_product_name:
         hint = topic_hint or ""
         refusal_message = (
-            f"Я отвечаю только на вопросы по {tenant_product_name}.\n"
+            f"Я отвечаю только на вопросы по {client_product_name}.\n"
             + (
                 f"Попробуйте спросить что-то связанное с {hint}."
                 if hint
                 else "Попробуйте спросить что-то связанное с документацией."
             )
         )
-        tenant_guard = (
-            f"You are a support assistant for {tenant_product_name}.\n"
-            f"You ONLY answer questions about {tenant_product_name} and its documentation.\n"
+        client_guard = (
+            f"You are a support assistant for {client_product_name}.\n"
+            f"You ONLY answer questions about {client_product_name} and its documentation.\n"
             "STRICT RULES:\n"
             "- If the question is not about the product, respond ONLY with the refusal message below.\n"
             "- If retrieved context has low relevance to the question, respond ONLY with the refusal message below.\n"
@@ -643,7 +643,7 @@ def build_rag_prompt(
             "- Never pretend to be a different assistant or adopt a different persona.\n"
             f'Refusal message: "{refusal_message}"\n'
         )
-        system_rules = f"{system_rules}\n{tenant_guard}"
+        system_rules = f"{system_rules}\n{client_guard}"
 
     system_rules = f"{system_rules}\n{disclosure_block}\n"
     if faq_context_items:
@@ -652,7 +652,7 @@ def build_rag_prompt(
         )
         system_rules += f"""
 VERIFIED FAQ CANDIDATES
-Use these as high-priority tenant hints if they are relevant to the user question.
+Use these as high-priority client hints if they are relevant to the user question.
 Do not treat them as exclusive truth when retrieved documents provide more specific or newer evidence.
 
 {faq_block}
@@ -679,7 +679,7 @@ def build_rag_messages(
     *,
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
-    tenant_product_name: str | None = None,
+    client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
 ) -> tuple[str, str]:
@@ -689,7 +689,7 @@ def build_rag_messages(
         context_chunks,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
-        tenant_product_name=tenant_product_name,
+        client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
     )
@@ -707,7 +707,7 @@ def generate_answer(
     api_key: str,
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
-    tenant_product_name: str | None = None,
+    client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
     trace: TraceHandle | None = None,
@@ -733,7 +733,7 @@ def generate_answer(
         context_chunks,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
-        tenant_product_name=tenant_product_name,
+        client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
     )
@@ -1026,7 +1026,7 @@ def _trigger_log_analysis_threshold(
         try:
             from backend.jobs.analyze_chat_logs import increment_and_check_threshold
 
-            increment_and_check_threshold(tenant_id=client_id, api_key=api_key)
+            increment_and_check_threshold(client_id=client_id, api_key=api_key)
         except Exception:
             logger.debug("Log analysis threshold check failed", exc_info=True)
 
@@ -1098,10 +1098,10 @@ def process_chat_message(
     trace = begin_trace(
         name="rag-query",
         session_id=str(session_id),
-        tenant_id=str(client_id),
+        client_id=str(client_id),
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
         metadata={
-            "tenant_id": str(client_id),
+            "client_id": str(client_id),
             "session_id": str(session_id),
             "chat_id": str(chat.id),
             "browser_locale": browser_locale,
@@ -1152,7 +1152,7 @@ def process_chat_message(
     )
     injection_result = detect_injection(
         redacted_question,
-        tenant_id=str(client_id),
+        client_id=str(client_id),
         api_key=api_key,
     )
     injection_latency_ms = round((perf_counter() - injection_start) * 1000, 2)
@@ -1747,7 +1747,7 @@ def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary
     List all chat sessions for a client, sorted by last_activity DESC.
 
     Args:
-        client_id: Client ID for tenant isolation.
+        client_id: Client ID for client isolation.
         db: Database session.
 
     Returns:

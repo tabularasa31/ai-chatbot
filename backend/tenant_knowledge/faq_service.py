@@ -49,7 +49,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 def _dedupe_existing_faq_by_similarity(
     *,
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     question_embedding: list[float],
 ) -> bool:
     """Return True if candidate is duplicate and should be skipped."""
@@ -59,7 +59,7 @@ def _dedupe_existing_faq_by_similarity(
         )
         row = (
             db.query(TenantFaqModel, distance_expr.label("distance"))
-            .filter(TenantFaqModel.tenant_id == tenant_id)
+            .filter(TenantFaqModel.tenant_id == client_id)
             .filter(TenantFaqModel.question_embedding.isnot(None))
             .order_by(distance_expr)
             .limit(1)
@@ -74,7 +74,7 @@ def _dedupe_existing_faq_by_similarity(
         # SQLite fallback (vector stored as TEXT for tests).
         existing = (
             db.query(TenantFaqModel)
-            .filter(TenantFaqModel.tenant_id == tenant_id)
+            .filter(TenantFaqModel.tenant_id == client_id)
             .filter(TenantFaqModel.question_embedding.isnot(None))
             .all()
         )
@@ -90,7 +90,7 @@ def _dedupe_existing_faq_by_similarity(
 def upsert_faq_candidates(
     *,
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     faq_candidates: Iterable[FaqCandidate],
     api_key: str,
 ) -> None:
@@ -115,13 +115,13 @@ def upsert_faq_candidates(
 
             if not _dedupe_existing_faq_by_similarity(
                 db=db,
-                tenant_id=tenant_id,
+                client_id=client_id,
                 question_embedding=question_embedding,
             ):
                 approved = candidate.confidence >= 0.85
                 db.add(
                     TenantFaqModel(
-                        tenant_id=tenant_id,
+                        tenant_id=client_id,
                         question=question,
                         answer=answer,
                         question_embedding=question_embedding,
@@ -132,9 +132,8 @@ def upsert_faq_candidates(
                 )
         except Exception:
             # Best-effort: don't let one bad candidate break the whole batch.
-            logger.exception("Failed to upsert FAQ candidate (tenant_id=%s)", tenant_id)
+            logger.exception("Failed to upsert FAQ candidate (client_id=%s)", client_id)
             db.rollback()
             continue
 
     db.commit()
-

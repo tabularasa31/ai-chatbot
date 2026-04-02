@@ -87,7 +87,7 @@ RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
 
 class DisclosureConfigResponse(BaseModel):
-    """Tenant-wide bot response detail level (all end-users)."""
+    """Client-wide bot response detail level (all end-users)."""
 
     level: DisclosureLevelLiteral
 
@@ -99,7 +99,7 @@ class UpdateDisclosureConfigRequest(BaseModel):
 
 
 class PrivacyConfigResponse(BaseModel):
-    """Tenant-wide regex redaction settings."""
+    """Client-wide regex redaction settings."""
 
     optional_entity_types: list[RedactionEntityLiteral]
 

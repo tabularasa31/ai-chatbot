@@ -526,8 +526,8 @@ class ObservabilityService:
     def __init__(self) -> None:
         self._client: _TraceClientProtocol | None = None
         self._enabled = False
-        self._tenant_query_counts: dict[str, int] = defaultdict(int)
-        self._tenant_recent_queries: dict[str, deque[float]] = defaultdict(deque)
+        self._client_query_counts: dict[str, int] = defaultdict(int)
+        self._client_recent_queries: dict[str, deque[float]] = defaultdict(deque)
 
     @property
     def enabled(self) -> bool:
@@ -610,36 +610,37 @@ class ObservabilityService:
         finally:
             self.reset()
 
-    def _record_tenant_query(self, tenant_id: str) -> tuple[int, int]:
+    def _record_client_query(self, client_id: str) -> tuple[int, int]:
         now = time.time()
-        recent = self._tenant_recent_queries[tenant_id]
+        recent = self._client_recent_queries[client_id]
         recent.append(now)
         window_seconds = max(int(settings.trace_rate_window_seconds), 1)
         cutoff = now - window_seconds
         while recent and recent[0] < cutoff:
             recent.popleft()
-        self._tenant_query_counts[tenant_id] += 1
-        return self._tenant_query_counts[tenant_id], len(recent)
+        self._client_query_counts[client_id] += 1
+        return self._client_query_counts[client_id], len(recent)
 
     def _should_sample(
         self,
         *,
-        tenant_id: str | None,
+        client_id: str | None,
         force_trace: bool,
     ) -> tuple[bool, str]:
         if settings.full_capture_mode:
-            # Keep tenant counters in sync with adaptive path so a later FULL_CAPTURE_MODE=false
-            # toggle does not reset new-tenant / high-volume classification.
-            if tenant_id is not None:
-                self._record_tenant_query(tenant_id)
+            # Keep client counters in sync with adaptive path so a later
+            # FULL_CAPTURE_MODE=false toggle does not reset legacy "new-tenant"
+            # / "high-volume" sampling classification.
+            if client_id is not None:
+                self._record_client_query(client_id)
             return True, "full_capture"
         if force_trace:
             return True, "forced"
-        if tenant_id is None:
+        if client_id is None:
             sample_rate = float(settings.trace_sample_rate)
             return random.random() < sample_rate, "default"
 
-        total_count, hourly_count = self._record_tenant_query(tenant_id)
+        total_count, hourly_count = self._record_client_query(client_id)
         if total_count <= int(settings.trace_new_tenant_threshold):
             return True, "new-tenant"
 
@@ -690,7 +691,7 @@ class ObservabilityService:
         *,
         name: str,
         session_id: str,
-        tenant_id: str | None = None,
+        client_id: str | None = None,
         user_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
@@ -699,7 +700,7 @@ class ObservabilityService:
         if self._client is None:
             return _NoOpTrace()
         sampled, sampling_reason = self._should_sample(
-            tenant_id=tenant_id,
+            client_id=client_id,
             force_trace=force_trace,
         )
         init_kwargs = {
@@ -743,7 +744,7 @@ def begin_trace(
     *,
     name: str,
     session_id: str,
-    tenant_id: str | None = None,
+    client_id: str | None = None,
     user_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     tags: list[str] | None = None,
@@ -752,7 +753,7 @@ def begin_trace(
     return _service.begin_trace(
         name=name,
         session_id=session_id,
-        tenant_id=tenant_id,
+        client_id=client_id,
         user_id=user_id,
         metadata=metadata,
         tags=tags,

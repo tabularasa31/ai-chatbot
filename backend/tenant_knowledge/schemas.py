@@ -25,7 +25,7 @@ class AliasEntry:
 
 @dataclass
 class TenantProfile:
-    tenant_id: object  # use app-level uuid/str without importing models here
+    client_id: object  # use app-level uuid/str without importing models here
     product_name: str | None
     modules: list[str]
     glossary: list[GlossaryEntry]
@@ -42,4 +42,3 @@ class FaqCandidate:
     answer: str
     confidence: float
     source: KnowledgeSource
-

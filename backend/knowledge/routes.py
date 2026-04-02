@@ -31,27 +31,27 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 logger = logging.getLogger(__name__)
 
 
-def _get_or_create_profile(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
-    profile = db.get(TenantProfile, tenant_id)
+def _get_or_create_profile(db: Session, client_id: uuid.UUID) -> TenantProfile:
+    profile = db.get(TenantProfile, client_id)
     if profile is None:
-        profile = TenantProfile(tenant_id=tenant_id)
+        profile = TenantProfile(tenant_id=client_id)
         db.add(profile)
         db.commit()
         db.refresh(profile)
     return profile
 
 
-def _profile_or_404(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
-    profile = db.get(TenantProfile, tenant_id)
+def _profile_or_404(db: Session, client_id: uuid.UUID) -> TenantProfile:
+    profile = db.get(TenantProfile, client_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Knowledge profile not found")
     return profile
 
 
-def _faq_or_404(db: Session, *, tenant_id: uuid.UUID, faq_id: uuid.UUID) -> TenantFaq:
+def _faq_or_404(db: Session, *, client_id: uuid.UUID, faq_id: uuid.UUID) -> TenantFaq:
     faq = (
         db.query(TenantFaq)
-        .filter(TenantFaq.id == faq_id, TenantFaq.tenant_id == tenant_id)
+        .filter(TenantFaq.id == faq_id, TenantFaq.tenant_id == client_id)
         .first()
     )
     if faq is None:
@@ -238,7 +238,7 @@ def approve_faq(
     bot_id: Optional[str] = None,
 ) -> KnowledgeFaqApproveResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
-    faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
+    faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
     faq.approved = True
     db.add(faq)
     db.commit()
@@ -266,7 +266,7 @@ def reject_faq(
     bot_id: Optional[str] = None,
 ) -> KnowledgeFaqRejectResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
-    faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
+    faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
     db.delete(faq)
     db.commit()
     return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
@@ -324,7 +324,7 @@ def update_faq(
     bot_id: Optional[str] = None,
 ) -> KnowledgeFaqItemResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
-    faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
+    faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
 
     question_changed = payload.question.strip() != faq.question.strip()
     faq.question = payload.question.strip()
@@ -368,8 +368,7 @@ def delete_faq(
     bot_id: Optional[str] = None,
 ) -> KnowledgeFaqRejectResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
-    faq = _faq_or_404(db, tenant_id=client.id, faq_id=faq_id)
+    faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
     db.delete(faq)
     db.commit()
     return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
-

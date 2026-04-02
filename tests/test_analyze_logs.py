@@ -38,9 +38,9 @@ from backend.models import (
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def tenant(db_session):
+def client_row(db_session):
     user = User(
-        email="tenant@example.com",
+        email="client@example.com",
         password_hash="x",
         is_admin=False,
         is_verified=True,
@@ -59,9 +59,9 @@ def tenant(db_session):
 
 
 @pytest.fixture()
-def chat_session(db_session, tenant):
+def chat_session(db_session, client_row):
     chat = Chat(
-        client_id=tenant.id,
+        client_id=client_row.id,
         session_id=uuid.uuid4(),
     )
     db_session.add(chat)
@@ -91,7 +91,7 @@ def _make_message(
 
 # ── test_clustering_batch_only ────────────────────────────────────────────────
 
-def test_clustering_batch_only(db_session, tenant, chat_session):
+def test_clustering_batch_only(db_session, client_row, chat_session):
     """Clustering must only use messages within the current batch.
 
     We verify by checking that _cluster_messages only receives IDs from
@@ -126,7 +126,7 @@ def test_clustering_batch_only(db_session, tenant, chat_session):
 
 # ── test_watermark_delayed_insert ─────────────────────────────────────────────
 
-def test_watermark_delayed_insert(db_session, tenant, chat_session):
+def test_watermark_delayed_insert(db_session, client_row, chat_session):
     """Messages created within the last 30 s must not appear in the batch."""
     from backend.jobs.analyze_chat_logs import _load_messages
 
@@ -146,7 +146,7 @@ def test_watermark_delayed_insert(db_session, tenant, chat_session):
     )
     db_session.commit()
 
-    messages = _load_messages(db_session, tenant.id, None, batch_size=100)
+    messages = _load_messages(db_session, client_row.id, None, batch_size=100)
     msg_ids = {m.id for m in messages}
 
     assert old_msg.id in msg_ids, "Message older than 30s should be included"
@@ -188,7 +188,7 @@ def test_max_faq_per_run():
 
 # ── test_answer_is_next_message ───────────────────────────────────────────────
 
-def test_answer_is_next_message(db_session, tenant, chat_session):
+def test_answer_is_next_message(db_session, client_row, chat_session):
     """Answer must be the next assistant message after the specific user message."""
     from backend.jobs.analyze_chat_logs import _get_answer_for_message
 
@@ -219,7 +219,7 @@ def test_answer_is_next_message(db_session, tenant, chat_session):
 # ── test_thumbs_down_skip ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_thumbs_down_skip(db_session, tenant, chat_session):
+async def test_thumbs_down_skip(db_session, client_row, chat_session):
     """Cluster where all answers are thumbs-down must not produce a FAQ candidate."""
     from backend.jobs.analyze_chat_logs import (
         MessageFeedback,
@@ -250,14 +250,14 @@ async def test_thumbs_down_skip(db_session, tenant, chat_session):
         )
 
     # All-thumbs-down → no FAQ candidate should be created
-    faq_count_before = db_session.query(TenantFaq).filter_by(tenant_id=tenant.id).count()
+    faq_count_before = db_session.query(TenantFaq).filter_by(tenant_id=client_row.id).count()
     assert faq_count_before == 0
 
 
 # ── test_embedding_throttle ───────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_embedding_throttle(db_session, tenant):
+async def test_embedding_throttle(db_session, client_row):
     """asyncio.sleep must be called between embedding batches."""
     from backend.jobs.analyze_chat_logs import MessageRow, _generate_embeddings
 
@@ -288,7 +288,7 @@ async def test_embedding_throttle(db_session, tenant):
          patch("backend.jobs.analyze_chat_logs._save_embeddings"), \
          patch("backend.jobs.analyze_chat_logs._touch_embeddings"), \
          patch("asyncio.sleep", side_effect=mock_sleep):
-        await _generate_embeddings(messages, "sk-test", db_session, tenant.id)
+        await _generate_embeddings(messages, "sk-test", db_session, client_row.id)
 
     # 250 messages / 100 per batch = 3 batches → 2 intermediate sleeps
     assert len(sleep_calls) == 2, f"Expected 2 sleep calls, got {len(sleep_calls)}"
@@ -297,7 +297,7 @@ async def test_embedding_throttle(db_session, tenant):
 # ── test_job_timeout ──────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_job_timeout(db_session, tenant):
+async def test_job_timeout(db_session, client_row):
     """Job must stop early when MAX_JOB_DURATION_SEC is exceeded."""
     import time as _time
     from backend.jobs.analyze_chat_logs import (
@@ -337,7 +337,7 @@ async def test_job_timeout(db_session, tenant):
 
 # ── test_faq_entry_has_explainability_fields ──────────────────────────────────
 
-def test_faq_entry_has_explainability_fields(db_session, tenant, chat_session):
+def test_faq_entry_has_explainability_fields(db_session, client_row, chat_session):
     """FAQEntry must contain cluster_size and source_message_ids (up to 10 IDs)."""
     from backend.jobs.analyze_chat_logs import MessageRow, _create_faq_candidate, ClusterMember
 
@@ -365,13 +365,13 @@ def test_faq_entry_has_explainability_fields(db_session, tenant, chat_session):
     )
 
     with patch("backend.jobs.analyze_chat_logs.get_openai_client", return_value=mock_openai), \
-         patch("backend.jobs.analyze_chat_logs._find_existing_faq", return_value=None):
+        patch("backend.jobs.analyze_chat_logs._find_existing_faq", return_value=None):
         created = _create_faq_candidate(
-            db_session, tenant.id, representative, best_member, cluster, "sk-test"
+            db_session, client_row.id, representative, best_member, cluster, "sk-test"
         )
 
     assert created is True
-    faq = db_session.query(TenantFaq).filter_by(tenant_id=tenant.id).first()
+    faq = db_session.query(TenantFaq).filter_by(tenant_id=client_row.id).first()
     assert faq is not None
     assert faq.cluster_size == 7
     assert isinstance(faq.source_message_ids, list)
@@ -382,8 +382,8 @@ def test_faq_entry_has_explainability_fields(db_session, tenant, chat_session):
 # ── test_analysis_version_resets_watermark ────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_analysis_version_resets_watermark(db_session, tenant):
-    """Changing CURRENT_ANALYSIS_VERSION must reset watermark for the tenant."""
+async def test_analysis_version_resets_watermark(db_session, client_row):
+    """Changing CURRENT_ANALYSIS_VERSION must reset watermark for the client."""
     from backend.jobs.analyze_chat_logs import (
         _get_or_create_state,
         run_job,
@@ -391,7 +391,7 @@ async def test_analysis_version_resets_watermark(db_session, tenant):
     )
 
     # Set up state with old version + a watermark
-    state = _get_or_create_state(db_session, tenant.id)
+    state = _get_or_create_state(db_session, client_row.id)
     state.analysis_version = CURRENT_ANALYSIS_VERSION - 1  # simulate old version
     state.last_run_started_at = datetime.now(timezone.utc) - timedelta(days=1)
     state.is_running = True
@@ -403,7 +403,7 @@ async def test_analysis_version_resets_watermark(db_session, tenant):
     with patch("backend.jobs.analyze_chat_logs._load_messages", return_value=[]), \
          patch("backend.jobs.analyze_chat_logs._finalize_job"):
         await run_job(
-            tenant_id=tenant.id,
+            client_id=client_row.id,
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),
@@ -412,7 +412,7 @@ async def test_analysis_version_resets_watermark(db_session, tenant):
         )
 
     db_session.expire_all()
-    updated_state = _get_or_create_state(db_session, tenant.id)
+    updated_state = _get_or_create_state(db_session, client_row.id)
     assert updated_state.last_run_started_at is None, (
         "Watermark should be reset when analysis_version changes"
     )
@@ -422,11 +422,11 @@ async def test_analysis_version_resets_watermark(db_session, tenant):
 # ── test_is_running_released_on_failure ───────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_is_running_released_on_failure(db_session, tenant):
+async def test_is_running_released_on_failure(db_session, client_row):
     """is_running must be set to FALSE in the finally block even if job fails."""
     from backend.jobs.analyze_chat_logs import _get_or_create_state, run_job
 
-    state = _get_or_create_state(db_session, tenant.id)
+    state = _get_or_create_state(db_session, client_row.id)
     state.is_running = True
     db_session.commit()
 
@@ -435,7 +435,7 @@ async def test_is_running_released_on_failure(db_session, tenant):
         side_effect=RuntimeError("Boom"),
     ):
         await run_job(
-            tenant_id=tenant.id,
+            client_id=client_row.id,
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),
@@ -444,7 +444,7 @@ async def test_is_running_released_on_failure(db_session, tenant):
         )
 
     db_session.expire_all()
-    state = db_session.query(LogAnalysisState).filter_by(tenant_id=tenant.id).first()
+    state = db_session.query(LogAnalysisState).filter_by(tenant_id=client_row.id).first()
     assert state is not None
     assert state.is_running is False, "is_running must be FALSE after job failure"
     assert state.last_run_status == "failed"

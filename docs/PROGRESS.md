@@ -137,10 +137,10 @@
 ### Live chat demo on landing page (feature/landing-demo-chat)
 
 - ✅ **DemoBlock** — заменён статичный макет чата на `DemoChat`: живые API-запросы к `/widget/chat`, тёмная цветовая схема лендинга (`#2D2D44` / `#38BDF8` / `#E879F9`), аватары у сообщений бота, typing-indicator (три точки). Анимация появления переведена на `whileInView + once: true` — не сбрасывается при скролле. Скролл сообщений происходит внутри контейнера чата, не прокручивает страницу.
-- ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: при проксировании на бэкенд `clientId` переименовывается в `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
+- ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: frontend product seam now accepts `botId` and still understands legacy `clientId`; при проксировании на бэкенд значение уходит как `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
 - ✅ **ChatWidget error handling** — добавлена `formatApiDetail`: корректно читает `detail` из FastAPI-ответа в любом формате (строка, массив validation objects). Устранён `[object Object]` в сообщениях об ошибках.
-- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID` (public `ch_...` клиента) задаётся через env; при отсутствии — fallback-заглушка без падения страницы. Добавлены комментарии в `.env.example`.
-- **Setup:** `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID=ch_...` (public_id из дашборда embed snippet) — в `.env.local` локально и в Vercel env до пересборки.
+- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_BOT_ID` is now the preferred env for the landing demo public bot ID; legacy `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID` still works as a compatibility alias. При отсутствии — fallback-заглушка без падения страницы.
+- **Setup:** set `NEXT_PUBLIC_LANDING_DEMO_BOT_ID=ch_...` (public bot ID from the dashboard embed snippet). Legacy `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID=ch_...` still works in `.env.local` and Vercel env until fully migrated.
 
 ---
 
@@ -167,7 +167,7 @@
 ### Documentation sync (registry + product docs)
 
 - ✅ **`IMPLEMENTED_FEATURES.md` / `PROGRESS.md`** — путь UI для FI-021: `knowledge/page.tsx` (старый `/documents` удалён)
-- ✅ **`docs/04-features.md`** — актуальный embed (`embed.js?clientId=…`, опционально `Chat9Config.widgetUrl`); таблица разделов Dashboard приведена к UI-NAV (Knowledge, Agents, sidebar); Admin — в сайдбаре
+- ✅ **`docs/04-features.md`** — embed docs now distinguish public bot terminology from the legacy `clientId` compatibility seam (`embed.js?clientId=…`, optional `Chat9Config.widgetUrl`); Dashboard section names stay aligned with UI-NAV (Knowledge, Agents, sidebar); Admin — в сайдбаре
 - ✅ **`demo-docs/04-dashboard-features.md`** — Knowledge hub, Agents (`/settings`), навигация через sidebar
 - ✅ **`README.md`** — формулировка про Dashboard / Knowledge hub
 
@@ -210,13 +210,13 @@
 ## ✅ COMPLETED (2026-03-21)
 
 ### L2 escalation tickets (FI-ESC)
-- ✅ **FI-ESC (v1)** — при провале RAG, запросе «человека» или ручном действии создаётся тикет **ESC-####** (per tenant), письмо на email владельца клиента, ответ пользователю формулирует отдельный OpenAI-call с JSON; машинный маркер `[[escalation_ticket:…]]` при необходимости дописывается в коде
+- ✅ **FI-ESC (v1)** — при провале RAG, запросе «человека» или ручном действии создаётся тикет **ESC-####** (per client), письмо на email владельца клиента, ответ пользователю формулирует отдельный OpenAI-call с JSON; машинный маркер `[[escalation_ticket:…]]` при необходимости дописывается в коде
 - **API:** JWT `GET/POST /escalations`, `GET /escalations/{id}`, `POST /escalations/{id}/resolve`; X-API-Key `POST /chat/{session_id}/escalate`; публично `POST /widget/escalate` + `chat_ended` / `locale` на виджете (см. `backend/routes/widget.py`)
 - **UI:** `frontend/app/(app)/escalations/page.tsx`, пункт **Escalations** в навбаре; виджет: **Talk to support**, баннер тикета, блокировка ввода при закрытом чате (`ChatWidget.tsx`)
 - **Модель/миграция:** `EscalationTicket`, колонки `Chat` для state machine; `backend/migrations/versions/fi_esc_escalation_tickets.py` (`fi_esc_v1`); модуль `backend/escalation/`
 - **QA:** `docs/qa/FI-ESC-escalation-tickets-qa.md`
 
-### Disclosure controls (FI-DISC) — tenant-wide response level
+### Disclosure controls (FI-DISC) — client-wide response level
 - ✅ **FI-DISC (v1)** — один уровень детализации ответа на весь тенант (**Detailed** / **Standard** / **Corporate**) для всех каналов (виджет, `POST /chat` по X-API-Key); жёсткие лимиты + блок `[Response level: …]` в system-части RAG-промпта (`build_rag_prompt` / `generate_answer`); загрузка `Client.disclosure_config` в `process_chat_message` и `run_debug`
 - **Хранение:** `clients.disclosure_config` JSON; каноническое поле **`level`**; при чтении поддерживается алиас **`default_level`**
 - **API:** `GET` / `PUT /clients/me/disclosure` (PUT — только для подтверждённого email)
@@ -232,7 +232,7 @@
 
 ### Widget / marketing
 - ✅ **FI-038** — футер виджета «Powered by Chat9 →» в `frontend/components/ChatWidget.tsx` (ссылка на сайт; prod: iframe-виджет через `backend/static/embed.js` + `/widget`)
-- Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed (`clientId` / `public_id`)
+- Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed seam: product-facing bot ID with legacy `clientId` / `public_id` compatibility
 
 ### Search / retrieval
 - ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`); промпт `FI-019ext-bm25-hybrid-hnsw.md` удалён после внедрения

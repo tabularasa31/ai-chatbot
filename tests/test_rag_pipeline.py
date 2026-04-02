@@ -119,7 +119,7 @@ def test_embedding_once(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -174,7 +174,7 @@ def test_faq_context_in_prompt(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -257,7 +257,7 @@ def test_langfuse_faq_match_span(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -325,7 +325,7 @@ def test_langfuse_faq_match_span(
     metadata = spans[-1].end_calls[-1].get("metadata")
     assert isinstance(metadata, dict)
     assert metadata["strategy"] == "faq_context"
-    assert metadata["tenant_id"] == str(cl_row.id)
+    assert metadata["client_id"] == str(cl_row.id)
     assert metadata["top_score"] == 0.81
     assert metadata["selected_score"] == 0.81
     assert metadata["faq_ids"] == [str(faq_item.id)]
@@ -350,7 +350,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -418,7 +418,7 @@ def test_faq_direct_skips_retrieval_and_generation(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -486,7 +486,7 @@ def test_guard_error_degrades_to_context(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -595,4 +595,3 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
     assert "VERIFIED FAQ CANDIDATES" in system_prompt
     assert "Q: How to reset password?" in system_prompt
     assert "A: Use the reset link from login page." in system_prompt
-

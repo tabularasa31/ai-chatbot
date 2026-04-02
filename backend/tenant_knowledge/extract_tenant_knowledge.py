@@ -100,14 +100,14 @@ def _glossary_confidence(term: str, combined_text: str, definition: str | None) 
     return 0.3
 
 
-def run_extract_tenant_knowledge_for_document(
+def run_extract_client_knowledge_for_document(
     *,
     document_id: uuid.UUID,
     db: Session,
     api_key: str,
 ) -> None:
     """
-    Extract structured tenant knowledge after successful document embedding.
+    Extract structured client knowledge after successful document embedding.
 
     Important: this job must be best-effort; exceptions should not break embedding runs.
     """
@@ -115,7 +115,7 @@ def run_extract_tenant_knowledge_for_document(
         doc = db.query(Document).filter(Document.id == document_id).first()
         if not doc:
             return
-        tenant_id = doc.client_id
+        client_id = doc.client_id
 
         rows = (
             db.query(Embedding)
@@ -269,7 +269,7 @@ def run_extract_tenant_knowledge_for_document(
         updated_at = datetime.now(timezone.utc)
         merge_into_profile(
             db,
-            tenant_id=tenant_id,
+            client_id=client_id,
             # Preserve extracted casing; only trim/collapse spaces upstream.
             product_name=product_name_norm if product_name_norm else None,
             product_name_confidence=float(product_conf),
@@ -287,7 +287,7 @@ def run_extract_tenant_knowledge_for_document(
         if faq_candidates:
             upsert_faq_candidates(
                 db=db,
-                tenant_id=tenant_id,
+                client_id=client_id,
                 faq_candidates=faq_candidates,
                 api_key=api_key,
             )
@@ -296,7 +296,7 @@ def run_extract_tenant_knowledge_for_document(
         # Best-effort job: never fail embeddings pipeline.
         logger.exception("Tenant knowledge extraction failed for document_id=%s", document_id)
         try:
-            profile = db.get(TenantProfile, tenant_id)
+            profile = db.get(TenantProfile, client_id)
             if profile is not None:
                 profile.extraction_status = "failed"
                 db.add(profile)
@@ -304,4 +304,3 @@ def run_extract_tenant_knowledge_for_document(
         except Exception:
             db.rollback()
         return
-

@@ -4,14 +4,14 @@
 
 Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. It loads a small script from your API host and points the iframe UI at the Chat9 app.
 
-Example (placeholders — the Dashboard fills in your real `clientId` and may adjust URLs):
+Example (placeholders — the Dashboard fills in your real public bot ID and may adjust URLs; the script param remains `clientId` for compatibility):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-`clientId` is your client **public id** (`ch_…`), not the secret API key.
+`clientId` is the legacy embed parameter that currently carries your public bot ID (`ch_…`), not the secret API key.
 
 ## What the widget does
 
@@ -23,7 +23,7 @@ Example (placeholders — the Dashboard fills in your real `clientId` and may ad
 ## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the **Dashboard** home (`/dashboard`). The **`clientId`** comes from the `Your Client ID` section (public `public_id`, `ch_…`).
+2. Copy the embed block from the **Dashboard** home (`/dashboard`). The widget loads your public bot ID (`public_id`, `ch_…`); in the legacy embed snippet that value currently appears as **`clientId`**.
 
 ## CORS
 
@@ -35,7 +35,7 @@ Each user gets a `session_id` stored in their browser. This allows the bot to ma
 
 ## Security
 
-The **public id** (`ch_…`) in the script URL identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.
+The public bot ID (`ch_…`) in the script URL identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.
 
 ---
 

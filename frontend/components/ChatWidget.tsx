@@ -21,7 +21,7 @@ type ChatWidgetMessage = {
 };
 
 interface ChatWidgetProps {
-  clientId: string;
+  botId: string;
   locale?: string | null;
   compact?: boolean;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
@@ -59,7 +59,7 @@ function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: nu
 }
 
 export function ChatWidget({
-  clientId,
+  botId,
   locale,
   compact = false,
   renderBelowAssistant,
@@ -100,7 +100,7 @@ export function ChatWidget({
 
     try {
       const params = new URLSearchParams({
-        clientId,
+        botId,
         message: userMessage,
       });
       if (sessionId) params.set("session_id", sessionId);

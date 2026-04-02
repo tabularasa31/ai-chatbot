@@ -72,13 +72,13 @@ Implemented as heuristic/interim behavior:
 - MMR similarity scoring
 - cross-document overlap detection
 - cost estimation
-- in-process tenant sampling counters
+- in-process client sampling counters
 - bounded in-memory deferred trace buffering
 
 ## Trace sampling
 
-- **`FULL_CAPTURE_MODE`:** `true` records 100% of traces that pass the Langfuse client gate (early-stage / low-traffic). `false` restores adaptive sampling: new-tenant boost, high-volume downsample, default `TRACE_SAMPLE_RATE`, and `force_trace` overrides — unchanged from prior behavior.
-- **Tenant counters:** when `tenant_id` is present, per-tenant totals and rolling-window counts are still updated in full-capture mode so toggling `FULL_CAPTURE_MODE` at runtime (same process) does not reset adaptive classification. Requests without a tenant id behave as before (no tenant counter state).
+- **`FULL_CAPTURE_MODE`:** `true` records 100% of traces that pass the Langfuse client gate (early-stage / low-traffic). `false` restores adaptive sampling: legacy `new-tenant` boost, high-volume downsample, default `TRACE_SAMPLE_RATE`, and `force_trace` overrides — unchanged from prior behavior.
+- **Client counters:** when `client_id` is present, per-client totals and rolling-window counts are still updated in full-capture mode so toggling `FULL_CAPTURE_MODE` at runtime (same process) does not reset adaptive classification. Requests without a client id behave as before (no client counter state). Continuity-sensitive sampling labels such as `new-tenant` are preserved in Langfuse output.
 - **Analysis fields:** each materialized root trace includes metadata `sampling_mode` (`full_capture` or `adaptive`) alongside existing `sampling_reason` (`full_capture`, `forced`, `new-tenant`, `high-volume`, `default`). A tag `sampling_mode:full_capture` or `sampling_mode:adaptive` is merged into the trace tag list for Langfuse filters.
 
 ## Query Variant Cost Metrics

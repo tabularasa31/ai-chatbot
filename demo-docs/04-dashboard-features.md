@@ -4,7 +4,7 @@ The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **
 
 ## Dashboard (`/dashboard`)
 
-- **Your Client ID** — your public `public_id` (`ch_…`) used in the widget embed URL (`embed.js?clientId=…`). This is not your secret API key.
+- **Your Bot ID** — your public `public_id` (`ch_…`) used in the widget embed URL. For compatibility the current snippet still passes it as `embed.js?clientId=…`. This is not your secret API key.
 - **API key** — your secret `X-Api-Key` for server-to-server API calls (`POST /chat`, etc.). Copy with one click.
 - **Embed code** — HTML snippet with your **`public_id`** (`ch_…`) in the script URL. Copy the block; code areas use an inline **copy** icon.
 - If the **OpenAI API key** is not set, an amber banner links to **Agents** (`/settings`) to configure it.
@@ -25,7 +25,7 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
 ## Agents (`/settings`)
 
-- **OpenAI API key** — per-tenant key, encrypted at rest; required for embeddings, chat, and document health checks.
+- **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks.
 - Save, update, or remove the key from this page.
 
 ## Chat Logs (`/logs`)
@@ -56,7 +56,7 @@ Test your bot directly in the dashboard.
 
 ## Response controls (`/settings/disclosure`)
 
-Set the tenant-wide **response detail level** (Detailed / Standard / Corporate) for FI-DISC v1.
+Set the client-wide **response detail level** (Detailed / Standard / Corporate) for FI-DISC v1.
 
 ## Widget API (`/settings/widget`)
 

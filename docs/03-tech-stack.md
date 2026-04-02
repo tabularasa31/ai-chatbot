@@ -180,7 +180,7 @@
    ↓
 2. Widget sends: `POST /widget/chat?client_id=ch_…&message=...`
    ↓
-3. Backend resolves public `clientId` → gets tenant `client_id` + client's OpenAI key
+3. Backend resolves the public bot ID (`clientId` / `client_id` compatibility seam) → gets internal `client_id` + client's OpenAI key
    ↓
 4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
@@ -212,9 +212,9 @@
 
 ### API Key Authentication
 - Client gets 32-character random API key
-- Dashboard / private API calls use the tenant API key (`X-API-Key`)
-- Public widget chat uses tenant `public_id` / `clientId`; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
-- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `client_id` and the tenant OpenAI key
+- Dashboard / private API calls use the client API key (`X-API-Key`)
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the legacy `clientId` / `client_id` compatibility seam; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
+- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `client_id` and the client's OpenAI key
 - All queries filter by client_id (no data leaks between tenants)
 
 ### OpenAI Key Isolation
@@ -226,7 +226,7 @@
 - Regex redaction on the user question before any OpenAI call (embedding, chat, validation)
 - `messages.content_original_encrypted` keeps the original wording encrypted at rest; `messages.content_redacted` and legacy `messages.content` keep the safe/redacted version
 - Dashboard/admin flows are **safe-first**: redacted text is the default view; original text is available only for privileged admin access and is audit-logged via `pii_events`
-- Tenant admins can manage optional regex entity toggles in `Settings → Privacy`; privacy audit rows are retained via admin retention controls
+- Client admins can manage optional regex entity toggles in `Settings → Privacy`; privacy audit rows are retained via admin retention controls
 
 ### Multi-Tenant Isolation
 - Every query includes `WHERE client_id = $1`

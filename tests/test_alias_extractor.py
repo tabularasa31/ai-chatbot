@@ -22,7 +22,7 @@ from backend.models import Client, TenantProfile, User
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
-def tenant_with_profile(db_session):
+def client_with_profile(db_session):
     user = User(
         email="alias@example.com",
         password_hash="x",
@@ -178,7 +178,7 @@ async def test_llm_semaphore():
 
 # ── test_alias_confidence_increments ─────────────────────────────────────────
 
-def test_alias_confidence_increments(db_session, tenant_with_profile):
+def test_alias_confidence_increments(db_session, client_with_profile):
     """Repeat appearance of alias must increase confidence (0.7→0.8→0.9, max 0.9)."""
     from backend.jobs.alias_extractor import (
         AliasEntry,
@@ -188,7 +188,7 @@ def test_alias_confidence_increments(db_session, tenant_with_profile):
         _merge_aliases_into_profile,
     )
 
-    client, profile = tenant_with_profile
+    client, profile = client_with_profile
 
     alias = AliasEntry(
         user_phrase="cancel subscription",
@@ -222,11 +222,11 @@ def test_alias_confidence_increments(db_session, tenant_with_profile):
 
 # ── test_no_duplicate_alias ───────────────────────────────────────────────────
 
-def test_no_duplicate_alias(db_session, tenant_with_profile):
+def test_no_duplicate_alias(db_session, client_with_profile):
     """Same alias phrase must not create a duplicate entry."""
     from backend.jobs.alias_extractor import AliasEntry, _merge_aliases_into_profile
 
-    client, profile = tenant_with_profile
+    client, profile = client_with_profile
 
     alias = AliasEntry(user_phrase="my account", canonical_term="account")
     _merge_aliases_into_profile(db_session, client.id, [alias])
@@ -240,11 +240,11 @@ def test_no_duplicate_alias(db_session, tenant_with_profile):
 # ── test_extract_and_merge_aliases_integration ────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_extract_and_merge_aliases_integration(db_session, tenant_with_profile):
+async def test_extract_and_merge_aliases_integration(db_session, client_with_profile):
     """End-to-end: qualifying cluster → LLM call → alias merged into profile."""
     from backend.jobs.alias_extractor import extract_and_merge_aliases
 
-    client, profile = tenant_with_profile
+    client, profile = client_with_profile
 
     mock_llm_response = MagicMock()
     mock_llm_response.choices = [
@@ -272,7 +272,7 @@ async def test_extract_and_merge_aliases_integration(db_session, tenant_with_pro
          patch("backend.jobs.alias_extractor.should_extract_aliases", return_value=True):
         count = await extract_and_merge_aliases(
             db=db_session,
-            tenant_id=client.id,
+            client_id=client.id,
             cluster_questions_list=questions_list,
             api_key="sk-test",
         )

@@ -54,10 +54,10 @@ def search_route(
     trace = begin_trace(
         name="search-request",
         session_id=f"search:{uuid.uuid4()}",
-        tenant_id=str(client.id),
+        client_id=str(client.id),
         user_id=str(current_user.id),
         metadata={
-            "tenant_id": str(client.id),
+            "client_id": str(client.id),
             "user_id": str(current_user.id),
             "route": str(request.url.path),
             "top_k": body.top_k,

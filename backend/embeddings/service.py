@@ -229,14 +229,14 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
-        # Phase 1 (best-effort): update tenant knowledge after successful indexing.
+        # Phase 1 (best-effort): update client knowledge after successful indexing.
         # Never break embeddings pipeline if extraction fails.
         try:
             from backend.tenant_knowledge.extract_tenant_knowledge import (
-                run_extract_tenant_knowledge_for_document,
+                run_extract_client_knowledge_for_document,
             )
 
-            run_extract_tenant_knowledge_for_document(
+            run_extract_client_knowledge_for_document(
                 document_id=document_id,
                 db=db,
                 api_key=api_key,

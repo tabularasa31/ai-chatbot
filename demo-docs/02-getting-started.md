@@ -30,7 +30,7 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 2. Click **Copy** on the embed snippet (it includes your `public_id`, e.g. `ch_…`).
 3. Paste the code before the closing `</body>` tag on your site.
 
-Example shape (use the Dashboard copy — URLs and `clientId` are filled in for you):
+Example shape (use the Dashboard copy — URLs and your public bot ID are filled in for you; the script param remains `clientId` for compatibility):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>

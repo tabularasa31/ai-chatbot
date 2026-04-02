@@ -163,7 +163,7 @@ function makeWidgetIdentityToken({
             Store this securely. It will not be shown again.
           </p>
           <div className="flex flex-wrap items-center gap-2">
-            <code className="text-xs break-all bg-white border border-amber-200 rounded px-2 py-1 flex-1 min-w-0">
+            <code className="text-xs break-all bg-white border border-amber-200 text-slate-900 font-mono rounded px-2 py-1 flex-1 min-w-0">
               {oneTimeSecret}
             </code>
             <button

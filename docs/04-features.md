@@ -9,7 +9,7 @@ A complete description of every implemented capability. Written for a technical 
 
 ## What Chat9 is
 
-Chat9 is a **multi-tenant SaaS platform** that lets businesses embed an AI support chatbot on their website. Each customer ("tenant") uploads their own documentation, connects their own OpenAI API key, and gets a ready-to-embed chat widget. The bot answers user questions by searching those documents with RAG (Retrieval-Augmented Generation).
+Chat9 is a SaaS platform that lets businesses embed an AI support bot on their website. Each customer owns one client in the backend model and one bot in the product/UI model. Customers upload their own documentation, connect their own OpenAI API key, and get a ready-to-embed chat widget. The bot answers user questions by searching those documents with RAG (Retrieval-Augmented Generation).
 
 ---
 
@@ -33,7 +33,7 @@ Full reset flow:
 
 ### Admin flag
 
-Users can have `is_admin = true`. Admins see an **Admin** section in the **sidebar** (app shell) and can access platform-wide metrics (`GET /admin/metrics/*`) — total users, sessions, tokens used across all tenants.
+Users can have `is_admin = true`. Admins see an **Admin** section in the **sidebar** (app shell) and can access platform-wide metrics (`GET /admin/metrics/*`) — total users, sessions, tokens used across all clients.
 
 ---
 
@@ -49,7 +49,7 @@ Every client gets a random 32-character `api_key` at registration. This key is u
 
 A human-readable `public_id` (format: `ch_xxxxxxxxxxxxxxxx`) is used in the embeddable widget snippet. It is safe to expose in public HTML — it only identifies the client, grants no write access.
 
-### OpenAI API key (per tenant)
+### OpenAI API key (per client)
 
 Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM via `backend/core/crypto.py`). The platform never uses a shared OpenAI key — no markup, no shared quota. The key is decrypted in memory only when making an OpenAI API call.
 
@@ -207,7 +207,7 @@ The `bm25-search` span keeps the lexical inputs and merged lexical output explic
 
 ### FAQ match routing (Phase 3)
 
-After injection detection and relevance pre-check, chat requests run a tenant FAQ semantic match layer before retrieval:
+After injection detection and relevance pre-check, chat requests run a client FAQ semantic match layer before retrieval:
 
 - `faq_direct` — direct FAQ answer allowed only for high-score approved FAQ and a passed cheap applicability guard.
 - `faq_context` — FAQ candidates are injected into the system prompt as `VERIFIED FAQ CANDIDATES` hints, then normal retrieval + generation runs.
@@ -240,7 +240,7 @@ Knowledge now has dedicated profile/FAQ workflows in addition to document source
   - `Profile` (`?tab=profile`) for extracted profile review/edit and glossary read-only inspection
   - `FAQ` (`?tab=faq`) for FAQ moderation (accept/reject/edit/approve-all, pending counter, filters, optimistic reject UX)
 
-**Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive tenant sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
+**Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive client sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
 
 ### Retrieval reliability contradiction policy
 
@@ -315,7 +315,7 @@ After deterministic overlap + metadata contradiction detection, the backend may 
 - **Canonical `evidence.contradiction_adjudication`** is absent on skip-only paths; do not treat “missing” as “disabled” without reading observability status.
 - Conversely, **product decisions** (caps, signals) still come only from deterministic `evidence.contradiction` and policy; do not use adjudication verdicts for scoring until explicitly designed and gated.
 
-Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-tenant `Client.settings.retrieval.contradiction_adjudication.enabled`, and the tenant’s OpenAI key when the layer executes.
+Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-client `Client.settings.retrieval.contradiction_adjudication.enabled`, and the client's OpenAI key when the layer executes.
 
 ---
 
@@ -376,12 +376,12 @@ After generating an answer, a **second LLM call** (`temperature=0`) checks wheth
 | Channel | Auth | Endpoint |
 |---------|------|----------|
 | Dashboard / API | `X-Api-Key` | `POST /chat` |
-| Widget (public) | `clientId` (public_id) | `POST /widget/chat` |
+| Widget (public) | `botId` in frontend/UI, legacy `clientId` in embed seam (same `public_id`) | `POST /widget/chat` |
 | Debug tool | JWT | `POST /chat/debug` |
 
 ### Sessions and history
 
-Each conversation is a **session** (UUID). Messages within a session are stored and passed as history in subsequent turns (last N messages). Sessions are scoped to a client — no cross-tenant leakage.
+Each conversation is a **session** (UUID). Messages within a session are stored and passed as history in subsequent turns (last N messages). Sessions are scoped to a client — no cross-client leakage.
 
 ---
 
@@ -400,9 +400,9 @@ When the bot cannot adequately answer, the conversation is **escalated to a huma
 
 ### What happens on escalation
 
-1. An `EscalationTicket` record is created with a sequential number **ESC-####** (per tenant, e.g. ESC-0001)
+1. An `EscalationTicket` record is created with a sequential number **ESC-####** (per client, e.g. ESC-0001)
 2. The bot sends a GPT-generated handoff message to the user explaining the situation
-3. The owner of the tenant receives an **email notification** (via Brevo) with ticket details
+3. The owner of the client receives an **email notification** (via Brevo) with ticket details
 4. The chat session is **closed** — the user sees a banner and the input is disabled
 5. The user can initiate a new session at any time
 
@@ -424,7 +424,7 @@ Tenants see all their tickets at `/escalations`:
 
 ## 7. Response Controls / Disclosure (FI-DISC)
 
-Tenants can set a **tenant-wide response detail level** that controls how the bot phrases answers across all channels (widget + API).
+Clients can set a client-wide response detail level that controls how the bot phrases answers across all channels (widget + API).
 
 | Level | Behaviour |
 |-------|-----------|
@@ -441,12 +441,12 @@ The selected level is injected into the RAG system prompt as a hard instruction 
 
 ## 8. Widget User Identification (FI-KYC)
 
-By default the widget is **anonymous** — no information about the end user is passed to the bot. Optionally, tenants can pass structured user context via a signed identity token.
+By default the widget is **anonymous** — no information about the end user is passed to the bot. Optionally, clients can pass structured user context via a signed identity token.
 
 ### How it works
 
-1. Tenant generates a **signing secret** in the dashboard (Settings → Widget API)
-2. On their server, the tenant creates an `identity_token` — a short-lived HMAC-SHA256 signed JWT containing user metadata: `plan_tier`, `locale`, `audience_tag`
+1. The client owner generates a signing secret in the dashboard (Settings → Widget API)
+2. On their server, the client creates an `identity_token` — a short-lived HMAC-SHA256 signed JWT containing user metadata: `plan_tier`, `locale`, `audience_tag`
 3. The widget passes this token to `POST /widget/session/init`
 4. Backend validates the signature, stores the context in `chats.user_context`
 5. In the RAG prompt, only the safe fields (`plan_tier`, `locale`, `audience_tag`) are included — no raw user PII
@@ -471,9 +471,9 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ### How embedding works
 
-Tenants copy a snippet from the **Dashboard** (and optionally from docs). The canonical pattern is a **script tag** whose URL includes `clientId` (the client **`public_id`**, `ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
+Users copy a snippet from the **Dashboard** (and optionally from docs). In product/UI language this is the bot ID. The legacy embed seam still uses `clientId` in the script URL, and that value is the client/bot **`public_id`** (`ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
 
-Example (placeholders — the Dashboard fills in your real `clientId` and URLs):
+Example (placeholders — the Dashboard fills in your real public bot ID and URLs; the script param remains `clientId` for compatibility):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
@@ -483,7 +483,7 @@ Example (placeholders — the Dashboard fills in your real `clientId` and URLs):
 If the frontend and API share the same origin, you can omit `Chat9Config` and use a single script tag with `?clientId=…` only.
 
 `embed.js` (vanilla JS, served from the API):
-- Reads `clientId` from the **script URL** query string (required)
+- Reads legacy `clientId` from the script URL query string (required compatibility seam)
 - Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script’s origin, as the **iframe base URL**
 - Appends a fixed-position container and an `<iframe>` pointing to `/widget?clientId=…&locale=<navigator.language>`
 - The iframe renders the full `ChatWidget` React component
@@ -510,7 +510,7 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 
 ## 10. Internal manual QA (Eval)
 
-**Purpose:** Internal-only flow for human testers to chat with a tenant bot (same public widget path as production) and record **pass/fail** (and optional error category + comment) per assistant message. It does **not** change dashboard user auth or the public widget contract.
+**Purpose:** Internal-only flow for human testers to chat with a client bot (same public widget path as production) and record **pass/fail** (and optional error category + comment) per assistant message. It does **not** change dashboard user auth or the public widget contract.
 
 ### Auth and isolation
 
@@ -524,13 +524,13 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 | Method | Path | Auth |
 |--------|------|------|
 | POST | `/eval/login` | Body: `username`, `password` → `access_token` |
-| POST | `/eval/sessions` | Eval JWT; body: `bot_id` (client `public_id`) |
+| POST | `/eval/sessions` | Eval JWT; body: `bot_id` (public bot ID / client `public_id`) |
 | POST | `/eval/sessions/{id}/results` | Eval JWT; snapshot `question`, `bot_answer`, `verdict`, optional `error_category`, `comment` |
 | GET | `/eval/sessions/{id}/results` | Eval JWT; list results for **own** sessions only (404 if not owner) |
 
-### `bot_id` = widget `clientId` (not the API key)
+### `bot_id` = public bot ID (same value as widget `clientId`, not the API key)
 
-The query/body field **`bot_id`** is exactly the **public client id** from the dashboard embed snippet — the same value as **`clientId`** in the script URL, e.g. `embed.js?clientId=ch_xxxxxxxxxxxxxxxx`.
+The query/body field **`bot_id`** is exactly the public bot ID from the dashboard embed snippet. For compatibility, it is the same value currently carried as **`clientId`** in the script URL, e.g. `embed.js?clientId=ch_xxxxxxxxxxxxxxxx`.
 
 ```html
 <script src="https://<api-host>/embed.js?clientId=ch_bwf5xpwxgaok3bzqjg"></script>
@@ -568,7 +568,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 |--------------|---------------|
 | **Dashboard** (`/dashboard`) | **API key** (server-to-server `X-Api-Key`), **embed code** snippet (`public_id` / `ch_…`); banner linking to Agents if OpenAI key is missing |
 | **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
-| **Agents** (`/settings`) | Per-tenant **OpenAI API key** (encrypted), save/update/remove |
+| **Agents** (`/settings`) | Per-client **OpenAI API key** (encrypted), save/update/remove |
 | **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |
 | **Review** (`/review`) | Bad answers (thumbs down) with ideal answer input |
 | **Escalations** (`/escalations`) | L2 ticket inbox; resolve tickets |
@@ -585,7 +585,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 |------|---------------|
 | Authentication | JWT (HS256), bcrypt passwords; user access tokens include `typ=chat9_user` |
 | Internal eval | Separate `EVAL_JWT_SECRET`, `typ=eval_tester`, `/eval/*` only |
-| Data isolation | All queries scoped by `client_id`; no cross-tenant access possible |
+| Data isolation | All queries scoped by `client_id`; no cross-client access possible |
 | API key storage | AES-GCM encrypted at rest |
 | KYC secret storage | AES-GCM encrypted at rest |
 | PII protection | Regex redaction before all OpenAI calls |
@@ -603,7 +603,7 @@ api.getchat9.live (Railway, FastAPI + Uvicorn)
   ↕  SQLAlchemy
 PostgreSQL 15 + pgvector extension (Railway managed DB)
   ↕
-OpenAI API  (tenant's own key)
+OpenAI API  (client's own key)
 Brevo       (transactional email: verification, password reset, escalation notifications)
 ```
 

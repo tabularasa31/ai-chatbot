@@ -106,7 +106,7 @@ Yes. Your documents and conversations are stored securely and are completely iso
 Yes. Your API key is encrypted at rest.
 
 **Can other customers see my data?**
-No. Chat9 enforces strict tenant isolation — each customer can only access their own data.
+No. Chat9 enforces strict client isolation — each customer can only access their own data.
 
 ---
 

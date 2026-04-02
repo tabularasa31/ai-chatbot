@@ -69,7 +69,7 @@ export default function WidgetSettingsPage() {
 
 function makeWidgetIdentityToken({
   secretHex,
-  tenantPublicId,
+  botPublicId,
   userId,
   extras = {},
   ttlSeconds = 300,
@@ -77,7 +77,7 @@ function makeWidgetIdentityToken({
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     user_id: userId,
-    tenant_id: tenantPublicId,
+    tenant_id: botPublicId,
     exp: now + ttlSeconds,
     iat: now,
     ...extras,
@@ -200,7 +200,7 @@ function makeWidgetIdentityToken({
         <p className="text-slate-500 text-sm">
           Call <code className="text-slate-800">POST /widget/session/init</code> with{" "}
           <code className="text-slate-800">api_key</code> and optional{" "}
-          <code className="text-slate-800">identity_token</code>. Use your tenant public ID as{" "}
+          <code className="text-slate-800">identity_token</code>. Use your bot public ID as{" "}
           <code className="text-slate-800">tenant_id</code> in the payload.
         </p>
         <CodeBlockWithCopy code={nodeSnippet} />

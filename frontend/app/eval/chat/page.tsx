@@ -224,7 +224,7 @@ function EvalChatContent() {
 
       <main className="flex flex-1 items-center justify-center p-8">
         <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-lg shadow-lg">
-          <ChatWidget clientId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
+          <ChatWidget botId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
         </div>
       </main>
     </div>

@@ -4,8 +4,10 @@ import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import { MessageCircle, Send } from "lucide-react";
 
-const LANDING_DEMO_CLIENT_ID =
-  process.env.NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID?.trim() ?? "";
+const LANDING_DEMO_BOT_ID =
+  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() ??
+  process.env.NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID?.trim() ??
+  "";
 
 const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
 
@@ -49,7 +51,7 @@ function DemoChat() {
 
     try {
       const params = new URLSearchParams({
-        clientId: LANDING_DEMO_CLIENT_ID,
+        botId: LANDING_DEMO_BOT_ID,
         message: text,
       });
       if (sessionId) params.set("session_id", sessionId);
@@ -222,16 +224,20 @@ export function DemoBlock() {
             </div>
           </div>
 
-          {LANDING_DEMO_CLIENT_ID ? (
+          {LANDING_DEMO_BOT_ID ? (
             <DemoChat />
           ) : (
             <div className="flex-1 flex items-center justify-center px-6">
               <p className="text-[#FAF5FF]/40 text-sm text-center leading-relaxed max-w-sm">
                 Live demo unavailable — set{" "}
                 <code className="text-[#FAF5FF]/60 text-xs">
+                  NEXT_PUBLIC_LANDING_DEMO_BOT_ID
+                </code>{" "}
+                to your public bot ID. Legacy{" "}
+                <code className="text-[#FAF5FF]/60 text-xs">
                   NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID
                 </code>{" "}
-                to your public client id.
+                still works for compatibility.
               </p>
             </div>
           )}

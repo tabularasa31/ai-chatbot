@@ -111,7 +111,11 @@ function DashboardContent() {
       <div className="bg-white rounded-xl border border-slate-200 p-6">
         {publicId && (
           <div className="mb-6">
-            <h2 className="text-base font-semibold text-slate-800 mb-1">Your Client ID</h2>
+            <h2 className="text-base font-semibold text-slate-800 mb-1">Your Bot ID</h2>
+            <p className="mb-2 text-sm text-slate-500">
+              Public bot identifier used in the widget snippet. The embed parameter remains{" "}
+              <code className="bg-slate-100 px-1 rounded">clientId</code> for compatibility.
+            </p>
             <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
               {publicId}
             </code>
@@ -153,7 +157,7 @@ function DashboardContent() {
           preClassName="text-sm mb-3"
         />
         <p className="text-slate-400 text-xs mb-4">
-          One-line embed — works on any domain. No CORS setup needed.
+          One-line embed — works on any domain. No CORS setup needed. `clientId` is the public bot ID.
         </p>
       </div>
 

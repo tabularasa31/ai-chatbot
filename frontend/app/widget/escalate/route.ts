@@ -4,12 +4,12 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function POST(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const clientId = searchParams.get("clientId");
+  const botId = searchParams.get("botId") || searchParams.get("clientId");
   const sessionId = searchParams.get("session_id");
 
-  if (!clientId || !sessionId) {
+  if (!botId || !sessionId) {
     return NextResponse.json(
-      { detail: "clientId and session_id are required" },
+      { detail: "botId (or legacy clientId) and session_id are required" },
       { status: 400 }
     );
   }
@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     body = {};
   }
 
-  const params = new URLSearchParams({ client_id: clientId, session_id: sessionId });
+  const params = new URLSearchParams({ client_id: botId, session_id: sessionId });
   const res = await fetch(`${API_URL}/widget/escalate?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

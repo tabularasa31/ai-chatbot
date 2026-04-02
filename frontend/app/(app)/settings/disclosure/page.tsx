@@ -71,7 +71,7 @@ export default function DisclosureSettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Response controls</h1>
         <p className="text-sm text-slate-500 mt-1">
-          One setting for your whole tenant: every chat (widget and API) uses this response style.
+          One setting for your whole bot: every chat (widget and API) uses this response style.
         </p>
       </div>
 

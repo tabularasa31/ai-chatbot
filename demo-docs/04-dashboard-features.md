@@ -4,6 +4,7 @@ The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **
 
 ## Dashboard (`/dashboard`)
 
+- **Your Client ID** — ваш публичный `public_id` (`ch_…`), который используется в embed URL виджета (`embed.js?clientId=…`). Это не secret API key.
 - **API key** — your secret `X-Api-Key` for server-to-server API calls (`POST /chat`, etc.). Copy with one click.
 - **Embed code** — HTML snippet with your **`public_id`** (`ch_…`) in the script URL. Copy the block; code areas use an inline **copy** icon.
 - If the **OpenAI API key** is not set, an amber banner links to **Agents** (`/settings`) to configure it.

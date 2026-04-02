@@ -1,6 +1,6 @@
 """Phase 4 — Chat-log analysis job.
 
-Clusters recent user messages per tenant, extracts FAQ candidates and aliases.
+Clusters recent user messages per client, extracts FAQ candidates and aliases.
 
 Key design decisions (v2.0 arch-review fixes):
 - O(N×K) clustering: similarity search constrained to current batch only
@@ -97,10 +97,10 @@ def _centroid(vectors: list[list[float]]) -> list[float]:
 
 # ── Database helpers ──────────────────────────────────────────────────────────
 
-def _get_or_create_state(db: Session, tenant_id: uuid.UUID) -> LogAnalysisState:
-    state = db.query(LogAnalysisState).filter_by(tenant_id=tenant_id).first()
+def _get_or_create_state(db: Session, client_id: uuid.UUID) -> LogAnalysisState:
+    state = db.query(LogAnalysisState).filter_by(tenant_id=client_id).first()
     if state is None:
-        state = LogAnalysisState(tenant_id=tenant_id)
+        state = LogAnalysisState(tenant_id=client_id)
         db.add(state)
         db.commit()
         db.refresh(state)
@@ -109,7 +109,7 @@ def _get_or_create_state(db: Session, tenant_id: uuid.UUID) -> LogAnalysisState:
 
 def _load_messages(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     last_run_started_at: datetime | None,
     batch_size: int,
 ) -> list[MessageRow]:
@@ -124,7 +124,7 @@ def _load_messages(
         db.query(Message)
         .join(Chat, Chat.id == Message.chat_id)
         .filter(
-            Chat.client_id == tenant_id,
+            Chat.client_id == client_id,
             Message.role == MessageRole.user,
             Message.created_at > cutoff,
             Message.created_at < upper_bound,
@@ -176,7 +176,7 @@ def _get_answer_for_message(
 
 def _get_cached_embeddings(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     message_ids: list[uuid.UUID],
 ) -> dict[uuid.UUID, list[float]]:
     """Fetch existing embeddings from message_embeddings table."""
@@ -185,7 +185,7 @@ def _get_cached_embeddings(
     rows = (
         db.query(MessageEmbedding)
         .filter(
-            MessageEmbedding.tenant_id == tenant_id,
+            MessageEmbedding.tenant_id == client_id,
             MessageEmbedding.message_id.in_(message_ids),
         )
         .all()
@@ -208,7 +208,7 @@ def _get_cached_embeddings(
 
 def _save_embeddings(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     batch: list[MessageRow],
     vectors: list[list[float]],
 ) -> None:
@@ -220,7 +220,7 @@ def _save_embeddings(
             db.add(
                 MessageEmbedding(
                     message_id=msg.id,
-                    tenant_id=tenant_id,
+                    tenant_id=client_id,
                     embedding=vec,
                 )
             )
@@ -249,12 +249,12 @@ async def _generate_embeddings(
     messages: list[MessageRow],
     api_key: str,
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
 ) -> None:
     """Fetch embeddings for messages that don't have one yet. Updates MessageRow in-place."""
     # Load from cache first
     all_ids = [m.id for m in messages]
-    cached = _get_cached_embeddings(db, tenant_id, all_ids)
+    cached = _get_cached_embeddings(db, client_id, all_ids)
     for msg in messages:
         if msg.id in cached:
             msg.embedding = cached[msg.id]
@@ -276,7 +276,7 @@ async def _generate_embeddings(
         vectors = [item.embedding for item in resp.data]
         for msg, vec in zip(batch, vectors):
             msg.embedding = vec
-        _save_embeddings(db, tenant_id, batch, vectors)
+        _save_embeddings(db, client_id, batch, vectors)
         if i + batch_size < len(missing):
             await asyncio.sleep(delay)
 
@@ -342,7 +342,7 @@ def _calculate_confidence(cluster_size: int, has_thumbs_up: bool) -> float:
 
 def _find_existing_faq(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     question_embedding: list[float],
 ) -> TenantFaq | None:
     """Return existing FAQ with cosine similarity >= threshold, or None."""
@@ -351,7 +351,7 @@ def _find_existing_faq(
         distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
         row = (
             db.query(TenantFaq, distance_expr.label("distance"))
-            .filter(TenantFaq.tenant_id == tenant_id)
+            .filter(TenantFaq.tenant_id == client_id)
             .filter(TenantFaq.question_embedding.isnot(None))
             .order_by(distance_expr)
             .limit(1)
@@ -370,7 +370,7 @@ def _find_existing_faq(
 
 def _create_faq_candidate(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     representative: MessageRow,
     best_member: ClusterMember,
     cluster_members: list[MessageRow],
@@ -386,11 +386,11 @@ def _create_faq_candidate(
     resp = client.embeddings.create(model=EMBEDDING_MODEL, input=question)
     q_emb = resp.data[0].embedding
 
-    existing = _find_existing_faq(db, tenant_id, q_emb)
+    existing = _find_existing_faq(db, client_id, q_emb)
     has_thumbs_up = best_member.has_thumbs_up
 
     # Dedup logic per spec:
-    # >= 0.92 + pending → skip; >= 0.92 + approved → create (tenant compares)
+    # >= 0.92 + pending → skip; >= 0.92 + approved → create (client compares)
     if existing is not None:
         if not existing.approved:
             return False  # duplicate pending — skip
@@ -401,7 +401,7 @@ def _create_faq_candidate(
 
     db.add(
         TenantFaq(
-            tenant_id=tenant_id,
+            tenant_id=client_id,
             question=question,
             answer=answer,
             question_embedding=q_emb,
@@ -420,7 +420,7 @@ def _create_faq_candidate(
 
 def try_acquire_job_lock(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
 ) -> tuple[datetime, datetime | None] | None:
     """Atomically set is_running=True.
 
@@ -432,7 +432,7 @@ def try_acquire_job_lock(
     """
     from sqlalchemy import update as sa_update
 
-    state = _get_or_create_state(db, tenant_id)
+    state = _get_or_create_state(db, client_id)
     if state.is_running:
         return None
 
@@ -442,7 +442,7 @@ def try_acquire_job_lock(
     result = db.execute(
         sa_update(LogAnalysisState)
         .where(
-            LogAnalysisState.tenant_id == tenant_id,
+            LogAnalysisState.tenant_id == client_id,
             LogAnalysisState.is_running == False,  # noqa: E712
         )
         .values(is_running=True)
@@ -457,7 +457,7 @@ def try_acquire_job_lock(
 
 def enqueue_log_analysis_job(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     api_key: str,
     trigger: str = "manual",
 ) -> bool:
@@ -465,10 +465,10 @@ def enqueue_log_analysis_job(
 
     Returns True if job was started, False if already running.
     """
-    _get_or_create_state(db, tenant_id)
-    result = try_acquire_job_lock(db, tenant_id)
+    _get_or_create_state(db, client_id)
+    result = try_acquire_job_lock(db, client_id)
     if result is None:
-        logger.debug("Log analysis already running for tenant %s", tenant_id)
+        logger.debug("Log analysis already running for client %s", client_id)
         return False
 
     job_start, old_watermark = result
@@ -476,7 +476,7 @@ def enqueue_log_analysis_job(
     import threading
     t = threading.Thread(
         target=_run_job_sync,
-        args=(tenant_id, api_key, job_start, old_watermark, trigger),
+        args=(client_id, api_key, job_start, old_watermark, trigger),
         daemon=True,
     )
     t.start()
@@ -486,7 +486,7 @@ def enqueue_log_analysis_job(
 # ── Main job ─────────────────────────────────────────────────────────────────
 
 def _run_job_sync(
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     api_key: str,
     job_start: datetime,
     old_watermark: datetime | None,
@@ -499,7 +499,7 @@ def _run_job_sync(
     loop = asyncio.new_event_loop()
     try:
         loop.run_until_complete(
-            run_job(tenant_id, api_key, db, job_start, old_watermark, trigger)
+            run_job(client_id, api_key, db, job_start, old_watermark, trigger)
         )
     finally:
         loop.close()
@@ -507,7 +507,7 @@ def _run_job_sync(
 
 
 async def run_job(
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     api_key: str,
     db: Session,
     job_start: datetime,
@@ -531,18 +531,18 @@ async def run_job(
 
     try:
         # ── Version check ────────────────────────────────────────────────────
-        state = _get_or_create_state(db, tenant_id)
+        state = _get_or_create_state(db, client_id)
         if state.analysis_version != CURRENT_ANALYSIS_VERSION:
             logger.info(
-                "Analysis version changed (%s→%s), resetting watermark for tenant %s",
+                "Analysis version changed (%s→%s), resetting watermark for client %s",
                 state.analysis_version,
                 CURRENT_ANALYSIS_VERSION,
-                tenant_id,
+                client_id,
             )
             from sqlalchemy import update as sa_update
             db.execute(
                 sa_update(LogAnalysisState)
-                .where(LogAnalysisState.tenant_id == tenant_id)
+                .where(LogAnalysisState.tenant_id == client_id)
                 .values(
                     last_run_started_at=None,
                     last_processed_id=None,
@@ -555,7 +555,7 @@ async def run_job(
         # ── Load messages using the PREVIOUS watermark ───────────────────────
         messages = _load_messages(
             db,
-            tenant_id,
+            client_id,
             old_watermark,
             settings.log_analysis_batch_size,
         )
@@ -564,7 +564,7 @@ async def run_job(
             return
 
         # ── Generate embeddings (throttled) ──────────────────────────────────
-        await _generate_embeddings(messages, api_key, db, tenant_id)
+        await _generate_embeddings(messages, api_key, db, client_id)
 
         # ── Cluster (batch-constrained) ──────────────────────────────────────
         clusters = _cluster_messages(messages)
@@ -579,7 +579,7 @@ async def run_job(
         for cluster in clusters:
             if time.monotonic() - job_started_mono > settings.max_job_duration_sec:
                 logger.warning(
-                    "Job timeout, stopping early for tenant %s", tenant_id
+                    "Job timeout, stopping early for client %s", client_id
                 )
                 break
 
@@ -617,7 +617,7 @@ async def run_job(
 
             representative = _representative_question(cluster)
             created = _create_faq_candidate(
-                db, tenant_id, representative, best, cluster, api_key
+                db, client_id, representative, best, cluster, api_key
             )
             if created:
                 faq_count += 1
@@ -628,7 +628,7 @@ async def run_job(
         # ── Alias extraction (async, throttled) ──────────────────────────────
         alias_count = await extract_and_merge_aliases(
             db=db,
-            tenant_id=tenant_id,
+            client_id=client_id,
             cluster_questions_list=alias_inputs,
             api_key=api_key,
         )
@@ -639,18 +639,18 @@ async def run_job(
 
     except Exception as exc:
         status = "failed"
-        logger.error("Log analysis job failed for tenant %s: %s", tenant_id, exc, exc_info=True)
+        logger.error("Log analysis job failed for client %s: %s", client_id, exc, exc_info=True)
 
     finally:
         _finalize_job(
-            db, tenant_id, last_msg_id, last_msg_created_at,
+            db, client_id, last_msg_id, last_msg_created_at,
             faq_count, alias_count, status, job_start,
         )
 
 
 def _finalize_job(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     last_msg_id: uuid.UUID | None,
     last_msg_created_at: datetime | None,
     faq_count: int,
@@ -683,19 +683,19 @@ def _finalize_job(
     try:
         db.execute(
             sa_update(LogAnalysisState)
-            .where(LogAnalysisState.tenant_id == tenant_id)
+            .where(LogAnalysisState.tenant_id == client_id)
             .values(**values)
         )
         db.commit()
     except Exception:
-        logger.exception("Failed to finalize log analysis job state for tenant %s", tenant_id)
+        logger.exception("Failed to finalize log analysis job state for client %s", client_id)
         db.rollback()
 
 
 # ── Threshold trigger helper ──────────────────────────────────────────────────
 
 def increment_and_check_threshold(
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     api_key: str,
 ) -> None:
     """Increment messages_since_last_run; enqueue job if threshold reached.
@@ -707,29 +707,29 @@ def increment_and_check_threshold(
 
     db = SessionLocal()
     try:
-        _get_or_create_state(db, tenant_id)
+        _get_or_create_state(db, client_id)
 
         db.execute(
             sa_update(LogAnalysisState)
-            .where(LogAnalysisState.tenant_id == tenant_id)
+            .where(LogAnalysisState.tenant_id == client_id)
             .values(
                 messages_since_last_run=LogAnalysisState.messages_since_last_run + 1
             )
         )
         db.commit()
 
-        state = _get_or_create_state(db, tenant_id)
+        state = _get_or_create_state(db, client_id)
         threshold = settings.log_analysis_threshold_messages
         if state.messages_since_last_run >= threshold and not state.is_running:
             enqueue_log_analysis_job(
                 db=db,
-                tenant_id=tenant_id,
+                client_id=client_id,
                 api_key=api_key,
                 trigger="threshold",
             )
     except Exception:
         logger.exception(
-            "increment_and_check_threshold failed for tenant %s", tenant_id
+            "increment_and_check_threshold failed for client %s", client_id
         )
     finally:
         db.close()

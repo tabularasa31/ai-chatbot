@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     trace_high_volume_sample_rate: float = Field(0.1, alias="TRACE_HIGH_VOLUME_SAMPLE_RATE")
     trace_new_tenant_threshold: int = Field(100, alias="TRACE_NEW_TENANT_THRESHOLD")
     trace_rate_window_seconds: int = Field(3600, alias="TRACE_RATE_WINDOW_SECONDS")
-    # Full capture: record all traces (early-stage / low-traffic). Adaptive: tenant heuristics below (production scale).
+    # Full capture: record all traces (early-stage / low-traffic). Adaptive: client heuristics below (production scale).
     full_capture_mode: bool = Field(True, alias="FULL_CAPTURE_MODE")
     bm25_expansion_mode: Literal["asymmetric", "symmetric_variants"] = Field(
         "asymmetric",

@@ -125,12 +125,12 @@ async def _call_alias_llm(
 
 # ── Confidence management ─────────────────────────────────────────────────────
 
-def _get_tenant_aliases(db: Session, tenant_id: uuid.UUID) -> dict[str, float]:
-    """Return {lower(user_phrase): confidence} for existing tenant aliases."""
+def _get_client_aliases(db: Session, client_id: uuid.UUID) -> dict[str, float]:
+    """Return {lower(user_phrase): confidence} for existing client aliases."""
     from backend.models import TenantProfile
 
     profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
     )
     if profile is None or not profile.aliases:
         return {}
@@ -147,7 +147,7 @@ def _get_tenant_aliases(db: Session, tenant_id: uuid.UUID) -> dict[str, float]:
 
 def _merge_aliases_into_profile(
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     new_aliases: list[AliasEntry],
 ) -> int:
     """Upsert aliases into TenantProfile.aliases. Returns count of changes."""
@@ -157,10 +157,10 @@ def _merge_aliases_into_profile(
         return 0
 
     profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
     )
     if profile is None:
-        logger.debug("No TenantProfile for tenant %s — skipping alias merge", tenant_id)
+        logger.debug("No TenantProfile for client %s — skipping alias merge", client_id)
         return 0
 
     existing_list: list[dict] = list(profile.aliases or [])
@@ -206,7 +206,7 @@ def _merge_aliases_into_profile(
 async def extract_and_merge_aliases(
     *,
     db: Session,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     cluster_questions_list: list[list[str]],
     api_key: str,
 ) -> int:
@@ -233,4 +233,4 @@ async def extract_and_merge_aliases(
     if not all_new:
         return 0
 
-    return _merge_aliases_into_profile(db, tenant_id, all_new)
+    return _merge_aliases_into_profile(db, client_id, all_new)

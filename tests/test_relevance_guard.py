@@ -44,7 +44,7 @@ def test_injection_rejects_before_rag(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=True, level=1, method="structural", pattern="x", score=None,
         ),
     )
@@ -85,7 +85,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -146,7 +146,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, client_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -202,10 +202,10 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     monkeypatch.setattr("backend.guards.relevance_checker.TIMEOUT_SECONDS", 0.05)
 
     cl_row, api_key = _create_client(client, db_session, email="reltime@example.com")
-    tenant_id = cl_row.id
+    client_id = cl_row.id
 
     profile = TenantProfile(
-        tenant_id=tenant_id,
+        tenant_id=client_id,
         product_name="Product",
         modules=["ModA"],
         glossary=[],
@@ -235,7 +235,7 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
 
     start = time.monotonic()
     relevant, reason, _profile = check_relevance_precheck(
-        tenant_id=tenant_id,
+        client_id=client_id,
         user_question="hello",
         db=db_session,
         api_key=api_key,
@@ -246,4 +246,3 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     assert elapsed < 0.3
     assert relevant is True
     assert reason == "timeout"
-

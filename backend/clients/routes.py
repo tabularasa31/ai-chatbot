@@ -125,7 +125,7 @@ def get_disclosure_route(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DisclosureConfigResponse:
-    """Tenant-wide response detail level (same for all users and channels)."""
+    """Client-wide response detail level (same for all users and channels)."""
     data = get_disclosure_config_for_user(current_user.id, db)
     return DisclosureConfigResponse(**data)
 
@@ -136,7 +136,7 @@ def put_disclosure_route(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DisclosureConfigResponse:
-    """Update tenant-wide disclosure level."""
+    """Update client-wide disclosure level."""
     data = update_disclosure_config_for_user(current_user.id, body.level, db)
     return DisclosureConfigResponse(**data)
 

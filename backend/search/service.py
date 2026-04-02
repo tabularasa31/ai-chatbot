@@ -1834,7 +1834,7 @@ def search_similar_chunks_detailed(
                 input={
                     "query_embedding": format_query_embedding_preview(trace_query_vector),
                     "query_variants": query_variants,
-                    "tenant_id": str(client_id),
+                    "client_id": str(client_id),
                     "top_k": BM25_CANDIDATE_POOL,
                     "engine": vector_engine,
                 },
@@ -1880,7 +1880,7 @@ def search_similar_chunks_detailed(
             input={
                 "query_embedding": format_query_embedding_preview(trace_query_vector),
                 "query_variants": query_variants,
-                "tenant_id": str(client_id),
+                "client_id": str(client_id),
                 "top_k": BM25_CANDIDATE_POOL,
                 "engine": vector_engine,
             },
@@ -1915,7 +1915,7 @@ def search_similar_chunks_detailed(
             input={
                 "query": query,
                 "query_variants": bm25_bundle.variant_queries,
-                "tenant_id": str(client_id),
+                "client_id": str(client_id),
                 "top_k": rrf_candidate_pool,
                 "bm25_expansion_mode": bm25_expansion_mode,
                 "variant_source": (

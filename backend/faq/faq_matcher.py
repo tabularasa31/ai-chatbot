@@ -116,7 +116,7 @@ def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:
 
 def _fetch_top_faq_rows(
     *,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     question_embedding: list[float],
     db: Session,
     limit: int = 3,
@@ -131,7 +131,7 @@ def _fetch_top_faq_rows(
     if "sqlite" in db_url:
         rows = (
             db.query(TenantFaq)
-            .filter(TenantFaq.tenant_id == tenant_id)
+            .filter(TenantFaq.tenant_id == client_id)
             .limit(max(limit * 5, limit))
             .all()
         )
@@ -158,7 +158,7 @@ def _fetch_top_faq_rows(
     distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
     results = (
         db.query(TenantFaq, distance_expr.label("distance"))
-        .filter(TenantFaq.tenant_id == tenant_id)
+        .filter(TenantFaq.tenant_id == client_id)
         .order_by(distance_expr)
         .limit(limit)
         .all()
@@ -235,7 +235,7 @@ def direct_applicability_guard(
 
 def match_faq(
     *,
-    tenant_id: uuid.UUID,
+    client_id: uuid.UUID,
     question: str,
     question_embedding: list[float],
     db: Session,
@@ -243,7 +243,7 @@ def match_faq(
     direct_threshold, context_threshold, context_max_items = _faq_thresholds()
 
     rows = _fetch_top_faq_rows(
-        tenant_id=tenant_id,
+        client_id=client_id,
         question_embedding=question_embedding,
         db=db,
         limit=3,
@@ -373,4 +373,3 @@ def match_faq(
         direct_guard_passed=False,
         decision_reason="score_below_context_threshold",
     )
-

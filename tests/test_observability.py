@@ -81,7 +81,7 @@ def test_observability_noops_when_config_missing(monkeypatch) -> None:
     trace = service.begin_trace(
         name="rag-query",
         session_id="sess-1",
-        metadata={"tenant_id": "tenant-1"},
+        metadata={"client_id": "client-1"},
     )
 
     trace.span(name="vector-search", input={"query": "hello"}).end(output={"chunks": []})
@@ -139,7 +139,7 @@ def test_safe_construct_drops_unsupported_metadata_argument() -> None:
         factory,
         name="vector-search",
         input={"query": "hello"},
-        metadata={"tenant_id": "tenant-1"},
+        metadata={"client_id": "client-1"},
     )
 
     assert result == {
@@ -221,12 +221,12 @@ def test_sampling_skips_high_volume_until_promoted(monkeypatch) -> None:
     trace_a = service.begin_trace(
         name="rag-query",
         session_id="sess-a",
-        tenant_id="tenant-1",
+        client_id="tenant-1",
     )
     trace_b = service.begin_trace(
         name="rag-query",
         session_id="sess-b",
-        tenant_id="tenant-1",
+        client_id="tenant-1",
     )
 
     assert trace_a.sampled is False
@@ -256,7 +256,7 @@ def test_force_trace_bypasses_sampling(monkeypatch) -> None:
     trace = service.begin_trace(
         name="rag-query",
         session_id="forced-session",
-        tenant_id="tenant-2",
+        client_id="tenant-2",
         force_trace=True,
     )
 
@@ -278,12 +278,12 @@ def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
     trace_a = service.begin_trace(
         name="rag-query",
         session_id="sess-a",
-        tenant_id="tenant-full",
+        client_id="tenant-full",
     )
     trace_b = service.begin_trace(
         name="rag-query",
         session_id="sess-b",
-        tenant_id="tenant-full",
+        client_id="tenant-full",
     )
 
     assert trace_a.sampled is True
@@ -296,16 +296,16 @@ def test_full_capture_mode_skips_adaptive_sampling(monkeypatch) -> None:
         assert "sampling_mode:full_capture" in fake_trace.init_kwargs["tags"]
 
 
-def test_full_capture_mode_still_advances_tenant_counters(monkeypatch) -> None:
+def test_full_capture_mode_still_advances_client_counters(monkeypatch) -> None:
     service = ObservabilityService()
     service._client = _FakeClient()
     service._enabled = True
     monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", True)
 
-    service.begin_trace(name="rag-query", session_id="s1", tenant_id="tenant-counter")
-    service.begin_trace(name="rag-query", session_id="s2", tenant_id="tenant-counter")
+    service.begin_trace(name="rag-query", session_id="s1", client_id="tenant-counter")
+    service.begin_trace(name="rag-query", session_id="s2", client_id="tenant-counter")
 
-    assert service._tenant_query_counts["tenant-counter"] == 2
+    assert service._client_query_counts["tenant-counter"] == 2
 
 
 def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
@@ -319,7 +319,7 @@ def test_sampled_trace_update_merges_existing_tags(monkeypatch) -> None:
     trace = service.begin_trace(
         name="rag-query",
         session_id="sampled-session",
-        tenant_id="tenant-merge",
+        client_id="tenant-merge",
         tags=["tenant:tenant-merge"],
     )
     trace.update(
@@ -350,12 +350,12 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
     service.begin_trace(
         name="rag-query",
         session_id="seed-session",
-        tenant_id="tenant-variants",
+        client_id="tenant-variants",
     )
     trace = service.begin_trace(
         name="rag-query",
         session_id="deferred-session",
-        tenant_id="tenant-variants",
+        client_id="tenant-variants",
         tags=["tenant:tenant-variants"],
     )
 

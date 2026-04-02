@@ -1,23 +1,23 @@
-# FI-115: Query Variant Retrieval Latency and Cost
+# FI-115: задержка и стоимость query variants в retrieval
 
-## Goal
+## Цель
 
-Measure whether deterministic query variant expansion is still operationally cheap once it adds extra embedding work and extra pgvector searches, and whether symmetric BM25 variant evaluation is worth promoting beyond the current asymmetric default.
+Проверить, остаётся ли детерминированное расширение запроса через варианты операционно дешёвым после добавления лишних embedding-операций и дополнительных pgvector-поисков, а также стоит ли продвигать симметричный режим BM25-вариантов сверх текущего асимметричного дефолта.
 
-This document is the runbook and evidence template for the production review. It does not change retrieval behavior by itself.
+Этот документ — runbook и шаблон фиксации результатов для прод-ревью. Сам по себе он не меняет поведение retrieval.
 
-## What to Measure
+## Что измеряем
 
-Primary comparison:
+Основные сравнения:
 
 - `variant_mode=single`
 - `variant_mode=multi`
 - `bm25_expansion_mode=asymmetric`
 - `bm25_expansion_mode=symmetric_variants`
 
-Primary signals:
+Ключевые метрики:
 
-- p50 / p95 total trace latency
+- p50 / p95 общей задержки trace
 - p50 / p95 `retrieval_duration_ms`
 - p50 / p95 `query_variant_count`
 - p50 / p95 `extra_embedded_queries`
@@ -29,22 +29,22 @@ Primary signals:
 - p50 / p95 `bm25_merged_hit_count_before_cap`
 - p50 / p95 `bm25_merged_hit_count_after_cap`
 
-Supporting signals:
+Поддерживающие сигналы:
 
 - `embedding_api_request_count`
 - `query-embedding.duration_ms`
 - `vector-search.duration_ms`
 - `bm25-search.duration_ms`
-- fused ranking deltas at final `top_k`
-- sampled `query-expansion.variants` payloads for noisy-tail inspection
-- sampled `bm25-search.query_variants` plus winner provenance for merge-debug inspection
+- изменения fused ranking на финальном `top_k`
+- сэмплы payload `query-expansion.variants` для анализа шумного хвоста
+- сэмплы `bm25-search.query_variants` + provenance winner-ов для merge-debug
 
-## Where to Look
+## Где смотреть
 
-In Langfuse:
+В Langfuse:
 
-- chat flow: trace name `rag-query`
-- direct search flow: trace name `search-request`
+- чат-флоу: trace name `rag-query`
+- прямой search-флоу: trace name `search-request`
 
 Trace metadata:
 
@@ -61,7 +61,7 @@ Trace metadata:
 - `bm25_merged_hit_count_after_cap`
 - `retrieval_duration_ms`
 
-Tags:
+Теги:
 
 - `variants:single`
 - `variants:multi`
@@ -74,20 +74,20 @@ Span outputs:
 - `bm25-search`
 - `rrf-fusion`
 
-## Review Procedure
+## Процедура ревью
 
-1. Pick a stable production window with representative traffic volume.
-2. Review `rag-query` traces first, comparing `single` vs `multi`.
-3. Review `search-request` traces separately so retrieval-only requests do not distort chat latency.
-4. Compare end-to-end p50/p95 first, then compare p50/p95 of `retrieval_duration_ms`.
-5. Compare `asymmetric` vs `symmetric_variants` using the same candidate-pool construction policy, so only lexical expansion behavior changes.
-6. Inspect a sample of slow `multi` and `symmetric_variants` traces and read the generated variants.
-7. Classify extra variants as useful recall expansion or mostly normalization noise.
-8. Check whether extra lexical mass changes the fused ranking at user-visible cutoffs such as final `top_k`, not just whether it exists before cap.
+1. Выберите стабильное прод-окно с репрезентативным объёмом трафика.
+2. Сначала проанализируйте trace `rag-query`, сравнив `single` и `multi`.
+3. Отдельно разберите `search-request`, чтобы retrieval-only запросы не искажали чат-латентность.
+4. Сначала сравните end-to-end p50/p95, затем p50/p95 по `retrieval_duration_ms`.
+5. Сравните `asymmetric` и `symmetric_variants` при одинаковой политике формирования candidate pool, чтобы менялось только лексическое расширение.
+6. Просмотрите выборку медленных trace для `multi` и `symmetric_variants`, прочитайте сгенерированные варианты.
+7. Классифицируйте дополнительные варианты как полезное расширение recall или как шум нормализации.
+8. Проверьте, меняет ли дополнительная лексическая масса fused ranking на пользовательских отсечках (например, финальный `top_k`), а не только «до cap».
 
-## Evidence Table
+## Таблица с доказательствами
 
-Fill this with real production numbers.
+Заполните реальными числами из продакшна.
 
 | Flow | Segment | Requests | Total p50 | Total p95 | Retrieval p50 | Retrieval p95 | Avg variants | P95 extra embedded queries | P95 extra vector calls | Notes |
 |------|---------|----------|-----------|-----------|---------------|---------------|--------------|----------------------------|------------------------|-------|
@@ -96,7 +96,7 @@ Fill this with real production numbers.
 | `search-request` | `single` | TBA | TBA | TBA | TBA | TBA | TBA | TBA | TBA | |
 | `search-request` | `multi` | TBA | TBA | TBA | TBA | TBA | TBA | TBA | TBA | |
 
-### Symmetric BM25 Comparison
+### Сравнение симметричного BM25
 
 | Flow | BM25 mode | Requests | Retrieval p50 | Retrieval p95 | Avg BM25 variants | P95 extra BM25 evals | Avg merged hits before cap | Avg merged hits after cap | Win/loss queries | Top-k notes |
 |------|-----------|----------|---------------|---------------|-------------------|----------------------|----------------------------|---------------------------|------------------|-------------|
@@ -105,43 +105,43 @@ Fill this with real production numbers.
 | `search-request` | `asymmetric` | TBA | TBA | TBA | TBA | TBA | TBA | TBA | TBA | |
 | `search-request` | `symmetric_variants` | TBA | TBA | TBA | TBA | TBA | TBA | TBA | TBA | |
 
-## Interpretation Checklist
+## Чеклист интерпретации
 
-- `multi` should justify its extra work with a small enough latency delta to remain operationally cheap.
-- `retrieval_duration_ms` matters more than total latency when generation variance is high.
-- `embedding_api_request_count` should usually stay flat because variants are batched.
-- `extra_embedding_api_requests` should usually stay at `0`; if it rises, batching or retries changed and transport overhead is no longer flat.
-- `extra_vector_search_calls` is the clearest pgvector workload amplifier.
-- `bm25_variant_eval_count` is a count of repeated lexical scoring passes over one shared in-memory candidate corpus, not a second corpus-acquisition search.
-- `bm25_merged_hit_count_before_cap` tells you whether symmetric lexical expansion found more lexical mass at all.
-- `bm25_merged_hit_count_after_cap` tells you how much of that lexical mass actually survived into RRF.
-- Slow `multi` traces with nearly duplicate variants are stronger evidence for guardrails than slow traces with clearly distinct variants.
-- Extra lexical hits matter only if they improve final fused ranking at useful cutoffs; “more before cap” by itself is not enough to justify the mode switch.
+- `multi` должен оправдывать дополнительную работу небольшим приростом латентности, чтобы оставаться операционно дешёвым.
+- При высокой вариативности генерации `retrieval_duration_ms` важнее total latency.
+- `embedding_api_request_count` обычно должен оставаться стабильным, так как варианты батчатся.
+- `extra_embedding_api_requests` обычно должен быть `0`; если растёт, изменилась batching/retry логика, и транспортный overhead уже не плоский.
+- `extra_vector_search_calls` — самый прямой усилитель нагрузки на pgvector.
+- `bm25_variant_eval_count` — это число повторных lexical scoring проходов по одному shared in-memory candidate corpus, а не второй поиск с повторным сбором корпуса.
+- `bm25_merged_hit_count_before_cap` показывает, нашло ли симметричное лексическое расширение больше лексической массы вообще.
+- `bm25_merged_hit_count_after_cap` показывает, сколько этой массы реально дошло до RRF.
+- Медленные trace `multi` с почти дубликатными вариантами — более сильный аргумент в пользу guardrails, чем медленные trace с явно различающимися формулировками.
+- Дополнительные лексические хиты важны только если они улучшают финальный fused ranking на полезных отсечках; само по себе «больше до cap» не оправдывает переключение режима.
 
-## Guardrails to Consider If Needed
+## Какие guardrails рассмотреть при необходимости
 
-- `max_variants` cap:
-  - first choice if p95 inflation is clearly driven by fan-out
-  - simplest safety control with the least product ambiguity
+- cap `max_variants`:
+  - первый выбор, если рост p95 явно вызван fan-out
+  - самый простой safety-контроль с минимальной продуктовой неоднозначностью
 
-- stronger normalization / deduping:
-  - use if many extra variants are punctuation, whitespace, or token-order noise
-  - best when cost comes from low-value expansions rather than genuinely different phrasings
+- более агрессивная нормализация / дедупликация:
+  - использовать, если много дополнительных вариантов — это шум пунктуации, пробелов или порядка токенов
+  - лучше подходит, когда стоимость вызвана низкоценными расширениями, а не реально разными формулировками
 
-- cached query embeddings:
-  - use only if the same normalized variant sets recur often enough in production
-  - adds complexity, so prefer it after confirming repeat-hit patterns
+- кеширование query embeddings:
+  - использовать только если одинаковые нормализованные наборы вариантов часто повторяются в проде
+  - усложняет систему, поэтому включать после подтверждения repeat-hit паттернов
 
-## Current Recommendation
+## Текущая рекомендация
 
-Current behavior should not yet be treated as proven cheap.
+Текущее поведение пока нельзя считать доказанно дешёвым.
 
-Until this evidence table is filled with production p50/p95 data, the safest position is:
+Пока таблица выше не заполнена прод-данными p50/p95, безопасная позиция такая:
 
-- keep the current behavior enabled for measurement
-- keep `bm25_expansion_mode=asymmetric` as the default
-- do not add guardrails preemptively
-- if the first production review shows material `multi` p95 inflation, implement a `max_variants` cap first
-- do not promote `symmetric_variants` unless it wins on representative fixtures, improves fused top-k outcomes often enough to matter, and does so with acceptable latency overhead plus no control-case regressions
+- оставить текущую логику включённой для измерений
+- оставить `bm25_expansion_mode=asymmetric` режимом по умолчанию
+- не добавлять guardrails превентивно
+- если первое прод-ревью покажет заметный рост p95 для `multi`, сначала внедрить cap `max_variants`
+- не продвигать `symmetric_variants`, пока режим не выигрывает на репрезентативных фикстурах, не улучшает fused top-k достаточно часто и не делает это с приемлемой задержкой без регрессий контрольных кейсов
 
-That makes `max_variants` the default next guardrail, with normalization heuristics second and cached embeddings third.
+Итого: guardrail первого приоритета — `max_variants`, затем эвристики нормализации, затем кеш embedding-ов.

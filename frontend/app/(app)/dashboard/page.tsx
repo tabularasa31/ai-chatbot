@@ -17,7 +17,6 @@ function DashboardContent() {
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [publicId, setPublicId] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [redirecting, setRedirecting] = useState(false);
   const [error, setError] = useState("");
@@ -26,8 +25,7 @@ function DashboardContent() {
   useEffect(() => {
     async function load() {
       try {
-        const user = await api.auth.getMe();
-        setUserEmail(user.email);
+        await api.auth.getMe();
 
         let client;
         try {
@@ -108,12 +106,17 @@ function DashboardContent() {
       )}
       <div>
         <h1 className="text-2xl font-semibold text-slate-800">Dashboard</h1>
-        {userEmail && (
-          <p className="text-slate-500 text-sm mt-1">{userEmail}</p>
-        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-6">
+        {publicId && (
+          <div className="mb-6">
+            <h2 className="text-base font-semibold text-slate-800 mb-1">Your Client ID</h2>
+            <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
+              {publicId}
+            </code>
+          </div>
+        )}
         <h2 className="text-base font-semibold text-slate-800 mb-1">Your API Key</h2>
         <p className="text-slate-500 text-sm mb-3">Use this key to authenticate API requests.</p>
         <div className="flex items-center gap-2 flex-wrap">

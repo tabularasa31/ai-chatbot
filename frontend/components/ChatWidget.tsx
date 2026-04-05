@@ -46,14 +46,24 @@ function isUuid(value: string): boolean {
 
 function clearStoredSession(botId: string): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(sessionStorageKey(botId));
-  window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId));
+  try {
+    window.localStorage.removeItem(sessionStorageKey(botId));
+    window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId));
+  } catch {
+    // localStorage can be blocked in embedded/privacy-restricted contexts.
+  }
 }
 
 function readStoredSession(botId: string): string | null {
   if (typeof window === "undefined") return null;
-  const storedSessionId = window.localStorage.getItem(sessionStorageKey(botId));
-  const storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId));
+  let storedSessionId: string | null = null;
+  let storedUpdatedAt: string | null = null;
+  try {
+    storedSessionId = window.localStorage.getItem(sessionStorageKey(botId));
+    storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId));
+  } catch {
+    return null;
+  }
   if (!storedSessionId || !storedUpdatedAt) {
     clearStoredSession(botId);
     return null;
@@ -72,8 +82,12 @@ function readStoredSession(botId: string): string | null {
 
 function persistSession(botId: string, sessionId: string): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(sessionStorageKey(botId), sessionId);
-  window.localStorage.setItem(sessionUpdatedAtStorageKey(botId), String(Date.now()));
+  try {
+    window.localStorage.setItem(sessionStorageKey(botId), sessionId);
+    window.localStorage.setItem(sessionUpdatedAtStorageKey(botId), String(Date.now()));
+  } catch {
+    // Persistence is best-effort; widget can continue without browser storage.
+  }
 }
 
 function parseEscalationTicket(content: string): string | null {

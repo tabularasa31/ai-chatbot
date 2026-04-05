@@ -43,23 +43,18 @@ def find_resumable_identified_chat(
     if not target_user_id:
         return None
 
-    candidates = (
+    return (
         db.query(Chat)
         .filter(
             Chat.client_id == client_id,
             Chat.ended_at.is_(None),
             Chat.updated_at >= cutoff,
             Chat.user_context.isnot(None),
+            Chat.user_context["user_id"].as_string() == target_user_id,
         )
         .order_by(Chat.updated_at.desc())
-        .all()
+        .first()
     )
-    for chat in candidates:
-        ctx = chat.user_context or {}
-        existing_user_id = _clean_optional_text(ctx.get("user_id"))
-        if existing_user_id == target_user_id:
-            return chat
-    return None
 
 
 def apply_identity_context_patch(

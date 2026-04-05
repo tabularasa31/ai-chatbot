@@ -30,6 +30,51 @@ interface ChatWidgetProps {
 
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
 const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
+const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function sessionStorageKey(botId: string): string {
+  return `chat9:${botId}:session`;
+}
+
+function sessionUpdatedAtStorageKey(botId: string): string {
+  return `chat9:${botId}:session_updated_at`;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function clearStoredSession(botId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(sessionStorageKey(botId));
+  window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId));
+}
+
+function readStoredSession(botId: string): string | null {
+  if (typeof window === "undefined") return null;
+  const storedSessionId = window.localStorage.getItem(sessionStorageKey(botId));
+  const storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId));
+  if (!storedSessionId || !storedUpdatedAt) {
+    clearStoredSession(botId);
+    return null;
+  }
+  if (!isUuid(storedSessionId)) {
+    clearStoredSession(botId);
+    return null;
+  }
+  const updatedAtMs = Number(storedUpdatedAt);
+  if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > SESSION_STORAGE_TTL_MS) {
+    clearStoredSession(botId);
+    return null;
+  }
+  return storedSessionId;
+}
+
+function persistSession(botId: string, sessionId: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(sessionStorageKey(botId), sessionId);
+  window.localStorage.setItem(sessionUpdatedAtStorageKey(botId), String(Date.now()));
+}
 
 function parseEscalationTicket(content: string): string | null {
   const match = content.match(ESC_TICKET_RE);
@@ -71,10 +116,17 @@ export function ChatWidget({
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
+
+  useEffect(() => {
+    setSessionId(readStoredSession(botId) ?? "");
+    setChatClosed(false);
+    setActiveTicket(null);
+  }, [botId]);
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -87,7 +139,21 @@ export function ChatWidget({
     if (ticket) setActiveTicket(ticket);
     const display = stripEscalationToken(raw) || raw;
     setMessages((prev) => [...prev, { role: "assistant", content: display }]);
-    if (ended) setChatClosed(true);
+    if (ended) {
+      setChatClosed(true);
+      setSessionId("");
+      clearStoredSession(botId);
+    }
+  };
+
+  const handleStartNewChat = () => {
+    setMessages([]);
+    setInput("");
+    setSessionId("");
+    setChatClosed(false);
+    setActiveTicket(null);
+    clearStoredSession(botId);
+    inputRef.current?.focus();
   };
 
   const handleSend = async () => {
@@ -121,7 +187,12 @@ export function ChatWidget({
       };
 
       applyAssistantMessage(data.response, data.chat_ended === true);
-      setSessionId(data.session_id);
+      if (data.chat_ended === true) {
+        setSessionId("");
+      } else {
+        setSessionId(data.session_id);
+        persistSession(botId, data.session_id);
+      }
     } catch (error) {
       setMessages((prev) => [
         ...prev,
@@ -169,6 +240,20 @@ export function ChatWidget({
             ) : null}
           </div>
         )}
+
+        {chatClosed ? (
+          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+            <p className="font-medium text-slate-800">This conversation is closed.</p>
+            <p className="mt-1">You can start a new chat for another question.</p>
+            <button
+              type="button"
+              onClick={handleStartNewChat}
+              className="mt-3 inline-flex items-center rounded-lg bg-[#a855f7] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea]"
+            >
+              Start new chat
+            </button>
+          </div>
+        ) : null}
 
         {messages.length === 0 && !loading ? (
           <div className="flex h-full min-h-[320px] items-start justify-center pt-14 text-center">
@@ -235,6 +320,7 @@ export function ChatWidget({
       <div className={cn("border-t border-gray-200 bg-white px-4 sm:px-6", compact ? "py-3" : "py-4")}>
         <div className="flex items-center gap-3">
           <input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import secrets
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -223,6 +224,269 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     assert r.status_code == 200
     assert r.json()["mode"] == "anonymous"
     assert any("kyc_validation_failed" in rec.message for rec in caplog.records)
+
+
+def test_widget_session_init_resumes_identified_session_and_patches_context(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-resume@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Resume Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    first_token = generate_kyc_token(
+        {
+            "user_id": "ext-42",
+            "tenant_id": public_id,
+            "plan_tier": "growth",
+        },
+        secret_hex,
+    )
+    r1 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": first_token, "locale": "en-US"},
+    )
+    assert r1.status_code == 200
+    first_sid = uuid.UUID(r1.json()["session_id"])
+
+    second_token = generate_kyc_token(
+        {
+            "user_id": "ext-42",
+            "tenant_id": public_id,
+            "email": "person@example.com",
+            "plan_tier": "enterprise",
+        },
+        secret_hex,
+    )
+    r2 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": second_token, "locale": "de-DE"},
+    )
+    assert r2.status_code == 200
+    assert uuid.UUID(r2.json()["session_id"]) == first_sid
+
+    chats = db_session.query(Chat).filter(Chat.session_id == first_sid).all()
+    assert len(chats) == 1
+    chat = chats[0]
+    assert chat.user_context is not None
+    assert chat.user_context.get("user_id") == "ext-42"
+    assert chat.user_context.get("email") == "person@example.com"
+    assert chat.user_context.get("plan_tier") == "enterprise"
+    assert chat.user_context.get("browser_locale") == "de-DE"
+
+
+def test_widget_session_init_closed_identified_chat_gets_new_session(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-closed@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Closed Resume Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    id_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id},
+        secret_hex,
+    )
+    r1 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r1.status_code == 200
+    first_sid = uuid.UUID(r1.json()["session_id"])
+    first_chat = db_session.query(Chat).filter(Chat.session_id == first_sid).first()
+    assert first_chat is not None
+    first_chat.ended_at = datetime.now(timezone.utc)
+    db_session.add(first_chat)
+    db_session.commit()
+
+    r2 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r2.status_code == 200
+    assert uuid.UUID(r2.json()["session_id"]) != first_sid
+
+
+def test_widget_session_init_expired_identified_chat_gets_new_session(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-expired-resume@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Expired Resume Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    id_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id},
+        secret_hex,
+    )
+    r1 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r1.status_code == 200
+    first_sid = uuid.UUID(r1.json()["session_id"])
+    first_chat = db_session.query(Chat).filter(Chat.session_id == first_sid).first()
+    assert first_chat is not None
+    first_chat.updated_at = datetime.now(timezone.utc) - timedelta(hours=25)
+    db_session.add(first_chat)
+    db_session.commit()
+
+    r2 = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r2.status_code == 200
+    assert uuid.UUID(r2.json()["session_id"]) != first_sid
+
+
+def test_widget_session_init_resumes_latest_eligible_identified_session(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-latest@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Latest Resume Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+    client_uuid = uuid.UUID(cr.json()["id"])
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    older_sid = uuid.uuid4()
+    newer_sid = uuid.uuid4()
+    older_chat = Chat(
+        client_id=client_uuid,
+        session_id=older_sid,
+        user_context={"user_id": "ext-42", "plan_tier": "growth"},
+    )
+    newer_chat = Chat(
+        client_id=client_uuid,
+        session_id=newer_sid,
+        user_context={"user_id": "ext-42", "plan_tier": "pro"},
+    )
+    db_session.add_all([older_chat, newer_chat])
+    db_session.commit()
+
+    older_chat.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    newer_chat.updated_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    db_session.add(older_chat)
+    db_session.add(newer_chat)
+    db_session.commit()
+
+    id_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id},
+        secret_hex,
+    )
+    r = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r.status_code == 200
+    assert uuid.UUID(r.json()["session_id"]) == newer_sid
+
+
+def test_widget_session_init_prefers_open_session_over_newer_closed_one(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="kyc-open-over-closed@example.com")
+    cr = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Open Over Closed Co"},
+    )
+    assert cr.status_code == 201
+    api_key = cr.json()["api_key"]
+    public_id = cr.json()["public_id"]
+    client_uuid = uuid.UUID(cr.json()["id"])
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+
+    open_sid = uuid.uuid4()
+    closed_sid = uuid.uuid4()
+    open_chat = Chat(
+        client_id=client_uuid,
+        session_id=open_sid,
+        user_context={"user_id": "ext-42", "plan_tier": "growth"},
+    )
+    closed_chat = Chat(
+        client_id=client_uuid,
+        session_id=closed_sid,
+        user_context={"user_id": "ext-42", "plan_tier": "enterprise"},
+        ended_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([open_chat, closed_chat])
+    db_session.commit()
+
+    open_chat.updated_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    closed_chat.updated_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.add(open_chat)
+    db_session.add(closed_chat)
+    db_session.commit()
+
+    id_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id},
+        secret_hex,
+    )
+    r = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": id_token},
+    )
+    assert r.status_code == 200
+    assert uuid.UUID(r.json()["session_id"]) == open_sid
 
 
 def test_kyc_rotate_returns_new_secret(

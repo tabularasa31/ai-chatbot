@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Document, DocumentStatus, DocumentType, Embedding
+from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -121,3 +121,117 @@ def test_widget_chat_rate_limit_429_after_20_requests_same_ip(
 def test_widget_chat_unknown_public_id_404(client: TestClient) -> None:
     r = client.post("/widget/chat?message=hi&client_id=ch_doesnotexist000")
     assert r.status_code == 404
+
+
+def test_widget_chat_invalid_session_id_returns_controlled_error(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="widget-invalid-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Invalid Session Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+    public_id = cl_resp.json()["public_id"]
+
+    r = client.post(
+        f"/widget/chat?message=hello&client_id={public_id}&session_id=not-a-uuid"
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "session_invalid"
+
+
+def test_widget_chat_missing_session_returns_controlled_error(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="widget-missing-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Missing Session Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+    public_id = cl_resp.json()["public_id"]
+
+    r = client.post(
+        f"/widget/chat?message=hello&client_id={public_id}&session_id={uuid.uuid4()}"
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "session_not_found"
+
+
+def test_widget_chat_foreign_session_returns_controlled_error(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token_a = register_and_verify_user(client, db_session, email="widget-foreign-a@example.com")
+    token_b = register_and_verify_user(client, db_session, email="widget-foreign-b@example.com")
+    cl_resp_a = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Widget Foreign A"},
+    )
+    cl_resp_b = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Widget Foreign B"},
+    )
+    assert cl_resp_a.status_code == 201
+    assert cl_resp_b.status_code == 201
+
+    set_client_openai_key(client, token_a)
+    set_client_openai_key(client, token_b)
+
+    client_a_uuid = uuid.UUID(cl_resp_a.json()["id"])
+    public_id_b = cl_resp_b.json()["public_id"]
+    foreign_chat = Chat(
+        client_id=client_a_uuid,
+        session_id=uuid.uuid4(),
+        user_context={},
+    )
+    db_session.add(foreign_chat)
+    db_session.commit()
+
+    r = client.post(
+        f"/widget/chat?message=hello&client_id={public_id_b}&session_id={foreign_chat.session_id}"
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "session_forbidden"
+
+
+def test_widget_chat_closed_session_returns_controlled_error(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from datetime import datetime, timezone
+
+    token = register_and_verify_user(client, db_session, email="widget-closed-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Closed Session Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+
+    client_uuid = uuid.UUID(cl_resp.json()["id"])
+    public_id = cl_resp.json()["public_id"]
+    closed_chat = Chat(
+        client_id=client_uuid,
+        session_id=uuid.uuid4(),
+        user_context={},
+        ended_at=datetime.now(timezone.utc),
+    )
+    db_session.add(closed_chat)
+    db_session.commit()
+
+    r = client.post(
+        f"/widget/chat?message=hello&client_id={public_id}&session_id={closed_chat.session_id}"
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "session_closed"

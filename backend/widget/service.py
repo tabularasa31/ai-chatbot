@@ -18,6 +18,11 @@ _PATCHABLE_USER_CONTEXT_FIELDS = (
     "locale",
 )
 
+SESSION_INVALID_CODE = "session_invalid"
+SESSION_NOT_FOUND_CODE = "session_not_found"
+SESSION_FORBIDDEN_CODE = "session_forbidden"
+SESSION_CLOSED_CODE = "session_closed"
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -79,3 +84,7 @@ def apply_identity_context_patch(
         patched["browser_locale"] = locale_value
 
     return patched
+
+
+def widget_session_error_detail(code: str, message: str) -> dict[str, str]:
+    return {"code": code, "message": message}

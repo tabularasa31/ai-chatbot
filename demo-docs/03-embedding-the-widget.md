@@ -41,15 +41,27 @@ The public bot ID (`ch_…`) in the script URL identifies which bot to load; it 
 
 ## Identified sessions (optional)
 
-By default the widget is anonymous — Chat9 does not know who is talking. **Identified sessions** let you pass verified user information (user id, email, plan, etc.) to the widget so it appears in conversation logs and can be used for routing or personalisation.
+By default the standard widget embed is anonymous. Chat9 knows which bot should answer, but does not know who the end user is.
+
+**Identified sessions** are an advanced integration path that lets you attach verified user context to a widget session.
 
 ### How it works
 
-1. Your server generates a short-lived signed token using your **signing secret**.
-2. The token is passed to the widget on page load.
-3. Chat9 verifies the token during `POST /widget/session/init` and attaches the user identity to the session.
+1. In **Dashboard -> Settings -> Widget API**, generate a signing secret.
+2. Store that secret on your server.
+3. Your server generates a short-lived signed `identity_token`.
+4. Your integration calls `POST /widget/session/init` with:
+   - your private `api_key`
+   - optional `identity_token`
+   - optional `locale`
+5. Chat9 validates the token and returns:
+   - `session_id`
+   - `mode` = `identified` or `anonymous`
+6. Reuse that `session_id` in later `POST /widget/chat` requests.
 
-The token is HMAC-signed — any tampering is detected. The payload is **encoded, not encrypted**, so do not put passwords, payment data, or other secrets inside it.
+Important: the current stock `embed.js` snippet does not automatically send `api_key` or `identity_token`. If you need identified sessions today, use a custom integration or custom bootstrap flow around the public widget APIs.
+
+The token is HMAC-signed. Any tampering is detected. The payload is encoded, not encrypted, so do not put passwords, card data, or other secrets inside it.
 
 ### Step 1 — Get a signing secret
 
@@ -57,88 +69,165 @@ Go to **Dashboard → Settings → Widget API** and click **Generate secret**. C
 
 ### Step 2 — Generate a token server-side
 
-Install the SDK for your backend language:
+Use the same signing approach as Chat9's backend.
 
-**Python**
-```bash
-# PyPI release coming soon — install directly from GitHub in the meantime:
-pip install git+https://github.com/tabularasa31/chat9-sdks.git#subdirectory=python
-```
-
-```python
-from chat9 import generateToken, Chat9Error
-
-try:
-    token = generateToken({
-        "secret": os.environ["CHAT9_SIGNING_SECRET"],
-        "user": {
-            "user_id": current_user.id,          # required, non-empty string
-            "email":   current_user.email,        # optional
-            "locale":  "en-US",                  # optional, e.g. "en", "de-AT"
-            "timezone": "Europe/Berlin",          # optional, IANA tz name
-            "custom_attrs": {                     # optional, up to 20 keys
-                "plan": "growth",
-            },
-        },
-        "options": {
-            "ttl": 300,   # seconds until expiry, 60–3600, default 300
-        },
-    })
-except Chat9Error as e:
-    # e.code is one of: MISSING_SECRET, MISSING_USER_ID, INVALID_FIELD,
-    #                   INVALID_TTL, CUSTOM_ATTRS_OVERFLOW
-    logger.error("Token generation failed: %s – %s", e.code, e.message)
-    raise
-```
-
-**Node.js** *(coming in Phase 1)*
 ```js
-const { generateToken } = require('@chat9/sdk');
+const crypto = require("crypto");
 
-const token = generateToken({
-  secret: process.env.CHAT9_SIGNING_SECRET,
-  user: { user_id: req.user.id, email: req.user.email },
-  options: { ttl: 300 },
-});
-```
-
-**Go / PHP** — coming in Phase 1. Until then, use the Python SDK or generate the token manually (see the [token spec](https://github.com/tabularasa31/chat9-sdks/blob/main/docs/token-spec.md)).
-
-### Step 3 — Pass the token to the widget
-
-Render the token into your page alongside the embed snippet:
-
-```html
-<script>
-  window.Chat9Config = {
-    widgetUrl: "https://getchat9.live",
-    userToken: "{{ chat9_token }}",   <!-- server-rendered token -->
+function makeWidgetIdentityToken({
+  secretHex,
+  botPublicId,
+  userId,
+  extras = {},
+  ttlSeconds = 300,
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const payload = {
+    user_id: userId,
+    tenant_id: botPublicId,
+    exp: now + ttlSeconds,
+    iat: now,
+    ...extras,
   };
-</script>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
+
+  const sorted = {};
+  for (const key of Object.keys(payload).sort()) {
+    sorted[key] = payload[key];
+  }
+
+  const json = JSON.stringify(sorted);
+  const b64 = Buffer.from(json, "utf8")
+    .toString("base64")
+    .replace(/[+]/g, "-")
+    .replace(/[/]/g, "_")
+    .replace(/=+$/, "");
+
+  const sig = crypto
+    .createHmac("sha256", Buffer.from(secretHex, "utf8"))
+    .update(b64)
+    .digest("hex");
+
+  return `${b64}.${sig}`;
+}
 ```
 
-The widget picks up `userToken` automatically. Do not store the token in `localStorage` or pass it via URL parameters.
+Required payload fields:
+
+- `tenant_id` — your bot public ID, for example `ch_...`
+- `user_id` — any non-empty string
+- `exp` — expiry time, Unix timestamp in seconds
+- `iat` — issued-at time, Unix timestamp in seconds
+
+Optional payload fields currently supported by Chat9:
+
+- `email`
+- `name`
+- `plan_tier`
+- `audience_tag`
+- `company`
+- `locale`
+
+Example payload:
+
+```json
+{
+  "user_id": "cust_12345",
+  "tenant_id": "ch_demo123",
+  "email": "user@example.com",
+  "plan_tier": "growth",
+  "audience_tag": "b2b",
+  "locale": "en-US",
+  "exp": 1775399700,
+  "iat": 1775399400
+}
+```
+
+### Step 3 — Initialize the session
+
+Call Chat9 before sending chat turns:
+
+```bash
+curl -X POST "https://YOUR_API_HOST/widget/session/init" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "api_key": "YOUR_PRIVATE_API_KEY",
+    "identity_token": "YOUR_SIGNED_TOKEN",
+    "locale": "en-US"
+  }'
+```
+
+Successful response:
+
+```json
+{
+  "session_id": "1c576fd8-cf10-4b58-a4e7-460ea0d19dbe",
+  "mode": "identified"
+}
+```
+
+If the token is missing or invalid, Chat9 still returns a session but with:
+
+```json
+{
+  "session_id": "1c576fd8-cf10-4b58-a4e7-460ea0d19dbe",
+  "mode": "anonymous"
+}
+```
+
+### Step 4 — Send chat messages with the returned session
+
+Use the `session_id` from `session/init` in later chat requests:
+
+```bash
+curl -X POST "https://YOUR_API_HOST/widget/chat?client_id=ch_YOUR_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe&message=Hello"
+```
 
 ### Token field reference
 
 | Field | Required | Type | Constraints |
 |---|---|---|---|
+| `tenant_id` | ✅ | string | must equal your bot public ID (`ch_...`) |
 | `user_id` | ✅ | string | non-empty, non-whitespace |
-| `email` | — | string | basic format, e.g. `user@example.com` |
-| `locale` | — | string | BCP 47, e.g. `en`, `en-US`, `zh-Hant-TW` |
-| `timezone` | — | string | IANA name, e.g. `Europe/Berlin` |
-| `custom_attrs` | — | object | max 20 keys, each value ≤ 256 chars |
+| `exp` | ✅ | integer | Unix timestamp in seconds |
+| `iat` | ✅ | integer | Unix timestamp in seconds |
+| `email` | — | string | optional |
+| `name` | — | string | optional |
+| `plan_tier` | — | string | optional |
+| `audience_tag` | — | string | optional free-form segment label |
+| `company` | — | string | optional |
+| `locale` | — | string | optional, e.g. `en`, `en-US`, `ru-RU` |
 
-### Error codes
+### What `mode` means
 
-| Code | When |
+| `mode` | Meaning |
 |---|---|
-| `MISSING_SECRET` | Signing secret not provided |
-| `MISSING_USER_ID` | `user.user_id` missing or blank |
-| `INVALID_FIELD` | Field value does not match the required format |
-| `INVALID_TTL` | `ttl` is outside the 60–3600 range |
-| `CUSTOM_ATTRS_OVERFLOW` | `custom_attrs` has more than 20 keys |
+| `identified` | The token was valid and Chat9 attached the user context to the session |
+| `anonymous` | No token was provided, or validation failed, so the widget continues without KYC context |
+
+### What Chat9 uses from KYC
+
+Stored in chat context:
+
+- `user_id`
+- `email`
+- `name`
+- `plan_tier`
+- `audience_tag`
+- `company`
+- `locale`
+
+Used in the LLM prompt:
+
+- `plan_tier`
+- `locale`
+- `audience_tag`
+
+Used for richer escalation metadata:
+
+- `user_id`
+- `email`
+- `name`
+- `plan_tier`
 
 ### Security checklist
 
@@ -146,4 +235,6 @@ The widget picks up `userToken` automatically. Do not store the token in `localS
 - ✅ Store the signing secret in an environment variable, not in source code
 - ✅ Use a short TTL (300 s is a reasonable default)
 - ✅ Rotate the secret from the Dashboard if it is ever exposed
-- ❌ Do not put passwords, card numbers, or PII beyond `email` in the token payload
+- ✅ Treat invalid tokens as a fallback to anonymous mode, not as a widget outage
+- ❌ Do not put passwords, card numbers, or other secrets in the token payload
+- ❌ Do not assume the stock `embed.js` snippet enables KYC by itself

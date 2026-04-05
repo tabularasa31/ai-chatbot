@@ -18,6 +18,7 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter, widget_public_rate_limit_key
 from backend.core.security import validate_kyc_token_detail
 from backend.models import Chat, Client, EscalationTrigger, UserContext
+from backend.widget.service import apply_identity_context_patch, find_resumable_identified_chat
 
 logger = logging.getLogger(__name__)
 
@@ -95,18 +96,40 @@ def widget_session_init(
 
     ctx, fail_reason = _resolve_widget_identity(client, body.identity_token)
     if ctx is not None:
-        merged = dict(ctx)
-        if body.locale and body.locale.strip():
-            merged.setdefault("browser_locale", body.locale.strip())
-        chat = Chat(
+        resumable_chat = find_resumable_identified_chat(
+            db,
             client_id=client.id,
-            session_id=session_id,
-            user_context=merged,
+            user_id=ctx["user_id"],
         )
-        db.add(chat)
-        db.commit()
+        if resumable_chat is not None:
+            session_id = resumable_chat.session_id
+            resumable_chat.user_context = apply_identity_context_patch(
+                resumable_chat.user_context,
+                ctx,
+                browser_locale=body.locale,
+            )
+            db.add(resumable_chat)
+            db.commit()
+            logger.info("kyc_session_resumed: client_id=%s", client.id)
+        else:
+            merged = apply_identity_context_patch(
+                {"user_id": ctx["user_id"]},
+                ctx,
+                browser_locale=body.locale,
+            )
+            chat = Chat(
+                client_id=client.id,
+                session_id=session_id,
+                user_context=merged,
+            )
+            db.add(chat)
+            db.commit()
+            logger.info(
+                "kyc_session_resume_skipped: client_id=%s reason=no_resumable_session",
+                client.id,
+            )
+            logger.info("kyc_session_created: client_id=%s", client.id)
         mode = "identified"
-        logger.info("kyc_session_identified: client_id=%s", client.id)
     elif body.identity_token and body.identity_token.strip():
         reason = fail_reason or "invalid_token"
         logger.info("kyc_validation_failed: reason=%s", reason)

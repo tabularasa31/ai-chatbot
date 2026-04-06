@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -460,17 +459,17 @@ def test_faq_direct_skips_retrieval_and_generation(
     monkeypatch.setattr("backend.chat.service.generate_answer", _unexpected_generate)
     monkeypatch.setattr("backend.chat.service.validate_answer", _unexpected_generate)
 
-    answer, docs, tokens_used, chat_ended = process_chat_message(
+    outcome = process_chat_message(
         cl_row.id,
         "Reset password",
         uuid.uuid4(),
         db_session,
         api_key=api_key,
     )
-    assert chat_ended is False
-    assert docs == []
-    assert tokens_used == 0
-    assert answer == faq_answer
+    assert outcome.chat_ended is False
+    assert outcome.document_ids == []
+    assert outcome.tokens_used == 0
+    assert outcome.text == faq_answer
 
 
 def test_guard_error_degrades_to_context(

@@ -401,7 +401,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         lambda *args, **kwargs: (False, None),
     )
 
-    answer, _, tokens_used, chat_ended = process_chat_message(
+    outcome = process_chat_message(
         client_row.id,
         "How do I reset my password?",
         uuid.uuid4(),
@@ -409,9 +409,9 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         api_key=cl_resp.json()["api_key"],
     )
 
-    assert answer == "Use the reset link in settings."
-    assert tokens_used == 17
-    assert chat_ended is False
+    assert outcome.text == "Use the reset link in settings."
+    assert outcome.tokens_used == 17
+    assert outcome.chat_ended is False
     assert fake_trace.update_calls[-1]["metadata"]["variant_mode"] == "multi"
     assert fake_trace.update_calls[-1]["metadata"]["query_variant_count"] == 3
     assert fake_trace.update_calls[-1]["metadata"]["extra_embedded_queries"] == 2
@@ -1580,7 +1580,7 @@ def test_set_message_feedback_success_up(
     db_session: Session,
 ) -> None:
     """Can set feedback=up on assistant message."""
-    from backend.models import Chat, Message, MessageFeedback, MessageRole
+    from backend.models import Chat, Message, MessageRole
 
     token = register_and_verify_user(client, db_session, email="fbup@example.com")
     cl_resp = client.post(
@@ -3380,7 +3380,7 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     from backend.search.service import default_retrieval_reliability
 
     token = register_and_verify_user(client, db_session, email="debug-fields@example.com")
-    cl_resp = client.post(
+    client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Debug Fields Client"},

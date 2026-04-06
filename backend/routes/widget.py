@@ -18,6 +18,7 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter, widget_public_rate_limit_key
 from backend.core.security import validate_kyc_token_detail
 from backend.models import Chat, Client, EscalationTrigger, UserContext
+from backend.user_sessions.service import start_user_session, touch_user_session
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
     SESSION_FORBIDDEN_CODE,
@@ -117,6 +118,12 @@ def widget_session_init(
                 browser_locale=body.locale,
             )
             db.add(resumable_chat)
+            touch_user_session(
+                db,
+                client_id=client.id,
+                user_context=resumable_chat.user_context,
+                started_at=resumable_chat.created_at,
+            )
             db.commit()
             logger.info("kyc_session_resumed: client_id=%s", client.id)
         else:
@@ -131,6 +138,13 @@ def widget_session_init(
                 user_context=merged,
             )
             db.add(chat)
+            db.flush()
+            start_user_session(
+                db,
+                client_id=client.id,
+                user_context=merged,
+                started_at=chat.created_at,
+            )
             db.commit()
             logger.info(
                 "kyc_session_resume_skipped: client_id=%s reason=no_resumable_session",

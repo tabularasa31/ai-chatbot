@@ -8,7 +8,7 @@ from unittest.mock import Mock
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding
+from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -235,3 +235,61 @@ def test_widget_chat_closed_session_returns_controlled_error(
     )
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "session_closed"
+
+
+def test_widget_chat_identified_session_increments_user_session_turns(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.core.security import generate_kyc_token
+
+    token = register_and_verify_user(client, db_session, email="widget-user-session-turns@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget User Session Turns Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+    body = cl_resp.json()
+    public_id = body["public_id"]
+    client_uuid = uuid.UUID(body["id"])
+    api_key = body["api_key"]
+    _seed_rag_chunk(db_session, client_uuid)
+
+    sk_resp = client.post(
+        "/clients/me/kyc/secret",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert sk_resp.status_code == 200
+    secret_hex = sk_resp.json()["secret_key"]
+    identity_token = generate_kyc_token(
+        {"user_id": "ext-42", "tenant_id": public_id, "email": "user@example.com"},
+        secret_hex,
+    )
+    init_resp = client.post(
+        "/widget/session/init",
+        json={"api_key": api_key, "identity_token": identity_token},
+    )
+    assert init_resp.status_code == 200
+    session_id = init_resp.json()["session_id"]
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Widget says hi"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+
+    r = client.post(
+        f"/widget/chat?message=widget%20support&client_id={public_id}&session_id={session_id}"
+    )
+    assert r.status_code == 200
+
+    row = (
+        db_session.query(UserSession)
+        .filter(UserSession.client_id == client_uuid, UserSession.user_id == "ext-42")
+        .first()
+    )
+    assert row is not None
+    assert row.conversation_turns == 1

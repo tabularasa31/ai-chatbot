@@ -819,6 +819,14 @@ Index(
     UserSession.client_id,
     UserSession.user_id,
 )
+Index(
+    "uq_user_sessions_client_user_active",
+    UserSession.client_id,
+    UserSession.user_id,
+    unique=True,
+    postgresql_where=UserSession.session_ended_at.is_(None),
+    sqlite_where=UserSession.session_ended_at.is_(None),
+)
 
 
 class Tester(Base):

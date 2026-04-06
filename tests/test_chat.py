@@ -17,6 +17,7 @@ from backend.chat.service import (
     ChatPipelineResult,
     ClarificationState,
     _build_clarification_decision,
+    _resolve_fallback_locale,
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
@@ -29,6 +30,7 @@ from backend.chat.service import (
     validate_answer,
 )
 from backend.chat.schemas import ChatResponse
+from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
 from backend.guards.reject_response import RejectReason, build_reject_response
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
 from backend.search.service import build_reliability_assessment
@@ -3048,6 +3050,53 @@ def test_build_reject_response_uses_canonical_english_without_question() -> None
     assert "this product" in text
 
 
+def test_localize_text_to_question_language_uses_fallback_locale_when_question_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_messages: list[dict[str, str]] = []
+
+    class FakeClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs: object) -> Mock:
+                    nonlocal captured_messages
+                    captured_messages = kwargs["messages"]  # type: ignore[assignment]
+                    return Mock(
+                        choices=[Mock(message=Mock(content="Bonjour"))],
+                        usage=Mock(total_tokens=21),
+                    )
+
+    monkeypatch.setattr(
+        "backend.chat.language.get_openai_client",
+        lambda _api_key: FakeClient(),
+    )
+
+    result = localize_text_to_question_language_result(
+        canonical_text="Hello",
+        question="",
+        api_key="sk-test",
+        fallback_locale="fr-FR",
+    )
+
+    assert result == LocalizationResult(text="Bonjour", tokens_used=21)
+    assert "User question:\n(missing)" in captured_messages[1]["content"]
+    assert "Fallback locale hint:\nfr-FR" in captured_messages[1]["content"]
+
+
+def test_resolve_fallback_locale_prefers_kyc_then_browser_locale() -> None:
+    assert (
+        _resolve_fallback_locale(
+            {"locale": "fr-FR", "browser_locale": "de-DE"},
+            "en-US",
+        )
+        == "fr-FR"
+    )
+    assert _resolve_fallback_locale({"browser_locale": "de-DE"}, "en-US") == "de-DE"
+    assert _resolve_fallback_locale({}, "en-US") == "en-US"
+    assert _resolve_fallback_locale({}, None) is None
+
+
 # ---------------------------------------------------------------------------
 # run_chat_pipeline — guard / FAQ / RAG scenarios
 # ---------------------------------------------------------------------------
@@ -3670,6 +3719,55 @@ def test_process_chat_message_returns_structured_clarification_for_ambiguous_dom
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
     assert chat is not None
     assert (chat.user_context or {}).get("clarification_state", {}).get("status") == "awaiting_reply"
+
+
+def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Client
+
+    token = register_and_verify_user(client, db_session, email="locale-fallback@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Locale Fallback Client"},
+    )
+    set_client_openai_key(client, token)
+    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    captured_kwargs: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: Mock(detected=True, level=1, method="structural", score=0.9),
+    )
+
+    def fake_build_reject_response_result(**kwargs: object) -> LocalizationResult:
+        captured_kwargs.update(kwargs)
+        return LocalizationResult(text="Bonjour", tokens_used=4)
+
+    monkeypatch.setattr(
+        "backend.chat.service.build_reject_response_result",
+        fake_build_reject_response_result,
+    )
+
+    outcome = process_chat_message(
+        client_row.id,
+        "",
+        uuid.uuid4(),
+        db_session,
+        api_key=cl_resp.json()["api_key"],
+        user_context={"locale": "fr-FR"},
+        browser_locale="de-DE",
+    )
+
+    assert outcome.text == "Bonjour"
+    assert outcome.tokens_used == 4
+    assert captured_kwargs["question"] == ""
+    assert captured_kwargs["fallback_locale"] == "fr-FR"
 
 
 def test_clarification_continuation_reenters_pipeline_and_clears_state(

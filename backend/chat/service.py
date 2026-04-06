@@ -581,6 +581,22 @@ def _is_sufficiently_answerable(result: ChatPipelineResult) -> bool:
     return result.validation_outcome == "valid" and retrieval.reliability.score in {"medium", "high"}
 
 
+def _resolve_fallback_locale(
+    user_context: dict[str, Any] | None,
+    browser_locale: str | None = None,
+) -> str | None:
+    if user_context:
+        locale = str(user_context.get("locale") or "").strip()
+        if locale:
+            return locale
+        stored_browser_locale = str(user_context.get("browser_locale") or "").strip()
+        if stored_browser_locale:
+            return stored_browser_locale
+    if browser_locale and browser_locale.strip():
+        return browser_locale.strip()
+    return None
+
+
 def _build_domain_clarification(
     *,
     original_user_message: str,
@@ -588,6 +604,7 @@ def _build_domain_clarification(
     turn_index: int,
     partial: bool,
     api_key: str,
+    fallback_locale: str | None = None,
 ) -> ClarificationDecision:
     if partial:
         canonical_text = (
@@ -604,6 +621,7 @@ def _build_domain_clarification(
         canonical_text=canonical_text,
         question=original_user_message,
         api_key=api_key,
+        fallback_locale=fallback_locale,
     )
     text = localization.text
     payload = ClarificationPayload(
@@ -642,11 +660,13 @@ def _build_api_slot_clarification(
     original_user_message_redacted: str,
     turn_index: int,
     api_key: str,
+    fallback_locale: str | None = None,
 ) -> ClarificationDecision:
     localization = localize_text_to_question_language_result(
         canonical_text="Can you share the endpoint and the error message you see?",
         question=original_user_message,
         api_key=api_key,
+        fallback_locale=fallback_locale,
     )
     text = localization.text
     payload = ClarificationPayload(
@@ -684,11 +704,13 @@ def _build_context_clarification(
     original_user_message_redacted: str,
     turn_index: int,
     api_key: str,
+    fallback_locale: str | None = None,
 ) -> ClarificationDecision:
     localization = localize_text_to_question_language_result(
         canonical_text="Can you clarify which feature or setup step you mean?",
         question=original_user_message,
         api_key=api_key,
+        fallback_locale=fallback_locale,
     )
     text = localization.text
     payload = ClarificationPayload(
@@ -727,6 +749,7 @@ def _build_clarification_decision(
     result: ChatPipelineResult,
     existing_state: ClarificationState | None,
     api_key: str,
+    fallback_locale: str | None = None,
 ) -> ClarificationDecision | None:
     if _is_sufficiently_answerable(result):
         return None
@@ -744,6 +767,7 @@ def _build_clarification_decision(
             turn_index=turn_index,
             partial=_is_low_retrieval_confidence(result),
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
     if _question_matches_missing_api_slot(original_user_message_redacted):
         return _build_api_slot_clarification(
@@ -751,6 +775,7 @@ def _build_clarification_decision(
             original_user_message_redacted=original_user_message_redacted,
             turn_index=turn_index,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
     if _is_low_retrieval_confidence(result) and _question_matches_generic_setup(original_user_message_redacted):
         return _build_context_clarification(
@@ -758,6 +783,7 @@ def _build_clarification_decision(
             original_user_message_redacted=original_user_message_redacted,
             turn_index=turn_index,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
     return None
 
@@ -857,6 +883,7 @@ def run_chat_pipeline(
     *,
     api_key: str,
     user_context_line: str | None = None,
+    fallback_locale: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     trace: "TraceHandle | None" = None,
     precomputed_injection: Any | None = None,
@@ -891,6 +918,7 @@ def run_chat_pipeline(
             profile=None,
             question=question,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -1010,6 +1038,7 @@ def run_chat_pipeline(
             profile=profile,
             question=question,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -1068,6 +1097,7 @@ def run_chat_pipeline(
             profile=profile,
             question=question,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -1119,6 +1149,7 @@ def run_chat_pipeline(
             profile=profile,
             question=question,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
         final_answer = reject_result.text
         tokens_used += reject_result.tokens_used
@@ -1670,6 +1701,7 @@ def process_chat_message(
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
+    fallback_locale = _resolve_fallback_locale(effective_user_ctx, browser_locale)
 
     explicit_human_request_raw = detect_human_request(redacted_question)
 
@@ -1804,6 +1836,7 @@ def process_chat_message(
             profile=None,
             question=redacted_question,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
         _persist_turn(
             db,
@@ -2129,6 +2162,7 @@ def process_chat_message(
         db,
         api_key=api_key,
         user_context_line=user_context_line,
+        fallback_locale=fallback_locale,
         disclosure_config=disclosure_cfg,
         trace=trace,
         precomputed_injection=injection_result,
@@ -2141,6 +2175,7 @@ def process_chat_message(
             result=result,
             existing_state=clarification_state,
             api_key=api_key,
+            fallback_locale=fallback_locale,
         )
 
     if clarification_decision is not None:

@@ -108,6 +108,7 @@ def complete_escalation_openai_turn(
                 canonical_text=FALLBACK_EN_GENERIC,
                 question=latest_user_text,
                 api_key=api_key,
+                fallback_locale=fact_json.get("locale"),
             )
             msg = localization.text
             tokens += localization.tokens_used
@@ -130,6 +131,7 @@ def complete_escalation_openai_turn(
             canonical_text=FALLBACK_EN_GENERIC,
             question=latest_user_text,
             api_key=api_key,
+            fallback_locale=fact_json.get("locale"),
         )
         fb = localization.text
         if isinstance(tn, str):

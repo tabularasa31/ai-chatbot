@@ -68,6 +68,7 @@ def build_reject_response(
     profile: TenantProfileModel | None,
     question: str | None = None,
     api_key: str | None = None,
+    fallback_locale: str | None = None,
 ) -> str:
     canonical_text = _build_canonical_reject_response(
         reason=reason,
@@ -77,6 +78,7 @@ def build_reject_response(
         canonical_text=canonical_text,
         question=question,
         api_key=api_key,
+        fallback_locale=fallback_locale,
     )
 
 
@@ -86,6 +88,7 @@ def build_reject_response_result(
     profile: TenantProfileModel | None,
     question: str | None = None,
     api_key: str | None = None,
+    fallback_locale: str | None = None,
 ) -> LocalizationResult:
     canonical_text = _build_canonical_reject_response(
         reason=reason,
@@ -95,4 +98,5 @@ def build_reject_response_result(
         canonical_text=canonical_text,
         question=question,
         api_key=api_key,
+        fallback_locale=fallback_locale,
     )

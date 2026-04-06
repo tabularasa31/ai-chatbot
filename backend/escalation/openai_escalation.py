@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
+from backend.chat.language import localize_text_to_question_language
 from backend.core.openai_client import get_openai_client
 from backend.models import EscalationPhase
 
@@ -99,7 +100,11 @@ def complete_escalation_openai_turn(
         )
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)
-        msg = (data.get("message_to_user") or "").strip() or FALLBACK_EN_GENERIC
+        msg = (data.get("message_to_user") or "").strip() or localize_text_to_question_language(
+            canonical_text=FALLBACK_EN_GENERIC,
+            question=latest_user_text,
+            api_key=api_key,
+        )
         fd = data.get("followup_decision")
         followup: Optional[Literal["yes", "no", "unclear"]] = None
         if fd in ("yes", "no", "unclear"):
@@ -116,7 +121,11 @@ def complete_escalation_openai_turn(
     except Exception as e:  # noqa: BLE001
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         tn = fact_json.get("ticket_number")
-        fb = FALLBACK_EN_GENERIC
+        fb = localize_text_to_question_language(
+            canonical_text=FALLBACK_EN_GENERIC,
+            question=latest_user_text,
+            api_key=api_key,
+        )
         if isinstance(tn, str):
             fb = _append_ticket_token(fb, tn)
         return EscalationLlmResult(message_to_user=fb, followup_decision=None, tokens_used=0)

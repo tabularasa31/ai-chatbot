@@ -188,7 +188,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     assert outcome.chat_ended is False
     assert outcome.document_ids == []
     assert outcome.tokens_used == 0
-    assert outcome.text.startswith("Извините")
+    assert outcome.text.startswith("Sorry")
     assert "Product" in outcome.text
     assert "ModA" in outcome.text
 

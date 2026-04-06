@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
+from backend.chat.language import localize_text_to_question_language
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
@@ -582,18 +583,24 @@ def _build_domain_clarification(
     original_user_message_redacted: str,
     turn_index: int,
     partial: bool,
+    api_key: str,
 ) -> ClarificationDecision:
     if partial:
-        text = (
+        canonical_text = (
             "Domain setup usually starts with DNS configuration. "
             "To guide you precisely, tell me whether you want DNS setup, CDN proxying, or SSL."
         )
         clarification_type: Literal["partial_plus_question"] = "partial_plus_question"
         message_type: Literal["partial_with_clarification"] = "partial_with_clarification"
     else:
-        text = "Do you want to connect the domain to DNS, CDN, or SSL?"
+        canonical_text = "Do you want to connect the domain to DNS, CDN, or SSL?"
         clarification_type = "disambiguation"
         message_type = "clarification"
+    text = localize_text_to_question_language(
+        canonical_text=canonical_text,
+        question=original_user_message,
+        api_key=api_key,
+    )
     payload = ClarificationPayload(
         reason="ambiguous_intent",
         type=clarification_type,
@@ -628,8 +635,13 @@ def _build_api_slot_clarification(
     original_user_message: str,
     original_user_message_redacted: str,
     turn_index: int,
+    api_key: str,
 ) -> ClarificationDecision:
-    text = "Can you share the endpoint and the error message you see?"
+    text = localize_text_to_question_language(
+        canonical_text="Can you share the endpoint and the error message you see?",
+        question=original_user_message,
+        api_key=api_key,
+    )
     payload = ClarificationPayload(
         reason="missing_critical_slot",
         type="slot_request",
@@ -663,8 +675,13 @@ def _build_context_clarification(
     original_user_message: str,
     original_user_message_redacted: str,
     turn_index: int,
+    api_key: str,
 ) -> ClarificationDecision:
-    text = "Can you clarify which feature or setup step you mean?"
+    text = localize_text_to_question_language(
+        canonical_text="Can you clarify which feature or setup step you mean?",
+        question=original_user_message,
+        api_key=api_key,
+    )
     payload = ClarificationPayload(
         reason="low_retrieval_confidence",
         type="context_request",
@@ -699,6 +716,7 @@ def _build_clarification_decision(
     original_user_message_redacted: str,
     result: ChatPipelineResult,
     existing_state: ClarificationState | None,
+    api_key: str,
 ) -> ClarificationDecision | None:
     if _is_sufficiently_answerable(result):
         return None
@@ -715,18 +733,21 @@ def _build_clarification_decision(
             original_user_message_redacted=original_user_message_redacted,
             turn_index=turn_index,
             partial=_is_low_retrieval_confidence(result),
+            api_key=api_key,
         )
     if _question_matches_missing_api_slot(original_user_message_redacted):
         return _build_api_slot_clarification(
             original_user_message=original_user_message,
             original_user_message_redacted=original_user_message_redacted,
             turn_index=turn_index,
+            api_key=api_key,
         )
     if _is_low_retrieval_confidence(result) and _question_matches_generic_setup(original_user_message_redacted):
         return _build_context_clarification(
             original_user_message=original_user_message,
             original_user_message_redacted=original_user_message_redacted,
             turn_index=turn_index,
+            api_key=api_key,
         )
     return None
 
@@ -855,7 +876,12 @@ def run_chat_pipeline(
         else detect_injection(question, client_id=str(client_id), api_key=api_key)
     )
     if injection_result.detected:
-        reject_text = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
+        reject_text = build_reject_response(
+            reason=RejectReason.INJECTION_DETECTED,
+            profile=None,
+            question=question,
+            api_key=api_key,
+        )
         return ChatPipelineResult(
             raw_answer=reject_text,
             final_answer=reject_text,
@@ -969,7 +995,12 @@ def run_chat_pipeline(
         trace=trace,
     )
     if not relevant:
-        reject_text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
+        reject_text = build_reject_response(
+            reason=RejectReason.NOT_RELEVANT,
+            profile=profile,
+            question=question,
+            api_key=api_key,
+        )
         return ChatPipelineResult(
             raw_answer=reject_text,
             final_answer=reject_text,
@@ -1025,6 +1056,8 @@ def run_chat_pipeline(
         reject_text = build_reject_response(
             reason=RejectReason.LOW_RETRIEVAL_SCORE,
             profile=profile,
+            question=question,
+            api_key=api_key,
         )
         return ChatPipelineResult(
             raw_answer=reject_text,
@@ -1074,6 +1107,8 @@ def run_chat_pipeline(
         final_answer = build_reject_response(
             reason=RejectReason.INSUFFICIENT_CONFIDENCE,
             profile=profile,
+            question=question,
+            api_key=api_key,
         )
         validation_outcome = "fallback"
 
@@ -1158,11 +1193,11 @@ def build_rag_prompt(
     if client_product_name:
         hint = topic_hint or ""
         refusal_message = (
-            f"Я отвечаю только на вопросы по {client_product_name}.\n"
+            f"I only answer questions about {client_product_name}.\n"
             + (
-                f"Попробуйте спросить что-то связанное с {hint}."
+                f"Please ask something related to {hint}."
                 if hint
-                else "Попробуйте спросить что-то связанное с документацией."
+                else "Please ask something related to the documentation."
             )
         )
         client_guard = (
@@ -1258,7 +1293,14 @@ def generate_answer(
     # For faq_context strategy we may intentionally have no retrieval chunks,
     # but still want generation to use VERIFIED FAQ CANDIDATES hints.
     if not context_chunks and not faq_context_items:
-        return ("I don't have information about this.", 0)
+        return (
+            localize_text_to_question_language(
+                canonical_text="I don't have information about this.",
+                question=question,
+                api_key=api_key,
+            ),
+            0,
+        )
 
     system_prompt, user_message = build_rag_messages(
         question,
@@ -1755,7 +1797,10 @@ def process_chat_message(
 
     if injection_result.detected:
         reject_text = build_reject_response(
-            reason=RejectReason.INJECTION_DETECTED, profile=None
+            reason=RejectReason.INJECTION_DETECTED,
+            profile=None,
+            question=redacted_question,
+            api_key=api_key,
         )
         _persist_turn(
             db,
@@ -2092,6 +2137,7 @@ def process_chat_message(
             original_user_message_redacted=redacted_question,
             result=result,
             existing_state=clarification_state,
+            api_key=api_key,
         )
 
     if clarification_decision is not None:
@@ -2403,6 +2449,7 @@ def run_debug(
             original_user_message_redacted=redacted_question,
             result=result,
             existing_state=None,
+            api_key=api_key,
         )
 
     retrieval = result.retrieval

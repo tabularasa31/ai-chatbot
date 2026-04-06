@@ -18,7 +18,15 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter, widget_public_rate_limit_key
 from backend.core.security import validate_kyc_token_detail
 from backend.models import Chat, Client, EscalationTrigger, UserContext
-from backend.widget.service import apply_identity_context_patch, find_resumable_identified_chat
+from backend.widget.service import (
+    SESSION_CLOSED_CODE,
+    SESSION_FORBIDDEN_CODE,
+    SESSION_INVALID_CODE,
+    SESSION_NOT_FOUND_CODE,
+    apply_identity_context_patch,
+    find_resumable_identified_chat,
+    widget_session_error_detail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,9 +181,44 @@ def widget_chat(
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
         ) from e
 
-    try:
-        sid = uuid.UUID(session_id) if session_id else uuid.uuid4()
-    except (ValueError, TypeError):
+    existing_chat: Chat | None = None
+    if session_id:
+        try:
+            sid = uuid.UUID(session_id)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=422,
+                detail=widget_session_error_detail(
+                    SESSION_INVALID_CODE,
+                    "Invalid session_id",
+                ),
+            )
+        existing_chat = db.query(Chat).filter(Chat.session_id == sid).first()
+        if existing_chat is None:
+            raise HTTPException(
+                status_code=409,
+                detail=widget_session_error_detail(
+                    SESSION_NOT_FOUND_CODE,
+                    "Session not found",
+                ),
+            )
+        if existing_chat.client_id != client.id:
+            raise HTTPException(
+                status_code=409,
+                detail=widget_session_error_detail(
+                    SESSION_FORBIDDEN_CODE,
+                    "Session belongs to another client",
+                ),
+            )
+        if existing_chat.ended_at is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=widget_session_error_detail(
+                    SESSION_CLOSED_CODE,
+                    "Session is closed",
+                ),
+            )
+    else:
         sid = uuid.uuid4()
 
     try:

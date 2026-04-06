@@ -38,12 +38,14 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 - Can embed chat widget on their website
 
 ### 2. Document Upload
-- Client uploads: PDF, Markdown, Swagger/OpenAPI
+- Client uploads: PDF, Markdown, Swagger/OpenAPI (`.json`, `.yaml`, `.yml`)
 - Or adds a same-domain documentation URL source for background crawling and indexing
+- URL sources that return structured OpenAPI JSON/YAML are auto-routed through the same Swagger/OpenAPI ingestion pipeline
 - Documents/pages are parsed, chunked, and embedded automatically
 
 ### 3. Indexing
-- Parsed text split into **sentence-aware chunks** (мягкий лимит ~500 символов, перекрытие последних *N* предложений между соседними чанками)
+- PDF/Markdown are split into **sentence-aware chunks**
+- Swagger/OpenAPI is transformed into endpoint-aware chunks (`method + path`) with additional request/response schema detail chunks for rich operations
 - Each chunk vectorized using OpenAI `text-embedding-3-small`
 - Vectors stored in PostgreSQL with pgvector
 
@@ -82,7 +84,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 3. Copy embed code from the Dashboard (your public bot ID, format `ch_…`, passed via the legacy `clientId` snippet param) → paste before `</body>` (API key stays private for dashboard/API use)
 
 #### Day 2: Upload Documents
-1. Upload PDFs, Markdown, Swagger files or add a URL source
+1. Upload PDFs, Markdown, Swagger/OpenAPI files or add a URL source
 2. Processing happens automatically (status: Processing / Crawling → Ready)
 3. Widget becomes active as soon as indexed knowledge is available
 

@@ -20,7 +20,8 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 
 1. Go to Dashboard → Knowledge.
 2. Either click "Upload document" or add a URL source.
-3. Supported file formats: PDF, Markdown (.md), Swagger/OpenAPI (.json, .yaml, .yml). Maximum file size: 50 MB.
+3. Supported file formats: PDF, Markdown (.md), Swagger/OpenAPI (`.json`, `.yaml`, `.yml`). Maximum file size: 50 MB.
+4. Swagger/OpenAPI files are processed semantically: Chat9 indexes API operations and schema detail instead of embedding raw JSON/YAML text.
 4. URL sources crawl same-domain documentation pages in the background and show crawl/index status in the same Knowledge hub.
 5. Wait until the document or source status returns to "Ready" — this may take a few seconds to a minute depending on size.
 

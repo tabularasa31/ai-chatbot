@@ -6,7 +6,7 @@ You upload your product documentation, and Chat9 creates a smart chat widget tha
 
 ## How it works
 
-1. **Add your knowledge** — upload PDF, Markdown, and Swagger/OpenAPI files, or index a documentation website URL.
+1. **Add your knowledge** — upload PDF, Markdown, and Swagger/OpenAPI files (`.json`, `.yaml`, `.yml`), or index a documentation website URL. OpenAPI files and structured OpenAPI URLs are indexed as API operations, not as raw JSON/YAML text.
 2. **Get a chat widget** — a JavaScript snippet you embed on your website in 2 lines of code.
 3. **Your customers get instant answers** — the bot answers based on your documentation only. No hallucinations about products you don't sell.
 

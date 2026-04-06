@@ -1,7 +1,36 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-01 (UTC) — aligned /chat/debug with public pipeline, soft rejection texts, single injection detection per request
+**Last updated:** 2026-04-06 (UTC) — smart OpenAPI ingestion for files and URLs, semantic endpoint chunking, rich schema detail chunks
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-04-06) — smart OpenAPI ingestion for files and URLs
+
+### OpenAPI / Swagger ingestion pipeline
+
+- ✅ **Structured OpenAPI parsing** (`backend/documents/parsers.py`): `.json`, `.yaml`, and `.yml` OpenAPI/Swagger files now enter a dedicated semantic ingestion path instead of being embedded as raw machine-readable text.
+- ✅ **Semantic validation:** uploaded or fetched structured payloads must parse as JSON/YAML objects, expose OpenAPI/Swagger markers, and contain at least one supported HTTP operation under `paths`.
+- ✅ **URL auto-detection** (`backend/documents/url_service.py`): URL sources that return structured JSON/YAML with OpenAPI signals are routed through the same `swagger` pipeline instead of generic page ingestion.
+- ✅ **Strict invalid-OpenAPI handling for structured URLs:** JSON/YAML blobs that look like OpenAPI but fail semantic validation now return a clear invalid-OpenAPI error instead of being silently indexed as generic text.
+
+### Retrieval-friendly chunking
+
+- ✅ **Operation-aware chunks** (`backend/embeddings/service.py`): OpenAPI knowledge is now indexed as one primary chunk per API operation (`method + path`) rather than generic sentence chunks over the whole spec.
+- ✅ **Stable endpoint rendering:** primary chunks include endpoint, operation ID, summary, description, tags, deprecated status, auth, parameters, request body summary, responses, example call, and selected `x-...` extensions.
+- ✅ **Rich schema detail chunks:** large or schema-rich operations now produce additional `request_schema` and `response_schema` chunks for better retrieval on payload structure questions.
+- ✅ **Nested field extraction:** schema detail chunks include required fields, top-level properties, one-level nested properties for rich config objects, and flattened `field path: ...` lines for точечные developer-style queries like `cache.disable` or `origin.hostname`.
+- ✅ **Embedding metadata upgrade:** OpenAPI chunks now persist retrieval metadata such as `path`, `method`, `operation_id`, `deprecated`, `content_types`, `response_codes`, `auth_schemes`, `source_kind`, and `source_format`.
+
+### Reliability hardening + coverage
+
+- ✅ **Ref/cycle protection:** local `$ref` resolution now has clearer cycle/depth guards for complex `allOf` / schema graphs, with graceful degradation instead of runaway expansion.
+- ✅ **Structured ingestion hardening:** OpenAPI URL ingestion avoids double parsing, reuses normalized chunk objects directly, and sanitizes reserved OpenAPI chunk sentinels inside rendered examples.
+- ✅ **Regression coverage:** added tests for YAML uploads, OpenAPI URL auto-detection, invalid structured payload handling, rich operation chunk splitting, round-trip render/extract behavior, unchanged-content short-circuiting, and cyclic `allOf/$ref` schemas.
+
+### Docs + QA sync
+
+- ✅ **Product/docs/demo sync:** updated core docs, Russian docs, demo docs, and QA plans to document OpenAPI file support, semantic endpoint chunking, request/response schema detail chunks, and URL auto-detection behavior.
 
 ---
 

@@ -10,7 +10,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.embeddings.service import chunk_text
+from backend.documents.parsers import (
+    build_openapi_ingestion_payload,
+    extract_openapi_chunks_from_rendered_text,
+)
+from backend.embeddings.service import _build_swagger_chunks, chunk_text
 from backend.models import Embedding
 
 
@@ -167,6 +171,270 @@ def test_create_embeddings_document_not_found(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 404
+
+
+@patch("backend.embeddings.service.get_openai_client")
+def test_create_embeddings_swagger_uses_endpoint_metadata(
+    mock_get_openai: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="swagger-emb@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Swagger Emb Client"},
+    )
+    set_client_openai_key(client, token)
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Team API
+  version: "1.0"
+paths:
+  /users:
+    post:
+      summary: Create a user
+      operationId: createUser
+      tags: [users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+      responses:
+        "201":
+          description: Created
+"""
+    upload_resp = client.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("team-api.yaml", swagger_content, "application/yaml")},
+    )
+    doc_id = upload_resp.json()["id"]
+
+    mock_client = Mock()
+    mock_client.embeddings.create.return_value = Mock(data=[Mock(embedding=[0.1] * 1536)])
+    mock_get_openai.return_value = mock_client
+
+    response = client.post(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 202
+
+    from backend.core.db import SessionLocal
+
+    with SessionLocal() as fresh_db:
+        row = (
+            fresh_db.query(Embedding)
+            .filter(Embedding.document_id == uuid.UUID(doc_id))
+            .first()
+        )
+
+    assert row is not None
+    metadata = row.metadata_json
+    assert metadata["type"] == "api_endpoint"
+    assert metadata["path"] == "/users"
+    assert metadata["method"] == "post"
+    assert metadata["operation_id"] == "createUser"
+    assert metadata["source_format"] == "yaml"
+    assert metadata["spec_version"] == "3.0.0"
+
+
+def test_build_swagger_chunks_forces_schema_detail_split_for_rich_operation() -> None:
+    swagger_content = b"""
+openapi: 3.0.3
+info:
+  title: Rich API
+  version: "1.0"
+paths:
+  /resources:
+    post:
+      summary: Create resource
+      operationId: createResource
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  properties:
+                    id:
+                      type: string
+                    origin:
+                      type: object
+                      properties:
+                        hostname:
+                          type: string
+                        https:
+                          type: boolean
+                    name:
+                      type: string
+                    cache:
+                      type: object
+                      properties:
+                        disable:
+                          type: boolean
+                        use_stale:
+                          type: boolean
+                    certificate:
+                      type: object
+                    active:
+                      type: boolean
+                  required:
+                    - origin
+                    - name
+            example:
+              id: abc
+              origin: https://origin.example.com
+              name: example
+      responses:
+        "200":
+          allOf:
+            - description: Created
+            - content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      task_id:
+                        type: string
+                      resource_id:
+                        type: string
+                      cdn_domain:
+                        type: string
+                  example:
+                    status: accept
+                    task_id: "1"
+                    resource_id: rid
+                    cdn_domain: cdn.example.com
+"""
+    parsed_text, _, _, _ = build_openapi_ingestion_payload(swagger_content)
+    chunks = _build_swagger_chunks(parsed_text)
+
+    assert len(chunks) == 3
+    assert [chunk["subtype"] for chunk in chunks] == [
+        "primary",
+        "request_schema",
+        "response_schema",
+    ]
+    assert "Request Schema Detail:" in str(chunks[1]["text"])
+    assert "required fields: origin, name" in str(chunks[1]["text"])
+    assert "top-level fields:" in str(chunks[1]["text"])
+    assert "origin nested fields:" in str(chunks[1]["text"])
+    assert "field path: origin.hostname" in str(chunks[1]["text"])
+    assert "origin.hostname: string" in str(chunks[1]["text"])
+    assert "cache nested fields:" in str(chunks[1]["text"])
+    assert "field path: cache.disable" in str(chunks[1]["text"])
+    assert "cache.disable: boolean" in str(chunks[1]["text"])
+    assert "Response Schema Detail:" in str(chunks[2]["text"])
+    assert "200 application/json top-level fields:" in str(chunks[2]["text"])
+
+
+def test_openapi_render_round_trip_preserves_operation_metadata() -> None:
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Round Trip API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      tags: [users]
+      responses:
+        "200":
+          description: OK
+"""
+    parsed_text, original_chunks, source_format, spec_version = build_openapi_ingestion_payload(swagger_content)
+    reparsed_chunks, reparsed_source_format, reparsed_spec_version = extract_openapi_chunks_from_rendered_text(parsed_text)
+
+    assert reparsed_source_format == source_format
+    assert reparsed_spec_version == spec_version
+    assert len(reparsed_chunks) == len(original_chunks) == 1
+    assert reparsed_chunks[0].path == original_chunks[0].path
+    assert reparsed_chunks[0].method == original_chunks[0].method
+    assert reparsed_chunks[0].operation_id == original_chunks[0].operation_id
+    assert tuple(reparsed_chunks[0].tags) == tuple(original_chunks[0].tags)
+
+
+def test_openapi_examples_sanitize_internal_chunk_markers() -> None:
+    swagger_content = f"""
+openapi: 3.0.0
+info:
+  title: Marker API
+  version: "1.0"
+paths:
+  /users:
+    post:
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              note: "before{chr(10)}{chr(10)}<<<OPENAPI_OPERATION>>>{chr(10)}{chr(10)}after"
+      responses:
+        "200":
+          description: OK
+""".encode()
+    parsed_text, chunks, _, _ = build_openapi_ingestion_payload(swagger_content)
+    reparsed_chunks, _, _ = extract_openapi_chunks_from_rendered_text(parsed_text)
+
+    assert len(chunks) == 1
+    assert len(reparsed_chunks) == 1
+    assert parsed_text.count("<<<OPENAPI_OPERATION>>>") == 1
+
+
+def test_openapi_allof_ref_cycle_finishes_without_recursion_error() -> None:
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Cycle API
+  version: "1.0"
+paths:
+  /items:
+    post:
+      summary: Create item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/A'
+      responses:
+        "200":
+          description: OK
+components:
+  schemas:
+    A:
+      allOf:
+        - $ref: '#/components/schemas/B'
+        - type: object
+          properties:
+            id:
+              type: string
+    B:
+      allOf:
+        - $ref: '#/components/schemas/A'
+        - type: object
+          properties:
+            name:
+              type: string
+"""
+    parsed_text, chunks, _, _ = build_openapi_ingestion_payload(swagger_content)
+
+    assert len(chunks) == 1
+    assert "Endpoint: POST /items" in parsed_text
 
 
 @patch("backend.embeddings.service.get_openai_client")

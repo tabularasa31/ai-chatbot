@@ -27,6 +27,12 @@ from sqlalchemy.orm import Session, selectinload
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.documents.parsers import (
+    OpenAPIChunk,
+    build_openapi_ingestion_payload_from_spec,
+    looks_like_openapi,
+    load_openapi_spec,
+)
 from backend.models import (
     Client,
     Document,
@@ -79,6 +85,14 @@ class ExtractedPage:
 class FetchContext:
     stage: str
     url: str
+
+
+@dataclass
+class StructuredSource:
+    title: str
+    parsed_text: str
+    chunks: list[OpenAPIChunk]
+    source_format: str
 
 
 def _utcnow() -> dt.datetime:
@@ -763,6 +777,125 @@ def _build_chunk_text(chunk_text: str, page_title: str, section: str) -> str:
     return "\n\n".join(parts)
 
 
+def _normalize_source_format(source_format: str, *, from_url: bool) -> str:
+    if not from_url:
+        return source_format
+    if source_format == "json":
+        return "url-json"
+    if source_format == "yaml":
+        return "url-yaml"
+    return f"url-{source_format}"
+
+
+def _build_structured_openapi_chunks(
+    openapi_chunks: list[OpenAPIChunk],
+    *,
+    filename: str,
+    source_url: str,
+    source_format: str,
+) -> list[dict[str, Any]]:
+    normalized_source_format = _normalize_source_format(source_format, from_url=True)
+    out: list[dict[str, Any]] = []
+    for index, chunk in enumerate(openapi_chunks):
+        out.append(
+            {
+                "chunk_index": index,
+                "chunk_text": chunk.text,
+                "type": "api_endpoint",
+                "subtype": "primary",
+                "path": chunk.path,
+                "method": chunk.method,
+                "operation_id": chunk.operation_id,
+                "tags": chunk.tags,
+                "deprecated": chunk.deprecated,
+                "content_types": chunk.content_types,
+                "response_codes": chunk.response_codes,
+                "auth_schemes": chunk.auth_schemes,
+                "has_examples": chunk.has_examples,
+                "filename": filename,
+                "file_type": DocumentType.swagger.value,
+                "source_kind": "url",
+                "source_format": normalized_source_format,
+                "spec_version": chunk.spec_version,
+                "source_url": source_url,
+            }
+        )
+    return out
+
+
+def _fetch_openapi_source(url: str) -> StructuredSource | None:
+    context = FetchContext(stage="crawl:structured", url=url)
+    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
+        try:
+            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            _raise_for_upstream_status(response, context)
+        except HTTPException as exc:
+            _log_fetch(logging.INFO, "Skipping structured source after fetch failure", context, detail=exc.detail)
+            return None
+
+    content_type = response.headers.get("content-type", "").lower()
+    if "text/html" in content_type:
+        return None
+
+    body = response.content
+    if len(body) > MAX_HTML_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
+        )
+    if not body.strip():
+        return None
+
+    try:
+        spec, source_format = load_openapi_spec(body)
+    except ValueError:
+        return None
+
+    if not looks_like_openapi(spec):
+        raise HTTPException(
+            status_code=422,
+            detail="The URL returned structured JSON/YAML content, but it is not an OpenAPI/Swagger spec.",
+        )
+
+    try:
+        parsed_text, chunks, parsed_source_format, _ = build_openapi_ingestion_payload_from_spec(
+            spec,
+            source_format,
+        )
+    except ValueError as exc:
+        logger.info("Structured OpenAPI validation failed for %s: %s", url, exc)
+        raise HTTPException(
+            status_code=422,
+            detail="The URL looks like an OpenAPI document, but it could not be validated.",
+        ) from exc
+
+    info = spec.get("info") if isinstance(spec.get("info"), dict) else {}
+    title = "Unknown API"
+    if isinstance(info, dict):
+        title = (info.get("title") or "").strip() or title
+    return StructuredSource(
+        title=title[:255],
+        parsed_text=parsed_text,
+        chunks=chunks,
+        source_format=parsed_source_format or source_format,
+    )
+
+
+def _render_structured_openapi_chunks(
+    openapi_chunks: list[OpenAPIChunk],
+    *,
+    title: str,
+    source_url: str,
+    source_format: str,
+) -> list[dict[str, Any]]:
+    return _build_structured_openapi_chunks(
+        openapi_chunks,
+        filename=title[:255],
+        source_url=source_url,
+        source_format=source_format,
+    )
+
+
 def _fetch_page_html(url: str) -> str | None:
     context = FetchContext(stage="crawl:page", url=url)
     with _http_client(FETCH_TIMEOUT_SECONDS) as client:
@@ -866,6 +999,103 @@ def _upsert_page_document(
     doc.status = DocumentStatus.ready
     db.flush()
     return doc, len(page.chunks)
+
+
+def _upsert_structured_document(
+    *,
+    source: UrlSource,
+    url: str,
+    title: str,
+    parsed_text: str,
+    chunks: list[OpenAPIChunk],
+    db: Session,
+    api_key: str | None,
+) -> tuple[Document, int]:
+    existing = (
+        db.query(Document)
+        .options(selectinload(Document.embeddings))
+        .filter(Document.source_id == source.id)
+        .filter(Document.source_url == url)
+        .first()
+    )
+    content_hash = _content_hash(parsed_text)
+    if existing and _content_hash(existing.parsed_text or "") == content_hash:
+        existing.filename = title[:255]
+        existing.status = DocumentStatus.ready
+        existing.file_type = DocumentType.swagger
+        return existing, len(existing.embeddings)
+
+    if existing:
+        db.query(Embedding).filter(Embedding.document_id == existing.id).delete()
+        doc = existing
+    else:
+        doc = Document(
+            client_id=source.client_id,
+            source_id=source.id,
+            filename=title[:255],
+            file_type=DocumentType.swagger,
+            status=DocumentStatus.processing,
+            source_url=url,
+        )
+        db.add(doc)
+        db.flush()
+
+    doc.filename = title[:255]
+    doc.source_url = url
+    doc.file_type = DocumentType.swagger
+    doc.parsed_text = parsed_text
+    doc.status = DocumentStatus.embedding
+    db.flush()
+
+    rendered_chunks = _render_structured_openapi_chunks(
+        chunks,
+        title=title,
+        source_url=url,
+        source_format=chunks[0].source_format if chunks else "yaml",
+    )
+    try:
+        vectors = _embed_chunks(rendered_chunks, api_key)
+        for chunk, vector in zip(rendered_chunks, vectors):
+            db.add(
+                Embedding(
+                    document_id=doc.id,
+                    chunk_text=chunk["chunk_text"],
+                    vector=vector,
+                    metadata_json={
+                        "chunk_index": chunk["chunk_index"],
+                        "filename": doc.filename,
+                        "file_type": doc.file_type.value,
+                        "source_url": url,
+                        "source_kind": "url",
+                        "source_format": chunk.get("source_format"),
+                        "type": chunk.get("type"),
+                        "subtype": chunk.get("subtype"),
+                        "path": chunk.get("path"),
+                        "method": chunk.get("method"),
+                        "operation_id": chunk.get("operation_id"),
+                        "tags": chunk.get("tags"),
+                        "deprecated": chunk.get("deprecated"),
+                        "content_types": chunk.get("content_types"),
+                        "response_codes": chunk.get("response_codes"),
+                        "auth_schemes": chunk.get("auth_schemes"),
+                        "has_examples": chunk.get("has_examples"),
+                        "spec_version": chunk.get("spec_version"),
+                        "page_content_hash": content_hash,
+                    },
+                )
+            )
+        doc.status = DocumentStatus.ready
+        db.flush()
+        return doc, len(rendered_chunks)
+    except Exception:
+        db.rollback()
+        refreshed_doc = db.query(Document).filter(Document.id == doc.id).first()
+        if refreshed_doc is not None:
+            refreshed_doc.status = DocumentStatus.error
+            refreshed_doc.parsed_text = parsed_text
+            db.add(refreshed_doc)
+            db.commit()
+        raise HTTPException(status_code=500, detail="Structured source embedding failed")
 
 
 def list_knowledge_sources(client_id: uuid.UUID, db: Session) -> dict[str, Any]:
@@ -1047,6 +1277,26 @@ def _index_pages(
     TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
     status-code matching alone.
     """
+    structured_source = _fetch_openapi_source(source.url)
+    if structured_source is not None:
+        _, chunk_count = _upsert_structured_document(
+            source=source,
+            url=source.url,
+            title=structured_source.title,
+            parsed_text=structured_source.parsed_text,
+            chunks=structured_source.chunks,
+            db=db,
+            api_key=api_key,
+        )
+        source.metadata_json = {
+            **(source.metadata_json or {}),
+            "platform": "openapi",
+            "limit_reached": False,
+            "source_kind": "url",
+            "source_format": _normalize_source_format(structured_source.source_format, from_url=True),
+        }
+        return _CrawlResult(indexed_urls={source.url}, failures=[], chunks_created=chunk_count)
+
     root_html = _fetch_page_html(source.url) or ""
     source.metadata_json = {
         **(source.metadata_json or {}),
@@ -1184,6 +1434,21 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             return
 
         _finalize_crawl(source, run, plan, result, started, db)
+    except HTTPException as exc:
+        logger.warning("URL crawl rejected for source %s: %s", source_id, exc.detail)
+        source = db.query(UrlSource).filter(UrlSource.id == source_id).first()
+        if source:
+            source.status = SourceStatus.error
+            source.error_message = str(exc.detail)
+            run = (
+                db.query(UrlSourceRun)
+                .filter(UrlSourceRun.source_id == source_id)
+                .order_by(UrlSourceRun.created_at.desc())
+                .first()
+            )
+            if run and run.finished_at is None:
+                _mark_run_finished(run, status=SourceStatus.error.value, error_message=str(exc.detail))
+            db.commit()
     except Exception as exc:
         logger.exception("URL crawl failed for source %s", source_id)
         source = db.query(UrlSource).filter(UrlSource.id == source_id).first()

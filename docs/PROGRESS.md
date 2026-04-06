@@ -227,7 +227,8 @@
 ### Identity / widget (FI-KYC)
 - ✅ **FI-KYC** — идентификация пользователя виджета через **краткоживущий HMAC-токен** (не через `data-*` в embed): `POST /widget/session/init` (`api_key`, опционально `identity_token`), ответ `session_id` + `mode` (`identified` | `anonymous`); контекст в `chats.user_context` (JSON); в LLM попадают только `plan_tier`, `locale`, `audience_tag`
 - **Секрет подписи:** `POST/GET/POST` `/clients/me/kyc/secret|status|rotate` (шифрование как у OpenAI key; ротация с перекрытием старого ключа 1 ч); UI: `frontend/app/(app)/settings/widget/page.tsx`, `api.kyc`, пункт навигации **Widget API**
-- **Код:** `backend/core/security.py` (`generate_kyc_token`, `validate_kyc_token`), миграция `fi_kyc_user_identification`, таблица `user_sessions` (схема под v2), тесты `tests/test_kyc.py`
+- ✅ **FI-KYC continuity v2** — backend resume for identified users (`client_id + user_id`, 24h, only open chats), browser-local continuity for anonymous users, `Start new chat` after `chat_ended`, controlled widget session retries, live `user_sessions` lifecycle tracking
+- **Код:** `backend/core/security.py` (`generate_kyc_token`, `validate_kyc_token`), `backend/routes/widget.py`, `backend/widget/service.py`, `backend/user_sessions/service.py`, миграции `fi_kyc_user_identification` и `phase4_user_sessions_active_unique_v1`, тесты `tests/test_kyc.py`, `tests/test_widget.py`, `tests/test_chat.py`, `tests/test_escalation.py`
 - Промпт `cursor_prompts/FI-KYC-user-identification.md` **удалён** после внедрения (описание здесь и в `BACKLOG_PRODUCT.md`)
 
 ### Widget / marketing

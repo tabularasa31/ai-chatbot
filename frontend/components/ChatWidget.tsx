@@ -11,6 +11,7 @@ import {
   appendSystemMarker,
   createTextMessage,
   getLastEndedMarkerIndex,
+  type ChatWidgetClarification,
   type ChatWidgetMessage,
 } from "@/lib/widget-conversation";
 
@@ -180,12 +181,27 @@ export function ChatWidget({
     clearStoredSession(botId);
   }, [appendSystemMessage, botId]);
 
-  const applyAssistantMessage = useCallback((raw: string, ended?: boolean) => {
+  const applyAssistantMessage = useCallback((
+    payload: {
+      text?: string;
+      response?: string;
+      message_type?: "answer" | "clarification" | "partial_with_clarification";
+      clarification?: ChatWidgetClarification | null;
+      chat_ended?: boolean;
+    },
+  ) => {
+    const raw = payload.text ?? payload.response ?? "";
     const ticket = parseEscalationTicket(raw);
     if (ticket) setActiveTicket(ticket);
     const display = stripEscalationToken(raw) || raw;
-    setMessages((prev) => [...prev, createTextMessage("assistant", display)]);
-    if (ended) {
+    setMessages((prev) => [
+      ...prev,
+      createTextMessage("assistant", display, {
+        messageType: payload.message_type ?? "answer",
+        clarification: payload.clarification ?? null,
+      }),
+    ]);
+    if (payload.chat_ended === true) {
       handleChatEnded();
     }
   }, [handleChatEnded]);
@@ -205,40 +221,47 @@ export function ChatWidget({
     [messages],
   );
 
-  const handleSend = async () => {
-    if (!canSend) return;
+  const handleSend = async (override?: { text: string; optionId?: string | null }) => {
+    const userMessage = override?.text?.trim() ?? trimmedInput;
+    if (!userMessage || (!override && !canSend) || chatClosed) return;
 
     setLoading(true);
-    const userMessage = trimmedInput;
     setInput("");
     setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
 
     try {
-      const sendWidgetMessage = async (attemptSessionId: string | null) => {
+      const sendWidgetMessage = async (
+        attemptSessionId: string | null,
+        optionId?: string | null,
+      ) => {
         const params = new URLSearchParams({
           botId,
           message: userMessage,
         });
         if (attemptSessionId) params.set("session_id", attemptSessionId);
         if (localeParam) params.set("locale", localeParam);
+        if (optionId) params.set("option_id", optionId);
 
         const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
         const payload = (await res.json().catch(() => ({}))) as {
           detail?: unknown;
+          text?: string;
           response?: string;
+          message_type?: "answer" | "clarification" | "partial_with_clarification";
+          clarification?: ChatWidgetClarification | null;
           session_id?: string;
           chat_ended?: boolean;
         };
         return { res, payload };
       };
 
-      let { res, payload } = await sendWidgetMessage(sessionId);
+      let { res, payload } = await sendWidgetMessage(sessionId, override?.optionId);
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId);
         setSessionId(null);
-        ({ res, payload } = await sendWidgetMessage(null));
+        ({ res, payload } = await sendWidgetMessage(null, override?.optionId));
         detail = payload.detail;
         code = apiErrorCode(detail);
       }
@@ -248,12 +271,15 @@ export function ChatWidget({
       }
 
       const data = payload as {
-        response: string;
+        text?: string;
+        response?: string;
+        message_type?: "answer" | "clarification" | "partial_with_clarification";
+        clarification?: ChatWidgetClarification | null;
         session_id: string;
         chat_ended?: boolean;
       };
 
-      applyAssistantMessage(data.response, data.chat_ended === true);
+      applyAssistantMessage(data);
       if (data.chat_ended !== true) {
         setSessionId(data.session_id);
         persistSession(botId, data.session_id);
@@ -351,6 +377,22 @@ export function ChatWidget({
                         <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
                       </div>
                     </div>
+
+                    {msg.type === "assistant" && msg.clarification?.options?.length ? (
+                      <div className="ml-0 mt-3 flex flex-wrap gap-2 sm:ml-12">
+                        {msg.clarification.options.map((option) => (
+                          <button
+                            key={`${msg.id}-${option.id}`}
+                            type="button"
+                            onClick={() => void handleSend({ text: option.label, optionId: option.id })}
+                            disabled={loading || chatClosed}
+                            className="rounded-full border border-[#D8B4FE] bg-[#FAF5FF] px-3 py-1.5 text-sm font-medium text-[#7E22CE] transition hover:bg-[#F3E8FF] disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
 
                     {msg.type === "assistant" && renderBelowAssistant ? (
                       <div className="ml-12 mt-3 max-w-[85%]">

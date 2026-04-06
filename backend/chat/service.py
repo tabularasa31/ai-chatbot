@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -69,6 +70,13 @@ from backend.guards.reject_response import RejectReason, build_reject_response
 logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
+CLARIFICATION_STATE_KEY = "clarification_state"
+CLARIFICATION_STATE_VERSION = 1
+CLARIFICATION_STATUS_AWAITING_REPLY = "awaiting_reply"
+CLARIFICATION_TURN_LIMIT = 1
+SAFE_PARTIAL_SOURCE_FAQ = "faq_rule"
+SAFE_PARTIAL_SOURCE_TEMPLATE = "deterministic_template"
+SAFE_PARTIAL_SOURCE_RETRIEVED = "retrieved_safe_context"
 
 DISCLOSURE_HARD_LIMITS = (
     "Hard limits (always follow):\n"
@@ -286,6 +294,508 @@ class ChatPipelineResult:
     escalation_trigger: Any  # EscalationTrigger | None
     # debug extras
     faq_match: Any = None  # FAQMatchResult | None
+
+
+@dataclass(frozen=True)
+class ClarificationOption:
+    id: str
+    label: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"id": self.id, "label": self.label}
+
+
+@dataclass(frozen=True)
+class ClarificationPayload:
+    reason: Literal["ambiguous_intent", "missing_critical_slot", "low_retrieval_confidence"]
+    type: Literal["disambiguation", "slot_request", "context_request", "partial_plus_question"]
+    options: list[ClarificationOption] = field(default_factory=list)
+    requested_fields: list[str] = field(default_factory=list)
+    original_user_message: str | None = None
+    turn_index: int = 1
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reason": self.reason,
+            "type": self.type,
+            "options": [item.to_dict() for item in self.options],
+            "requested_fields": list(self.requested_fields),
+            "original_user_message": self.original_user_message,
+            "turn_index": self.turn_index,
+        }
+
+
+@dataclass(frozen=True)
+class ClarificationState:
+    version: int
+    status: Literal["awaiting_reply"]
+    original_user_message: str
+    clarification_prompt: str
+    reason: Literal["ambiguous_intent", "missing_critical_slot", "low_retrieval_confidence"]
+    type: Literal["disambiguation", "slot_request", "context_request", "partial_plus_question"]
+    options: list[ClarificationOption] = field(default_factory=list)
+    requested_fields: list[str] = field(default_factory=list)
+    turn_count: int = 1
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": self.version,
+            "status": self.status,
+            "original_user_message": self.original_user_message,
+            "clarification_prompt": self.clarification_prompt,
+            "reason": self.reason,
+            "type": self.type,
+            "options": [item.to_dict() for item in self.options],
+            "requested_fields": list(self.requested_fields),
+            "turn_count": self.turn_count,
+            "created_at": self.created_at,
+        }
+
+
+@dataclass(frozen=True)
+class ClarificationContinuation:
+    classification: Literal["clarification_continuation", "new_intent"]
+    matched_option: ClarificationOption | None = None
+
+
+@dataclass(frozen=True)
+class ClarificationDecision:
+    message_type: Literal["clarification", "partial_with_clarification"]
+    text: str
+    payload: ClarificationPayload
+    state: ClarificationState
+    safe_partial_source_type: Literal["faq_rule", "deterministic_template", "retrieved_safe_context"] | None = None
+    best_effort_text: str | None = None
+
+
+@dataclass(frozen=True)
+class ChatTurnOutcome:
+    text: str
+    document_ids: list[uuid.UUID]
+    tokens_used: int
+    chat_ended: bool
+    message_type: Literal["answer", "clarification", "partial_with_clarification"] = "answer"
+    clarification_reason: Literal[
+        "ambiguous_intent", "missing_critical_slot", "low_retrieval_confidence"
+    ] | None = None
+    clarification_type: Literal[
+        "disambiguation", "slot_request", "context_request", "partial_plus_question"
+    ] | None = None
+    clarification: ClarificationPayload | None = None
+    safe_partial_source_type: Literal[
+        "faq_rule", "deterministic_template", "retrieved_safe_context"
+    ] | None = None
+
+    @property
+    def answer(self) -> str:
+        return self.text
+
+    def __iter__(self):
+        return iter((self.text, self.document_ids, self.tokens_used, self.chat_ended))
+
+
+_DOMAIN_OPTIONS = [
+    ClarificationOption(id="dns", label="DNS"),
+    ClarificationOption(id="cdn", label="CDN"),
+    ClarificationOption(id="ssl", label="SSL"),
+]
+_STANDALONE_INTENT_HINTS = (
+    "pricing",
+    "billing",
+    "price",
+    "cost",
+    "plan",
+    "support",
+    "account",
+    "subscription",
+    "trial",
+    "team",
+)
+_DOMAIN_SETUP_HINTS = (
+    "connect domain",
+    "domain setup",
+    "set up domain",
+    "setup domain",
+    "configure domain",
+    "custom domain",
+    "point domain",
+)
+_GENERIC_SETUP_HINTS = (
+    "setup",
+    "set up",
+    "configure",
+    "config",
+    "install",
+    "integration",
+    "connect",
+)
+_API_FAILURE_HINTS = (
+    "api request fails",
+    "api fails",
+    "api error",
+    "request fails",
+    "request failed",
+    "doesn't work",
+    "not working",
+    "failing",
+)
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.lower().strip().split())
+
+
+def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
+    if trace is None:
+        return
+    trace.span(name=name, metadata=metadata).end(output=metadata)
+
+
+def _get_clarification_state(chat: Chat | None) -> ClarificationState | None:
+    raw = ((chat.user_context or {}) if chat else {}).get(CLARIFICATION_STATE_KEY)
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("status") != CLARIFICATION_STATUS_AWAITING_REPLY:
+        return None
+    options = [
+        ClarificationOption(id=str(item.get("id", "")).strip(), label=str(item.get("label", "")).strip())
+        for item in raw.get("options", [])
+        if isinstance(item, dict) and str(item.get("id", "")).strip() and str(item.get("label", "")).strip()
+    ]
+    return ClarificationState(
+        version=int(raw.get("version", CLARIFICATION_STATE_VERSION)),
+        status=CLARIFICATION_STATUS_AWAITING_REPLY,
+        original_user_message=str(raw.get("original_user_message", "")).strip(),
+        clarification_prompt=str(raw.get("clarification_prompt", "")).strip(),
+        reason=str(raw.get("reason", "low_retrieval_confidence")),  # type: ignore[arg-type]
+        type=str(raw.get("type", "context_request")),  # type: ignore[arg-type]
+        options=options,
+        requested_fields=[str(item).strip() for item in raw.get("requested_fields", []) if str(item).strip()],
+        turn_count=max(int(raw.get("turn_count", 1)), 1),
+        created_at=str(raw.get("created_at", "")),
+    )
+
+
+def _set_clarification_state(chat: Chat, state: ClarificationState | None) -> None:
+    ctx = dict(chat.user_context or {})
+    if state is None:
+        ctx.pop(CLARIFICATION_STATE_KEY, None)
+    else:
+        ctx[CLARIFICATION_STATE_KEY] = state.to_dict()
+    chat.user_context = ctx or None
+
+
+def _question_matches_domain_ambiguity(question: str) -> bool:
+    normalized = _normalize_text(question)
+    if "domain" not in normalized:
+        return False
+    if any(term in normalized for term in ("dns", "cdn", "ssl", "certificate", "proxy")):
+        return False
+    return any(term in normalized for term in _DOMAIN_SETUP_HINTS)
+
+
+def _has_endpoint_detail(question: str) -> bool:
+    normalized = _normalize_text(question)
+    if "/" in question or "endpoint" in normalized:
+        return True
+    return bool(re.search(r"\b(get|post|put|patch|delete)\b", normalized))
+
+
+def _has_error_detail(question: str) -> bool:
+    normalized = _normalize_text(question)
+    if "error" in normalized or "exception" in normalized or "timeout" in normalized:
+        return True
+    return bool(re.search(r"\b[45]\d{2}\b", normalized))
+
+
+def _question_matches_missing_api_slot(question: str) -> bool:
+    normalized = _normalize_text(question)
+    if "api" not in normalized:
+        return False
+    if not any(term in normalized for term in _API_FAILURE_HINTS):
+        return False
+    return not (_has_endpoint_detail(question) and _has_error_detail(question))
+
+
+def _question_matches_generic_setup(question: str) -> bool:
+    normalized = _normalize_text(question)
+    return any(term in normalized for term in _GENERIC_SETUP_HINTS)
+
+
+def _is_low_retrieval_confidence(result: ChatPipelineResult) -> bool:
+    if result.reject_reason == "low_retrieval":
+        return True
+    if result.validation_outcome == "fallback":
+        return True
+    retrieval = result.retrieval
+    if retrieval is None:
+        return False
+    return retrieval.reliability.score == "low"
+
+
+def _is_sufficiently_answerable(result: ChatPipelineResult) -> bool:
+    if result.is_faq_direct:
+        return True
+    if result.is_reject:
+        return False
+    retrieval = result.retrieval
+    if retrieval is None:
+        return False
+    return result.validation_outcome == "valid" and retrieval.reliability.score in {"medium", "high"}
+
+
+def _build_domain_clarification(
+    *,
+    original_user_message: str,
+    original_user_message_redacted: str,
+    turn_index: int,
+    partial: bool,
+) -> ClarificationDecision:
+    if partial:
+        text = (
+            "Domain setup usually starts with DNS configuration. "
+            "To guide you precisely, tell me whether you want DNS setup, CDN proxying, or SSL."
+        )
+        best_effort = (
+            "Domain setup usually starts with DNS configuration. "
+            "If you need CDN or SSL, use the matching domain settings for that feature."
+        )
+        clarification_type: Literal["partial_plus_question"] = "partial_plus_question"
+        message_type: Literal["partial_with_clarification"] = "partial_with_clarification"
+    else:
+        text = "Do you want to connect the domain to DNS, CDN, or SSL?"
+        best_effort = (
+            "Domain setup usually starts with DNS configuration. "
+            "If you need CDN or SSL, use the matching domain settings for that feature."
+        )
+        clarification_type = "disambiguation"
+        message_type = "clarification"
+    payload = ClarificationPayload(
+        reason="ambiguous_intent",
+        type=clarification_type,
+        options=list(_DOMAIN_OPTIONS),
+        requested_fields=[],
+        original_user_message=original_user_message,
+        turn_index=turn_index,
+    )
+    state = ClarificationState(
+        version=CLARIFICATION_STATE_VERSION,
+        status=CLARIFICATION_STATUS_AWAITING_REPLY,
+        original_user_message=original_user_message_redacted,
+        clarification_prompt=text,
+        reason="ambiguous_intent",
+        type=clarification_type,
+        options=list(_DOMAIN_OPTIONS),
+        requested_fields=[],
+        turn_count=turn_index,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return ClarificationDecision(
+        message_type=message_type,
+        text=text,
+        payload=payload,
+        state=state,
+        safe_partial_source_type=(SAFE_PARTIAL_SOURCE_TEMPLATE if partial else None),
+        best_effort_text=best_effort,
+    )
+
+
+def _build_api_slot_clarification(
+    *,
+    original_user_message: str,
+    original_user_message_redacted: str,
+    turn_index: int,
+) -> ClarificationDecision:
+    text = "Can you share the endpoint and the error message you see?"
+    payload = ClarificationPayload(
+        reason="missing_critical_slot",
+        type="slot_request",
+        options=[],
+        requested_fields=["endpoint", "error_message"],
+        original_user_message=original_user_message,
+        turn_index=turn_index,
+    )
+    state = ClarificationState(
+        version=CLARIFICATION_STATE_VERSION,
+        status=CLARIFICATION_STATUS_AWAITING_REPLY,
+        original_user_message=original_user_message_redacted,
+        clarification_prompt=text,
+        reason="missing_critical_slot",
+        type="slot_request",
+        options=[],
+        requested_fields=["endpoint", "error_message"],
+        turn_count=turn_index,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return ClarificationDecision(
+        message_type="clarification",
+        text=text,
+        payload=payload,
+        state=state,
+        best_effort_text=(
+            "API failures are usually resolved by checking the endpoint, HTTP method, "
+            "authentication, and the exact error message returned by the API."
+        ),
+    )
+
+
+def _build_context_clarification(
+    *,
+    original_user_message: str,
+    original_user_message_redacted: str,
+    turn_index: int,
+) -> ClarificationDecision:
+    text = "Can you clarify which feature or setup step you mean?"
+    payload = ClarificationPayload(
+        reason="low_retrieval_confidence",
+        type="context_request",
+        options=[],
+        requested_fields=["feature_or_setup_step"],
+        original_user_message=original_user_message,
+        turn_index=turn_index,
+    )
+    state = ClarificationState(
+        version=CLARIFICATION_STATE_VERSION,
+        status=CLARIFICATION_STATUS_AWAITING_REPLY,
+        original_user_message=original_user_message_redacted,
+        clarification_prompt=text,
+        reason="low_retrieval_confidence",
+        type="context_request",
+        options=[],
+        requested_fields=["feature_or_setup_step"],
+        turn_count=turn_index,
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return ClarificationDecision(
+        message_type="clarification",
+        text=text,
+        payload=payload,
+        state=state,
+        best_effort_text=(
+            "I can give a more precise answer once the specific feature or setup step is clear. "
+            "For now, start with the setup guide for the feature you are working on."
+        ),
+    )
+
+
+def _build_clarification_decision(
+    *,
+    original_user_message: str,
+    original_user_message_redacted: str,
+    result: ChatPipelineResult,
+    existing_state: ClarificationState | None,
+) -> ClarificationDecision | None:
+    if _is_sufficiently_answerable(result):
+        return None
+    if existing_state is not None and existing_state.turn_count >= CLARIFICATION_TURN_LIMIT:
+        return None
+    turn_index = (existing_state.turn_count + 1) if existing_state is not None else 1
+
+    if _question_matches_domain_ambiguity(original_user_message_redacted):
+        return _build_domain_clarification(
+            original_user_message=original_user_message,
+            original_user_message_redacted=original_user_message_redacted,
+            turn_index=turn_index,
+            partial=_is_low_retrieval_confidence(result),
+        )
+    if _question_matches_missing_api_slot(original_user_message_redacted):
+        return _build_api_slot_clarification(
+            original_user_message=original_user_message,
+            original_user_message_redacted=original_user_message_redacted,
+            turn_index=turn_index,
+        )
+    if _is_low_retrieval_confidence(result) and _question_matches_generic_setup(original_user_message_redacted):
+        return _build_context_clarification(
+            original_user_message=original_user_message,
+            original_user_message_redacted=original_user_message_redacted,
+            turn_index=turn_index,
+        )
+    return None
+
+
+def _match_clarification_option(
+    state: ClarificationState,
+    user_reply: str,
+    option_id: str | None,
+) -> ClarificationOption | None:
+    normalized_reply = _normalize_text(user_reply)
+    if option_id:
+        target_id = option_id.strip().lower()
+        for option in state.options:
+            if option.id.lower() == target_id:
+                return option
+    for option in state.options:
+        option_label = option.label.lower()
+        option_key = option.id.lower()
+        if (
+            normalized_reply == option_label
+            or normalized_reply == option_key
+            or option_label in normalized_reply.split()
+            or option_key in normalized_reply.split()
+        ):
+            return option
+    return None
+
+
+def _looks_like_standalone_request(user_reply: str) -> bool:
+    normalized = _normalize_text(user_reply)
+    if any(token in normalized for token in _STANDALONE_INTENT_HINTS):
+        return True
+    if "?" in user_reply:
+        return True
+    if len(normalized.split()) >= 4 and any(
+        normalized.startswith(prefix) for prefix in ("how ", "what ", "why ", "can ", "could ", "i need ")
+    ):
+        return True
+    return False
+
+
+def _reply_fills_requested_fields(state: ClarificationState, user_reply: str) -> bool:
+    normalized = _normalize_text(user_reply)
+    if "endpoint" in state.requested_fields and _has_endpoint_detail(user_reply):
+        return True
+    if "error_message" in state.requested_fields and _has_error_detail(user_reply):
+        return True
+    if "feature_or_setup_step" in state.requested_fields and len(normalized.split()) <= 6:
+        return True
+    return False
+
+
+def _classify_clarification_turn(
+    state: ClarificationState,
+    user_reply: str,
+    option_id: str | None,
+) -> ClarificationContinuation:
+    matched_option = _match_clarification_option(state, user_reply, option_id)
+    if matched_option is not None:
+        return ClarificationContinuation(
+            classification="clarification_continuation",
+            matched_option=matched_option,
+        )
+    if _looks_like_standalone_request(user_reply):
+        return ClarificationContinuation(classification="new_intent")
+    if _reply_fills_requested_fields(state, user_reply):
+        return ClarificationContinuation(classification="clarification_continuation")
+    return ClarificationContinuation(classification="new_intent")
+
+
+def _synthesize_clarification_query(
+    state: ClarificationState,
+    user_reply: str,
+    matched_option: ClarificationOption | None,
+) -> str:
+    if matched_option is not None:
+        return (
+            f"Original user request: {state.original_user_message}\n"
+            f"Clarification selected: {matched_option.label}\n"
+            f"Answer the request specifically for {matched_option.label}."
+        )
+    return (
+        f"Original user request: {state.original_user_message}\n"
+        f"Clarification prompt: {state.clarification_prompt}\n"
+        f"Additional user details: {user_reply}"
+    )
 
 
 def run_chat_pipeline(
@@ -1036,12 +1546,13 @@ def process_chat_message(
     api_key: str,
     user_context: dict | None = None,
     browser_locale: str | None = None,
-) -> tuple[str, list[uuid.UUID], int, bool]:
+    clarification_option_id: str | None = None,
+) -> ChatTurnOutcome:
     """
     RAG pipeline with FI-ESC escalation state machine.
 
     Returns:
-        (answer, document_ids, tokens_used, chat_ended)
+        Typed turn outcome. The object is also iterable for legacy tuple-style callers.
     """
     client_row = db.query(Client).filter(Client.id == client_id).first()
     optional_entity_types = _client_optional_entity_types(client_row)
@@ -1094,7 +1605,7 @@ def process_chat_message(
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
 
-    explicit_human_request = detect_human_request(redacted_question)
+    explicit_human_request_raw = detect_human_request(redacted_question)
 
     trace = begin_trace(
         name="rag-query",
@@ -1108,12 +1619,63 @@ def process_chat_message(
             "browser_locale": browser_locale,
             "question": redacted_question,
             "has_user_context": bool(effective_user_ctx),
+            "clarification_option_id": clarification_option_id,
         },
         tags=[f"tenant:{client_id}"],
-        force_trace=explicit_human_request,
+        force_trace=explicit_human_request_raw,
     )
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
+    clarification_state = _get_clarification_state(chat)
+    continuation_result: ClarificationContinuation | None = None
+    question_for_pipeline = redacted_question
+
+    if clarification_state is not None:
+        continuation_result = _classify_clarification_turn(
+            clarification_state,
+            redacted_question,
+            clarification_option_id,
+        )
+        if continuation_result.classification == "new_intent":
+            _set_clarification_state(chat, None)
+            db.add(chat)
+            _trace_event(
+                trace,
+                "clarification_superseded",
+                {
+                    "reason": clarification_state.reason,
+                    "clarification_type": clarification_state.type,
+                    "turn_index": clarification_state.turn_count,
+                },
+            )
+            clarification_state = None
+        else:
+            question_for_pipeline = _synthesize_clarification_query(
+                clarification_state,
+                redacted_question,
+                continuation_result.matched_option,
+            )
+            _trace_event(
+                trace,
+                "clarification_answered",
+                {
+                    "reason": clarification_state.reason,
+                    "clarification_type": clarification_state.type,
+                    "turn_index": clarification_state.turn_count,
+                    "option_selected": (
+                        continuation_result.matched_option.id
+                        if continuation_result.matched_option is not None
+                        else None
+                    ),
+                    "free_text": (
+                        None
+                        if continuation_result.matched_option is not None
+                        else redacted_question
+                    ),
+                },
+            )
+
+    explicit_human_request = detect_human_request(question_for_pipeline)
 
     disclosure_cfg: dict[str, Any] | None = None
     if client_row and isinstance(client_row.disclosure_config, dict):
@@ -1144,7 +1706,12 @@ def process_chat_message(
             output={"answer": quick_answer, "source": "quick_answers"},
             metadata={"chat_ended": False, "escalated": False, "quick_answer": True},
         )
-        return (quick_answer, [], 0, False)
+        return ChatTurnOutcome(
+            text=quick_answer,
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
 
     injection_start = perf_counter()
     injection_span = trace.span(
@@ -1183,7 +1750,12 @@ def process_chat_message(
             output={"answer": reject_text, "source": "guard_reject_injection"},
             metadata={"chat_ended": False, "escalated": False, "reject_reason": "injection"},
         )
-        return (reject_text, [], 0, False)
+        return ChatTurnOutcome(
+            text=reject_text,
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
 
     # --- Chat closed ---
     if chat.ended_at is not None:
@@ -1214,7 +1786,12 @@ def process_chat_message(
             output={"answer": out.message_to_user, "source": "chat_closed"},
             metadata={"chat_ended": True, "escalated": False},
         )
-        return (out.message_to_user, [], out.tokens_used, True)
+        return ChatTurnOutcome(
+            text=out.message_to_user,
+            document_ids=[],
+            tokens_used=out.tokens_used,
+            chat_ended=True,
+        )
 
     # --- Awaiting contact email ---
     if chat.escalation_awaiting_ticket_id:
@@ -1266,7 +1843,12 @@ def process_chat_message(
                         output={"answer": out.message_to_user, "source": "escalation_email_capture"},
                         metadata={"chat_ended": False, "escalated": True},
                     )
-                    return (out.message_to_user, [], out.tokens_used, False)
+                    return ChatTurnOutcome(
+                        text=out.message_to_user,
+                        document_ids=[],
+                        tokens_used=out.tokens_used,
+                        chat_ended=False,
+                    )
                 out = complete_escalation_openai_turn(
                     phase=EscalationPhase.email_parse_failed,
                     chat_messages=msgs,
@@ -1291,7 +1873,12 @@ def process_chat_message(
                     output={"answer": out.message_to_user, "source": "escalation_email_retry"},
                     metadata={"chat_ended": False, "escalated": True},
                 )
-                return (out.message_to_user, [], out.tokens_used, False)
+                return ChatTurnOutcome(
+                    text=out.message_to_user,
+                    document_ids=[],
+                    tokens_used=out.tokens_used,
+                    chat_ended=False,
+                )
             except Exception as exc:
                 awaiting_email_span.end(
                     output={"ticket_found": True, "error": True},
@@ -1340,7 +1927,12 @@ def process_chat_message(
                     output={"answer": out.message_to_user, "source": "escalation_followup"},
                     metadata={"chat_ended": False, "escalated": True},
                 )
-                return (out.message_to_user, [], out.tokens_used, False)
+                return ChatTurnOutcome(
+                    text=out.message_to_user,
+                    document_ids=[],
+                    tokens_used=out.tokens_used,
+                    chat_ended=False,
+                )
             if decision == "no":
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
@@ -1361,7 +1953,12 @@ def process_chat_message(
                     output={"answer": out.message_to_user, "source": "escalation_followup"},
                     metadata={"chat_ended": True, "escalated": True},
                 )
-                return (out.message_to_user, [], out.tokens_used, True)
+                return ChatTurnOutcome(
+                    text=out.message_to_user,
+                    document_ids=[],
+                    tokens_used=out.tokens_used,
+                    chat_ended=True,
+                )
             _set_escalation_clarify_flag(chat)
             db.add(chat)
             _persist_turn(
@@ -1379,7 +1976,12 @@ def process_chat_message(
                 output={"answer": out.message_to_user, "source": "escalation_followup"},
                 metadata={"chat_ended": False, "escalated": True},
             )
-            return (out.message_to_user, [], out.tokens_used, False)
+            return ChatTurnOutcome(
+                text=out.message_to_user,
+                document_ids=[],
+                tokens_used=out.tokens_used,
+                chat_ended=False,
+            )
         except Exception as exc:
             followup_span.end(
                 output={"error": True},
@@ -1391,7 +1993,7 @@ def process_chat_message(
     # --- T-3: explicit human request (before RAG) ---
     human_request_span = trace.span(
         name="human-request-detection",
-        input={"question": redacted_question},
+        input={"question": question_for_pipeline},
     )
     human_request_span.end(output={"matched": explicit_human_request})
     if explicit_human_request:
@@ -1438,7 +2040,12 @@ def process_chat_message(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
                 metadata={"chat_ended": False, "escalated": True},
             )
-            return (out.message_to_user, [], out.tokens_used, False)
+            return ChatTurnOutcome(
+                text=out.message_to_user,
+                document_ids=[],
+                tokens_used=out.tokens_used,
+                chat_ended=False,
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
@@ -1449,7 +2056,7 @@ def process_chat_message(
     # relevance → retrieve → generate → validate → escalation decision.
     result = run_chat_pipeline(
         client_id,
-        redacted_question,
+        question_for_pipeline,
         db,
         api_key=api_key,
         user_context_line=user_context_line,
@@ -1457,6 +2064,97 @@ def process_chat_message(
         trace=trace,
         precomputed_injection=injection_result,
     )
+    clarification_decision: ClarificationDecision | None = None
+    if not result.is_faq_direct and result.reject_reason not in {"injection", "not_relevant"}:
+        clarification_decision = _build_clarification_decision(
+            original_user_message=question,
+            original_user_message_redacted=redacted_question,
+            result=result,
+            existing_state=clarification_state,
+        )
+
+    if clarification_decision is not None:
+        clarification_document_ids = (
+            list(dict.fromkeys(result.retrieval.document_ids))
+            if result.retrieval is not None
+            else []
+        )
+        _set_clarification_state(chat, clarification_decision.state)
+        db.add(chat)
+        _persist_turn(
+            db,
+            chat,
+            client_id,
+            question,
+            clarification_decision.text,
+            clarification_document_ids,
+            result.tokens_used,
+            optional_entity_types=optional_entity_types,
+        )
+        _trace_event(
+            trace,
+            "clarification_shown",
+            {
+                "reason": clarification_decision.payload.reason,
+                "clarification_type": clarification_decision.payload.type,
+                "had_options": bool(clarification_decision.payload.options),
+                "turn_index": clarification_decision.payload.turn_index,
+                "message_type": clarification_decision.message_type,
+            },
+        )
+        trace.update(
+            output={"answer": clarification_decision.text, "source": "clarification"},
+            metadata={
+                "chat_ended": False,
+                "escalated": False,
+                "strategy": result.strategy,
+                "message_type": clarification_decision.message_type,
+                "clarification_considered": True,
+                "clarification_reason": clarification_decision.payload.reason,
+                "clarification_type": clarification_decision.payload.type,
+                "clarification_limit_hit": False,
+                "safe_partial_source_type": clarification_decision.safe_partial_source_type,
+            },
+        )
+        return ChatTurnOutcome(
+            text=clarification_decision.text,
+            document_ids=clarification_document_ids,
+            tokens_used=result.tokens_used,
+            chat_ended=False,
+            message_type=clarification_decision.message_type,
+            clarification_reason=clarification_decision.payload.reason,
+            clarification_type=clarification_decision.payload.type,
+            clarification=clarification_decision.payload,
+            safe_partial_source_type=clarification_decision.safe_partial_source_type,
+        )
+
+    if (
+        clarification_state is not None
+        and continuation_result is not None
+        and continuation_result.classification == "clarification_continuation"
+    ):
+        _set_clarification_state(chat, None)
+        db.add(chat)
+        if _is_sufficiently_answerable(result):
+            _trace_event(
+                trace,
+                "clarification_resolved",
+                {
+                    "reason": clarification_state.reason,
+                    "clarification_type": clarification_state.type,
+                    "turn_index": clarification_state.turn_count,
+                },
+            )
+        else:
+            _trace_event(
+                trace,
+                "clarification_followed_by_best_effort",
+                {
+                    "reason": clarification_state.reason,
+                    "clarification_type": clarification_state.type,
+                    "turn_index": clarification_state.turn_count,
+                },
+            )
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).
     if result.is_reject or result.is_faq_direct:
@@ -1488,9 +2186,19 @@ def process_chat_message(
                 "strategy": result.strategy,
                 "reject_reason": result.reject_reason,
                 "retrieval_skipped": result.is_faq_direct,
+                "message_type": "answer",
+                "clarification_considered": clarification_state is not None or clarification_decision is not None,
+                "continuation_classification": (
+                    continuation_result.classification if continuation_result is not None else None
+                ),
             },
         )
-        return (result.final_answer, [], result.tokens_used, False)
+        return ChatTurnOutcome(
+            text=result.final_answer,
+            document_ids=[],
+            tokens_used=result.tokens_used,
+            chat_ended=False,
+        )
 
     # Normal RAG / faq_context path: handle escalation side effects, then persist.
     retrieval = result.retrieval
@@ -1598,6 +2306,11 @@ def process_chat_message(
             "validation": validation,
             "source_document_ids": [str(document_id) for document_id in document_ids],
             "tokens_used": int(tokens_used),
+            "message_type": "answer",
+            "clarification_considered": clarification_state is not None or clarification_decision is not None,
+            "continuation_classification": (
+                continuation_result.classification if continuation_result is not None else None
+            ),
             **(
                 {
                     "faq_strategy": faq_match.strategy,
@@ -1612,7 +2325,12 @@ def process_chat_message(
         },
         tags=[build_variant_trace_tag(retrieval.variant_mode)],
     )
-    return (answer, document_ids, tokens_used, bool(chat.ended_at))
+    return ChatTurnOutcome(
+        text=answer,
+        document_ids=document_ids,
+        tokens_used=tokens_used,
+        chat_ended=bool(chat.ended_at),
+    )
 
 
 def run_debug(
@@ -1653,6 +2371,14 @@ def run_debug(
         api_key=api_key,
         disclosure_config=disclosure_cfg,
     )
+    clarification_decision: ClarificationDecision | None = None
+    if not result.is_faq_direct and result.reject_reason not in {"injection", "not_relevant"}:
+        clarification_decision = _build_clarification_decision(
+            original_user_message=question,
+            original_user_message_redacted=redacted_question,
+            result=result,
+            existing_state=None,
+        )
 
     retrieval = result.retrieval
     if retrieval is not None:
@@ -1693,8 +2419,27 @@ def run_debug(
     debug["validation_applied"] = result.validation_applied
     debug["validation_outcome"] = result.validation_outcome
     debug["raw_answer"] = result.raw_answer
+    debug["clarification_considered"] = clarification_decision is not None
+    debug["message_type"] = (
+        clarification_decision.message_type if clarification_decision is not None else "answer"
+    )
+    debug["clarification_reason"] = (
+        clarification_decision.payload.reason if clarification_decision is not None else None
+    )
+    debug["clarification_type"] = (
+        clarification_decision.payload.type if clarification_decision is not None else None
+    )
+    debug["clarification"] = (
+        clarification_decision.payload.to_dict() if clarification_decision is not None else None
+    )
+    debug["safe_partial_source_type"] = (
+        clarification_decision.safe_partial_source_type
+        if clarification_decision is not None
+        else None
+    )
 
-    return (result.final_answer, result.tokens_used, debug)
+    final_text = clarification_decision.text if clarification_decision is not None else result.final_answer
+    return (final_text, result.tokens_used, debug)
 
 
 def get_chat_history(

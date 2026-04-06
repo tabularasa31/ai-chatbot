@@ -7,7 +7,40 @@ from enum import Enum
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+class ClarificationReason(str, Enum):
+    ambiguous_intent = "ambiguous_intent"
+    missing_critical_slot = "missing_critical_slot"
+    low_retrieval_confidence = "low_retrieval_confidence"
+
+
+class ClarificationType(str, Enum):
+    disambiguation = "disambiguation"
+    slot_request = "slot_request"
+    context_request = "context_request"
+    partial_plus_question = "partial_plus_question"
+
+
+class ChatMessageType(str, Enum):
+    answer = "answer"
+    clarification = "clarification"
+    partial_with_clarification = "partial_with_clarification"
+
+
+class ClarificationOptionResponse(BaseModel):
+    id: str
+    label: str
+
+
+class ClarificationPayloadResponse(BaseModel):
+    reason: ClarificationReason
+    type: ClarificationType
+    options: list[ClarificationOptionResponse] = Field(default_factory=list)
+    requested_fields: list[str] = Field(default_factory=list)
+    original_user_message: Optional[str] = None
+    turn_index: int = 1
 
 
 class MessageFeedbackValue(str, Enum):
@@ -53,17 +86,31 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional session ID; auto-generated if not provided",
     )
+    clarification_option_id: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description="Optional structured quick-reply option ID for clarification flows",
+    )
 
 
 class ChatResponse(BaseModel):
     """Response from chat endpoint."""
 
+    text: str
     answer: str
+    message_type: ChatMessageType = ChatMessageType.answer
+    clarification: Optional[ClarificationPayloadResponse] = None
     session_id: UUID
     source_documents: list[UUID]
     tokens_used: int
     validation: Optional[dict] = None
     chat_ended: bool = False
+
+    @model_validator(mode="after")
+    def validate_clarification_payload(self) -> "ChatResponse":
+        if self.message_type != ChatMessageType.answer and self.clarification is None:
+            raise ValueError("clarification payload is required when message_type is not answer")
+        return self
 
 
 class MessageResponse(BaseModel):

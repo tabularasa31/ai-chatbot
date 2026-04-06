@@ -24,7 +24,9 @@ from backend.chat.service import (
     process_chat_message,
     validate_answer,
 )
+from backend.chat.schemas import ChatResponse
 from backend.guards.reject_response import RejectReason, build_reject_response
+from backend.search.service import build_reliability_assessment
 
 
 # --- Unit tests ---
@@ -3450,3 +3452,347 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     assert data["debug"]["is_reject"] is False
     assert data["debug"]["validation_applied"] is True
     assert data["debug"]["validation_outcome"] == "valid"
+
+
+def _make_retrieval_context(*, reliability_score: str = "medium") -> RetrievalContext:
+    top_score = {"high": 0.9, "medium": 0.6, "low": 0.3}[reliability_score]
+    result_count = {"high": 3, "medium": 3, "low": 1}[reliability_score]
+    return RetrievalContext(
+        chunk_texts=["retrieved docs"],
+        document_ids=[uuid.uuid4()],
+        scores=[top_score],
+        mode="vector",
+        best_rank_score=top_score,
+        best_confidence_score=top_score,
+        confidence_source="vector_similarity",
+        reliability=build_reliability_assessment(top_score=top_score, result_count=result_count),
+        vector_similarities=[top_score],
+    )
+
+
+def _make_pipeline_result(
+    *,
+    final_answer: str,
+    validation_outcome: str,
+    reliability_score: str = "medium",
+    is_reject: bool = False,
+    reject_reason: str | None = None,
+) -> ChatPipelineResult:
+    retrieval = None if is_reject and reject_reason == "not_relevant" else _make_retrieval_context(
+        reliability_score=reliability_score
+    )
+    return ChatPipelineResult(
+        raw_answer=final_answer,
+        final_answer=final_answer,
+        tokens_used=3,
+        strategy="guard_reject" if is_reject else "rag_only",
+        reject_reason=reject_reason,  # type: ignore[arg-type]
+        is_reject=is_reject,
+        is_faq_direct=False,
+        validation_applied=not is_reject,
+        validation_outcome=validation_outcome,  # type: ignore[arg-type]
+        retrieval=retrieval,
+        validation={"is_valid": validation_outcome == "valid", "confidence": 0.9, "reason": validation_outcome},
+        escalation_recommended=False,
+        escalation_trigger=None,
+    )
+
+
+def test_chat_response_requires_clarification_payload() -> None:
+    with pytest.raises(ValueError, match="clarification payload is required"):
+        ChatResponse(
+            text="Do you want DNS, CDN, or SSL?",
+            answer="Do you want DNS, CDN, or SSL?",
+            message_type="clarification",
+            clarification=None,
+            session_id=uuid.uuid4(),
+            source_documents=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
+
+
+def test_process_chat_message_returns_structured_clarification_for_ambiguous_domain(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="clarify-domain@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Domain Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: Mock(detected=False, level=None, method=None, score=None),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.run_chat_pipeline",
+        lambda *args, **kwargs: _make_pipeline_result(
+            final_answer="Maybe this is about domains.",
+            validation_outcome="skipped",
+            reliability_score="medium",
+        ),
+    )
+
+    outcome = process_chat_message(
+        client_id,
+        "How to connect domain?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert outcome.message_type == "clarification"
+    assert outcome.clarification is not None
+    assert outcome.clarification.reason == "ambiguous_intent"
+    assert [item.label for item in outcome.clarification.options] == ["DNS", "CDN", "SSL"]
+
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert (chat.user_context or {}).get("clarification_state", {}).get("status") == "awaiting_reply"
+
+
+def test_clarification_continuation_reenters_pipeline_and_clears_state(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="clarify-continue@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Continue Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    seen_questions: list[str] = []
+    results = iter(
+        [
+            _make_pipeline_result(
+                final_answer="Maybe this is about domains.",
+                validation_outcome="skipped",
+                reliability_score="medium",
+            ),
+            _make_pipeline_result(
+                final_answer="Use the CDN-specific domain settings.",
+                validation_outcome="valid",
+                reliability_score="medium",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: Mock(detected=False, level=None, method=None, score=None),
+    )
+
+    def fake_run_chat_pipeline(*args, **kwargs):
+        seen_questions.append(args[1])
+        return next(results)
+
+    monkeypatch.setattr("backend.chat.service.run_chat_pipeline", fake_run_chat_pipeline)
+
+    first = process_chat_message(
+        client_id,
+        "How to connect domain?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+    second = process_chat_message(
+        client_id,
+        "CDN",
+        session_id,
+        db_session,
+        api_key=api_key,
+        clarification_option_id="cdn",
+    )
+
+    assert first.message_type == "clarification"
+    assert second.message_type == "answer"
+    assert second.text == "Use the CDN-specific domain settings."
+    assert "Clarification selected: CDN" in seen_questions[-1]
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert "clarification_state" not in (chat.user_context or {})
+
+
+def test_clarification_new_intent_supersedes_prior_state(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="clarify-supersede@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Supersede Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    seen_questions: list[str] = []
+    results = iter(
+        [
+            _make_pipeline_result(
+                final_answer="Maybe this is about domains.",
+                validation_outcome="skipped",
+                reliability_score="medium",
+            ),
+            _make_pipeline_result(
+                final_answer="Pricing starts on the plans page.",
+                validation_outcome="valid",
+                reliability_score="medium",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: Mock(detected=False, level=None, method=None, score=None),
+    )
+
+    def fake_run_chat_pipeline(*args, **kwargs):
+        seen_questions.append(args[1])
+        return next(results)
+
+    monkeypatch.setattr("backend.chat.service.run_chat_pipeline", fake_run_chat_pipeline)
+
+    _ = process_chat_message(
+        client_id,
+        "How to connect domain?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+    second = process_chat_message(
+        client_id,
+        "Actually I need pricing",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert second.message_type == "answer"
+    assert seen_questions[-1] == "Actually I need pricing"
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert "clarification_state" not in (chat.user_context or {})
+
+
+def test_clarification_limit_forces_best_effort_answer_and_clears_state(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="clarify-limit@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Limit Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    results = iter(
+        [
+            _make_pipeline_result(
+                final_answer="Maybe this is about domains.",
+                validation_outcome="skipped",
+                reliability_score="medium",
+            ),
+            _make_pipeline_result(
+                final_answer="I don't have enough information in my knowledge base to answer this question accurately.",
+                validation_outcome="skipped",
+                reliability_score="medium",
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: Mock(detected=False, level=None, method=None, score=None),
+    )
+    monkeypatch.setattr("backend.chat.service.run_chat_pipeline", lambda *args, **kwargs: next(results))
+
+    first = process_chat_message(
+        client_id,
+        "How to connect domain?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+    second = process_chat_message(
+        client_id,
+        "CDN",
+        session_id,
+        db_session,
+        api_key=api_key,
+        clarification_option_id="cdn",
+    )
+
+    assert first.message_type == "clarification"
+    assert second.message_type == "answer"
+    assert second.clarification is None
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert "clarification_state" not in (chat.user_context or {})
+
+
+def test_run_debug_exposes_partial_clarification_metadata(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="debug-clarify@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Debug Clarify Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    monkeypatch.setattr(
+        "backend.chat.service.run_chat_pipeline",
+        lambda *args, **kwargs: _make_pipeline_result(
+            final_answer="I don't have enough information in my knowledge base to answer this question accurately.",
+            validation_outcome="fallback",
+            reliability_score="low",
+        ),
+    )
+
+    answer, _tokens_used, debug_dict = run_debug(
+        client_id=client_id,
+        question="How to connect domain?",
+        db=db_session,
+        api_key=api_key,
+    )
+
+    assert answer.startswith("Domain setup usually starts with DNS configuration")
+    assert debug_dict["message_type"] == "partial_with_clarification"
+    assert debug_dict["clarification_reason"] == "ambiguous_intent"
+    assert debug_dict["safe_partial_source_type"] == "deterministic_template"

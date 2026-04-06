@@ -1,30 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   MessageCircle,
   Send,
   Ticket,
 } from "lucide-react";
 import { cn } from "@/components/ui/utils";
+import {
+  appendSystemMarker,
+  createTextMessage,
+  getLastEndedMarkerIndex,
+  type ChatWidgetMessage,
+} from "@/lib/widget-conversation";
 
 export type ChatWidgetBelowAssistantContext = {
   messageIndex: number;
   userQuestion: string;
   assistantContent: string;
 };
-
-type ChatWidgetMessage =
-  | {
-      id: string;
-      type: "assistant" | "user" | "error";
-      text: string;
-    }
-  | {
-      id: string;
-      type: "system";
-      subtype: "conversation_ended" | "new_conversation";
-    };
 
 interface ChatWidgetProps {
   botId: string;
@@ -134,34 +128,6 @@ function apiErrorCode(detail: unknown): string | null {
   return null;
 }
 
-function createMessageId(): string {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function createTextMessage(
-  type: "assistant" | "user" | "error",
-  text: string,
-): ChatWidgetMessage {
-  return {
-    id: createMessageId(),
-    type,
-    text,
-  };
-}
-
-function createSystemMessage(
-  subtype: "conversation_ended" | "new_conversation",
-): ChatWidgetMessage {
-  return {
-    id: createMessageId(),
-    type: "system",
-    subtype,
-  };
-}
-
 function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: number): string {
   for (let i = assistantIndex - 1; i >= 0; i -= 1) {
     if (messages[i].type === "user") return messages[i].text;
@@ -200,26 +166,20 @@ export function ChatWidget({
     el.scrollTop = el.scrollHeight;
   }, [messages, loading]);
 
-  const appendSystemMessage = (subtype: "conversation_ended" | "new_conversation") => {
+  const appendSystemMessage = useCallback((subtype: "conversation_ended" | "new_conversation") => {
     setMessages((prev) => {
-      if (subtype === "conversation_ended") {
-        const last = prev[prev.length - 1];
-        if (last?.type === "system" && last.subtype === "conversation_ended") {
-          return prev;
-        }
-      }
-      return [...prev, createSystemMessage(subtype)];
+      return appendSystemMarker(prev, subtype);
     });
-  };
+  }, []);
 
-  const handleChatEnded = () => {
+  const handleChatEnded = useCallback(() => {
     setChatClosed(true);
     setSessionId(null);
     appendSystemMessage("conversation_ended");
     clearStoredSession(botId);
-  };
+  }, [appendSystemMessage, botId]);
 
-  const applyAssistantMessage = (raw: string, ended?: boolean) => {
+  const applyAssistantMessage = useCallback((raw: string, ended?: boolean) => {
     const ticket = parseEscalationTicket(raw);
     if (ticket) setActiveTicket(ticket);
     const display = stripEscalationToken(raw) || raw;
@@ -227,9 +187,9 @@ export function ChatWidget({
     if (ended) {
       handleChatEnded();
     }
-  };
+  }, [handleChatEnded]);
 
-  const handleStartNewChat = () => {
+  const handleStartNewChat = useCallback(() => {
     setInput("");
     setSessionId(null);
     setChatClosed(false);
@@ -237,7 +197,12 @@ export function ChatWidget({
     appendSystemMessage("new_conversation");
     clearStoredSession(botId);
     inputRef.current?.focus();
-  };
+  }, [appendSystemMessage, botId]);
+
+  const lastEndedMarkerIndex = useMemo(
+    () => getLastEndedMarkerIndex(messages),
+    [messages],
+  );
 
   const handleSend = async () => {
     if (!canSend) return;
@@ -272,7 +237,7 @@ export function ChatWidget({
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId);
         setSessionId(null);
-        ({ res, payload } = await sendWidgetMessage(""));
+        ({ res, payload } = await sendWidgetMessage(null));
         detail = payload.detail;
         code = apiErrorCode(detail);
       }
@@ -288,9 +253,7 @@ export function ChatWidget({
       };
 
       applyAssistantMessage(data.response, data.chat_ended === true);
-      if (data.chat_ended === true) {
-        setSessionId(null);
-      } else {
+      if (data.chat_ended !== true) {
         setSessionId(data.session_id);
         persistSession(botId, data.session_id);
       }
@@ -340,19 +303,7 @@ export function ChatWidget({
           </div>
         ) : (
           <div className="space-y-5">
-            {/*
-              The list stays flat on purpose: closed/open cycles are represented by
-              lightweight system markers instead of introducing a conversation tree.
-            */}
-            {(() => {
-              const lastEndedMarkerIndex = messages.reduce((lastIndex, item, index) => {
-                if (item.type === "system" && item.subtype === "conversation_ended") {
-                  return index;
-                }
-                return lastIndex;
-              }, -1);
-
-              return messages.map((msg, i) => {
+            {messages.map((msg, i) => {
                 if (msg.type === "system") {
                   const isEnded = msg.subtype === "conversation_ended";
                   const isLastEndedMarker = isEnded && i === lastEndedMarkerIndex;
@@ -411,8 +362,7 @@ export function ChatWidget({
                     ) : null}
                   </div>
                 );
-              });
-            })()}
+            })}
 
             {loading ? (
               <div className="flex items-end gap-3">

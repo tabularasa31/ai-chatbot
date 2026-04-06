@@ -77,6 +77,17 @@ CLARIFICATION_TURN_LIMIT = 1
 SAFE_PARTIAL_SOURCE_FAQ = "faq_rule"
 SAFE_PARTIAL_SOURCE_TEMPLATE = "deterministic_template"
 SAFE_PARTIAL_SOURCE_RETRIEVED = "retrieved_safe_context"
+VALID_CLARIFICATION_REASONS = {
+    "ambiguous_intent",
+    "missing_critical_slot",
+    "low_retrieval_confidence",
+}
+VALID_CLARIFICATION_TYPES = {
+    "disambiguation",
+    "slot_request",
+    "context_request",
+    "partial_plus_question",
+}
 
 DISCLOSURE_HARD_LIMITS = (
     "Hard limits (always follow):\n"
@@ -137,6 +148,13 @@ def _safe_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_int_with_default(value: Any, default: int) -> int:
+    parsed = _safe_int(value)
+    if parsed == 0 and value not in (0, "0"):
+        return default
+    return parsed
 
 
 def retrieve_context(
@@ -440,6 +458,14 @@ _API_FAILURE_HINTS = (
     "not working",
     "failing",
 )
+_NEGATIVE_REPLY_HINTS = (
+    "i don't know",
+    "dont know",
+    "not sure",
+    "what is that",
+    "what do you mean",
+    "help",
+)
 
 
 def _normalize_text(value: str) -> str:
@@ -463,16 +489,22 @@ def _get_clarification_state(chat: Chat | None) -> ClarificationState | None:
         for item in raw.get("options", [])
         if isinstance(item, dict) and str(item.get("id", "")).strip() and str(item.get("label", "")).strip()
     ]
+    reason = str(raw.get("reason", "low_retrieval_confidence")).strip()
+    if reason not in VALID_CLARIFICATION_REASONS:
+        reason = "low_retrieval_confidence"
+    clarification_type = str(raw.get("type", "context_request")).strip()
+    if clarification_type not in VALID_CLARIFICATION_TYPES:
+        clarification_type = "context_request"
     return ClarificationState(
-        version=int(raw.get("version", CLARIFICATION_STATE_VERSION)),
+        version=max(_safe_int_with_default(raw.get("version"), CLARIFICATION_STATE_VERSION), 1),
         status=CLARIFICATION_STATUS_AWAITING_REPLY,
         original_user_message=str(raw.get("original_user_message", "")).strip(),
         clarification_prompt=str(raw.get("clarification_prompt", "")).strip(),
-        reason=str(raw.get("reason", "low_retrieval_confidence")),  # type: ignore[arg-type]
-        type=str(raw.get("type", "context_request")),  # type: ignore[arg-type]
+        reason=reason,  # type: ignore[arg-type]
+        type=clarification_type,  # type: ignore[arg-type]
         options=options,
         requested_fields=[str(item).strip() for item in raw.get("requested_fields", []) if str(item).strip()],
-        turn_count=max(int(raw.get("turn_count", 1)), 1),
+        turn_count=max(_safe_int_with_default(raw.get("turn_count"), 1), 1),
         created_at=str(raw.get("created_at", "")),
     )
 
@@ -757,7 +789,11 @@ def _reply_fills_requested_fields(state: ClarificationState, user_reply: str) ->
         return True
     if "error_message" in state.requested_fields and _has_error_detail(user_reply):
         return True
-    if "feature_or_setup_step" in state.requested_fields and len(normalized.split()) <= 6:
+    if (
+        "feature_or_setup_step" in state.requested_fields
+        and len(normalized.split()) <= 6
+        and not any(hint in normalized for hint in _NEGATIVE_REPLY_HINTS)
+    ):
         return True
     return False
 

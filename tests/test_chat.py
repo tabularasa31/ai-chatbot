@@ -15,9 +15,12 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
     ChatPipelineResult,
+    ClarificationState,
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
+    _classify_clarification_turn,
+    _get_clarification_state,
     retrieve_context,
     run_chat_pipeline,
     run_debug,
@@ -3796,3 +3799,51 @@ def test_run_debug_exposes_partial_clarification_metadata(
     assert debug_dict["message_type"] == "partial_with_clarification"
     assert debug_dict["clarification_reason"] == "ambiguous_intent"
     assert debug_dict["safe_partial_source_type"] == "deterministic_template"
+
+
+def test_get_clarification_state_tolerates_malformed_context() -> None:
+    from backend.models import Chat
+
+    chat = Chat(
+        user_context={
+            "clarification_state": {
+                "version": "oops",
+                "status": "awaiting_reply",
+                "original_user_message": "How to connect domain?",
+                "clarification_prompt": "DNS, CDN, or SSL?",
+                "reason": "not_a_real_reason",
+                "type": "not_a_real_type",
+                "options": [{"id": "cdn", "label": "CDN"}],
+                "requested_fields": ["feature_or_setup_step"],
+                "turn_count": "NaN",
+                "created_at": "2026-04-06T00:00:00Z",
+            }
+        }
+    )
+
+    state = _get_clarification_state(chat)
+
+    assert state is not None
+    assert state.version == 1
+    assert state.turn_count == 1
+    assert state.reason == "low_retrieval_confidence"
+    assert state.type == "context_request"
+
+
+def test_classify_clarification_turn_rejects_uninformative_feature_reply() -> None:
+    state = ClarificationState(
+        version=1,
+        status="awaiting_reply",
+        original_user_message="How do I set this up?",
+        clarification_prompt="Can you clarify which feature or setup step you mean?",
+        reason="low_retrieval_confidence",
+        type="context_request",
+        options=[],
+        requested_fields=["feature_or_setup_step"],
+        turn_count=1,
+        created_at="2026-04-06T00:00:00Z",
+    )
+
+    result = _classify_clarification_turn(state, "I don't know", None)
+
+    assert result.classification == "new_intent"

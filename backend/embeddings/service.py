@@ -15,7 +15,7 @@ from backend.documents.parsers import (
     OPENAPI_RESPONSE_DETAIL_MARKER,
     extract_openapi_chunks_from_rendered_text,
 )
-from backend.models import Document, DocumentStatus, Embedding
+from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
 # Optimal chunking parameters per document type.
 # Tune these values here when re-evaluating retrieval quality.
@@ -241,7 +241,7 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
 
-    if doc.file_type.value == "swagger":
+    if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
     else:
         cfg = CHUNKING_CONFIG.get(doc.file_type.value, _CHUNKING_DEFAULT)

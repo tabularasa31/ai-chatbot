@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from backend.documents.parsers import build_openapi_ingestion_payload
+from backend.documents.parsers import (
+    build_openapi_ingestion_payload,
+    extract_openapi_chunks_from_rendered_text,
+)
 from backend.embeddings.service import _build_swagger_chunks, chunk_text
 from backend.models import Embedding
 
@@ -334,6 +337,34 @@ paths:
     assert "cache.disable: boolean" in str(chunks[1]["text"])
     assert "Response Schema Detail:" in str(chunks[2]["text"])
     assert "200 application/json top-level fields:" in str(chunks[2]["text"])
+
+
+def test_openapi_render_round_trip_preserves_operation_metadata() -> None:
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Round Trip API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      tags: [users]
+      responses:
+        "200":
+          description: OK
+"""
+    parsed_text, original_chunks, source_format, spec_version = build_openapi_ingestion_payload(swagger_content)
+    reparsed_chunks, reparsed_source_format, reparsed_spec_version = extract_openapi_chunks_from_rendered_text(parsed_text)
+
+    assert reparsed_source_format == source_format
+    assert reparsed_spec_version == spec_version
+    assert len(reparsed_chunks) == len(original_chunks) == 1
+    assert reparsed_chunks[0].path == original_chunks[0].path
+    assert reparsed_chunks[0].method == original_chunks[0].method
+    assert reparsed_chunks[0].operation_id == original_chunks[0].operation_id
+    assert tuple(reparsed_chunks[0].tags) == tuple(original_chunks[0].tags)
 
 
 @patch("backend.embeddings.service.get_openai_client")

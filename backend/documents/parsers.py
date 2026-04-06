@@ -31,7 +31,7 @@ _RICH_SCHEMA_PROPERTY_THRESHOLD = 4
 _NESTED_SCHEMA_DETAIL_LIMIT = 4
 
 
-@dataclass(frozen=True)
+@dataclass
 class OpenAPIChunk:
     text: str
     path: str
@@ -107,6 +107,13 @@ def looks_like_openapi(spec: dict[str, Any]) -> bool:
 def build_openapi_ingestion_payload(content: bytes) -> tuple[str, list[OpenAPIChunk], str, str]:
     """Return preview text plus retrieval chunks for a valid OpenAPI spec."""
     spec, source_format = load_openapi_spec(content)
+    return build_openapi_ingestion_payload_from_spec(spec, source_format)
+
+
+def build_openapi_ingestion_payload_from_spec(
+    spec: dict[str, Any], source_format: str
+) -> tuple[str, list[OpenAPIChunk], str, str]:
+    """Return preview text plus retrieval chunks for a validated OpenAPI spec object."""
     spec_version = _validate_openapi_spec(spec)
     title = _string_or_none((spec.get("info") or {}).get("title")) or "Unknown API"
     chunks = _build_openapi_chunks(spec, source_format=source_format, spec_version=spec_version)
@@ -272,20 +279,18 @@ def _build_openapi_chunks(
 
 def _iter_operations(
     spec: dict[str, Any]
-) -> list[tuple[str, str, dict[str, Any], dict[str, Any]]]:
+):
     paths = spec.get("paths")
     if not isinstance(paths, dict):
-        return []
+        return
 
-    out: list[tuple[str, str, dict[str, Any], dict[str, Any]]] = []
     for path, path_item in paths.items():
         if not isinstance(path, str) or not isinstance(path_item, dict):
             continue
         for method in _SUPPORTED_HTTP_METHODS:
             operation = path_item.get(method)
             if isinstance(operation, dict):
-                out.append((path, method, operation, path_item))
-    return out
+                yield path, method, operation, path_item
 
 
 def _merge_parameters(
@@ -602,9 +607,9 @@ def _resolve_local_value(
 
 
 def _resolve_response_value(
-    spec: dict[str, Any], value: Any, *, depth: int = 0
+    spec: dict[str, Any], value: Any, *, visited: set[str] | None = None, depth: int = 0
 ) -> Any:
-    resolved = _resolve_local_value(spec, value, depth=depth)
+    resolved = _resolve_local_value(spec, value, visited=visited, depth=depth)
     if not isinstance(resolved, dict) or depth > _MAX_SCHEMA_DEPTH:
         return resolved
     all_of = resolved.get("allOf")
@@ -613,7 +618,7 @@ def _resolve_response_value(
 
     merged: dict[str, Any] = {}
     for part in all_of:
-        part_resolved = _resolve_response_value(spec, part, depth=depth + 1)
+        part_resolved = _resolve_response_value(spec, part, visited=visited, depth=depth + 1)
         if not isinstance(part_resolved, dict):
             continue
         for key, part_value in part_resolved.items():
@@ -677,8 +682,14 @@ def _summarize_schema(spec: dict[str, Any], schema: Any, *, depth: int = 0) -> s
     return "object"
 
 
-def _normalize_schema(spec: dict[str, Any], schema: Any, *, depth: int = 0) -> Any:
-    resolved = _resolve_local_value(spec, schema, depth=depth)
+def _normalize_schema(
+    spec: dict[str, Any],
+    schema: Any,
+    *,
+    visited: set[str] | None = None,
+    depth: int = 0,
+) -> Any:
+    resolved = _resolve_local_value(spec, schema, visited=visited, depth=depth)
     if not isinstance(resolved, dict):
         return resolved
     if depth > _MAX_SCHEMA_DEPTH:
@@ -693,7 +704,7 @@ def _normalize_schema(spec: dict[str, Any], schema: Any, *, depth: int = 0) -> A
     merged_required: list[str] = []
     saw_object_like = False
     for part in all_of:
-        part_resolved = _normalize_schema(spec, part, depth=depth + 1)
+        part_resolved = _normalize_schema(spec, part, visited=visited, depth=depth + 1)
         if not isinstance(part_resolved, dict):
             continue
         properties = part_resolved.get("properties")
@@ -836,6 +847,7 @@ def _parse_rendered_openapi_block(
     response_codes: list[str] = []
     content_types: list[str] = []
     has_examples = False
+    current_section: str | None = None
 
     for line in text.splitlines():
         stripped = line.strip()
@@ -849,14 +861,18 @@ def _parse_rendered_openapi_block(
             deprecated = True
         elif stripped.startswith("Authentication: "):
             auth_schemes = [item.strip() for item in stripped.removeprefix("Authentication: ").split(",") if item.strip()]
+        elif stripped == "Request Body:":
+            current_section = "request"
+        elif stripped == "Responses:":
+            current_section = "response"
+        elif stripped in {"Request Schema Detail:", "Response Schema Detail:", "Example Call:", "Extensions:"}:
+            current_section = None
         elif stripped.startswith("- ") and ": " in stripped:
             head = stripped[2:].split(":", 1)[0].strip()
             if head.isdigit() or head == "default":
                 response_codes.append(head)
-            if "application/" in stripped or "text/" in stripped:
-                for token in stripped.replace("[", " ").replace("]", " ").replace(";", " ").split():
-                    if "/" in token and not token.startswith("http"):
-                        content_types.append(token.strip(","))
+            if current_section in {"request", "response"}:
+                content_types.extend(_extract_content_types_from_line(stripped))
             if "example " in stripped:
                 has_examples = True
         elif stripped.startswith("curl -X "):
@@ -879,3 +895,12 @@ def _parse_rendered_openapi_block(
         source_format=source_format,
         spec_version=spec_version,
     )
+
+
+def _extract_content_types_from_line(line: str) -> list[str]:
+    found: list[str] = []
+    for token in line.replace("[", " ").replace("]", " ").replace(";", " ").split():
+        clean = token.strip(",)")
+        if clean.startswith("application/") or clean.startswith("text/"):
+            found.append(clean)
+    return found

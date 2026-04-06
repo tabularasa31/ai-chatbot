@@ -28,7 +28,8 @@ from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.documents.parsers import (
-    build_openapi_ingestion_payload,
+    OpenAPIChunk,
+    build_openapi_ingestion_payload_from_spec,
     looks_like_openapi,
     load_openapi_spec,
 )
@@ -90,7 +91,7 @@ class FetchContext:
 class StructuredSource:
     title: str
     parsed_text: str
-    chunks: list[dict[str, Any]]
+    chunks: list[OpenAPIChunk]
     source_format: str
 
 
@@ -781,21 +782,18 @@ def _normalize_source_format(source_format: str, *, from_url: bool) -> str:
         return source_format
     if source_format == "json":
         return "url-json"
-    if source_format in {"yaml", "yml"}:
+    if source_format == "yaml":
         return "url-yaml"
     return f"url-{source_format}"
 
 
 def _build_structured_openapi_chunks(
-    parsed_text: str,
+    openapi_chunks: list[OpenAPIChunk],
     *,
     filename: str,
     source_url: str,
     source_format: str,
 ) -> list[dict[str, Any]]:
-    from backend.documents.parsers import extract_openapi_chunks_from_rendered_text
-
-    openapi_chunks, _, spec_version = extract_openapi_chunks_from_rendered_text(parsed_text)
     normalized_source_format = _normalize_source_format(source_format, from_url=True)
     out: list[dict[str, Any]] = []
     for index, chunk in enumerate(openapi_chunks):
@@ -818,7 +816,7 @@ def _build_structured_openapi_chunks(
                 "file_type": DocumentType.swagger.value,
                 "source_kind": "url",
                 "source_format": normalized_source_format,
-                "spec_version": spec_version,
+                "spec_version": chunk.spec_version,
                 "source_url": source_url,
             }
         )
@@ -840,6 +838,11 @@ def _fetch_openapi_source(url: str) -> StructuredSource | None:
         return None
 
     body = response.content
+    if len(body) > MAX_HTML_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
+        )
     if not body.strip():
         return None
 
@@ -855,25 +858,41 @@ def _fetch_openapi_source(url: str) -> StructuredSource | None:
         )
 
     try:
-        parsed_text, _, parsed_source_format, _ = build_openapi_ingestion_payload(body)
+        parsed_text, chunks, parsed_source_format, _ = build_openapi_ingestion_payload_from_spec(
+            spec,
+            source_format,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        logger.info("Structured OpenAPI validation failed for %s: %s", url, exc)
+        raise HTTPException(
+            status_code=422,
+            detail="The URL looks like an OpenAPI document, but it could not be validated.",
+        ) from exc
 
     info = spec.get("info") if isinstance(spec.get("info"), dict) else {}
     title = "Unknown API"
     if isinstance(info, dict):
         title = (info.get("title") or "").strip() or title
-    chunks = _build_structured_openapi_chunks(
-        parsed_text,
-        filename=title[:255],
-        source_url=url,
-        source_format=parsed_source_format or source_format,
-    )
     return StructuredSource(
         title=title[:255],
         parsed_text=parsed_text,
         chunks=chunks,
         source_format=parsed_source_format or source_format,
+    )
+
+
+def _render_structured_openapi_chunks(
+    openapi_chunks: list[OpenAPIChunk],
+    *,
+    title: str,
+    source_url: str,
+    source_format: str,
+) -> list[dict[str, Any]]:
+    return _build_structured_openapi_chunks(
+        openapi_chunks,
+        filename=title[:255],
+        source_url=source_url,
+        source_format=source_format,
     )
 
 
@@ -988,7 +1007,7 @@ def _upsert_structured_document(
     url: str,
     title: str,
     parsed_text: str,
-    chunks: list[dict[str, Any]],
+    chunks: list[OpenAPIChunk],
     db: Session,
     api_key: str | None,
 ) -> tuple[Document, int]:
@@ -1028,39 +1047,55 @@ def _upsert_structured_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    vectors = _embed_chunks(chunks, api_key)
-    for chunk, vector in zip(chunks, vectors):
-        db.add(
-            Embedding(
-                document_id=doc.id,
-                chunk_text=chunk["chunk_text"],
-                vector=vector,
-                metadata_json={
-                    "chunk_index": chunk["chunk_index"],
-                    "filename": doc.filename,
-                    "file_type": doc.file_type.value,
-                    "source_url": url,
-                    "source_kind": "url",
-                    "source_format": chunk.get("source_format"),
-                    "type": chunk.get("type"),
-                    "subtype": chunk.get("subtype"),
-                    "path": chunk.get("path"),
-                    "method": chunk.get("method"),
-                    "operation_id": chunk.get("operation_id"),
-                    "tags": chunk.get("tags"),
-                    "deprecated": chunk.get("deprecated"),
-                    "content_types": chunk.get("content_types"),
-                    "response_codes": chunk.get("response_codes"),
-                    "auth_schemes": chunk.get("auth_schemes"),
-                    "has_examples": chunk.get("has_examples"),
-                    "spec_version": chunk.get("spec_version"),
-                    "page_content_hash": content_hash,
-                },
+    rendered_chunks = _render_structured_openapi_chunks(
+        chunks,
+        title=title,
+        source_url=url,
+        source_format=chunks[0].source_format if chunks else "yaml",
+    )
+    try:
+        vectors = _embed_chunks(rendered_chunks, api_key)
+        for chunk, vector in zip(rendered_chunks, vectors):
+            db.add(
+                Embedding(
+                    document_id=doc.id,
+                    chunk_text=chunk["chunk_text"],
+                    vector=vector,
+                    metadata_json={
+                        "chunk_index": chunk["chunk_index"],
+                        "filename": doc.filename,
+                        "file_type": doc.file_type.value,
+                        "source_url": url,
+                        "source_kind": "url",
+                        "source_format": chunk.get("source_format"),
+                        "type": chunk.get("type"),
+                        "subtype": chunk.get("subtype"),
+                        "path": chunk.get("path"),
+                        "method": chunk.get("method"),
+                        "operation_id": chunk.get("operation_id"),
+                        "tags": chunk.get("tags"),
+                        "deprecated": chunk.get("deprecated"),
+                        "content_types": chunk.get("content_types"),
+                        "response_codes": chunk.get("response_codes"),
+                        "auth_schemes": chunk.get("auth_schemes"),
+                        "has_examples": chunk.get("has_examples"),
+                        "spec_version": chunk.get("spec_version"),
+                        "page_content_hash": content_hash,
+                    },
+                )
             )
-        )
-    doc.status = DocumentStatus.ready
-    db.flush()
-    return doc, len(chunks)
+        doc.status = DocumentStatus.ready
+        db.flush()
+        return doc, len(rendered_chunks)
+    except Exception:
+        db.rollback()
+        refreshed_doc = db.query(Document).filter(Document.id == doc.id).first()
+        if refreshed_doc is not None:
+            refreshed_doc.status = DocumentStatus.error
+            refreshed_doc.parsed_text = parsed_text
+            db.add(refreshed_doc)
+            db.commit()
+        raise HTTPException(status_code=500, detail="Structured source embedding failed")
 
 
 def list_knowledge_sources(client_id: uuid.UUID, db: Session) -> dict[str, Any]:

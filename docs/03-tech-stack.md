@@ -38,7 +38,7 @@
 - **Document Parsing:**
   - pypdf>=4.0.0 (PDF extraction — replaces deprecated PyPDF2)
   - markdown (Markdown parsing)
-  - yaml/json (Swagger/OpenAPI specs)
+  - yaml/json (Swagger/OpenAPI specs with semantic endpoint-aware rendering)
   
 - **Email:** Brevo HTTP API
   - Transactional emails (email verification)

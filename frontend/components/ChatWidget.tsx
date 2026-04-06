@@ -130,7 +130,8 @@ function apiErrorCode(detail: unknown): string | null {
 
 function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: number): string {
   for (let i = assistantIndex - 1; i >= 0; i -= 1) {
-    if (messages[i].type === "user") return messages[i].text;
+    const message = messages[i];
+    if (message?.type === "user") return message.text;
   }
   return "";
 }

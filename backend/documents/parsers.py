@@ -570,16 +570,38 @@ def _extract_example_payload(spec: dict[str, Any], media: dict[str, Any]) -> Any
 
 def _compact_value(value: Any) -> str:
     if isinstance(value, str):
-        return value[:120]
+        return _sanitize_rendered_fragment(value)[:120]
     if isinstance(value, (int, float, bool)):
         return str(value)
     if isinstance(value, list):
         preview = ", ".join(_compact_value(item) for item in value[:3])
         return f"[{preview}]"
     if isinstance(value, dict):
-        keys = ", ".join(list(value.keys())[:5])
+        keys = ", ".join(_sanitize_rendered_fragment(str(key)) for key in list(value.keys())[:5])
         return f"{{{keys}}}"
     return "example"
+
+
+def _sanitize_rendered_fragment(text: str) -> str:
+    sanitized = text
+    for marker in (
+        OPENAPI_OPERATION_SEPARATOR,
+        OPENAPI_REQUEST_DETAIL_MARKER,
+        OPENAPI_RESPONSE_DETAIL_MARKER,
+    ):
+        sanitized = sanitized.replace(marker, " ")
+    return sanitized
+
+
+def _extend_visited_with_ref(value: Any, visited: set[str] | None) -> set[str] | None:
+    if not isinstance(value, dict):
+        return visited
+    ref = value.get("$ref")
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return visited
+    base = set(visited or set())
+    base.add(ref)
+    return base
 
 
 def _resolve_local_value(
@@ -609,6 +631,7 @@ def _resolve_local_value(
 def _resolve_response_value(
     spec: dict[str, Any], value: Any, *, visited: set[str] | None = None, depth: int = 0
 ) -> Any:
+    active_visited = _extend_visited_with_ref(value, visited)
     resolved = _resolve_local_value(spec, value, visited=visited, depth=depth)
     if not isinstance(resolved, dict) or depth > _MAX_SCHEMA_DEPTH:
         return resolved
@@ -618,7 +641,7 @@ def _resolve_response_value(
 
     merged: dict[str, Any] = {}
     for part in all_of:
-        part_resolved = _resolve_response_value(spec, part, visited=visited, depth=depth + 1)
+        part_resolved = _resolve_response_value(spec, part, visited=active_visited, depth=depth + 1)
         if not isinstance(part_resolved, dict):
             continue
         for key, part_value in part_resolved.items():
@@ -692,6 +715,7 @@ def _normalize_schema(
     visited: set[str] | None = None,
     depth: int = 0,
 ) -> Any:
+    active_visited = _extend_visited_with_ref(schema, visited)
     resolved = _resolve_local_value(spec, schema, visited=visited, depth=depth)
     if not isinstance(resolved, dict):
         return resolved
@@ -707,7 +731,7 @@ def _normalize_schema(
     merged_required: list[str] = []
     saw_object_like = False
     for part in all_of:
-        part_resolved = _normalize_schema(spec, part, visited=visited, depth=depth + 1)
+        part_resolved = _normalize_schema(spec, part, visited=active_visited, depth=depth + 1)
         if not isinstance(part_resolved, dict):
             continue
         properties = part_resolved.get("properties")

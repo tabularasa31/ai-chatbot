@@ -162,6 +162,10 @@ def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
         request_idx = text_body.find(request_marker)
         response_idx = text_body.find(response_marker)
 
+        # Keep the primary chunk focused on endpoint-level context only.
+        # As soon as request/response sections or their richer detail markers begin,
+        # we cut the primary chunk and move the heavier schema material into the
+        # specialized secondary chunks below.
         primary_end = min(
             [idx for idx in (request_idx, response_idx, request_detail_idx, response_detail_idx) if idx >= 0],
             default=len(text_body),

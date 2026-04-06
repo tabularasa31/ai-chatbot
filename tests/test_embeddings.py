@@ -367,6 +367,76 @@ paths:
     assert tuple(reparsed_chunks[0].tags) == tuple(original_chunks[0].tags)
 
 
+def test_openapi_examples_sanitize_internal_chunk_markers() -> None:
+    swagger_content = f"""
+openapi: 3.0.0
+info:
+  title: Marker API
+  version: "1.0"
+paths:
+  /users:
+    post:
+      summary: Create user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            example:
+              note: "before{chr(10)}{chr(10)}<<<OPENAPI_OPERATION>>>{chr(10)}{chr(10)}after"
+      responses:
+        "200":
+          description: OK
+""".encode()
+    parsed_text, chunks, _, _ = build_openapi_ingestion_payload(swagger_content)
+    reparsed_chunks, _, _ = extract_openapi_chunks_from_rendered_text(parsed_text)
+
+    assert len(chunks) == 1
+    assert len(reparsed_chunks) == 1
+    assert parsed_text.count("<<<OPENAPI_OPERATION>>>") == 1
+
+
+def test_openapi_allof_ref_cycle_finishes_without_recursion_error() -> None:
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Cycle API
+  version: "1.0"
+paths:
+  /items:
+    post:
+      summary: Create item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/A'
+      responses:
+        "200":
+          description: OK
+components:
+  schemas:
+    A:
+      allOf:
+        - $ref: '#/components/schemas/B'
+        - type: object
+          properties:
+            id:
+              type: string
+    B:
+      allOf:
+        - $ref: '#/components/schemas/A'
+        - type: object
+          properties:
+            name:
+              type: string
+"""
+    parsed_text, chunks, _, _ = build_openapi_ingestion_payload(swagger_content)
+
+    assert len(chunks) == 1
+    assert "Endpoint: POST /items" in parsed_text
+
+
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_document_not_ready(
     mock_get_openai: Mock,

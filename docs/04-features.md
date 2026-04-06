@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-03-30 (FAQ Phase 3 + Knowledge Profile/FAQ dashboard)  
+**Last updated:** 2026-04-06 (controlled clarification layer + structured widget clarification UI)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -242,6 +242,52 @@ Observability for this layer is emitted through a single `faq_match` span with s
 - `selected_score` (score of the FAQ selected for direct/context decisioning)
 - `direct_guard_used`, `direct_guard_passed`, `decision_reason`
 - `retrieval_skipped`, `generation_skipped`
+
+### Controlled clarification layer (MVP)
+
+The chat pipeline can now return three typed outcomes instead of only a plain answer:
+
+- `answer`
+- `clarification`
+- `partial_with_clarification`
+
+Clarification is intentionally narrow. The bot does not ask follow-up questions by default; it does so only when the current request is not sufficiently answerable under the existing pipeline signals and one of these deterministic trigger families is matched:
+
+- ambiguous intent
+- missing critical slot
+- low retrieval confidence
+
+Current MVP behavior:
+
+- only one clarification question is asked per active clarification flow
+- clarification state is stored in `chats.user_context["clarification_state"]`
+- a short follow-up reply is first classified as either:
+  - continuation of the active clarification flow
+  - new unrelated intent
+- continuation replies are normalized back into the standard chat pipeline rather than handled by a separate mini-pipeline
+- unsupported ambiguity or missing-slot patterns do not trigger speculative clarification; they fall back to the existing best-effort answer path
+
+Public response contracts:
+
+- `POST /chat` now returns canonical `text`, `message_type`, and optional `clarification`
+- legacy `answer` remains as a compatibility alias of `text`
+- `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
+- legacy `response` remains as a compatibility alias of `text`
+
+Clarification payloads can include:
+
+- `reason`
+- `type`
+- `options`
+- `requested_fields`
+- `original_user_message`
+- `turn_index`
+
+For the website widget:
+
+- clarification options render as quick-reply buttons
+- only the latest assistant clarification keeps active quick replies
+- button clicks send the visible option label and, when available, a structured `option_id`
 
 ### Knowledge dashboard API and UI (Phase 3)
 

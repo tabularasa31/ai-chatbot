@@ -13,11 +13,13 @@ from backend.core.limiter import limiter
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
+    ChatMessageType,
     ChatHistoryResponse,
     ChatMessageLogItem,
     ChatMessageLogResponse,
     ChatRequest,
     ChatResponse,
+    ClarificationPayloadResponse,
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
     MessageFeedbackRequest,
@@ -87,6 +89,12 @@ class DebugInfoResponse(BaseModel):
     is_faq_direct: bool = False
     validation_applied: bool = False
     validation_outcome: Optional[Literal["valid", "fallback", "skipped"]] = None
+    clarification_considered: bool = False
+    message_type: ChatMessageType = ChatMessageType.answer
+    clarification_reason: Optional[str] = None
+    clarification_type: Optional[str] = None
+    clarification: Optional[ClarificationPayloadResponse] = None
+    safe_partial_source_type: Optional[str] = None
 
 
 class ChatDebugResponse(BaseModel):
@@ -135,13 +143,14 @@ def chat(
     session_id = body.session_id or uuid.uuid4()
 
     try:
-        answer, document_ids, tokens_used, chat_ended = process_chat_message(
+        outcome = process_chat_message(
             client_id=client.id,
             question=body.question,
             session_id=session_id,
             db=db,
             api_key=client.openai_api_key,
             browser_locale=x_browser_locale,
+            clarification_option_id=body.clarification_option_id,
         )
     except APIError:
         raise HTTPException(
@@ -150,11 +159,16 @@ def chat(
         )
 
     return ChatResponse(
-        answer=answer,
+        text=outcome.text,
+        answer=outcome.text,
+        message_type=outcome.message_type,
+        clarification=(
+            outcome.clarification.to_dict() if outcome.clarification is not None else None
+        ),
         session_id=session_id,
-        source_documents=document_ids,
-        tokens_used=tokens_used,
-        chat_ended=chat_ended,
+        source_documents=outcome.document_ids,
+        tokens_used=outcome.tokens_used,
+        chat_ended=outcome.chat_ended,
     )
 
 
@@ -247,6 +261,12 @@ def chat_debug(
         is_faq_direct=bool(debug_dict.get("is_faq_direct", False)),
         validation_applied=bool(debug_dict.get("validation_applied", False)),
         validation_outcome=debug_dict.get("validation_outcome"),
+        clarification_considered=bool(debug_dict.get("clarification_considered", False)),
+        message_type=debug_dict.get("message_type", "answer"),
+        clarification_reason=debug_dict.get("clarification_reason"),
+        clarification_type=debug_dict.get("clarification_type"),
+        clarification=debug_dict.get("clarification"),
+        safe_partial_source_type=debug_dict.get("safe_partial_source_type"),
     )
     return ChatDebugResponse(
         answer=answer,

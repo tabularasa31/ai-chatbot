@@ -51,12 +51,15 @@ Yes. The widget is plain JavaScript and works on any website — React, Vue, pla
 **Can users have multi-turn conversations?**
 Yes. The widget maintains session continuity — users can ask follow-up questions and the bot will understand the context.
 
+**Can the bot ask follow-up questions?**
+Yes. If one critical detail is missing or the request is ambiguous, Chat9 may ask one short, specific clarification question instead of guessing. When possible, the widget can show answer options as quick replies.
+
 ---
 
 ## Quality and accuracy
 
 **What if the bot doesn't know the answer?**
-If the answer is not in your documentation, the bot will say it doesn't have that information and suggest contacting support.
+If the answer is not in your documentation, the bot will either say it doesn't have enough information, ask one targeted clarification question, or suggest contacting support depending on what is safest and most useful for that turn.
 
 **How can I improve answer quality?**
 - Upload more complete documentation.

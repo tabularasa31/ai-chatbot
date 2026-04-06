@@ -17,6 +17,14 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |
 | Widget | Dedicated Next.js routes (`/widget`), API calls; some public endpoints in `backend/routes/widget.py` and `backend/widget/` |
 
+Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
+
+- `answer`
+- `clarification`
+- `partial_with_clarification`
+
+For `/chat` and `/widget/chat`, legacy text aliases (`answer` / `response`) still exist for compatibility, but the typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
+
 Deployment: typically Railway (API + Postgres), frontend on Vercel. Environment variables: `backend/core/config.py` (required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`, etc.). Langfuse / trace sampling knobs include `FULL_CAPTURE_MODE` and `TRACE_*` (see `docs/07-observability-rollout.md`).
 
 ---
@@ -69,6 +77,7 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 
 - REST-style paths: lowercase, hyphens or path segments consistent with existing routers.
 - Bodies and responses via Pydantic; FastAPI errors: `HTTPException`, consistent `detail` messages.
+- Chat endpoints may return structured clarification payloads. Keep `message_type` and `clarification` in sync across backend schemas, service-layer literals, and frontend transport/widget types.
 
 ---
 

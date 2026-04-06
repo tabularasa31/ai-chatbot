@@ -317,6 +317,62 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     assert row.email == "user@example.com"
 
 
+def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="apply-email-rollback@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Apply Email Rollback Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-rollback", "email": None},
+        escalation_followup_pending=False,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0002",
+        primary_question="need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+
+    with patch(
+        "backend.escalation.service.sync_user_session_identity",
+        side_effect=RuntimeError("sync failed"),
+    ):
+        with pytest.raises(RuntimeError, match="sync failed"):
+            apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
+
+    db_session.rollback()
+    db_session.refresh(ticket)
+    db_session.refresh(chat)
+    assert ticket.user_email is None
+    assert chat.user_context.get("email") is None
+    assert chat.escalation_awaiting_ticket_id == ticket.id
+    assert chat.escalation_followup_pending is False
+
+
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     client: TestClient,
     db_session: Session,

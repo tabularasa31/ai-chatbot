@@ -50,6 +50,7 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
+from backend.user_sessions.service import record_user_session_turn, touch_user_session
 from backend.search.service import (
     RetrievalReliability,
     build_reliability_projection,
@@ -986,28 +987,21 @@ def _persist_turn(
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
-    db.commit()
-
-
-def _persist_assistant_only(
-    db: Session,
-    chat: Chat,
-    client_id: uuid.UUID,
-    assistant_content: str,
-    extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
-) -> None:
-    _create_message(
-        db,
-        chat=chat,
-        client_id=client_id,
-        role=MessageRole.assistant,
-        content=assistant_content,
-        source_documents=None,
-        optional_entity_types=optional_entity_types,
-    )
-    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
-    db.add(chat)
+    try:
+        with db.begin_nested():
+            record_user_session_turn(
+                db,
+                client_id=client_id,
+                user_context=chat.user_context,
+                ended_at=chat.ended_at,
+            )
+    except Exception:
+        logger.warning(
+            "user_session_turn_tracking_failed: client_id=%s session_id=%s",
+            client_id,
+            chat.session_id,
+            exc_info=True,
+        )
     db.commit()
 
 
@@ -1080,6 +1074,13 @@ def process_chat_message(
             user_context=uc,
         )
         db.add(chat)
+        db.flush()
+        touch_user_session(
+            db,
+            client_id=client_id,
+            user_context=chat.user_context,
+            started_at=chat.created_at,
+        )
         db.commit()
         db.refresh(chat)
     elif browser_locale and not (chat.user_context or {}).get("browser_locale"):
@@ -1324,7 +1325,6 @@ def process_chat_message(
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 db.add(chat)
-                db.commit()
                 _persist_turn(
                     db,
                     chat,
@@ -1346,7 +1346,6 @@ def process_chat_message(
                 _clear_escalation_clarify_flag(chat)
                 chat.ended_at = datetime.now(timezone.utc)
                 db.add(chat)
-                db.commit()
                 _persist_turn(
                     db,
                     chat,
@@ -1365,7 +1364,6 @@ def process_chat_message(
                 return (out.message_to_user, [], out.tokens_used, True)
             _set_escalation_clarify_flag(chat)
             db.add(chat)
-            db.commit()
             _persist_turn(
                 db,
                 chat,

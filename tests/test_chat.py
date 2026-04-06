@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.models import UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
@@ -2409,6 +2410,149 @@ def test_chat_followup_no_ends_chat(
     assert chat.ended_at is not None
 
 
+def test_chat_followup_no_closes_active_user_session(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+    from backend.user_sessions.service import start_user_session
+
+    token = register_and_verify_user(client, db_session, email="follow-no-user-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow No User Session Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-follow"},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    row = start_user_session(
+        db_session,
+        client_id=client_id,
+        user_context={"user_id": "u-follow"},
+    )
+    assert row is not None
+    db_session.commit()
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0002",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Understood, closing chat.",
+            followup_decision="no",
+            tokens_used=3,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "no thanks"},
+    )
+    assert response.status_code == 200
+    assert response.json()["chat_ended"] is True
+
+    db_session.refresh(row)
+    assert row.conversation_turns == 1
+    assert row.session_ended_at is not None
+
+
+def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+    from backend.user_sessions.service import start_user_session
+
+    token = register_and_verify_user(client, db_session, email="follow-yes-user-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow Yes User Session Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-follow-yes"},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    row = start_user_session(
+        db_session,
+        client_id=client_id,
+        user_context={"user_id": "u-follow-yes"},
+    )
+    assert row is not None
+    db_session.commit()
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0003",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Understood, we will continue.",
+            followup_decision="yes",
+            tokens_used=3,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "yes please continue"},
+    )
+    assert response.status_code == 200
+    assert response.json()["chat_ended"] is False
+
+    db_session.refresh(chat)
+    db_session.refresh(row)
+    assert chat.escalation_followup_pending is False
+    assert chat.ended_at is None
+    assert row.conversation_turns == 1
+    assert row.session_ended_at is None
+
+
 def test_chat_followup_unclear_twice_falls_back_to_yes(
     client: TestClient,
     db_session: Session,
@@ -2500,7 +2644,7 @@ def test_chat_when_already_closed_uses_closed_phase(
     chat = Chat(
         client_id=client_id,
         session_id=uuid.uuid4(),
-        user_context={},
+        user_context={"user_id": "u-closed"},
         ended_at=datetime.now(timezone.utc),
     )
     db_session.add(chat)
@@ -2524,6 +2668,159 @@ def test_chat_when_already_closed_uses_closed_phase(
     assert response.status_code == 200
     assert response.json()["chat_ended"] is True
     assert "Chat already ended" in response.json()["answer"]
+    rows = (
+        db_session.query(UserSession)
+        .filter(UserSession.client_id == client_id, UserSession.user_id == "u-closed")
+        .all()
+    )
+    assert rows == []
+
+
+def test_anonymous_chat_does_not_create_user_sessions(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+    token = register_and_verify_user(client, db_session, email="anon-user-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Anonymous User Session Client"},
+    )
+    set_client_openai_key(client, token)
+    api_key = cl_resp.json()["api_key"]
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    doc = Document(
+        client_id=client_id,
+        filename="anon.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="Anonymous answer",
+        vector=None,
+        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Anonymous answer"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=20)
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "What is the answer?"},
+    )
+    assert response.status_code == 200
+
+    rows = db_session.query(UserSession).filter(UserSession.client_id == client_id).all()
+    assert rows == []
+
+
+def test_chat_succeeds_when_user_session_tracking_fails(
+    mock_openai_client: Mock,
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
+
+    token = register_and_verify_user(client, db_session, email="tracking-failure@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Tracking Failure Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    doc = Document(
+        client_id=client_id,
+        filename="tracking.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="content",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+
+    emb = Embedding(
+        document_id=doc.id,
+        chunk_text="Tracked answer",
+        vector=None,
+        metadata_json={"vector": [0.1] * 1536, "chunk_index": 0},
+    )
+    db_session.add(emb)
+    db_session.commit()
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-track-fail"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Tracked answer"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=25)
+
+    monkeypatch.setattr(
+        "backend.chat.service.record_user_session_turn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tracking failed")),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "What is the answer?"},
+    )
+    assert response.status_code == 200
+    assert response.json()["answer"] == "Tracked answer"
+
+    messages = db_session.query(Message).filter(Message.chat_id == chat.id).all()
+    assert len(messages) == 2
+
+
+def test_user_sessions_allow_only_one_active_row_per_user(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    token = register_and_verify_user(client, db_session, email="unique-user-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Unique User Session Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    db_session.add(UserSession(client_id=client_id, user_id="u-unique"))
+    db_session.commit()
+
+    db_session.add(UserSession(client_id=client_id, user_id="u-unique"))
+    with pytest.raises(IntegrityError):
+        db_session.commit()
+    db_session.rollback()
 
 
 def test_manual_escalate_requires_api_key(client: TestClient) -> None:

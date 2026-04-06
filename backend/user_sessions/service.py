@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import UserSession
@@ -13,6 +16,8 @@ _TRACKED_IDENTITY_FIELDS = (
     "plan_tier",
     "audience_tag",
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _now_utc() -> datetime:
@@ -33,6 +38,12 @@ def _extract_user_id(user_context: dict[str, Any] | None) -> str | None:
 
 
 def _apply_identity_fields(row: UserSession, user_context: dict[str, Any]) -> None:
+    """Patch best-known identity fields without clearing prior non-empty values.
+
+    Missing keys in a fresh payload do not erase previously stored values. This keeps the
+    latest known profile stable across partial KYC payloads until we introduce an explicit
+    "clear" contract for identity fields.
+    """
     for key in _TRACKED_IDENTITY_FIELDS:
         value = _clean_optional_text(user_context.get(key))
         if value is not None:
@@ -42,7 +53,7 @@ def _apply_identity_fields(row: UserSession, user_context: dict[str, Any]) -> No
 def get_active_user_session(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
     user_id: str,
 ) -> UserSession | None:
     return (
@@ -60,7 +71,7 @@ def get_active_user_session(
 def _close_active_user_sessions(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
     user_id: str,
     ended_at: datetime,
 ) -> None:
@@ -73,32 +84,30 @@ def _close_active_user_sessions(
         )
         .all()
     )
+    if len(rows) > 1:
+        logger.warning(
+            "multiple_active_user_sessions_detected: client_id=%s user_id=%s count=%s",
+            client_id,
+            user_id,
+            len(rows),
+        )
     for row in rows:
         row.session_ended_at = ended_at
         db.add(row)
 
 
-def start_user_session(
+def _create_user_session_row(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
+    user_id: str,
     user_context: dict[str, Any] | None,
-    started_at: datetime | None = None,
-) -> UserSession | None:
-    user_id = _extract_user_id(user_context)
-    if not user_id:
-        return None
-    started = started_at or _now_utc()
-    _close_active_user_sessions(
-        db,
-        client_id=client_id,
-        user_id=user_id,
-        ended_at=started,
-    )
+    started_at: datetime,
+) -> UserSession:
     row = UserSession(
         client_id=client_id,
         user_id=user_id,
-        session_started_at=started,
+        session_started_at=started_at,
         conversation_turns=0,
     )
     _apply_identity_fields(row, user_context or {})
@@ -107,10 +116,45 @@ def start_user_session(
     return row
 
 
+def start_user_session(
+    db: Session,
+    *,
+    client_id: uuid.UUID,
+    user_context: dict[str, Any] | None,
+    started_at: datetime | None = None,
+) -> UserSession | None:
+    user_id = _extract_user_id(user_context)
+    if not user_id:
+        return None
+    started = started_at or _now_utc()
+    try:
+        with db.begin_nested():
+            _close_active_user_sessions(
+                db,
+                client_id=client_id,
+                user_id=user_id,
+                ended_at=started,
+            )
+            return _create_user_session_row(
+                db,
+                client_id=client_id,
+                user_id=user_id,
+                user_context=user_context,
+                started_at=started,
+            )
+    except IntegrityError:
+        logger.info(
+            "user_session_start_race_recovered: client_id=%s user_id=%s",
+            client_id,
+            user_id,
+        )
+        return get_active_user_session(db, client_id=client_id, user_id=user_id)
+
+
 def touch_user_session(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     started_at: datetime | None = None,
 ) -> UserSession | None:
@@ -134,7 +178,7 @@ def touch_user_session(
 def record_user_session_turn(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     ended_at: datetime | None = None,
 ) -> UserSession | None:
@@ -161,12 +205,7 @@ def record_user_session_turn(
 def sync_user_session_identity(
     db: Session,
     *,
-    client_id: Any,
+    client_id: uuid.UUID,
     user_context: dict[str, Any] | None,
 ) -> UserSession | None:
-    row = touch_user_session(db, client_id=client_id, user_context=user_context)
-    if row is None:
-        return None
-    db.add(row)
-    db.flush()
-    return row
+    return touch_user_session(db, client_id=client_id, user_context=user_context)

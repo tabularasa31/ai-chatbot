@@ -987,34 +987,21 @@ def _persist_turn(
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
-    record_user_session_turn(
-        db,
-        client_id=client_id,
-        user_context=chat.user_context,
-        ended_at=chat.ended_at,
-    )
-    db.commit()
-
-
-def _persist_assistant_only(
-    db: Session,
-    chat: Chat,
-    client_id: uuid.UUID,
-    assistant_content: str,
-    extra_tokens: int,
-    optional_entity_types: set[str] | None = None,
-) -> None:
-    _create_message(
-        db,
-        chat=chat,
-        client_id=client_id,
-        role=MessageRole.assistant,
-        content=assistant_content,
-        source_documents=None,
-        optional_entity_types=optional_entity_types,
-    )
-    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
-    db.add(chat)
+    try:
+        with db.begin_nested():
+            record_user_session_turn(
+                db,
+                client_id=client_id,
+                user_context=chat.user_context,
+                ended_at=chat.ended_at,
+            )
+    except Exception:
+        logger.warning(
+            "user_session_turn_tracking_failed: client_id=%s session_id=%s",
+            client_id,
+            chat.session_id,
+            exc_info=True,
+        )
     db.commit()
 
 
@@ -1338,7 +1325,6 @@ def process_chat_message(
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 db.add(chat)
-                db.commit()
                 _persist_turn(
                     db,
                     chat,
@@ -1360,7 +1346,6 @@ def process_chat_message(
                 _clear_escalation_clarify_flag(chat)
                 chat.ended_at = datetime.now(timezone.utc)
                 db.add(chat)
-                db.commit()
                 _persist_turn(
                     db,
                     chat,
@@ -1379,7 +1364,6 @@ def process_chat_message(
                 return (out.message_to_user, [], out.tokens_used, True)
             _set_escalation_clarify_flag(chat)
             db.add(chat)
-            db.commit()
             _persist_turn(
                 db,
                 chat,

@@ -322,8 +322,6 @@ def apply_collected_contact_email(
     chat.escalation_followup_pending = True
     db.add(ticket)
     db.add(chat)
-    db.commit()
-
     sync_user_session_identity(
         db,
         client_id=chat.client_id,

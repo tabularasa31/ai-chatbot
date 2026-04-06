@@ -196,3 +196,73 @@ def test_api_key_is_32_chars(client: TestClient, db_session: Session) -> None:
     )
     assert response.status_code == 201
     assert len(response.json()["api_key"]) == 32
+
+
+def test_support_settings_default_falls_back_to_owner_email(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="owner-support@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Support Client"},
+    )
+
+    response = client.get(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "l2_email": None,
+        "fallback_email": "owner-support@example.com",
+    }
+
+
+def test_support_settings_put_and_get(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="support-put@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Support Put"},
+    )
+
+    response = client.put(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "L2@Example.com"},
+    )
+    assert response.status_code == 200
+    assert response.json()["l2_email"] == "l2@example.com"
+    assert response.json()["fallback_email"] == "support-put@example.com"
+
+    response = client.get(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["l2_email"] == "l2@example.com"
+
+
+def test_support_settings_reject_invalid_email(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="support-bad@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Support Bad"},
+    )
+
+    response = client.put(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "not-an-email"},
+    )
+    assert response.status_code == 422

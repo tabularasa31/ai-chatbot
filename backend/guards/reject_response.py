@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import enum
 
-from backend.chat.language import localize_text_to_question_language
+from backend.chat.language import (
+    LocalizationResult,
+    localize_text_to_question_language,
+    localize_text_to_question_language_result,
+)
 from backend.models import TenantProfile as TenantProfileModel
 
 
@@ -70,6 +74,24 @@ def build_reject_response(
         profile=profile,
     )
     return localize_text_to_question_language(
+        canonical_text=canonical_text,
+        question=question,
+        api_key=api_key,
+    )
+
+
+def build_reject_response_result(
+    *,
+    reason: RejectReason,
+    profile: TenantProfileModel | None,
+    question: str | None = None,
+    api_key: str | None = None,
+) -> LocalizationResult:
+    canonical_text = _build_canonical_reject_response(
+        reason=reason,
+        profile=profile,
+    )
+    return localize_text_to_question_language_result(
         canonical_text=canonical_text,
         question=question,
         api_key=api_key,

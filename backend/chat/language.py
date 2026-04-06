@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from openai import APIError
 
@@ -11,18 +12,24 @@ logger = logging.getLogger(__name__)
 LOCALIZATION_MODEL = "gpt-4o-mini"
 
 
-def localize_text_to_question_language(
+@dataclass(frozen=True)
+class LocalizationResult:
+    text: str
+    tokens_used: int = 0
+
+
+def localize_text_to_question_language_result(
     *,
     canonical_text: str,
     question: str | None,
     api_key: str | None,
-) -> str:
+) -> LocalizationResult:
     if not canonical_text.strip():
-        return canonical_text
+        return LocalizationResult(text=canonical_text, tokens_used=0)
 
     question_text = (question or "").strip()
     if not question_text or not api_key:
-        return canonical_text
+        return LocalizationResult(text=canonical_text, tokens_used=0)
 
     try:
         client = get_openai_client(api_key)
@@ -48,10 +55,27 @@ def localize_text_to_question_language(
                 },
             ],
         )
+        tokens_used = response.usage.total_tokens if response.usage else 0
         if not response.choices:
-            return canonical_text
+            return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
         localized = (response.choices[0].message.content or "").strip()
-        return localized or canonical_text
+        return LocalizationResult(
+            text=localized or canonical_text,
+            tokens_used=tokens_used,
+        )
     except (APIError, IndexError) as exc:
         logger.warning("Localization failed; using canonical text: %s", exc)
-        return canonical_text
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+
+def localize_text_to_question_language(
+    *,
+    canonical_text: str,
+    question: str | None,
+    api_key: str | None,
+) -> str:
+    return localize_text_to_question_language_result(
+        canonical_text=canonical_text,
+        question=question,
+        api_key=api_key,
+    ).text

@@ -71,11 +71,11 @@ def test_build_rag_messages_splits_system_and_user_parts() -> None:
 
 
 def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
-    """Empty chunks → localized fallback message, no generation call."""
+    """Empty chunks → canonical fallback, no OpenAI call."""
     answer, tokens = generate_answer("question", [], api_key="sk-test")
     assert answer == "I don't have information about this."
     assert tokens == 0
-    mock_openai_client.chat.completions.create.assert_called_once()
+    mock_openai_client.chat.completions.create.assert_not_called()
 
 
 def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
@@ -3079,8 +3079,11 @@ def test_run_chat_pipeline_injection_detected(
         ),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language",
-        lambda **kwargs: "I cannot help with that request.",
+        "backend.guards.reject_response.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="I cannot help with that request.",
+            tokens_used=7,
+        ),
     )
 
     result = run_chat_pipeline(
@@ -3095,6 +3098,7 @@ def test_run_chat_pipeline_injection_detected(
     assert result.is_reject is True
     assert result.retrieval is None
     assert result.final_answer == "I cannot help with that request."
+    assert result.tokens_used == 7
     assert result.escalation_recommended is False
 
 
@@ -3151,8 +3155,11 @@ def test_run_chat_pipeline_not_relevant(
         lambda **kwargs: (False, "off_topic", None),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language",
-        lambda **kwargs: "Je ne peux pas aider avec cette question.",
+        "backend.guards.reject_response.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Je ne peux pas aider avec cette question.",
+            tokens_used=9,
+        ),
     )
 
     result = run_chat_pipeline(
@@ -3166,6 +3173,7 @@ def test_run_chat_pipeline_not_relevant(
     assert result.reject_reason == "not_relevant"
     assert result.is_reject is True
     assert result.final_answer == "Je ne peux pas aider avec cette question."
+    assert result.tokens_used == 9
     assert result.escalation_recommended is False
 
 
@@ -3194,8 +3202,11 @@ def test_run_chat_pipeline_injection_detected_french_question(
         ),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language",
-        lambda **kwargs: "Je ne peux pas aider avec cette demande.",
+        "backend.guards.reject_response.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Je ne peux pas aider avec cette demande.",
+            tokens_used=11,
+        ),
     )
 
     result = run_chat_pipeline(
@@ -3209,6 +3220,7 @@ def test_run_chat_pipeline_injection_detected_french_question(
     assert result.reject_reason == "injection"
     assert result.is_reject is True
     assert result.final_answer == "Je ne peux pas aider avec cette demande."
+    assert result.tokens_used == 11
 
 
 def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text(
@@ -3286,8 +3298,11 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
         lambda *args, **kwargs: (False, None),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language",
-        lambda **kwargs: "Je n'ai pas assez d'informations pour repondre de maniere fiable.",
+        "backend.guards.reject_response.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Je n'ai pas assez d'informations pour repondre de maniere fiable.",
+            tokens_used=13,
+        ),
     )
 
     result = run_chat_pipeline(
@@ -3300,6 +3315,7 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     assert result.validation_outcome == "fallback"
     assert result.raw_answer == "A hallucinated answer"
     assert result.final_answer == "Je n'ai pas assez d'informations pour repondre de maniere fiable."
+    assert result.tokens_used == 23
     assert result.is_reject is False  # validation fallback is not a guard_reject
 
 
@@ -3629,8 +3645,11 @@ def test_process_chat_message_returns_structured_clarification_for_ambiguous_dom
         ),
     )
     monkeypatch.setattr(
-        "backend.chat.service.localize_text_to_question_language",
-        lambda **kwargs: "Voulez-vous connecter le domaine a DNS, CDN ou SSL ?",
+        "backend.chat.service.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Voulez-vous connecter le domaine a DNS, CDN ou SSL ?",
+            tokens_used=12,
+        ),
     )
 
     outcome = process_chat_message(
@@ -3643,6 +3662,7 @@ def test_process_chat_message_returns_structured_clarification_for_ambiguous_dom
 
     assert outcome.message_type == "clarification"
     assert outcome.text == "Voulez-vous connecter le domaine a DNS, CDN ou SSL ?"
+    assert outcome.tokens_used == 15
     assert outcome.clarification is not None
     assert outcome.clarification.reason == "ambiguous_intent"
     assert [item.label for item in outcome.clarification.options] == ["DNS", "CDN", "SSL"]
@@ -3876,10 +3896,13 @@ def test_run_debug_exposes_partial_clarification_metadata(
         ),
     )
     monkeypatch.setattr(
-        "backend.chat.service.localize_text_to_question_language",
-        lambda **kwargs: (
-            "La configuration du domaine commence generalement par DNS. "
-            "Pour vous guider precisement, dites-moi si vous voulez DNS, CDN ou SSL."
+        "backend.chat.service.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text=(
+                "La configuration du domaine commence generalement par DNS. "
+                "Pour vous guider precisement, dites-moi si vous voulez DNS, CDN ou SSL."
+            ),
+            tokens_used=14,
         ),
     )
 
@@ -3891,6 +3914,7 @@ def test_run_debug_exposes_partial_clarification_metadata(
     )
 
     assert answer.startswith("La configuration du domaine commence generalement par DNS")
+    assert _tokens_used == 17
     assert debug_dict["message_type"] == "partial_with_clarification"
     assert debug_dict["clarification_reason"] == "ambiguous_intent"
     assert debug_dict["safe_partial_source_type"] == "deterministic_template"
@@ -3904,8 +3928,11 @@ def test_complete_escalation_openai_turn_localizes_fallback_to_question_language
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.localize_text_to_question_language",
-        lambda **kwargs: "Nous n'avons pas pu charger une reponse complete pour le moment.",
+        "backend.escalation.openai_escalation.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Nous n'avons pas pu charger une reponse complete pour le moment.",
+            tokens_used=17,
+        ),
     )
 
     result = complete_escalation_openai_turn(
@@ -3919,6 +3946,7 @@ def test_complete_escalation_openai_turn_localizes_fallback_to_question_language
     assert result.message_to_user.startswith(
         "Nous n'avons pas pu charger une reponse complete pour le moment."
     )
+    assert result.tokens_used == 17
     assert "[[escalation_ticket:ESC-1234]]" in result.message_to_user
 
 
@@ -4007,8 +4035,11 @@ def test_clarification_turn_limit_reads_from_settings(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("backend.chat.service.settings.clarification_turn_limit", 2)
     monkeypatch.setattr(
-        "backend.chat.service.localize_text_to_question_language",
-        lambda **kwargs: "Voulez-vous connecter le domaine a DNS, CDN ou SSL ?",
+        "backend.chat.service.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Voulez-vous connecter le domaine a DNS, CDN ou SSL ?",
+            tokens_used=12,
+        ),
     )
 
     decision = _build_clarification_decision(

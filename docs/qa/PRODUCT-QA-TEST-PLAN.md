@@ -232,7 +232,7 @@
 - [ ] **FI-KYC (опционально, через API):** `POST /widget/session/init` без identity-токена → режим anonymous; с валидным токеном → identified; с подделанным — снова anonymous, виджет не падает.
 - [ ] **Session continuity:** anonymous continuity в том же браузере и identified resume для того же `user_id` работают по ожидаемым правилам; детали — в `docs/qa/FI-KYC-session-continuity-qa.md`.
 - [ ] **Много сообщений подряд** (например 20+ в минуту): срабатывает ограничение — зафиксируй текст ошибки (**не** души прод настоящей атакой).
-- [ ] **FI-ESC на виджете:** кнопка **Talk to support** после начала диалога создаёт тикет, баннер **Support ticket**; при закрытии чата поле ввода блокируется; в ответе API есть признак **`chat_ended`** (детали — в `FI-ESC-escalation-tickets-qa.md`).
+- [ ] **FI-ESC на виджете:** кнопка **Talk to support** после начала диалога создаёт тикет, баннер **Support ticket**; при закрытии чата поле ввода блокируется, виден `Start new chat`, а старая история не исчезает сразу; в ответе API есть признак **`chat_ended`** (детали — в `FI-ESC-escalation-tickets-qa.md`).
 
 ---
 

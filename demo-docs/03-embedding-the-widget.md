@@ -39,7 +39,7 @@ Current behavior:
 - identified sessions can also be resumed by Chat9 on `POST /widget/session/init` for the same `user_id` if the previous chat is still open and was active within 24 hours
 - closed chats are not resumed
 
-If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. Clicking it clears the old session state, and the next message starts a fresh conversation.
+If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
 
 ## Security
 

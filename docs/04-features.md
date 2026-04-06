@@ -63,17 +63,30 @@ Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM 
 |--------|--------|-------|
 | PDF | pypdf | Text extraction, multi-page |
 | Markdown | markdown lib | CommonMark |
-| Swagger / OpenAPI | PyYAML / json | Paths, descriptions, schemas |
+| Swagger / OpenAPI | PyYAML / json | JSON/YAML parse, OpenAPI validation, endpoint-aware rendering |
 
 Upload endpoint: `POST /documents` (multipart/form-data, max 50 MB).
+Supported OpenAPI extensions: `.json`, `.yaml`, `.yml`.
 
 ### Processing pipeline
 
-1. File is saved and parsed to `parsed_text` (plain text)
+1. File is saved and parsed to `parsed_text`
+   - PDF / Markdown become plain text
+   - Swagger / OpenAPI is normalized into a deterministic human-readable preview
 2. Document status → `ready`
 3. User triggers embedding via dashboard (or automatically on upload)
 4. Status → `embedding` (background task starts)
 5. Status → `ready` (embedding done) or `error`
+
+For Swagger / OpenAPI documents, the embedding pipeline does **not** embed raw JSON/YAML. Instead it:
+
+1. Parses JSON or YAML into an object
+2. Validates that it is a Swagger/OpenAPI spec with supported operations
+3. Renders one primary chunk per `method + path`
+4. Adds request/response schema detail chunks for rich operations
+5. Stores chunk metadata such as `path`, `method`, `operation_id`, `tags`, `deprecated`, `content_types`, and `auth_schemes`
+
+URL sources can also be auto-routed into the same Swagger/OpenAPI pipeline when fetched content is structured JSON/YAML and matches OpenAPI heuristics (`openapi`, `swagger`, or `paths`), followed by semantic validation.
 
 ### Asynchronous embedding (FI-021)
 
@@ -87,7 +100,7 @@ Embedding is expensive for large documents (20+ chunks → multiple OpenAI calls
 
 ### Chunking (FI-009, TD-033)
 
-Documents are split into overlapping chunks before embedding. Chunk boundaries follow sentence endings (not character positions) to preserve semantic coherence.
+Documents are split into chunks before embedding. For text documents, chunk boundaries follow sentence endings (not character positions) to preserve semantic coherence.
 
 Optimal parameters differ by document type:
 
@@ -95,9 +108,16 @@ Optimal parameters differ by document type:
 |---------------|-----------|---------|
 | PDF | 1000 chars | 1 sentence |
 | Markdown | 700 chars | 1 sentence |
-| Swagger / YAML | 500 chars | 0 sentences |
+| Swagger / OpenAPI | Operation-aware chunks | No sentence overlap between operations |
 | Logs *(planned)* | 300 chars | 0 sentences |
 | Code *(planned)* | 600 chars | 1 sentence |
+
+Swagger/OpenAPI chunking rules:
+
+- Primary unit: one API operation (`method + path`)
+- No sliding-window overlap between operations
+- Rich operations may emit secondary chunks for request schema and response schema detail
+- Secondary chunks repeat the endpoint header for retrieval context, but do not duplicate neighbouring operations
 
 Each chunk stores: `chunk_text`, `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`.
 

@@ -1,6 +1,6 @@
 """Add unique partial index for active user_sessions rows.
 
-Revision ID: phase4_user_sessions_active_unique_v1
+Revision ID: phase4_user_sessions_active_v1
 Revises: phase4_message_embeddings_v1
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 from alembic import op
 
-revision = "phase4_user_sessions_active_unique_v1"
+revision = "phase4_user_sessions_active_v1"
 down_revision = "phase4_message_embeddings_v1"
 branch_labels = None
 depends_on = None

@@ -31,7 +31,15 @@ The widget is designed to work on arbitrary sites because the public loader inje
 
 ## Session continuity
 
-Each user gets a `session_id` stored in their browser. This allows the bot to maintain context across multiple questions in the same conversation.
+The widget keeps a `session_id` so the bot can maintain context across follow-up questions.
+
+Current behavior:
+
+- anonymous sessions are stored in the browser and can continue in the same browser for up to 24 hours
+- identified sessions can also be resumed by Chat9 on `POST /widget/session/init` for the same `user_id` if the previous chat is still open and was active within 24 hours
+- closed chats are not resumed
+
+If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. Clicking it clears the old session state, and the next message starts a fresh conversation.
 
 ## Security
 
@@ -58,6 +66,11 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
    - `session_id`
    - `mode` = `identified` or `anonymous`
 6. Reuse that `session_id` in later `POST /widget/chat` requests.
+
+If the same identified user returns later:
+
+- Chat9 may return the same `session_id` again if the previous identified chat is still open and recent
+- otherwise Chat9 returns a new `session_id`
 
 Important: the current stock `embed.js` snippet does not automatically send `api_key` or `identity_token`. If you need identified sessions today, use a custom integration or custom bootstrap flow around the public widget APIs.
 

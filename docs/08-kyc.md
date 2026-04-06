@@ -10,7 +10,7 @@ In the codebase this feature is called **KYC** or **identified widget sessions**
 - [backend/core/security.py](/Users/tabularasa/Projects/ai-chatbot/backend/core/security.py)
 - [backend/models.py](/Users/tabularasa/Projects/ai-chatbot/backend/models.py)
 
-This document describes the real production flow as of April 5, 2026.
+This document describes the real production flow as of April 6, 2026.
 
 ## High-level flow
 
@@ -22,11 +22,13 @@ This document describes the real production flow as of April 5, 2026.
    - optional `identity_token`
    - optional `locale`
 5. Chat9 validates the token.
-6. If valid, Chat9 creates a chat row immediately and stores the validated user context in `chats.user_context`.
-7. The response returns:
+6. If valid, Chat9 either resumes an eligible identified chat for the same `user_id` or creates a new one.
+7. Chat9 stores the validated user context in `chats.user_context`.
+8. Chat9 also maintains an identified-user lifecycle row in `user_sessions`.
+9. The response returns:
    - `session_id`
    - `mode` = `identified` or `anonymous`
-8. Later `POST /widget/chat` calls reuse the returned `session_id`.
+10. Later `POST /widget/chat` calls reuse the returned `session_id`.
 
 ## Request and response
 
@@ -161,7 +163,7 @@ Returned when:
 
 Effects:
 
-- Chat row is created during `session/init`
+- Chat9 resumes an eligible identified chat, or creates one during `session/init`
 - validated context is stored in `chats.user_context`
 - later chat turns can use the stored context
 
@@ -199,6 +201,44 @@ Internal fields removed before storage:
 - `tenant_id`
 - `exp`
 - `iat`
+
+For identified users, Chat9 also maintains a `user_sessions` row with:
+
+- `client_id`
+- `user_id`
+- best-known identity fields (`email`, `name`, `plan_tier`, `audience_tag`)
+- `session_started_at`
+- optional `session_ended_at`
+- `conversation_turns`
+
+Only one active `user_sessions` row is allowed per `client_id + user_id`.
+
+## Session continuity and resume
+
+The widget now has two different continuity mechanisms:
+
+### Anonymous users
+
+- continuity is browser-local only
+- the widget stores `session_id` in `localStorage`
+- the same browser can continue the same chat for up to 24 hours
+- another browser or device gets a new session
+
+### Identified users
+
+- resume is decided on the backend during `POST /widget/session/init`
+- matching key: `client_id + user_id`
+- Chat9 resumes the latest eligible chat when:
+  - `ended_at is null`
+  - the last chat activity is within 24 hours
+- otherwise Chat9 creates a new chat and a new active `user_sessions` row
+
+### Closed chats
+
+- a chat is considered closed when `chats.ended_at` is set
+- closed chats are never resumed
+- if the widget receives `chat_ended = true`, it clears the stored `session_id`
+- the widget shows `Start new chat`, which resets local state and starts a new session on the next message
 
 ## What affects the LLM
 

@@ -114,6 +114,20 @@ pytest --cov=backend --cov-report=term-missing --cov-report=xml
 make coverage-all
 ```
 
+## Alembic Migration Guard
+
+Use this before merging any schema change:
+
+```bash
+pytest -q tests/test_migrations.py
+```
+
+This guard checks repository migration metadata and currently enforces:
+
+- every Alembic `revision` id is 32 characters or fewer
+- migration files expose a `revision` constant
+- there are no duplicate `revision` ids
+
 ## Recommended CI Order
 
 1) P0 Smoke  

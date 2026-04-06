@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 import enum
+
+from backend.chat.language import (
+    LocalizationResult,
+    localize_text_to_question_language,
+    localize_text_to_question_language_result,
+)
 from backend.models import TenantProfile as TenantProfileModel
 
 
@@ -11,14 +17,14 @@ class RejectReason(enum.Enum):
     INSUFFICIENT_CONFIDENCE = "insufficient_confidence"
 
 
-def build_reject_response(
+def _build_canonical_reject_response(
     *,
     reason: RejectReason,
     profile: TenantProfileModel | None,
 ) -> str:
     product_name = (
         profile.product_name if profile and profile.product_name else None
-    ) or "данному продукту"
+    ) or "this product"
 
     topic_hint = ""
     if profile is not None:
@@ -28,30 +34,69 @@ def build_reject_response(
 
     if reason == RejectReason.INJECTION_DETECTED:
         return (
-            f"Извините, но я не могу помочь с этим запросом. "
-            f"Я могу ответить на вопросы по {product_name}, если нужно."
+            f"Sorry, but I can't help with that request. "
+            f"I can answer questions about {product_name} if helpful."
         )
 
     if reason == RejectReason.INSUFFICIENT_CONFIDENCE:
         if topic_hint:
             return (
-                f"Сейчас у меня недостаточно информации, чтобы надёжно ответить. "
-                f"Попробуйте уточнить вопрос или задать его иначе, "
-                f"например про {topic_hint}."
+                "I don't have enough information to answer reliably right now. "
+                f"Please clarify your question or ask it another way, for example about {topic_hint}."
             )
         return (
-            "Сейчас у меня недостаточно информации, чтобы надёжно ответить. "
-            "Попробуйте уточнить вопрос или задать его иначе."
+            "I don't have enough information to answer reliably right now. "
+            "Please clarify your question or ask it another way."
         )
 
     # NOT_RELEVANT and LOW_RETRIEVAL_SCORE — out-of-domain bucket
     if topic_hint:
         return (
-            f"Извините, но я не могу помочь с этим вопросом. "
-            f"Я могу ответить на вопросы по {product_name} или его настройкам, "
-            f"например про {topic_hint}."
+            f"Sorry, but I can't help with that question. "
+            f"I can answer questions about {product_name} or its settings, "
+            f"for example about {topic_hint}."
         )
     return (
-        f"Извините, но я не могу помочь с этим вопросом. "
-        f"Я могу ответить на вопросы по {product_name} или его настройкам."
+        f"Sorry, but I can't help with that question. "
+        f"I can answer questions about {product_name} or its settings."
+    )
+
+
+def build_reject_response(
+    *,
+    reason: RejectReason,
+    profile: TenantProfileModel | None,
+    question: str | None = None,
+    api_key: str | None = None,
+    fallback_locale: str | None = None,
+) -> str:
+    canonical_text = _build_canonical_reject_response(
+        reason=reason,
+        profile=profile,
+    )
+    return localize_text_to_question_language(
+        canonical_text=canonical_text,
+        question=question,
+        api_key=api_key,
+        fallback_locale=fallback_locale,
+    )
+
+
+def build_reject_response_result(
+    *,
+    reason: RejectReason,
+    profile: TenantProfileModel | None,
+    question: str | None = None,
+    api_key: str | None = None,
+    fallback_locale: str | None = None,
+) -> LocalizationResult:
+    canonical_text = _build_canonical_reject_response(
+        reason=reason,
+        profile=profile,
+    )
+    return localize_text_to_question_language_result(
+        canonical_text=canonical_text,
+        question=question,
+        api_key=api_key,
+        fallback_locale=fallback_locale,
     )

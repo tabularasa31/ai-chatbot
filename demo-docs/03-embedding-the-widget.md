@@ -18,9 +18,15 @@ Example (placeholders — the Dashboard fills in your real public bot ID and may
 - A floating chat iframe appears in the bottom-right corner of your page (about 400×600px).
 - Users type questions and receive answers from your documentation.
 - Session continuity works across messages in the same visit.
+- If the first turn is empty, the widget can return a default greeting instead of an error.
 - If the bot needs one missing detail, it can show a single structured follow-up question instead of guessing.
 - When that follow-up has clear options, the widget renders them as quick-reply buttons on the latest bot message.
 - The widget works in any language.
+
+Language behavior:
+
+- before the first real user question, deterministic widget text uses `locale -> browser locale -> English`
+- after the first real user question, replies follow the language of that question
 
 ## Where to get the embed code
 
@@ -48,6 +54,7 @@ Clarification behavior:
 - Chat9 may ask one clarification question when the user's request is ambiguous or missing a critical parameter.
 - Clarification replies are treated as part of the same conversation context, not as a brand-new standalone question.
 - Quick replies stay active only on the latest clarification turn, so older buttons do not keep driving the current conversation after the chat has moved on.
+- Empty follow-up turns after the conversation has already started are still rejected as invalid input.
 
 ## Security
 
@@ -74,6 +81,8 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
    - `session_id`
    - `mode` = `identified` or `anonymous`
 6. Reuse that `session_id` in later `POST /widget/chat` requests.
+
+Before the first real user question, Chat9 can use the locale from `session/init` as the language hint for greeting and other deterministic fallback-only turns.
 
 If the same identified user returns later:
 
@@ -206,6 +215,7 @@ curl -X POST "https://YOUR_API_HOST/widget/chat?client_id=ch_YOUR_PUBLIC_ID&sess
 Public widget responses may now include:
 
 - normal answer text
+- default localized greeting on the first empty turn
 - one clarification question
 - partial guidance plus one clarification question
 

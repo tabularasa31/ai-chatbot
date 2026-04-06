@@ -12,7 +12,7 @@ Yes. Chat9 requires your own OpenAI API key to generate embeddings and answers. 
 Yes, Chat9 is currently free during early access. You only pay OpenAI directly for the AI usage (embeddings and chat).
 
 **What languages does Chat9 support?**
-Chat9 responds in the language the user writes in. Best results come when your documentation and user questions are close in language and terminology.
+Chat9 responds in the language the user writes in. Before the first real question, the widget can use the available locale hint and otherwise defaults to English. Best results come when your documentation and user questions are close in language and terminology.
 
 ---
 
@@ -50,6 +50,9 @@ Yes. The widget is plain JavaScript and works on any website — React, Vue, pla
 
 **Can users have multi-turn conversations?**
 Yes. The widget maintains session continuity — users can ask follow-up questions and the bot will understand the context.
+
+**What happens before the user asks the first real question?**
+If the first turn is empty, Chat9 can return a default greeting instead of an error. That greeting starts from English and can be localized from the available locale hint.
 
 **Can the bot ask follow-up questions?**
 Yes. If one critical detail is missing or the request is ambiguous, Chat9 may ask one short, specific clarification question instead of guessing. When possible, the widget can show answer options as quick replies.

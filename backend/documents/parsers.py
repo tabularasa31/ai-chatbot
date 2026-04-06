@@ -236,11 +236,27 @@ def _deserialize_openapi_chunk_block(
                 path=str(raw_meta.get("path") or endpoint_chunk.path),
                 method=str(raw_meta.get("method") or endpoint_chunk.method).lower(),
                 operation_id=_string_or_none(raw_meta.get("operation_id")) or endpoint_chunk.operation_id,
-                tags=_normalize_string_list(raw_meta.get("tags")) or endpoint_chunk.tags,
+                tags=(
+                    _normalize_string_list(raw_meta.get("tags"))
+                    if raw_meta.get("tags") is not None
+                    else endpoint_chunk.tags
+                ),
                 deprecated=bool(raw_meta.get("deprecated", endpoint_chunk.deprecated)),
-                content_types=_normalize_string_list(raw_meta.get("content_types")) or endpoint_chunk.content_types,
-                response_codes=_normalize_string_list(raw_meta.get("response_codes")) or endpoint_chunk.response_codes,
-                auth_schemes=_normalize_string_list(raw_meta.get("auth_schemes")) or endpoint_chunk.auth_schemes,
+                content_types=(
+                    _normalize_string_list(raw_meta.get("content_types"))
+                    if raw_meta.get("content_types") is not None
+                    else endpoint_chunk.content_types
+                ),
+                response_codes=(
+                    _normalize_string_list(raw_meta.get("response_codes"))
+                    if raw_meta.get("response_codes") is not None
+                    else endpoint_chunk.response_codes
+                ),
+                auth_schemes=(
+                    _normalize_string_list(raw_meta.get("auth_schemes"))
+                    if raw_meta.get("auth_schemes") is not None
+                    else endpoint_chunk.auth_schemes
+                ),
                 has_examples=bool(raw_meta.get("has_examples", endpoint_chunk.has_examples)),
                 source_format=source_format,
                 spec_version=spec_version,

@@ -31,6 +31,12 @@ interface ChatWidgetProps {
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
 const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
 const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
+const RETRYABLE_SESSION_ERROR_CODES = new Set([
+  "session_invalid",
+  "session_not_found",
+  "session_forbidden",
+  "session_closed",
+]);
 
 function sessionStorageKey(botId: string): string {
   return `chat9:${botId}:session`;
@@ -101,6 +107,10 @@ function stripEscalationToken(content: string): string {
 
 function formatApiDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string" && detail.trim()) return detail;
+  if (typeof detail === "object" && detail !== null && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
   if (Array.isArray(detail) && detail.length > 0) {
     const first = detail[0];
     if (typeof first === "object" && first !== null && "msg" in first) {
@@ -108,6 +118,14 @@ function formatApiDetail(detail: unknown, fallback: string): string {
     }
   }
   return fallback;
+}
+
+function apiErrorCode(detail: unknown): string | null {
+  if (typeof detail === "object" && detail !== null && "code" in detail) {
+    const code = (detail as { code?: unknown }).code;
+    if (typeof code === "string" && code.trim()) return code;
+  }
+  return null;
 }
 
 function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: number): string {
@@ -179,22 +197,40 @@ export function ChatWidget({
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
 
     try {
-      const params = new URLSearchParams({
-        botId,
-        message: userMessage,
-      });
-      if (sessionId) params.set("session_id", sessionId);
-      if (localeParam) params.set("locale", localeParam);
+      const sendWidgetMessage = async (attemptSessionId: string) => {
+        const params = new URLSearchParams({
+          botId,
+          message: userMessage,
+        });
+        if (attemptSessionId) params.set("session_id", attemptSessionId);
+        if (localeParam) params.set("locale", localeParam);
 
-      const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          formatApiDetail((err as { detail?: unknown }).detail, `API error: ${res.status}`),
-        );
+        const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
+        const payload = (await res.json().catch(() => ({}))) as {
+          detail?: unknown;
+          response?: string;
+          session_id?: string;
+          chat_ended?: boolean;
+        };
+        return { res, payload };
+      };
+
+      let { res, payload } = await sendWidgetMessage(sessionId);
+      let detail = payload.detail;
+      let code = apiErrorCode(detail);
+      if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
+        clearStoredSession(botId);
+        setSessionId("");
+        ({ res, payload } = await sendWidgetMessage(""));
+        detail = payload.detail;
+        code = apiErrorCode(detail);
       }
 
-      const data = (await res.json()) as {
+      if (!res.ok) {
+        throw new Error(formatApiDetail(detail, `API error: ${res.status}`));
+      }
+
+      const data = payload as {
         response: string;
         session_id: string;
         chat_ended?: boolean;

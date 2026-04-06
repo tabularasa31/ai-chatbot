@@ -22,6 +22,8 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import HTTPException
+from openai import APIError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.core.db import SessionLocal
@@ -1087,7 +1089,8 @@ def _upsert_structured_document(
         doc.status = DocumentStatus.ready
         db.flush()
         return doc, len(rendered_chunks)
-    except Exception:
+    except (APIError, SQLAlchemyError, ValueError) as exc:
+        logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})
         db.rollback()
         refreshed_doc = db.query(Document).filter(Document.id == doc.id).first()
         if refreshed_doc is not None:

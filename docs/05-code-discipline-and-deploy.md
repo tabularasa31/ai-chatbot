@@ -155,11 +155,25 @@ Before merge, I check:
 ☐ Docstrings + type hints present
 ☐ Follows exact spec (no extra features)
 ☐ Database migrations included (if schema change)
+☐ Alembic `revision` id is 32 chars or shorter
 ☐ No secrets in code (use env vars only)
 ☐ Code follows PEP 8 (use black/flake8)
 
 If ANY fail → Request changes, do not merge
 ```
+
+### Alembic migration rule
+
+Production deploy runs Alembic before the app starts. Because `alembic_version.version_num`
+is effectively limited to `varchar(32)` in our environments, a too-long migration `revision`
+can fail the deploy even if the migration body itself is valid.
+
+Rules:
+
+- keep every new Alembic `revision` string at **32 characters or fewer**
+- prefer short ids like `phase4_user_sessions_active_v1`
+- do not use long descriptive revision ids copied directly from feature names
+- run the migration guard test before merge
 
 ---
 

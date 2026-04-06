@@ -384,7 +384,6 @@ class ClarificationDecision:
     payload: ClarificationPayload
     state: ClarificationState
     safe_partial_source_type: Literal["faq_rule", "deterministic_template", "retrieved_safe_context"] | None = None
-    best_effort_text: str | None = None
 
 
 @dataclass(frozen=True)
@@ -408,9 +407,6 @@ class ChatTurnOutcome:
     @property
     def answer(self) -> str:
         return self.text
-
-    def __iter__(self):
-        return iter((self.text, self.document_ids, self.tokens_used, self.chat_ended))
 
 
 _DOMAIN_OPTIONS = [
@@ -469,7 +465,8 @@ _NEGATIVE_REPLY_HINTS = (
 
 
 def _normalize_text(value: str) -> str:
-    return " ".join(value.lower().strip().split())
+    normalized = " ".join(value.lower().strip().split())
+    return re.sub(r"[?!.,:;]+$", "", normalized)
 
 
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
@@ -589,18 +586,10 @@ def _build_domain_clarification(
             "Domain setup usually starts with DNS configuration. "
             "To guide you precisely, tell me whether you want DNS setup, CDN proxying, or SSL."
         )
-        best_effort = (
-            "Domain setup usually starts with DNS configuration. "
-            "If you need CDN or SSL, use the matching domain settings for that feature."
-        )
         clarification_type: Literal["partial_plus_question"] = "partial_plus_question"
         message_type: Literal["partial_with_clarification"] = "partial_with_clarification"
     else:
         text = "Do you want to connect the domain to DNS, CDN, or SSL?"
-        best_effort = (
-            "Domain setup usually starts with DNS configuration. "
-            "If you need CDN or SSL, use the matching domain settings for that feature."
-        )
         clarification_type = "disambiguation"
         message_type = "clarification"
     payload = ClarificationPayload(
@@ -629,7 +618,6 @@ def _build_domain_clarification(
         payload=payload,
         state=state,
         safe_partial_source_type=(SAFE_PARTIAL_SOURCE_TEMPLATE if partial else None),
-        best_effort_text=best_effort,
     )
 
 
@@ -665,10 +653,6 @@ def _build_api_slot_clarification(
         text=text,
         payload=payload,
         state=state,
-        best_effort_text=(
-            "API failures are usually resolved by checking the endpoint, HTTP method, "
-            "authentication, and the exact error message returned by the API."
-        ),
     )
 
 
@@ -704,10 +688,6 @@ def _build_context_clarification(
         text=text,
         payload=payload,
         state=state,
-        best_effort_text=(
-            "I can give a more precise answer once the specific feature or setup step is clear. "
-            "For now, start with the setup guide for the feature you are working on."
-        ),
     )
 
 

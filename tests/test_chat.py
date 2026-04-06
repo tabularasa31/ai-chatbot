@@ -3847,3 +3847,24 @@ def test_classify_clarification_turn_rejects_uninformative_feature_reply() -> No
     result = _classify_clarification_turn(state, "I don't know", None)
 
     assert result.classification == "new_intent"
+
+
+def test_classify_clarification_turn_accepts_option_with_question_mark() -> None:
+    state = ClarificationState(
+        version=1,
+        status="awaiting_reply",
+        original_user_message="How to connect domain?",
+        clarification_prompt="Do you want DNS, CDN, or SSL?",
+        reason="ambiguous_intent",
+        type="disambiguation",
+        options=[__import__("backend.chat.service", fromlist=["ClarificationOption"]).ClarificationOption(id="cdn", label="CDN")],
+        requested_fields=[],
+        turn_count=1,
+        created_at="2026-04-06T00:00:00Z",
+    )
+
+    result = _classify_clarification_turn(state, "CDN?", None)
+
+    assert result.classification == "clarification_continuation"
+    assert result.matched_option is not None
+    assert result.matched_option.id == "cdn"

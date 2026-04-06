@@ -220,6 +220,7 @@ export function ChatWidget({
     () => getLastEndedMarkerIndex(messages),
     [messages],
   );
+  const lastMessageId = messages[messages.length - 1]?.id;
 
   const handleSend = async (override?: { text: string; optionId?: string | null }) => {
     const userMessage = override?.text?.trim() ?? trimmedInput;
@@ -382,7 +383,7 @@ export function ChatWidget({
                       </div>
                     </div>
 
-                    {msg.type === "assistant" && msg.clarification?.options?.length ? (
+                    {msg.type === "assistant" && msg.clarification?.options?.length && msg.id === lastMessageId ? (
                       <div className="ml-0 mt-3 flex flex-wrap gap-2 sm:ml-12">
                         {msg.clarification.options.map((option) => (
                           <button

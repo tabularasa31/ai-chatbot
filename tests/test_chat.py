@@ -627,8 +627,11 @@ def test_chat_without_openai_key(client: TestClient, db_session: Session) -> Non
     assert "OpenAI API key" in response.json()["detail"]
 
 
-def test_chat_empty_question(client: TestClient, db_session: Session) -> None:
-    """Empty string question → 422."""
+def test_chat_empty_question_returns_default_greeting(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    """Empty first message returns the default greeting."""
     token = register_and_verify_user(client, db_session, email="empty@example.com")
     cl_resp = client.post(
         "/clients",
@@ -643,7 +646,78 @@ def test_chat_empty_question(client: TestClient, db_session: Session) -> None:
         headers={"X-API-Key": api_key},
         json={"question": ""},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == (
+        "I'm the Empty Client assistant and can help with documentation, "
+        "product setup, integrations, and finding the right information. Ask your question."
+    )
+    assert data["source_documents"] == []
+    assert data["chat_ended"] is False
+
+
+def test_chat_empty_question_uses_browser_locale_for_greeting(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="empty-locale@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Greeting Locale Client"},
+    )
+    set_client_openai_key(client, token)
+    api_key = cl_resp.json()["api_key"]
+
+    monkeypatch.setattr(
+        "backend.chat.service.localize_text_to_question_language_result",
+        lambda **kwargs: LocalizationResult(
+            text="Je suis l'assistant Greeting Locale Client. Posez votre question.",
+            tokens_used=9,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key, "X-Browser-Locale": "fr-FR"},
+        json={"question": ""},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "Je suis l'assistant Greeting Locale Client. Posez votre question."
+    assert data["tokens_used"] == 9
+
+
+def test_chat_empty_followup_after_started_session_is_rejected(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="empty-followup@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Empty Followup Client"},
+    )
+    set_client_openai_key(client, token)
+    api_key = cl_resp.json()["api_key"]
+
+    first = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": ""},
+    )
+    assert first.status_code == 200
+    session_id = first.json()["session_id"]
+
+    second = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "", "session_id": session_id},
+    )
+    assert second.status_code == 422
+    assert second.json()["detail"] == "Question is required"
 
 
 def test_chat_no_embeddings(
@@ -3740,18 +3814,13 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
 
     captured_kwargs: dict[str, object] = {}
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda *args, **kwargs: Mock(detected=True, level=1, method="structural", score=0.9),
-    )
-
-    def fake_build_reject_response_result(**kwargs: object) -> LocalizationResult:
+    def fake_localize_text_to_question_language_result(**kwargs: object) -> LocalizationResult:
         captured_kwargs.update(kwargs)
         return LocalizationResult(text="Bonjour", tokens_used=4)
 
     monkeypatch.setattr(
-        "backend.chat.service.build_reject_response_result",
-        fake_build_reject_response_result,
+        "backend.chat.service.localize_text_to_question_language_result",
+        fake_localize_text_to_question_language_result,
     )
 
     outcome = process_chat_message(
@@ -3766,7 +3835,7 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
 
     assert outcome.text == "Bonjour"
     assert outcome.tokens_used == 4
-    assert captured_kwargs["question"] == ""
+    assert captured_kwargs["question"] is None
     assert captured_kwargs["fallback_locale"] == "fr-FR"
 
 

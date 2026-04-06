@@ -76,6 +76,59 @@ def test_widget_chat_success(
     assert data.get("chat_ended") is False
 
 
+def test_widget_chat_empty_message_returns_default_greeting(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="widget-greeting@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Greeting Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+    public_id = cl_resp.json()["public_id"]
+
+    r = client.post(_widget_url(public_id, message=""))
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == (
+        "I'm the Widget Greeting Co assistant and can help with documentation, "
+        "product setup, integrations, and finding the right information. Ask your question."
+    )
+    assert "session_id" in data
+    assert data.get("chat_ended") is False
+
+
+def test_widget_chat_empty_message_uses_locale_for_greeting(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="widget-greeting-locale@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Greeting Locale Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(client, token)
+    public_id = cl_resp.json()["public_id"]
+
+    monkeypatch.setattr(
+        "backend.chat.service.localize_text_to_question_language_result",
+        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
+            text="Je suis l'assistant Widget Greeting Locale Co. Posez votre question.",
+            tokens_used=6,
+        ),
+    )
+
+    r = client.post(f"{_widget_url(public_id, message='')}&locale=fr-FR")
+    assert r.status_code == 200
+    assert r.json()["response"] == "Je suis l'assistant Widget Greeting Locale Co. Posez votre question."
+
+
 def test_widget_chat_rate_limit_429_after_20_requests_same_ip(
     mock_openai_client: Mock,
     client: TestClient,

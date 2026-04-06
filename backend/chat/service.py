@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, joinedload
 PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
-from backend.chat.language import localize_text_to_question_language_result
+from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
@@ -48,6 +48,7 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    TenantProfile,
 )
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
@@ -595,6 +596,37 @@ def _resolve_fallback_locale(
     if browser_locale and browser_locale.strip():
         return browser_locale.strip()
     return None
+
+
+def _resolve_product_name(
+    *,
+    client: Client | None,
+    db: Session,
+) -> str:
+    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first() if client else None
+    product_name = (profile.product_name if profile and profile.product_name else None) or (
+        client.name if client and client.name else None
+    )
+    return product_name or "this product"
+
+
+def _build_greeting_result(
+    *,
+    product_name: str,
+    question: str | None,
+    fallback_locale: str | None,
+    api_key: str,
+) -> LocalizationResult:
+    canonical_text = (
+        f"I'm the {product_name} assistant and can help with documentation, "
+        "product setup, integrations, and finding the right information. Ask your question."
+    )
+    return localize_text_to_question_language_result(
+        canonical_text=canonical_text,
+        question=question,
+        api_key=api_key,
+        fallback_locale=fallback_locale,
+    )
 
 
 def _build_domain_clarification(
@@ -1593,6 +1625,26 @@ def _persist_turn(
         optional_entity_types=optional_entity_types,
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
+
+
+def _persist_assistant_message(
+    db: Session,
+    chat: Chat,
+    client_id: uuid.UUID,
+    assistant_content: str,
+    extra_tokens: int,
+    optional_entity_types: set[str] | None = None,
+) -> None:
+    _create_message(
+        db,
+        chat=chat,
+        client_id=client_id,
+        role=MessageRole.assistant,
+        content=assistant_content,
+        source_documents=None,
+        optional_entity_types=optional_entity_types,
+    )
+    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
     try:
         with db.begin_nested():
@@ -1722,6 +1774,41 @@ def process_chat_message(
         tags=[f"tenant:{client_id}"],
         force_trace=explicit_human_request_raw,
     )
+
+    question_text = question.strip()
+    has_prior_user_messages = any(message.role == MessageRole.user for message in chat.messages)
+    if not question_text:
+        if has_prior_user_messages:
+            raise ValueError("Question is required")
+        greeting = _build_greeting_result(
+            product_name=_resolve_product_name(client=client_row, db=db),
+            question=None,
+            fallback_locale=fallback_locale,
+            api_key=api_key,
+        )
+        _persist_assistant_message(
+            db,
+            chat,
+            client_id,
+            greeting.text,
+            greeting.tokens_used,
+            optional_entity_types=optional_entity_types,
+        )
+        trace.update(
+            output={"answer": greeting.text, "source": "greeting"},
+            metadata={
+                "chat_ended": False,
+                "escalated": False,
+                "message_type": "answer",
+                "greeting": True,
+            },
+        )
+        return ChatTurnOutcome(
+            text=greeting.text,
+            document_ids=[],
+            tokens_used=greeting.tokens_used,
+            chat_ended=False,
+        )
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
     clarification_state = _get_clarification_state(chat)

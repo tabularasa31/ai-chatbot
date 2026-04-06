@@ -152,6 +152,8 @@ def chat(
             browser_locale=x_browser_locale,
             clarification_option_id=body.clarification_option_id,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except APIError:
         raise HTTPException(
             status_code=503,

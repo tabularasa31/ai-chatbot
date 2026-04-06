@@ -247,6 +247,8 @@ def widget_chat(
             browser_locale=locale.strip() if locale and locale.strip() else None,
             clarification_option_id=option_id,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     except APIError:
         raise HTTPException(
             status_code=503,

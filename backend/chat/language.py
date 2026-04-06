@@ -32,6 +32,8 @@ def localize_text_to_question_language_result(
     locale_hint = (fallback_locale or "").strip()
     if not api_key or (not question_text and not locale_hint):
         return LocalizationResult(text=canonical_text, tokens_used=0)
+    if not question_text and locale_hint.lower().startswith("en"):
+        return LocalizationResult(text=canonical_text, tokens_used=0)
 
     try:
         client = get_openai_client(api_key)

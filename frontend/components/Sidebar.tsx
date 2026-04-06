@@ -27,7 +27,7 @@ const mainNav: NavItem[] = [
   },
   {
     href: "/knowledge",
-    label: "Knowledge",
+    label: "Knowledge Hub",
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M7.5 1L13 4v7l-5.5 3L2 11V4L7.5 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
@@ -79,7 +79,7 @@ const mainNav: NavItem[] = [
 const settingsNav: NavItem[] = [
   {
     href: "/settings",
-    label: "Agents",
+    label: "Settings",
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M2 4h11M2 7.5h7M2 11h5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -90,17 +90,8 @@ const settingsNav: NavItem[] = [
     ),
   },
   {
-    href: "/settings/disclosure",
-    label: "Response controls",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M1.5 4.5h12M4 7.5h7M6 10.5h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      </svg>
-    ),
-  },
-  {
-    href: "/settings/widget",
-    label: "Widget API",
+    href: "/widget-settings",
+    label: "Widget",
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10M7.5 4l-1.5 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -172,7 +163,7 @@ export function Sidebar() {
 
       <div className="px-3 mb-1">
         <p className="text-[10px] uppercase tracking-widest text-[#FAF5FF]/20 px-3 mb-1.5">
-          Settings
+          Configure
         </p>
         <div className="flex flex-col gap-0.5">
           {settingsNav.map((item) => (

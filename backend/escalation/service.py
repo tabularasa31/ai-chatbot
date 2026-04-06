@@ -27,6 +27,7 @@ from backend.models import (
     User,
 )
 from backend.privacy_config import public_redaction_config_dict
+from backend.support_config import public_support_config_dict
 from backend.user_sessions.service import sync_user_session_identity
 
 logger = logging.getLogger(__name__)
@@ -177,8 +178,10 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
 
 def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Session) -> None:
     user = db.query(User).filter(User.id == client.user_id).first()
-    if not user or not user.email:
-        logger.warning("No client owner email for client_id=%s", client.id)
+    support_config = public_support_config_dict(client.settings if isinstance(client.settings, dict) else None)
+    recipient = support_config["l2_email"] or (user.email if user and user.email else None)
+    if not recipient:
+        logger.warning("No escalation notification email configured for client_id=%s", client.id)
         return
     base = settings.FRONTEND_URL.rstrip("/")
     body = (
@@ -192,7 +195,7 @@ def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Sess
     )
     subject = f"[Chat9] New support ticket #{ticket.ticket_number} — {_safe_ticket_question(ticket)[:60]}"
     try:
-        send_email(user.email, subject, body)
+        send_email(recipient, subject, body)
     except Exception as e:  # noqa: BLE001
         logger.warning("Escalation email failed: %s", e)
 

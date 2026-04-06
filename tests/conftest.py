@@ -180,12 +180,13 @@ def mock_openai_client():
                     choices=[Mock(message=Mock(content=canonical.strip()))],
                     usage=Mock(total_tokens=20),
                 )
-        return Mock(
-            choices=[Mock(message=Mock(content="AI response"))],
-            usage=Mock(total_tokens=100),
-        )
+        return mock_client.chat.completions.create.return_value
 
     mock_client.chat.completions.create.side_effect = _chat_completions_create
+    mock_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content="AI response"))],
+        usage=Mock(total_tokens=100),
+    )
     mock_esc_client = Mock()
     mock_esc_client.chat.completions.create.return_value = Mock(
         choices=[

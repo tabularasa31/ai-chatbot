@@ -238,7 +238,7 @@ The widget now has two different continuity mechanisms:
 - a chat is considered closed when `chats.ended_at` is set
 - closed chats are never resumed
 - if the widget receives `chat_ended = true`, it clears the stored `session_id`
-- the widget shows `Start new chat`, which resets local state and starts a new session on the next message
+- the widget shows `Start new chat`, keeps the old transcript visible, and starts a new session below it on the next message
 
 ## What affects the LLM
 

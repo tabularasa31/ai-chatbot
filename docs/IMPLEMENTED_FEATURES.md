@@ -69,7 +69,7 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
 | **FI-EMBED-MVP** | iframe + `public_id`, `/embed.js`, public chat | `GET /embed.js`, `POST /widget/chat`, dashboard embed code |
-| **FI-KYC** | `POST /widget/session/init` with optional `identity_token` → `chats.user_context` | `backend/routes/widget.py`, `backend/core/security.py` |
+| **FI-KYC** | `POST /widget/session/init` with optional `identity_token` → `chats.user_context`; identified resume; anonymous browser continuity; `user_sessions` tracking | `backend/routes/widget.py`, `backend/widget/service.py`, `backend/user_sessions/service.py`, `backend/core/security.py` |
 | **FI-ESC (widget)** | Optional `locale` on session init and `/widget/chat`; `POST /widget/escalate` (public); response includes `chat_ended` | `backend/routes/widget.py`, `frontend/app/widget/escalate/route.ts`, `ChatWidget.tsx` |
 | **FI-038** | “Powered by Chat9” footer | `frontend/components/ChatWidget.tsx` |
 | Widget rate limits | 20/min on `POST /widget/session/init`, `/widget/chat`, `/widget/escalate` | slowapi, `backend/routes/widget.py` |

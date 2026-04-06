@@ -746,7 +746,8 @@ def test_chat_no_embeddings(
     assert data["answer"].startswith(expected_prefix)
     assert "A support ticket was created for you." in data["answer"]
     assert "[[escalation_ticket:ESC-0001]]" in data["answer"]
-    assert data["tokens_used"] == 15
+    # 20 tokens for localization fallback + 15 for escalation handoff mock.
+    assert data["tokens_used"] == 35
     assert data.get("chat_ended") is False
 
 
@@ -2179,7 +2180,8 @@ def test_debug_no_embeddings(
     # No embeddings → validation fallback → INSUFFICIENT_CONFIDENCE text
     expected = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None)
     assert data["answer"] == expected
-    assert data["tokens_used"] == 0
+    # Debug now includes localization tokens for the insufficient-confidence fallback.
+    assert data["tokens_used"] == 20
     assert data["debug"]["mode"] == "none"
     assert data["debug"]["chunks"] == []
     assert data["debug"]["validation_outcome"] == "fallback"

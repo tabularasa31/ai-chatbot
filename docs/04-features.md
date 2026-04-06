@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-06 (controlled clarification layer + structured widget clarification UI)  
+**Last updated:** 2026-04-06 (question-language localization + localized default greeting)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -273,6 +273,7 @@ Public response contracts:
 - legacy `answer` remains as a compatibility alias of `text`
 - `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
 - legacy `response` remains as a compatibility alias of `text`
+- both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
 
 Clarification payloads can include:
 
@@ -436,6 +437,37 @@ After generating an answer, a **second LLM call** (`temperature=0`) checks wheth
 - If `is_valid = false` **and** `confidence < 0.4`, the answer is replaced with a safe fallback: *"I don't have enough information to answer this question."*
 - Validation errors (e.g. OpenAI timeout) do not block the response — the original answer is returned with `validation_skipped: true`
 - Full validation result is visible in `POST /chat/debug` → `debug.validation`
+
+### Language behavior
+
+The bot now follows one shared language policy for deterministic assistant text:
+
+- before the first real user question, language-only turns use `user_context.locale -> user_context.browser_locale -> English`
+- after the first real question, replies should follow the language of that question
+
+This applies not only to generated RAG answers, but also to deterministic system text such as:
+
+- soft rejection messages
+- clarification prompts
+- escalation fallback text
+- the default greeting
+
+Localization of deterministic text is handled by a shared helper in `backend/chat/language.py`.
+
+### Default greeting
+
+When a new conversation starts before the first real user question, Chat9 can return a default assistant greeting instead of `422`:
+
+`I’m the <product_name> assistant and can help with documentation, product setup, integrations, and finding the right information. Ask your question.`
+
+Behavior details:
+
+- the canonical greeting is stored in English
+- it is localized using the pre-question locale chain above
+- `<product_name>` comes from `TenantProfile.product_name` when available, otherwise from the client name
+- the stock widget shows this greeting automatically only for a truly new empty session; resumed sessions within 24 hours do not repeat it
+- `Start new chat` creates a fresh session and allows the greeting to appear again
+- empty follow-up turns after the conversation has already started still return `422 Question is required`
 
 ### Chat channels
 

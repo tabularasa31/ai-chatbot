@@ -25,6 +25,12 @@ Chat responses now support structured clarification outcomes in addition to plai
 
 For `/chat` and `/widget/chat`, legacy text aliases (`answer` / `response`) still exist for compatibility, but the typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
+Language behavior is now:
+
+- before the first real user question, default greeting and other fallback-only turns use `user_context.locale -> user_context.browser_locale -> English`
+- after the first real question, bot replies should follow the language of the question itself
+- soft rejections / clarification prompts / escalation fallbacks are localized through the shared helper in `backend/chat/language.py`
+
 Deployment: typically Railway (API + Postgres), frontend on Vercel. Environment variables: `backend/core/config.py` (required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`, etc.). Langfuse / trace sampling knobs include `FULL_CAPTURE_MODE` and `TRACE_*` (see `docs/07-observability-rollout.md`).
 
 ---

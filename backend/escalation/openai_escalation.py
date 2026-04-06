@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
+from backend.chat.language import localize_text_to_question_language_result
 from backend.core.openai_client import get_openai_client
 from backend.models import EscalationPhase
 
@@ -33,6 +34,7 @@ You must output a single JSON object with keys:
 
 Rules:
 - Write message_to_user ONLY in the same language the user has been using in the chat; match formality (e.g. Russian вы/ты as they used).
+- When LATEST_USER_MESSAGE is present, prefer its language over older context and keep message_to_user in that same language.
 - If the conversation is too short to tell the language, use the "locale" field from facts if present; otherwise use English.
 - Use only facts from the JSON block: ticket_number, sla_hours, user_email, trigger, phase, clarify_round, locale. Never invent ticket numbers, emails, or SLA.
 - Explain that the request was passed to human support; they will reply by email at the given email when user_email is present; otherwise politely ask for an email address.
@@ -99,12 +101,21 @@ def complete_escalation_openai_turn(
         )
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)
-        msg = (data.get("message_to_user") or "").strip() or FALLBACK_EN_GENERIC
+        tokens = response.usage.total_tokens if response.usage else 0
+        msg = (data.get("message_to_user") or "").strip()
+        if not msg:
+            localization = localize_text_to_question_language_result(
+                canonical_text=FALLBACK_EN_GENERIC,
+                question=latest_user_text,
+                api_key=api_key,
+                fallback_locale=fact_json.get("locale"),
+            )
+            msg = localization.text
+            tokens += localization.tokens_used
         fd = data.get("followup_decision")
         followup: Optional[Literal["yes", "no", "unclear"]] = None
         if fd in ("yes", "no", "unclear"):
             followup = fd  # type: ignore[assignment]
-        tokens = response.usage.total_tokens if response.usage else 0
         tn = fact_json.get("ticket_number")
         if isinstance(tn, str):
             msg = _append_ticket_token(msg, tn)
@@ -116,7 +127,17 @@ def complete_escalation_openai_turn(
     except Exception as e:  # noqa: BLE001
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         tn = fact_json.get("ticket_number")
-        fb = FALLBACK_EN_GENERIC
+        localization = localize_text_to_question_language_result(
+            canonical_text=FALLBACK_EN_GENERIC,
+            question=latest_user_text,
+            api_key=api_key,
+            fallback_locale=fact_json.get("locale"),
+        )
+        fb = localization.text
         if isinstance(tn, str):
             fb = _append_ticket_token(fb, tn)
-        return EscalationLlmResult(message_to_user=fb, followup_decision=None, tokens_used=0)
+        return EscalationLlmResult(
+            message_to_user=fb,
+            followup_decision=None,
+            tokens_used=localization.tokens_used,
+        )

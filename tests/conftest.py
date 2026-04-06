@@ -164,6 +164,25 @@ def mock_openai_client():
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536)]
     )
+    def _chat_completions_create(*args: object, **kwargs: object) -> Mock:
+        messages = kwargs.get("messages") or []
+        if isinstance(messages, list) and messages:
+            system_content = ""
+            user_content = ""
+            if len(messages) >= 1 and isinstance(messages[0], dict):
+                system_content = str(messages[0].get("content", ""))
+            if len(messages) >= 2 and isinstance(messages[1], dict):
+                user_content = str(messages[1].get("content", ""))
+            if "You localize assistant messages." in system_content:
+                marker = "Assistant message to localize:\n"
+                canonical = user_content.split(marker, 1)[1] if marker in user_content else "AI response"
+                return Mock(
+                    choices=[Mock(message=Mock(content=canonical.strip()))],
+                    usage=Mock(total_tokens=20),
+                )
+        return mock_client.chat.completions.create.return_value
+
+    mock_client.chat.completions.create.side_effect = _chat_completions_create
     mock_client.chat.completions.create.return_value = Mock(
         choices=[Mock(message=Mock(content="AI response"))],
         usage=Mock(total_tokens=100),
@@ -188,6 +207,7 @@ def mock_openai_client():
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client), \
          patch("backend.search.service.get_openai_client", return_value=mock_client), \
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
+         patch("backend.chat.language.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client), \
          patch("backend.knowledge.routes.get_openai_client", return_value=mock_client), \
@@ -273,4 +293,3 @@ def register_and_verify_user(
     assert verify_resp.status_code == 200, verify_resp.json()
     token = verify_resp.json()["token"]
     return token
-

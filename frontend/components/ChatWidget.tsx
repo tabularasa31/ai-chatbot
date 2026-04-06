@@ -146,6 +146,7 @@ export function ChatWidget({
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionHydrated, setSessionHydrated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
@@ -158,6 +159,7 @@ export function ChatWidget({
 
   useEffect(() => {
     setSessionId(readStoredSession(botId));
+    setSessionHydrated(true);
     setChatClosed(false);
     setActiveTicket(null);
   }, [botId]);
@@ -206,6 +208,82 @@ export function ChatWidget({
     }
   }, [handleChatEnded]);
 
+  const requestWidgetTurn = useCallback(async ({
+    message,
+    attemptSessionId,
+    optionId,
+  }: {
+    message: string;
+    attemptSessionId: string | null;
+    optionId?: string | null;
+  }) => {
+    const params = new URLSearchParams({
+      botId,
+      message,
+    });
+    if (attemptSessionId) params.set("session_id", attemptSessionId);
+    if (localeParam) params.set("locale", localeParam);
+    if (optionId) params.set("option_id", optionId);
+
+    const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
+    const payload = (await res.json().catch(() => ({}))) as {
+      detail?: unknown;
+      text?: string;
+      response?: string;
+      message_type?: "answer" | "clarification" | "partial_with_clarification";
+      clarification?: ChatWidgetClarification | null;
+      session_id?: string;
+      chat_ended?: boolean;
+    };
+    return { res, payload };
+  }, [botId, localeParam]);
+
+  const fetchGreeting = useCallback(async () => {
+    const { res, payload } = await requestWidgetTurn({
+      message: "",
+      attemptSessionId: null,
+    });
+    if (!res.ok) {
+      throw new Error(formatApiDetail(payload.detail, `API error: ${res.status}`));
+    }
+    const data = payload as {
+      text?: string;
+      response?: string;
+      message_type?: "answer" | "clarification" | "partial_with_clarification";
+      clarification?: ChatWidgetClarification | null;
+      session_id: string;
+      chat_ended?: boolean;
+    };
+    applyAssistantMessage(data);
+    if (data.chat_ended !== true) {
+      setSessionId(data.session_id);
+      persistSession(botId, data.session_id);
+    }
+  }, [applyAssistantMessage, botId, requestWidgetTurn]);
+
+  useEffect(() => {
+    if (!sessionHydrated || sessionId || messages.length > 0 || loading || chatClosed) return;
+    let cancelled = false;
+    setLoading(true);
+    void fetchGreeting()
+      .catch((error) => {
+        if (cancelled) return;
+        setMessages((prev) => [
+          ...prev,
+          createTextMessage(
+            "error",
+            error instanceof Error ? error.message : "Failed to load greeting",
+          ),
+        ]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chatClosed, fetchGreeting, loading, messages.length, sessionHydrated, sessionId]);
+
   const handleStartNewChat = useCallback(() => {
     setInput("");
     setSessionId(null);
@@ -214,7 +292,21 @@ export function ChatWidget({
     appendSystemMessage("new_conversation");
     clearStoredSession(botId);
     inputRef.current?.focus();
-  }, [appendSystemMessage, botId]);
+    setLoading(true);
+    void fetchGreeting()
+      .catch((error) => {
+        setMessages((prev) => [
+          ...prev,
+          createTextMessage(
+            "error",
+            error instanceof Error ? error.message : "Failed to load greeting",
+          ),
+        ]);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [appendSystemMessage, botId, fetchGreeting]);
 
   const lastEndedMarkerIndex = useMemo(
     () => getLastEndedMarkerIndex(messages),
@@ -231,38 +323,21 @@ export function ChatWidget({
     setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
 
     try {
-      const sendWidgetMessage = async (
-        attemptSessionId: string | null,
-        optionId?: string | null,
-      ) => {
-        const params = new URLSearchParams({
-          botId,
-          message: userMessage,
-        });
-        if (attemptSessionId) params.set("session_id", attemptSessionId);
-        if (localeParam) params.set("locale", localeParam);
-        if (optionId) params.set("option_id", optionId);
-
-        const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
-        const payload = (await res.json().catch(() => ({}))) as {
-          detail?: unknown;
-          text?: string;
-          response?: string;
-          message_type?: "answer" | "clarification" | "partial_with_clarification";
-          clarification?: ChatWidgetClarification | null;
-          session_id?: string;
-          chat_ended?: boolean;
-        };
-        return { res, payload };
-      };
-
-      let { res, payload } = await sendWidgetMessage(sessionId, override?.optionId);
+      let { res, payload } = await requestWidgetTurn({
+        message: userMessage,
+        attemptSessionId: sessionId,
+        optionId: override?.optionId,
+      });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId);
         setSessionId(null);
-        ({ res, payload } = await sendWidgetMessage(null, override?.optionId));
+        ({ res, payload } = await requestWidgetTurn({
+          message: userMessage,
+          attemptSessionId: null,
+          optionId: override?.optionId,
+        }));
         detail = payload.detail;
         code = apiErrorCode(detail);
       }

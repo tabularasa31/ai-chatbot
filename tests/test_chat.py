@@ -3481,6 +3481,9 @@ def _make_pipeline_result(
     is_reject: bool = False,
     reject_reason: str | None = None,
 ) -> ChatPipelineResult:
+    # Clarification tests intentionally use medium reliability + skipped validation
+    # to model "not rejected, but not sufficiently answerable yet" under the
+    # production `_is_sufficiently_answerable()` rule.
     retrieval = None if is_reject and reject_reason == "not_relevant" else _make_retrieval_context(
         reliability_score=reliability_score
     )

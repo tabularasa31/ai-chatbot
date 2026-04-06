@@ -323,6 +323,9 @@ class ClarificationOption:
         return {"id": self.id, "label": self.label}
 
 
+# Keep these service-layer literals aligned with backend/chat/schemas.py and the
+# frontend API/widget contracts. They intentionally mirror the public types so
+# the pipeline can stay decoupled from Pydantic models.
 @dataclass(frozen=True)
 class ClarificationPayload:
     reason: Literal["ambiguous_intent", "missing_critical_slot", "low_retrieval_confidence"]
@@ -2363,6 +2366,10 @@ def run_debug(
     Mirrors the public chat pipeline (injection guard → FAQ → relevance →
     retrieve → generate → validate) via run_chat_pipeline, so debug responses
     match production decisions for guard/FAQ/RAG scenarios.
+
+    Clarification state from an existing session is intentionally ignored here:
+    debug evaluates a fresh single-turn question and reports whether that turn
+    would trigger clarification on its own.
 
     Returns:
         Tuple of (final_answer, tokens_used, debug_dict).

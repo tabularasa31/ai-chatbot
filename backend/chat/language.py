@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from openai import APIError
+
 from backend.core.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
@@ -46,8 +48,10 @@ def localize_text_to_question_language(
                 },
             ],
         )
+        if not response.choices:
+            return canonical_text
         localized = (response.choices[0].message.content or "").strip()
         return localized or canonical_text
-    except Exception as exc:  # noqa: BLE001
+    except (APIError, IndexError) as exc:
         logger.warning("Localization failed; using canonical text: %s", exc)
         return canonical_text

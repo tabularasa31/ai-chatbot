@@ -186,10 +186,6 @@ def mock_openai_client():
         )
 
     mock_client.chat.completions.create.side_effect = _chat_completions_create
-    mock_client.chat.completions.create.return_value = Mock(
-        choices=[Mock(message=Mock(content="AI response"))],
-        usage=Mock(total_tokens=100),
-    )
     mock_esc_client = Mock()
     mock_esc_client.chat.completions.create.return_value = Mock(
         choices=[

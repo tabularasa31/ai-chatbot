@@ -174,6 +174,7 @@ def widget_chat(
     message: Annotated[str, Query(description="User message")],
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
     session_id: Annotated[Optional[str], Query(description="Optional session ID")] = None,
+    option_id: Annotated[Optional[str], Query(description="Optional structured clarification option ID")] = None,
     locale: Annotated[
         Optional[str], Query(description="Browser locale hint (e.g. ru-RU)")
     ] = None,
@@ -236,7 +237,7 @@ def widget_chat(
         sid = uuid.uuid4()
 
     try:
-        answer, _document_ids, _tokens_used, chat_ended = process_chat_message(
+        outcome = process_chat_message(
             client_id=client.id,
             question=message,
             session_id=sid,
@@ -244,6 +245,7 @@ def widget_chat(
             api_key=client.openai_api_key,
             user_context=None,
             browser_locale=locale.strip() if locale and locale.strip() else None,
+            clarification_option_id=option_id,
         )
     except APIError:
         raise HTTPException(
@@ -252,9 +254,14 @@ def widget_chat(
         )
 
     return {
-        "response": answer,
+        "text": outcome.text,
+        "response": outcome.text,
+        "message_type": outcome.message_type,
+        "clarification": (
+            outcome.clarification.to_dict() if outcome.clarification is not None else None
+        ),
         "session_id": str(sid),
-        "chat_ended": chat_ended,
+        "chat_ended": outcome.chat_ended,
     }
 
 

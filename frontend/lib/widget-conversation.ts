@@ -1,8 +1,19 @@
+export type ChatWidgetClarification = {
+  reason: "ambiguous_intent" | "missing_critical_slot" | "low_retrieval_confidence";
+  type: "disambiguation" | "slot_request" | "context_request" | "partial_plus_question";
+  options: Array<{ id: string; label: string }>;
+  requested_fields: string[];
+  original_user_message: string | null;
+  turn_index: number;
+};
+
 export type ChatWidgetMessage =
   | {
       id: string;
       type: "assistant" | "user" | "error";
       text: string;
+      messageType?: "answer" | "clarification" | "partial_with_clarification";
+      clarification?: ChatWidgetClarification | null;
     }
   | {
       id: string;
@@ -20,11 +31,17 @@ function createMessageId(): string {
 export function createTextMessage(
   type: "assistant" | "user" | "error",
   text: string,
+  extras?: {
+    messageType?: "answer" | "clarification" | "partial_with_clarification";
+    clarification?: ChatWidgetClarification | null;
+  },
 ): ChatWidgetMessage {
   return {
     id: createMessageId(),
     type,
     text,
+    messageType: extras?.messageType,
+    clarification: extras?.clarification,
   };
 }
 

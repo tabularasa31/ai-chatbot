@@ -36,6 +36,7 @@ View all conversations your users have had with your bot.
 - **Inbox layout:** Sessions list on the left, full conversation on the right.
 - **Session details:** Last question, last answer preview, last activity time.
 - **Message view:** User messages and bot answers in a thread layout.
+- **Clarification visibility:** if the bot asked a structured follow-up question, you can see that turn in the conversation instead of guessing why the bot paused before answering.
 - **Feedback:** Click 👍 or 👎 on any bot answer to rate its quality.
 
 ## Review Bad Answers (`/review`)
@@ -53,6 +54,7 @@ Test your bot directly in the dashboard.
 
 - Ask a question and inspect the retrieved chunks plus matching scores.
 - Reliability metadata includes the canonical score and cap reason from the retrieval pipeline.
+- Clarification-aware debug metadata shows whether the turn would answer directly or trigger a clarification / partial-with-clarification path.
 - **Answer** is shown in a code-style block with an inline **copy** icon.
 
 ## Response controls (`/settings/disclosure`)

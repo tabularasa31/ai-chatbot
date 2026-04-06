@@ -18,6 +18,8 @@ Example (placeholders — the Dashboard fills in your real public bot ID and may
 - A floating chat iframe appears in the bottom-right corner of your page (about 400×600px).
 - Users type questions and receive answers from your documentation.
 - Session continuity works across messages in the same visit.
+- If the bot needs one missing detail, it can show a single structured follow-up question instead of guessing.
+- When that follow-up has clear options, the widget renders them as quick-reply buttons on the latest bot message.
 - The widget works in any language.
 
 ## Where to get the embed code
@@ -40,6 +42,12 @@ Current behavior:
 - closed chats are not resumed
 
 If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
+
+Clarification behavior:
+
+- Chat9 may ask one clarification question when the user's request is ambiguous or missing a critical parameter.
+- Clarification replies are treated as part of the same conversation context, not as a brand-new standalone question.
+- Quick replies stay active only on the latest clarification turn, so older buttons do not keep driving the current conversation after the chat has moved on.
 
 ## Security
 
@@ -194,6 +202,14 @@ Use the `session_id` from `session/init` in later chat requests:
 ```bash
 curl -X POST "https://YOUR_API_HOST/widget/chat?client_id=ch_YOUR_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe&message=Hello"
 ```
+
+Public widget responses may now include:
+
+- normal answer text
+- one clarification question
+- partial guidance plus one clarification question
+
+When the widget receives structured clarification options, it can render them as quick replies instead of forcing the user to type the answer manually.
 
 ### Token field reference
 

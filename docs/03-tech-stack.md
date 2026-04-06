@@ -1,5 +1,7 @@
 # Technical Stack & Architecture
 
+**Last updated:** 2026-04-06 (controlled clarification layer MVP)
+
 ---
 
 ## Technology Choices
@@ -118,6 +120,10 @@
 │              Next.js /widget (ChatWidget)                 │
 │                                                           │
 │  - Chat UI (messages, input)                             │
+│  - Renders typed assistant outcomes: answer,             │
+│    clarification, partial_with_clarification             │
+│  - Latest clarification options render as quick replies; │
+│    old clarification buttons are no longer active        │
 │  - Optional: POST /widget/session/init → session_id +   │
 │    mode (identified | anonymous) for HMAC user context   │
 │  - POST /widget/chat (BFF) → FastAPI /widget/chat        │
@@ -133,14 +139,22 @@
 │    ↓                                                      │
 │    1. Resolve client → client_id + openai_api_key        │
 │    2. Redact PII in question (regex + tenant toggles)    │
-│    3. Embed redacted question (OpenAI, client's key)      │
-│    4. Search embeddings (pgvector)                       │
-│    5. Build prompt (+ safe user context line if FI-KYC)  │
-│    6. Call OpenAI gpt-4o-mini (client's key); optional     │
+│    3. If pending clarification exists, classify the turn │
+│       as continuation vs new intent                      │
+│    4. Run shared chat pipeline (FAQ / retrieval /        │
+│       validation / existing reject & escalation guards)  │
+│    5. Clarification policy may emit answer,              │
+│       clarification, or partial_with_clarification       │
+│    6. Embed redacted question when retrieval is needed   │
+│       (OpenAI, client's key)                             │
+│    7. Search embeddings (pgvector)                       │
+│    8. Build prompt (+ safe user context line if FI-KYC)  │
+│    9. Call OpenAI gpt-4o-mini (client's key); optional   │
 │       validation call (FI-034) also uses redacted text   │
-│    7. Track token usage                                  │
-│    8. Save encrypted original + redacted-safe message      │
-│    9. Return {answer, sources, tokens_used}              │
+│   10. Track token usage                                  │
+│   11. Save encrypted original + redacted-safe message    │
+│   12. Return canonical {text, message_type,              │
+│       clarification?} plus legacy answer/response alias  │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
@@ -201,10 +215,37 @@
    ↓
 10. Track tokens used → save encrypted original question plus redacted-safe message fields
    ↓
-11. Return answer + sources + reliability metadata
+11. Clarification policy may:
+    - answer immediately
+    - ask one structured clarification question
+    - return partial guidance plus one clarification question
+    Clarification replies are re-synthesized into a normalized query and re-enter
+    the standard chat pipeline, not a side branch.
    ↓
-12. Widget / dashboard displays answer
+12. Return canonical `text` + `message_type` + optional `clarification`
+    (legacy `/chat.answer` and `/widget.chat.response` still mirror `text`)
+   ↓
+13. Widget / dashboard displays the message; widget renders quick replies only
+    for the latest assistant clarification
 ```
+
+### Typed chat outcomes
+
+Public chat surfaces now treat assistant output as a typed contract rather than
+plain text only.
+
+- `answer` — normal direct response
+- `clarification` — one structured follow-up question
+- `partial_with_clarification` — safe partial guidance plus one follow-up question
+
+For compatibility:
+
+- `POST /chat` still returns `answer`, but it is now an alias of canonical `text`
+- `POST /widget/chat` still returns `response`, but it is now an alias of canonical `text`
+
+When `message_type != answer`, the payload also includes structured
+`clarification` data (`reason`, `type`, `options`, `requested_fields`,
+`original_user_message`, `turn_index`).
 
 ---
 

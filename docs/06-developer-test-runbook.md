@@ -47,6 +47,26 @@ pytest -q \
   -k "awaiting_email or followup or already_closed or manual_escalate or perform_manual_escalation"
 ```
 
+## Clarification Flow (controlled clarification MVP)
+
+Use this after touching chat outcome typing, clarification heuristics, widget
+quick replies, or continuation-vs-new-intent logic.
+
+```bash
+pytest -q \
+  tests/test_chat.py \
+  tests/test_widget.py \
+  -k "clarification"
+```
+
+This targeted group covers:
+
+- direct answer vs clarification branching
+- clarification continuation vs new intent
+- clarification state cleanup/supersede behavior
+- widget quick replies and structured clarification payloads
+- schema invariant: non-answer message types must include clarification payload
+
 ## RAG Edge Cases (SQLite path)
 
 ```bash

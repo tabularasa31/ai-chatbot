@@ -41,3 +41,9 @@ Example shape (use the Dashboard copy — URLs and your public bot ID are filled
 ## Step 5: Test it
 
 Open your website and click the chat button in the bottom-right corner. Ask a question about your product — the bot will answer based on your uploaded documents.
+
+What to expect:
+
+- if the answer is clear from your docs, the bot replies immediately
+- if one critical detail is missing, the bot may ask one short, specific follow-up question
+- when there are clear options, the widget can show them as quick-reply buttons

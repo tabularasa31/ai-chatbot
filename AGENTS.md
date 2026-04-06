@@ -76,6 +76,13 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 
 In short: models live only in `backend/models.py`; HTTP handlers use `Depends(get_db)`; services receive `Session` from the router; background jobs and scripts use `SessionLocal`; schema changes only via Alembic from the repo root.
 
+### Alembic safety rule
+
+- Alembic `revision` identifiers **must fit into `alembic_version.version_num`**.
+- In this project, treat **32 characters as the hard maximum** for every new `revision` string.
+- Prefer short snake_case ids such as `phase4_user_sessions_active_v1`, not long descriptive ids that can exceed 32 chars.
+- Every schema PR should run the migration guard test that scans `backend/migrations/versions/*.py` and fails if a `revision` is too long.
+
 **Full checklist** — `.cursor/rules/backend-data-layer.mdc` (applies when working under `backend/**/*.py`).
 
 ---

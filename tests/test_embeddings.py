@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from unittest.mock import Mock, patch
 
@@ -11,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.documents.parsers import (
+    OPENAPI_CHUNK_META_PREFIX,
+    OPENAPI_OPERATION_START_MARKER,
     build_openapi_ingestion_payload,
     extract_openapi_chunks_from_rendered_text,
 )
@@ -367,6 +370,45 @@ paths:
     assert tuple(reparsed_chunks[0].tags) == tuple(original_chunks[0].tags)
 
 
+def test_openapi_structured_meta_empty_lists_override_text_fallback() -> None:
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: Empty Meta API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      tags: [users]
+      responses:
+        "200":
+          description: OK
+    """
+    parsed_text, _, _, _ = build_openapi_ingestion_payload(swagger_content)
+    meta_line = next(
+        line for line in parsed_text.splitlines() if line.startswith(OPENAPI_CHUNK_META_PREFIX)
+    )
+    meta = json.loads(meta_line.removeprefix(OPENAPI_CHUNK_META_PREFIX))
+    meta["tags"] = []
+    meta["response_codes"] = []
+    meta["content_types"] = []
+    meta["auth_schemes"] = []
+    patched_text = parsed_text.replace(
+        meta_line,
+        f"{OPENAPI_CHUNK_META_PREFIX}{json.dumps(meta, ensure_ascii=False, sort_keys=True)}",
+    )
+
+    reparsed_chunks, _, _ = extract_openapi_chunks_from_rendered_text(patched_text)
+
+    assert len(reparsed_chunks) == 1
+    assert reparsed_chunks[0].tags == []
+    assert reparsed_chunks[0].response_codes == []
+    assert reparsed_chunks[0].content_types == []
+    assert reparsed_chunks[0].auth_schemes == []
+
+
 def test_openapi_examples_sanitize_internal_chunk_markers() -> None:
     swagger_content = f"""
 openapi: 3.0.0
@@ -392,7 +434,8 @@ paths:
 
     assert len(chunks) == 1
     assert len(reparsed_chunks) == 1
-    assert parsed_text.count("<<<OPENAPI_OPERATION>>>") == 1
+    assert parsed_text.count(OPENAPI_OPERATION_START_MARKER.strip()) == 1
+    assert parsed_text.count(OPENAPI_CHUNK_META_PREFIX) == 1
 
 
 def test_openapi_allof_ref_cycle_finishes_without_recursion_error() -> None:

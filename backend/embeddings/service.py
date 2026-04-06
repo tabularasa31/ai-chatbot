@@ -31,6 +31,14 @@ _CHUNKING_DEFAULT: dict[str, int] = {"chunk_size": 700, "overlap_sentences": 1}
 _OPENAPI_DETAIL_SPLIT_LIMIT = 2200
 
 
+def _should_keep_openapi_as_single_chunk(
+    text_body: str,
+    *,
+    has_forced_detail_split: bool,
+) -> bool:
+    return len(text_body) <= _OPENAPI_DETAIL_SPLIT_LIMIT and not has_forced_detail_split
+
+
 class ChunkInfo(TypedDict):
     """One text chunk with position in the original document."""
 
@@ -153,7 +161,10 @@ def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
         response_detail_idx = text_body.find(OPENAPI_RESPONSE_DETAIL_MARKER)
         has_forced_detail_split = request_detail_idx >= 0 or response_detail_idx >= 0
 
-        if len(text_body) <= _OPENAPI_DETAIL_SPLIT_LIMIT and not has_forced_detail_split:
+        if _should_keep_openapi_as_single_chunk(
+            text_body,
+            has_forced_detail_split=has_forced_detail_split,
+        ):
             rendered_chunks.append({"text": text_body, "subtype": "primary", **base_meta})
             continue
 

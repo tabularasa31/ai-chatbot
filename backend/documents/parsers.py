@@ -11,6 +11,9 @@ import yaml
 from pypdf import PdfReader
 
 OPENAPI_OPERATION_SEPARATOR = "\n\n<<<OPENAPI_OPERATION>>>\n\n"
+OPENAPI_OPERATION_START_MARKER = "\n\n<<<OPENAPI_OPERATION_START>>>\n"
+OPENAPI_OPERATION_END_MARKER = "\n\n<<<OPENAPI_OPERATION_END>>>\n"
+OPENAPI_CHUNK_META_PREFIX = "OpenAPIChunkMeta: "
 OPENAPI_REQUEST_DETAIL_MARKER = "\nRequest Schema Detail:\n"
 OPENAPI_RESPONSE_DETAIL_MARKER = "\nResponse Schema Detail:\n"
 _SUPPORTED_HTTP_METHODS = (
@@ -126,18 +129,15 @@ def build_openapi_ingestion_payload_from_spec(
         f"SourceFormat: {source_format}",
         f"OperationCount: {len(chunks)}",
     ]
-    preview = "\n".join(header_lines) + OPENAPI_OPERATION_SEPARATOR + OPENAPI_OPERATION_SEPARATOR.join(
-        chunk.text for chunk in chunks
-    )
+    preview = "\n".join(header_lines) + "".join(_serialize_openapi_chunk_block(chunk) for chunk in chunks)
     return preview, chunks, source_format, spec_version
 
 
 def extract_openapi_chunks_from_rendered_text(text: str) -> tuple[list[OpenAPIChunk], str | None, str | None]:
     """Rehydrate OpenAPI chunks from deterministic preview text."""
-    if OPENAPI_OPERATION_SEPARATOR not in text:
+    header_text, block_texts = _split_rendered_openapi_blocks(text)
+    if not block_texts:
         return [], None, None
-
-    header_text, *block_texts = text.split(OPENAPI_OPERATION_SEPARATOR)
     header = _parse_header_lines(header_text)
     source_format = header.get("SourceFormat")
     spec_version = header.get("SpecVersion")
@@ -146,16 +146,14 @@ def extract_openapi_chunks_from_rendered_text(text: str) -> tuple[list[OpenAPICh
 
     chunks: list[OpenAPIChunk] = []
     for block in block_texts:
-        normalized = block.strip()
-        if not normalized:
-            continue
-        chunk = _parse_rendered_openapi_block(
-            normalized,
+        chunk = _deserialize_openapi_chunk_block(
+            block,
             source_format=source_format,
             spec_version=spec_version,
         )
-        if chunk is not None:
-            chunks.append(chunk)
+        if chunk is None:
+            continue
+        chunks.append(chunk)
     return chunks, source_format, spec_version
 
 
@@ -167,6 +165,114 @@ def _parse_header_lines(text: str) -> dict[str, str]:
         key, value = line.split(":", 1)
         out[key.strip()] = value.strip()
     return out
+
+
+def _split_rendered_openapi_blocks(text: str) -> tuple[str, list[str]]:
+    if OPENAPI_OPERATION_START_MARKER in text:
+        header_text, _, remainder = text.partition(OPENAPI_OPERATION_START_MARKER)
+        blocks = [
+            block
+            for block in remainder.split(OPENAPI_OPERATION_START_MARKER)
+            if block.strip()
+        ]
+        return header_text, blocks
+    if OPENAPI_OPERATION_SEPARATOR not in text:
+        return text, []
+    header_text, *legacy_blocks = text.split(OPENAPI_OPERATION_SEPARATOR)
+    return header_text, legacy_blocks
+
+
+def _serialize_openapi_chunk_block(chunk: OpenAPIChunk) -> str:
+    meta = json.dumps(
+        {
+            "path": chunk.path,
+            "method": chunk.method,
+            "operation_id": chunk.operation_id,
+            "tags": chunk.tags,
+            "deprecated": chunk.deprecated,
+            "content_types": chunk.content_types,
+            "response_codes": chunk.response_codes,
+            "auth_schemes": chunk.auth_schemes,
+            "has_examples": chunk.has_examples,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return (
+        f"{OPENAPI_OPERATION_START_MARKER}"
+        f"{OPENAPI_CHUNK_META_PREFIX}{meta}\n"
+        f"{chunk.text.strip()}\n"
+        f"{OPENAPI_OPERATION_END_MARKER}"
+    )
+
+
+def _deserialize_openapi_chunk_block(
+    block: str,
+    *,
+    source_format: str,
+    spec_version: str,
+) -> OpenAPIChunk | None:
+    normalized = block.strip()
+    if not normalized:
+        return None
+
+    if normalized.startswith(OPENAPI_CHUNK_META_PREFIX):
+        meta_line, _, body = normalized.partition("\n")
+        try:
+            raw_meta = json.loads(meta_line.removeprefix(OPENAPI_CHUNK_META_PREFIX).strip())
+        except json.JSONDecodeError:
+            raw_meta = None
+        if isinstance(raw_meta, dict):
+            text = body.removesuffix(OPENAPI_OPERATION_END_MARKER.strip()).strip()
+            endpoint_chunk = _parse_rendered_openapi_block(
+                text,
+                source_format=source_format,
+                spec_version=spec_version,
+            )
+            if endpoint_chunk is None:
+                return None
+            return OpenAPIChunk(
+                text=text,
+                path=str(raw_meta.get("path") or endpoint_chunk.path),
+                method=str(raw_meta.get("method") or endpoint_chunk.method).lower(),
+                operation_id=_string_or_none(raw_meta.get("operation_id")) or endpoint_chunk.operation_id,
+                tags=(
+                    _normalize_string_list(raw_meta.get("tags"))
+                    if raw_meta.get("tags") is not None
+                    else endpoint_chunk.tags
+                ),
+                deprecated=bool(raw_meta.get("deprecated", endpoint_chunk.deprecated)),
+                content_types=(
+                    _normalize_string_list(raw_meta.get("content_types"))
+                    if raw_meta.get("content_types") is not None
+                    else endpoint_chunk.content_types
+                ),
+                response_codes=(
+                    _normalize_string_list(raw_meta.get("response_codes"))
+                    if raw_meta.get("response_codes") is not None
+                    else endpoint_chunk.response_codes
+                ),
+                auth_schemes=(
+                    _normalize_string_list(raw_meta.get("auth_schemes"))
+                    if raw_meta.get("auth_schemes") is not None
+                    else endpoint_chunk.auth_schemes
+                ),
+                has_examples=bool(raw_meta.get("has_examples", endpoint_chunk.has_examples)),
+                source_format=source_format,
+                spec_version=spec_version,
+            )
+
+    return _parse_rendered_openapi_block(
+        normalized.removesuffix(OPENAPI_OPERATION_END_MARKER.strip()).strip(),
+        source_format=source_format,
+        spec_version=spec_version,
+    )
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _validate_openapi_spec(spec: dict[str, Any]) -> str:
@@ -586,6 +692,9 @@ def _sanitize_rendered_fragment(text: str) -> str:
     sanitized = text
     for marker in (
         OPENAPI_OPERATION_SEPARATOR,
+        OPENAPI_OPERATION_START_MARKER,
+        OPENAPI_OPERATION_END_MARKER,
+        OPENAPI_CHUNK_META_PREFIX,
         OPENAPI_REQUEST_DETAIL_MARKER,
         OPENAPI_RESPONSE_DETAIL_MARKER,
     ):

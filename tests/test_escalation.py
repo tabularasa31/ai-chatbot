@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
+    _notify_client_new_ticket,
     _set_escalation_clarify_flag,
     apply_collected_contact_email,
     compute_priority,
@@ -371,6 +372,81 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     assert chat.user_context.get("email") is None
     assert chat.escalation_awaiting_ticket_id == ticket.id
     assert chat.escalation_followup_pending is False
+
+
+def test_notify_client_new_ticket_uses_l2_email_when_configured(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="owner-l2@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "L2 Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    support_resp = client.put(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "l2@example.com"},
+    )
+    assert support_resp.status_code == 200
+
+    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    assert cl is not None
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0010",
+        primary_question="need help",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_client_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    assert send_email_mock.call_args.args[0] == "l2@example.com"
+
+
+def test_notify_client_new_ticket_falls_back_to_owner_email(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="owner-only@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Owner Fallback Client"},
+    )
+    assert cl_resp.status_code == 201
+    client_id = uuid.UUID(cl_resp.json()["id"])
+
+    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    assert cl is not None
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0011",
+        primary_question="need help",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_client_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    assert send_email_mock.call_args.args[0] == "owner-only@example.com"
 
 
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(

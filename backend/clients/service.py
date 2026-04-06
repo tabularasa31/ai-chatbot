@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
+from backend.support_config import public_support_config_dict, with_support_config
 from backend.models import Chat, Client, User
 
 
@@ -130,6 +131,36 @@ def update_redaction_config_for_user(
     db.commit()
     db.refresh(client)
     return public_redaction_config_dict(client.settings if isinstance(client.settings, dict) else None)
+
+
+def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, str | None]:
+    client = get_client_by_user(user_id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    owner = db.query(User).filter(User.id == client.user_id).first()
+    raw = client.settings if isinstance(client.settings, dict) else None
+    config = public_support_config_dict(raw)
+    return {
+        "l2_email": config["l2_email"],
+        "fallback_email": owner.email if owner and owner.email else None,
+    }
+
+
+def update_support_settings_for_user(
+    user_id: uuid.UUID,
+    l2_email: str | None,
+    db: Session,
+) -> dict[str, str | None]:
+    client = get_client_by_user(user_id, db)
+    if not client:
+        raise HTTPException(status_code=404, detail="Client not found")
+    client.settings = with_support_config(
+        client.settings if isinstance(client.settings, dict) else None,
+        {"l2_email": l2_email},
+    )
+    db.commit()
+    db.refresh(client)
+    return get_support_settings_for_user(user_id, db)
 
 
 def update_client(

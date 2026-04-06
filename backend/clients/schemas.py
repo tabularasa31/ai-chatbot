@@ -108,3 +108,31 @@ class UpdatePrivacyConfigRequest(BaseModel):
     """PUT body for /clients/me/privacy."""
 
     optional_entity_types: list[RedactionEntityLiteral]
+
+
+class SupportSettingsResponse(BaseModel):
+    """Client-wide support inbox settings."""
+
+    l2_email: Optional[str] = None
+    fallback_email: Optional[str] = None
+
+
+class UpdateSupportSettingsRequest(BaseModel):
+    """PUT body for /clients/me/support-settings."""
+
+    l2_email: Optional[str] = None
+
+    @field_validator("l2_email")
+    @classmethod
+    def validate_l2_email(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        value = v.strip().lower()
+        if not value:
+            return None
+        if value.count("@") != 1:
+            raise ValueError("Enter a valid email address")
+        local, domain = value.split("@")
+        if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+            raise ValueError("Enter a valid email address")
+        return value

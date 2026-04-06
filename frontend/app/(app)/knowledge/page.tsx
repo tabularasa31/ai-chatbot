@@ -506,7 +506,7 @@ export default function KnowledgePage() {
   }
 
   async function handleDeleteSourcePage(sourceId: string, documentId: string) {
-    if (!confirm("Delete this indexed page from Knowledge and exclude it from future refreshes?")) return;
+    if (!confirm("Delete this indexed page from Knowledge Hub and exclude it from future refreshes?")) return;
     setDeletingPageId(documentId);
     try {
       await api.documents.deleteSourcePage(sourceId, documentId);
@@ -588,7 +588,7 @@ export default function KnowledgePage() {
     return (
       <div className="max-w-7xl space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
+          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
         <KnowledgeTabs activeTab="profile" onChange={setTab} />
@@ -803,7 +803,7 @@ export default function KnowledgePage() {
     return (
       <div className="max-w-7xl space-y-6">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
+          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
         <KnowledgeTabs activeTab="faq" onChange={setTab} />
@@ -980,7 +980,7 @@ export default function KnowledgePage() {
     <div className="max-w-7xl space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge</h1>
+          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
           <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
         </div>
         <div className="flex items-center gap-3">

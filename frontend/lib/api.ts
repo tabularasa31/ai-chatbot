@@ -82,6 +82,11 @@ export type DisclosureConfigResponse = {
   level: DisclosureLevel;
 };
 
+export type SupportSettingsResponse = {
+  l2_email: string | null;
+  fallback_email: string | null;
+};
+
 export type EscalationTicket = {
   id: string;
   ticket_number: string;
@@ -429,6 +434,24 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
       return data as DisclosureConfigResponse;
+    },
+  },
+  support: {
+    async get(): Promise<SupportSettingsResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
+      return data as SupportSettingsResponse;
+    },
+    async update(config: { l2_email: string | null }): Promise<SupportSettingsResponse> {
+      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save support inbox settings"));
+      return data as SupportSettingsResponse;
     },
   },
   documents: {

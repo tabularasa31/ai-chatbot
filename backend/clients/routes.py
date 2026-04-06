@@ -15,9 +15,11 @@ from backend.clients.schemas import (
     KycSecretGeneratedResponse,
     KycStatusResponse,
     PrivacyConfigResponse,
+    SupportSettingsResponse,
     UpdateClientRequest,
     UpdateDisclosureConfigRequest,
     UpdatePrivacyConfigRequest,
+    UpdateSupportSettingsRequest,
     ValidateApiKeyResponse,
 )
 from backend.clients.service import (
@@ -30,10 +32,12 @@ from backend.clients.service import (
     get_disclosure_config_for_user,
     get_kyc_status,
     get_redaction_config_for_user,
+    get_support_settings_for_user,
     rotate_kyc_secret,
     update_client,
     update_disclosure_config_for_user,
     update_redaction_config_for_user,
+    update_support_settings_for_user,
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter
@@ -158,6 +162,25 @@ def put_privacy_route(
 ) -> PrivacyConfigResponse:
     data = update_redaction_config_for_user(current_user.id, body.optional_entity_types, db)
     return PrivacyConfigResponse(**data)
+
+
+@clients_router.get("/me/support-settings", response_model=SupportSettingsResponse)
+def get_support_settings_route(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SupportSettingsResponse:
+    data = get_support_settings_for_user(current_user.id, db)
+    return SupportSettingsResponse(**data)
+
+
+@clients_router.put("/me/support-settings", response_model=SupportSettingsResponse)
+def put_support_settings_route(
+    body: UpdateSupportSettingsRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SupportSettingsResponse:
+    data = update_support_settings_for_user(current_user.id, body.l2_email, db)
+    return SupportSettingsResponse(**data)
 
 
 @clients_router.patch("/me", response_model=ClientResponse)

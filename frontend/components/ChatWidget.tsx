@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Lock,
   MessageCircle,
   Send,
   Ticket,
@@ -15,10 +14,17 @@ export type ChatWidgetBelowAssistantContext = {
   assistantContent: string;
 };
 
-type ChatWidgetMessage = {
-  role: "assistant" | "user" | "error";
-  content: string;
-};
+type ChatWidgetMessage =
+  | {
+      id: string;
+      type: "assistant" | "user" | "error";
+      text: string;
+    }
+  | {
+      id: string;
+      type: "system";
+      subtype: "conversation_ended" | "new_conversation";
+    };
 
 interface ChatWidgetProps {
   botId: string;
@@ -128,9 +134,37 @@ function apiErrorCode(detail: unknown): string | null {
   return null;
 }
 
+function createMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function createTextMessage(
+  type: "assistant" | "user" | "error",
+  text: string,
+): ChatWidgetMessage {
+  return {
+    id: createMessageId(),
+    type,
+    text,
+  };
+}
+
+function createSystemMessage(
+  subtype: "conversation_ended" | "new_conversation",
+): ChatWidgetMessage {
+  return {
+    id: createMessageId(),
+    type: "system",
+    subtype,
+  };
+}
+
 function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: number): string {
   for (let i = assistantIndex - 1; i >= 0; i -= 1) {
-    if (messages[i].role === "user") return messages[i].content;
+    if (messages[i].type === "user") return messages[i].text;
   }
   return "";
 }
@@ -143,7 +177,7 @@ export function ChatWidget({
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
-  const [sessionId, setSessionId] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
@@ -155,7 +189,7 @@ export function ChatWidget({
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
 
   useEffect(() => {
-    setSessionId(readStoredSession(botId) ?? "");
+    setSessionId(readStoredSession(botId));
     setChatClosed(false);
     setActiveTicket(null);
   }, [botId]);
@@ -166,24 +200,41 @@ export function ChatWidget({
     el.scrollTop = el.scrollHeight;
   }, [messages, loading]);
 
+  const appendSystemMessage = (subtype: "conversation_ended" | "new_conversation") => {
+    setMessages((prev) => {
+      if (subtype === "conversation_ended") {
+        const last = prev[prev.length - 1];
+        if (last?.type === "system" && last.subtype === "conversation_ended") {
+          return prev;
+        }
+      }
+      return [...prev, createSystemMessage(subtype)];
+    });
+  };
+
+  const handleChatEnded = () => {
+    setChatClosed(true);
+    setSessionId(null);
+    appendSystemMessage("conversation_ended");
+    clearStoredSession(botId);
+  };
+
   const applyAssistantMessage = (raw: string, ended?: boolean) => {
     const ticket = parseEscalationTicket(raw);
     if (ticket) setActiveTicket(ticket);
     const display = stripEscalationToken(raw) || raw;
-    setMessages((prev) => [...prev, { role: "assistant", content: display }]);
+    setMessages((prev) => [...prev, createTextMessage("assistant", display)]);
     if (ended) {
-      setChatClosed(true);
-      setSessionId("");
-      clearStoredSession(botId);
+      handleChatEnded();
     }
   };
 
   const handleStartNewChat = () => {
-    setMessages([]);
     setInput("");
-    setSessionId("");
+    setSessionId(null);
     setChatClosed(false);
     setActiveTicket(null);
+    appendSystemMessage("new_conversation");
     clearStoredSession(botId);
     inputRef.current?.focus();
   };
@@ -194,10 +245,10 @@ export function ChatWidget({
     setLoading(true);
     const userMessage = trimmedInput;
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
 
     try {
-      const sendWidgetMessage = async (attemptSessionId: string) => {
+      const sendWidgetMessage = async (attemptSessionId: string | null) => {
         const params = new URLSearchParams({
           botId,
           message: userMessage,
@@ -220,7 +271,7 @@ export function ChatWidget({
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId);
-        setSessionId("");
+        setSessionId(null);
         ({ res, payload } = await sendWidgetMessage(""));
         detail = payload.detail;
         code = apiErrorCode(detail);
@@ -238,7 +289,7 @@ export function ChatWidget({
 
       applyAssistantMessage(data.response, data.chat_ended === true);
       if (data.chat_ended === true) {
-        setSessionId("");
+        setSessionId(null);
       } else {
         setSessionId(data.session_id);
         persistSession(botId, data.session_id);
@@ -246,10 +297,10 @@ export function ChatWidget({
     } catch (error) {
       setMessages((prev) => [
         ...prev,
-        {
-          role: "error",
-          content: error instanceof Error ? error.message : "Failed to send message",
-        },
+        createTextMessage(
+          "error",
+          error instanceof Error ? error.message : "Failed to send message",
+        ),
       ]);
     } finally {
       setLoading(false);
@@ -274,34 +325,12 @@ export function ChatWidget({
         ref={messagesRef}
         className={cn("min-h-0 flex-1 overflow-y-auto bg-white p-6", compact ? "text-[13px]" : "")}
       >
-        {(activeTicket || chatClosed) && (
+        {activeTicket ? (
           <div className={cn("flex flex-wrap gap-2", compact ? "mb-3" : "mb-4")}>
-            {activeTicket ? (
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
-                <Ticket size={14} />
-                Ticket {activeTicket}
-              </div>
-            ) : null}
-            {chatClosed ? (
-              <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
-                <Lock size={14} />
-                Chat closed
-              </div>
-            ) : null}
-          </div>
-        )}
-
-        {chatClosed ? (
-          <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
-            <p className="font-medium text-slate-800">This conversation is closed.</p>
-            <p className="mt-1">You can start a new chat for another question.</p>
-            <button
-              type="button"
-              onClick={handleStartNewChat}
-              className="mt-3 inline-flex items-center rounded-lg bg-[#a855f7] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea]"
-            >
-              Start new chat
-            </button>
+            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600">
+              <Ticket size={14} />
+              Ticket {activeTicket}
+            </div>
           </div>
         ) : null}
 
@@ -311,45 +340,79 @@ export function ChatWidget({
           </div>
         ) : (
           <div className="space-y-5">
-            {messages.map((msg, i) => {
-              if (msg.role === "user") {
-                return (
-                  <div key={i} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
-                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+            {/*
+              The list stays flat on purpose: closed/open cycles are represented by
+              lightweight system markers instead of introducing a conversation tree.
+            */}
+            {(() => {
+              const lastEndedMarkerIndex = messages.reduce((lastIndex, item, index) => {
+                if (item.type === "system" && item.subtype === "conversation_ended") {
+                  return index;
+                }
+                return lastIndex;
+              }, -1);
+
+              return messages.map((msg, i) => {
+                if (msg.type === "system") {
+                  const isEnded = msg.subtype === "conversation_ended";
+                  const isLastEndedMarker = isEnded && i === lastEndedMarkerIndex;
+                  return (
+                    <div key={msg.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-600">
+                      <p className="font-medium text-slate-800">
+                        {isEnded ? "This conversation has ended." : "New conversation"}
+                      </p>
+                      {isEnded && isLastEndedMarker && chatClosed ? (
+                        <button
+                          type="button"
+                          onClick={handleStartNewChat}
+                          className="mt-3 inline-flex items-center rounded-lg bg-[#a855f7] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea]"
+                        >
+                          Start new chat
+                        </button>
+                      ) : null}
                     </div>
+                  );
+                }
+
+                if (msg.type === "user") {
+                  return (
+                    <div key={msg.id} className="flex justify-end">
+                      <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
+                        <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const isError = msg.type === "error";
+                return (
+                  <div key={msg.id}>
+                    <div className="flex items-end gap-3">
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-2xl px-4 py-2",
+                          isError
+                            ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
+                            : "bg-gray-100 text-gray-800",
+                        )}
+                      >
+                        <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
+                      </div>
+                    </div>
+
+                    {msg.type === "assistant" && renderBelowAssistant ? (
+                      <div className="ml-12 mt-3 max-w-[85%]">
+                        {renderBelowAssistant({
+                          messageIndex: i,
+                          userQuestion: precedingUserQuestion(messages, i),
+                          assistantContent: msg.text,
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 );
-              }
-
-              const isError = msg.role === "error";
-              return (
-                <div key={i}>
-                  <div className="flex items-end gap-3">
-                    <div
-                      className={cn(
-                        "max-w-[85%] rounded-2xl px-4 py-2",
-                        isError
-                          ? "border border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-                          : "bg-gray-100 text-gray-800",
-                      )}
-                    >
-                      <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
-                    </div>
-                  </div>
-
-                  {msg.role === "assistant" && renderBelowAssistant ? (
-                    <div className="ml-12 mt-3 max-w-[85%]">
-                      {renderBelowAssistant({
-                        messageIndex: i,
-                        userQuestion: precedingUserQuestion(messages, i),
-                        assistantContent: msg.content,
-                      })}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
+              });
+            })()}
 
             {loading ? (
               <div className="flex items-end gap-3">
@@ -374,7 +437,7 @@ export function ChatWidget({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            placeholder={chatClosed ? "Chat closed" : "Type a message..."}
+            placeholder={chatClosed ? "Start a new chat to ask another question" : "Type a message..."}
             disabled={loading || chatClosed}
             className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-[#a855f7] focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
           />

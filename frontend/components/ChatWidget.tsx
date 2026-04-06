@@ -297,6 +297,10 @@ export function ChatWidget({
     }
   };
 
+  const handleSendClick = () => {
+    void handleSend();
+  };
+
   return (
     <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
       {/* Header */}
@@ -436,7 +440,7 @@ export function ChatWidget({
           />
           <button
             type="button"
-            onClick={handleSend}
+            onClick={handleSendClick}
             disabled={!canSend}
             className="flex-shrink-0 p-3 bg-[#a855f7] hover:bg-[#9333ea] disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
             aria-label="Send message"

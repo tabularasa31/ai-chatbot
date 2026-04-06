@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.models import UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
@@ -2409,6 +2410,71 @@ def test_chat_followup_no_ends_chat(
     assert chat.ended_at is not None
 
 
+def test_chat_followup_no_closes_active_user_session(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
+
+    token = register_and_verify_user(client, db_session, email="follow-no-user-session@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Follow No User Session Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-follow"},
+        escalation_followup_pending=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    row = UserSession(client_id=client_id, user_id="u-follow", conversation_turns=0)
+    db_session.add(row)
+    db_session.commit()
+
+    ticket = EscalationTicket(
+        client_id=client_id,
+        ticket_number="ESC-0002",
+        primary_question="Need support",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: Mock(
+            message_to_user="Understood, closing chat.",
+            followup_decision="no",
+            tokens_used=3,
+        ),
+    )
+
+    response = client.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"session_id": str(chat.session_id), "question": "no thanks"},
+    )
+    assert response.status_code == 200
+    assert response.json()["chat_ended"] is True
+
+    db_session.refresh(row)
+    assert row.conversation_turns == 1
+    assert row.session_ended_at is not None
+
+
 def test_chat_followup_unclear_twice_falls_back_to_yes(
     client: TestClient,
     db_session: Session,
@@ -2500,7 +2566,7 @@ def test_chat_when_already_closed_uses_closed_phase(
     chat = Chat(
         client_id=client_id,
         session_id=uuid.uuid4(),
-        user_context={},
+        user_context={"user_id": "u-closed"},
         ended_at=datetime.now(timezone.utc),
     )
     db_session.add(chat)
@@ -2524,6 +2590,12 @@ def test_chat_when_already_closed_uses_closed_phase(
     assert response.status_code == 200
     assert response.json()["chat_ended"] is True
     assert "Chat already ended" in response.json()["answer"]
+    rows = (
+        db_session.query(UserSession)
+        .filter(UserSession.client_id == client_id, UserSession.user_id == "u-closed")
+        .all()
+    )
+    assert rows == []
 
 
 def test_manual_escalate_requires_api_key(client: TestClient) -> None:

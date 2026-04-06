@@ -25,9 +25,9 @@ from backend.models import (
     PiiEvent,
     PiiEventDirection,
     User,
-    UserSession,
 )
 from backend.privacy_config import public_redaction_config_dict
+from backend.user_sessions.service import sync_user_session_identity
 
 logger = logging.getLogger(__name__)
 
@@ -324,17 +324,12 @@ def apply_collected_contact_email(
     db.add(chat)
     db.commit()
 
-    uid = ctx.get("user_id")
-    if uid:
-        row = (
-            db.query(UserSession)
-            .filter(UserSession.client_id == chat.client_id, UserSession.user_id == str(uid))
-            .first()
-        )
-        if row:
-            row.email = email
-            db.add(row)
-            db.commit()
+    sync_user_session_identity(
+        db,
+        client_id=chat.client_id,
+        user_context=ctx,
+    )
+    db.commit()
 
 
 def resolve_ticket(

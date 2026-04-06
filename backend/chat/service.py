@@ -50,6 +50,7 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
+from backend.user_sessions.service import record_user_session_turn, touch_user_session
 from backend.search.service import (
     RetrievalReliability,
     build_reliability_projection,
@@ -986,6 +987,12 @@ def _persist_turn(
     )
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
+    record_user_session_turn(
+        db,
+        client_id=client_id,
+        user_context=chat.user_context,
+        ended_at=chat.ended_at,
+    )
     db.commit()
 
 
@@ -1080,6 +1087,13 @@ def process_chat_message(
             user_context=uc,
         )
         db.add(chat)
+        db.flush()
+        touch_user_session(
+            db,
+            client_id=client_id,
+            user_context=chat.user_context,
+            started_at=chat.created_at,
+        )
         db.commit()
         db.refresh(chat)
     elif browser_locale and not (chat.user_context or {}).get("browser_locale"):

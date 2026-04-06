@@ -22,7 +22,9 @@ Chat9 responds in the language the user writes in. Best results come when your d
 Typically 5–10 minutes: create account, verify email, add OpenAI key, upload docs, embed widget.
 
 **What document formats are supported?**
-PDF, Markdown (.md), and Swagger/OpenAPI files (.json, .yaml, .yml).
+PDF, Markdown (.md), and Swagger/OpenAPI files (`.json`, `.yaml`, `.yml`).
+
+Swagger/OpenAPI specs are indexed semantically: Chat9 extracts API operations and schema detail instead of embedding raw JSON/YAML text.
 
 **Can I use a documentation website instead of uploading files?**
 Yes. In the Knowledge hub you can add a same-domain documentation URL source, track crawl/index status, and refresh it later.

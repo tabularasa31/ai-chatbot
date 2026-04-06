@@ -1,7 +1,35 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-06 (UTC) — smart OpenAPI ingestion for files and URLs, semantic endpoint chunking, rich schema detail chunks
+**Last updated:** 2026-04-06 (UTC) — controlled clarification layer MVP, widget quick replies, clarification-aware debug metadata
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-04-06) — controlled clarification layer MVP
+
+### Typed chat outcomes + clarification policy
+
+- ✅ **Typed chat outcomes** (`backend/chat/service.py`, `backend/chat/schemas.py`): chat turns now resolve to `answer`, `clarification`, or `partial_with_clarification` instead of treating every assistant turn as plain answer text.
+- ✅ **Canonical additive response contract:** `POST /chat` and `POST /widget/chat` now return canonical `text`, `message_type`, and optional structured `clarification`, while keeping legacy `answer` / `response` aliases for compatibility.
+- ✅ **Deterministic clarification policy:** clarification is considered only after the normal guard/FAQ/retrieval pipeline and only for narrow MVP triggers: ambiguous intent, missing critical slot, or low retrieval confidence.
+- ✅ **Safe partial-answer boundary:** `partial_with_clarification` is limited to approved safe sources rather than free-form “weak answer” generation.
+
+### Multi-turn clarification flow
+
+- ✅ **Bounded clarification state** (`chats.user_context["clarification_state"]`): minimal versioned flow state stored without introducing a new persistence model.
+- ✅ **Continuation vs new-intent detection:** pending clarification replies are classified deterministically; continuation replies are synthesized with the original question and clarification prompt, then re-enter the standard chat decision pipeline.
+- ✅ **Flow cleanup guarantees:** clarification state is cleared on resolution, supersede/new intent, and forced best-effort completion.
+- ✅ **Clarification turn limit:** one clarification turn per active clarification flow in MVP; if unresolved after the limit, the bot must return best-effort instead of asking again.
+
+### Widget + debug + tests
+
+- ✅ **Widget quick replies:** the widget renders clarification options as quick replies only on the latest assistant clarification turn; button clicks send both visible label text and structured `option_id` when available.
+- ✅ **Debug metadata:** `/chat/debug` now exposes clarification-aware decision fields such as `clarification_considered`, `message_type`, `clarification_reason`, `clarification_type`, and `safe_partial_source_type`.
+- ✅ **Regression coverage:** added backend and widget tests for clarification branching, continuation vs new intent, malformed clarification state, cleanup behavior, schema invariants, and quick replies.
+
+### Docs sync
+
+- ✅ Updated `AGENTS.md`, `docs/04-features.md`, `docs/03-tech-stack.md`, `docs/06-developer-test-runbook.md`, `docs/07-observability-rollout.md`, `docs/IMPLEMENTED_FEATURES.md`, and Russian chat/widget docs to reflect the shipped clarification flow.
 
 ---
 

@@ -59,6 +59,13 @@ Implemented in code:
 - `source-overlap-check`
 - `llm-generation`
 - reliability score propagation
+- clarification decision projection for chat traces/debug:
+  - `clarification_considered`
+  - `message_type`
+  - `clarification_reason`
+  - `clarification_type`
+  - `clarification_limit_hit`
+  - `safe_partial_source_type` (only for `partial_with_clarification`)
 - contradiction observability projection (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`)
 - optional contradiction **adjudication** projection fields (`contradiction_adjudication_*`) sourced from the observability run, not from canonical `evidence` alone — see `docs/04-features.md` (Retrieval contradiction observability + shadow adjudication)
 - deferred sampling with promotion for low-reliability and escalated requests
@@ -173,6 +180,34 @@ Decision rule:
 Current MMR note:
 the `mmr-pass` stage uses token-set Jaccard similarity over the post-rerank pool and recomputes pairwise comparisons as chunks are selected. Normal current usage is small (`/search` defaults to `top_k=3`, chat retrieval uses `top_k=5`, so MMR usually sees about 6-10 candidates after script boost). That remains acceptable for roughly up to 50 MMR candidates; around 100 candidates it becomes a noticeable hot-path cost, and the schema-allowed worst case (`top_k=100` => up to 200 MMR candidates before selection) is outside the intended operating range until we add a cap or replace the heuristic.
 
+## Clarification observability
+
+Controlled clarification now emits decision metadata into chat traces and
+`/chat/debug`, even though clarification itself remains a product-level chat
+feature rather than a retrieval stage.
+
+Trace/debug fields:
+
+- `clarification_considered`
+- `message_type`
+- `clarification_reason`
+- `clarification_type`
+- `clarification_limit_hit`
+- `safe_partial_source_type` when `message_type=partial_with_clarification`
+
+Operational events currently recorded from the chat flow:
+
+- `clarification_shown`
+- `clarification_answered`
+- `clarification_resolved`
+- `clarification_followed_by_best_effort`
+- `clarification_superseded`
+
+Current limitation:
+
+- true `clarification_abandoned` requires a lifecycle hook tied to session
+  expiry/closure; it is not fully emitted from the single-request path yet
+
 ## Acceptance Criteria Status
 
 `AC-1` Partial.
@@ -222,3 +257,4 @@ Sampling logic and forced-promotion rules exist; an explicit `FULL_CAPTURE_MODE`
 - true quick-answer implementation
 - model-backed reranking and true contradiction detection if we decide the heuristics are insufficient
 - actual production review of FI-115 evidence and a follow-up guardrail decision if multi-variant tails are too expensive
+- clarification abandonment lifecycle instrumentation outside the request path

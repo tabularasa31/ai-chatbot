@@ -70,7 +70,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| **FI-EMBED-MVP** | iframe + `public_id`, `/embed.js`, public chat, and default localized greeting on the first empty turn | `GET /embed.js`, `POST /widget/chat`, `backend/chat/service.py`, dashboard embed code |
+| **FI-EMBED-MVP** | iframe + `public_id`, `/embed.js`, public chat, and a default localized greeting for brand-new empty widget sessions (not repeated on 24h resume) | `GET /embed.js`, `POST /widget/chat`, `backend/chat/service.py`, `frontend/components/ChatWidget.tsx`, dashboard embed code |
 | **FI-KYC** | `POST /widget/session/init` with optional `identity_token` → `chats.user_context`; identified resume; anonymous browser continuity; `user_sessions` tracking | `backend/routes/widget.py`, `backend/widget/service.py`, `backend/user_sessions/service.py`, `backend/core/security.py` |
 | **FI-ESC (widget)** | Optional `locale` on session init and `/widget/chat`; `POST /widget/escalate` (public); response includes `chat_ended`; escalation fallback text respects latest question language or locale hint for short conversations | `backend/routes/widget.py`, `backend/escalation/openai_escalation.py`, `frontend/app/widget/escalate/route.ts`, `ChatWidget.tsx` |
 | Clarification quick replies | Widget renders structured clarification options as quick-reply buttons only for the latest assistant clarification turn; button clicks send the visible label plus structured `option_id` when available | `frontend/components/ChatWidget.tsx`, `frontend/lib/widget-conversation.ts`, `frontend/app/widget/chat/route.ts` |

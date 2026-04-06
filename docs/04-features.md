@@ -273,7 +273,7 @@ Public response contracts:
 - legacy `answer` remains as a compatibility alias of `text`
 - `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
 - legacy `response` remains as a compatibility alias of `text`
-- on the first empty turn, both channels may return the localized default greeting as a normal `answer`
+- both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
 
 Clarification payloads can include:
 
@@ -456,7 +456,7 @@ Localization of deterministic text is handled by a shared helper in `backend/cha
 
 ### Default greeting
 
-If the first turn is an empty message, `POST /chat` and `POST /widget/chat` return a default assistant greeting instead of `422`:
+When a new conversation starts before the first real user question, Chat9 can return a default assistant greeting instead of `422`:
 
 `I’m the <product_name> assistant and can help with documentation, product setup, integrations, and finding the right information. Ask your question.`
 
@@ -465,6 +465,8 @@ Behavior details:
 - the canonical greeting is stored in English
 - it is localized using the pre-question locale chain above
 - `<product_name>` comes from `TenantProfile.product_name` when available, otherwise from the client name
+- the stock widget shows this greeting automatically only for a truly new empty session; resumed sessions within 24 hours do not repeat it
+- `Start new chat` creates a fresh session and allows the greeting to appear again
 - empty follow-up turns after the conversation has already started still return `422 Question is required`
 
 ### Chat channels

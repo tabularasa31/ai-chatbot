@@ -18,7 +18,7 @@ Example (placeholders — the Dashboard fills in your real public bot ID and may
 - A floating chat iframe appears in the bottom-right corner of your page (about 400×600px).
 - Users type questions and receive answers from your documentation.
 - Session continuity works across messages in the same visit.
-- If the first turn is empty, the widget can return a default greeting instead of an error.
+- If the widget starts a brand-new empty conversation, it can show a default greeting instead of an error or blank state.
 - If the bot needs one missing detail, it can show a single structured follow-up question instead of guessing.
 - When that follow-up has clear options, the widget renders them as quick-reply buttons on the latest bot message.
 - The widget works in any language.
@@ -48,6 +48,12 @@ Current behavior:
 - closed chats are not resumed
 
 If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
+
+Greeting behavior:
+
+- when the widget opens a brand-new session with no resumed transcript, it can show the default greeting automatically
+- if an existing session is resumed from the last 24 hours, the greeting is not shown again
+- after `Start new chat`, the next fresh empty session shows the greeting again
 
 Clarification behavior:
 
@@ -215,7 +221,7 @@ curl -X POST "https://YOUR_API_HOST/widget/chat?client_id=ch_YOUR_PUBLIC_ID&sess
 Public widget responses may now include:
 
 - normal answer text
-- default localized greeting on the first empty turn
+- default localized greeting when a new empty conversation starts
 - one clarification question
 - partial guidance plus one clarification question
 

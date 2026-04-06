@@ -15,14 +15,15 @@
 
 ### Greeting + channel behavior
 
-- ✅ **Default greeting** (`backend/chat/service.py`): first empty turn on `POST /chat` and `POST /widget/chat` now returns a localized assistant-only greeting: “I’m the `<product_name>` assistant and can help with documentation, product setup, integrations, and finding the right information. Ask your question.”
+- ✅ **Default greeting** (`backend/chat/service.py`, `frontend/components/ChatWidget.tsx`): new empty conversations can start with a localized assistant-only greeting: “I’m the `<product_name>` assistant and can help with documentation, product setup, integrations, and finding the right information. Ask your question.”
 - ✅ **Product-aware naming:** greeting uses `TenantProfile.product_name` when available, otherwise falls back to client name, then to `"this product"`.
+- ✅ **Widget UX alignment:** the stock widget now shows greeting only for a truly new session with no resumed transcript; if a session is resumed within 24 hours, greeting is not repeated. `Start new chat` creates a fresh empty session and shows greeting again.
 - ✅ **Follow-up guard:** empty follow-up turns after a real conversation has started are still rejected with `422 Question is required`.
 
 ### Token accounting + regression coverage
 
 - ✅ **Localization token accounting:** deterministic localization calls now contribute to `tokens_used` in validation fallback, reject, clarification, escalation fallback, and greeting paths.
-- ✅ **Regression tests:** added coverage for fallback locale behavior, locale priority (`locale -> browser_locale`), localized greeting on `/chat` and `/widget/chat`, and updated token expectations for no-context validation fallback paths.
+- ✅ **Regression tests:** added coverage for fallback locale behavior, locale priority (`locale -> browser_locale`), localized greeting flows, resumed-session behavior, and updated token expectations for no-context validation fallback paths.
 
 ### Docs sync
 

@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
   const locale = searchParams.get("locale");
   const optionId = searchParams.get("option_id");
 
-  if (!botId || !message) {
+  if (!botId || message === null) {
     return NextResponse.json(
       { detail: "botId (or legacy clientId) and message are required" },
       { status: 400 }

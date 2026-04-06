@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pypdf import PdfWriter
@@ -110,6 +111,39 @@ def test_upload_swagger_success(client: TestClient, db_session: Session) -> None
     assert response.status_code == 201
     data = response.json()
     assert data["filename"] == "api.json"
+    assert data["file_type"] == "swagger"
+    assert data["status"] == "ready"
+
+
+def test_upload_swagger_yaml_success(client: TestClient, db_session: Session) -> None:
+    """Upload valid OpenAPI YAML, status=ready."""
+    token = register_and_verify_user(client, db_session, email="swagger-yaml@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Swagger YAML Client"},
+    )
+    swagger_content = b"""
+openapi: 3.0.0
+info:
+  title: YAML Test API
+  version: "1.0"
+paths:
+  /users:
+    post:
+      summary: Create user
+      responses:
+        "201":
+          description: Created
+"""
+    response = client.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("api.yaml", swagger_content, "application/yaml")},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["filename"] == "api.yaml"
     assert data["file_type"] == "swagger"
     assert data["status"] == "ready"
 
@@ -909,3 +943,107 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
     assert refreshed_source.pages_indexed == 0
     assert refreshed_source.pages_found == 0
     assert source_docs == []
+
+
+def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(
+    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.documents import url_service
+
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    token = register_and_verify_user(client, db_session, email="openapi-url@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "OpenAPI URL Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="API spec",
+        url="https://docs.example.com/openapi.yaml",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.queued,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: [source.url])
+    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+
+    yaml_spec = """
+openapi: 3.0.0
+info:
+  title: URL API
+  version: "1.0"
+paths:
+  /users:
+    get:
+      summary: List users
+      operationId: listUsers
+      responses:
+        "200":
+          description: OK
+  /users/{userId}:
+    get:
+      summary: Get user
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+"""
+
+    monkeypatch.setattr(
+        url_service,
+        "_http_client",
+        lambda timeout_seconds: httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    headers={"content-type": "application/yaml"},
+                    text=yaml_spec,
+                    request=request,
+                )
+            ),
+            timeout=timeout_seconds,
+            follow_redirects=False,
+            trust_env=False,
+        ),
+    )
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+
+    url_service.crawl_url_source(source.id, api_key="test-key")
+    db_session.expire_all()
+
+    refreshed_source = db_session.query(UrlSource).filter(UrlSource.id == source.id).first()
+    doc = db_session.query(Document).filter(Document.source_id == source.id).first()
+    embeddings = (
+        db_session.query(Embedding)
+        .filter(Embedding.document_id == doc.id)
+        .order_by(Embedding.created_at.asc())
+        .all()
+    )
+
+    assert refreshed_source is not None
+    assert refreshed_source.status == SourceStatus.ready
+    assert refreshed_source.metadata_json["platform"] == "openapi"
+    assert doc is not None
+    assert doc.file_type == DocumentType.swagger
+    assert "Endpoint: GET /users" in (doc.parsed_text or "")
+    assert len(embeddings) == 2
+    assert embeddings[0].metadata_json["type"] == "api_endpoint"
+    assert embeddings[0].metadata_json["source_kind"] == "url"
+    assert embeddings[0].metadata_json["path"] == "/users"

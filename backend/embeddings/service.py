@@ -10,6 +10,11 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
+from backend.documents.parsers import (
+    OPENAPI_REQUEST_DETAIL_MARKER,
+    OPENAPI_RESPONSE_DETAIL_MARKER,
+    extract_openapi_chunks_from_rendered_text,
+)
 from backend.models import Document, DocumentStatus, Embedding
 
 # Optimal chunking parameters per document type.
@@ -23,6 +28,7 @@ CHUNKING_CONFIG: dict[str, dict[str, int]] = {
     "code":     {"chunk_size": 600, "overlap_sentences": 1},
 }
 _CHUNKING_DEFAULT: dict[str, int] = {"chunk_size": 700, "overlap_sentences": 1}
+_OPENAPI_DETAIL_SPLIT_LIMIT = 2200
 
 
 class ChunkInfo(TypedDict):
@@ -120,6 +126,86 @@ def chunk_text(
     return chunks
 
 
+def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
+    chunks, source_format, spec_version = extract_openapi_chunks_from_rendered_text(text)
+    if not chunks:
+        return chunk_text(text, **CHUNKING_CONFIG["swagger"])
+
+    rendered_chunks: list[dict[str, object]] = []
+    for operation_chunk in chunks:
+        base_meta = {
+            "type": "api_endpoint",
+            "path": operation_chunk.path,
+            "method": operation_chunk.method,
+            "operation_id": operation_chunk.operation_id,
+            "tags": operation_chunk.tags,
+            "deprecated": operation_chunk.deprecated,
+            "content_types": operation_chunk.content_types,
+            "response_codes": operation_chunk.response_codes,
+            "auth_schemes": operation_chunk.auth_schemes,
+            "has_examples": operation_chunk.has_examples,
+            "source_format": source_format,
+            "spec_version": spec_version,
+        }
+
+        text_body = operation_chunk.text
+        request_detail_idx = text_body.find(OPENAPI_REQUEST_DETAIL_MARKER)
+        response_detail_idx = text_body.find(OPENAPI_RESPONSE_DETAIL_MARKER)
+        has_forced_detail_split = request_detail_idx >= 0 or response_detail_idx >= 0
+
+        if len(text_body) <= _OPENAPI_DETAIL_SPLIT_LIMIT and not has_forced_detail_split:
+            rendered_chunks.append({"text": text_body, "subtype": "primary", **base_meta})
+            continue
+
+        request_marker = "\nRequest Body:\n"
+        response_marker = "\nResponses:\n"
+        request_idx = text_body.find(request_marker)
+        response_idx = text_body.find(response_marker)
+
+        primary_end = min(
+            [idx for idx in (request_detail_idx, response_detail_idx) if idx >= 0],
+            default=len(text_body),
+        )
+        primary_text = text_body[:primary_end].strip()
+        if primary_text:
+            rendered_chunks.append({"text": primary_text, "subtype": "primary", **base_meta})
+        if request_idx >= 0 and request_detail_idx >= 0:
+            request_summary_end = response_idx if response_idx > request_idx else request_detail_idx
+            request_detail_end = response_detail_idx if response_detail_idx > request_detail_idx else len(text_body)
+            request_parts = [
+                f"Endpoint: {operation_chunk.method.upper()} {operation_chunk.path}",
+                text_body[request_idx:request_summary_end].strip(),
+                text_body[request_detail_idx:request_detail_end].strip(),
+            ]
+            request_text = "\n".join(part for part in request_parts if part)
+            rendered_chunks.append({"text": request_text, "subtype": "request_schema", **base_meta})
+        elif request_idx >= 0 and len(text_body) > _OPENAPI_DETAIL_SPLIT_LIMIT:
+            request_end = response_idx if response_idx > request_idx else len(text_body)
+            request_text = (
+                f"Endpoint: {operation_chunk.method.upper()} {operation_chunk.path}\n"
+                + text_body[request_idx:request_end].strip()
+            )
+            rendered_chunks.append({"text": request_text, "subtype": "request_schema", **base_meta})
+
+        if response_idx >= 0 and response_detail_idx >= 0:
+            response_summary_end = request_detail_idx if request_detail_idx > response_idx else response_detail_idx
+            response_parts = [
+                f"Endpoint: {operation_chunk.method.upper()} {operation_chunk.path}",
+                text_body[response_idx:response_summary_end].strip(),
+                text_body[response_detail_idx:].strip(),
+            ]
+            response_text = "\n".join(part for part in response_parts if part)
+            rendered_chunks.append({"text": response_text, "subtype": "response_schema", **base_meta})
+        elif response_idx >= 0 and len(text_body) > _OPENAPI_DETAIL_SPLIT_LIMIT:
+            response_text = (
+                f"Endpoint: {operation_chunk.method.upper()} {operation_chunk.path}\n"
+                + text_body[response_idx:].strip()
+            )
+            rendered_chunks.append({"text": response_text, "subtype": "response_schema", **base_meta})
+
+    return rendered_chunks
+
+
 def create_embeddings_for_document(
     document_id: uuid.UUID,
     db: Session,
@@ -155,12 +241,15 @@ def create_embeddings_for_document(
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
 
-    cfg = CHUNKING_CONFIG.get(doc.file_type.value, _CHUNKING_DEFAULT)
-    chunks = chunk_text(doc.parsed_text, **cfg)
+    if doc.file_type.value == "swagger":
+        chunks = _build_swagger_chunks(doc.parsed_text)
+    else:
+        cfg = CHUNKING_CONFIG.get(doc.file_type.value, _CHUNKING_DEFAULT)
+        chunks = chunk_text(doc.parsed_text, **cfg)
     if not chunks:
         return []
 
-    chunk_texts = [c["text"] for c in chunks]
+    chunk_texts = [str(c["text"]) for c in chunks]
 
     openai_client = get_openai_client(api_key)
     try:
@@ -178,14 +267,17 @@ def create_embeddings_for_document(
     for i, item in enumerate(response.data):
         vector = item.embedding  # list of 1536 floats
         chunk = chunks[i] if i < len(chunks) else None
-        text_part = chunk["text"] if chunk else ""
+        text_part = str(chunk["text"]) if chunk else ""
         meta_base = (
             {
-                "chunk_index": chunk["chunk_index"],
-                "char_offset": chunk["char_offset"],
-                "char_end": chunk["char_end"],
+                "chunk_index": i,
                 "filename": doc.filename,
                 "file_type": doc.file_type.value,
+                **{
+                    key: value
+                    for key, value in chunk.items()
+                    if key != "text"
+                },
             }
             if chunk
             else {"chunk_index": i}

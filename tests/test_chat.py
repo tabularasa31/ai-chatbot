@@ -16,6 +16,7 @@ from backend.chat.service import (
     RetrievalContext,
     ChatPipelineResult,
     ClarificationState,
+    _build_clarification_decision,
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
@@ -3871,3 +3872,34 @@ def test_classify_clarification_turn_accepts_option_with_question_mark() -> None
     assert result.classification == "clarification_continuation"
     assert result.matched_option is not None
     assert result.matched_option.id == "cdn"
+
+
+def test_clarification_turn_limit_reads_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    existing_state = ClarificationState(
+        version=1,
+        status="awaiting_reply",
+        original_user_message="How to connect domain?",
+        clarification_prompt="Do you want DNS, CDN, or SSL?",
+        reason="ambiguous_intent",
+        type="disambiguation",
+        options=[],
+        requested_fields=[],
+        turn_count=1,
+        created_at="2026-04-06T00:00:00Z",
+    )
+
+    monkeypatch.setattr("backend.chat.service.settings.clarification_turn_limit", 2)
+
+    decision = _build_clarification_decision(
+        original_user_message="How to connect domain?",
+        original_user_message_redacted="How to connect domain?",
+        result=_make_pipeline_result(
+            final_answer="Maybe this is about domains.",
+            validation_outcome="skipped",
+            reliability_score="medium",
+        ),
+        existing_state=existing_state,
+    )
+
+    assert decision is not None
+    assert decision.payload.turn_index == 2

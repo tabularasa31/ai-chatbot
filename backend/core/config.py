@@ -53,6 +53,7 @@ class Settings(BaseSettings):
         500,
         alias="CONTRADICTION_ADJUDICATION_MAX_TOKENS",
     )
+    clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
 
     # Email verification
     EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")

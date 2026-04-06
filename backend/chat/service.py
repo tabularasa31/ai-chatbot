@@ -73,7 +73,6 @@ LOW_CONFIDENCE_THRESHOLD = 0.4
 CLARIFICATION_STATE_KEY = "clarification_state"
 CLARIFICATION_STATE_VERSION = 1
 CLARIFICATION_STATUS_AWAITING_REPLY = "awaiting_reply"
-CLARIFICATION_TURN_LIMIT = 1
 SAFE_PARTIAL_SOURCE_FAQ = "faq_rule"
 SAFE_PARTIAL_SOURCE_TEMPLATE = "deterministic_template"
 SAFE_PARTIAL_SOURCE_RETRIEVED = "retrieved_safe_context"
@@ -703,7 +702,10 @@ def _build_clarification_decision(
 ) -> ClarificationDecision | None:
     if _is_sufficiently_answerable(result):
         return None
-    if existing_state is not None and existing_state.turn_count >= CLARIFICATION_TURN_LIMIT:
+    if (
+        existing_state is not None
+        and existing_state.turn_count >= settings.clarification_turn_limit
+    ):
         return None
     turn_index = (existing_state.turn_count + 1) if existing_state is not None else 1
 

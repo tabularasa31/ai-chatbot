@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.documents.parsers import (
+    OPENAPI_CHUNK_META_PREFIX,
+    OPENAPI_OPERATION_START_MARKER,
     build_openapi_ingestion_payload,
     extract_openapi_chunks_from_rendered_text,
 )
@@ -392,7 +394,8 @@ paths:
 
     assert len(chunks) == 1
     assert len(reparsed_chunks) == 1
-    assert parsed_text.count("<<<OPENAPI_OPERATION>>>") == 1
+    assert parsed_text.count(OPENAPI_OPERATION_START_MARKER.strip()) == 1
+    assert parsed_text.count(OPENAPI_CHUNK_META_PREFIX) == 1
 
 
 def test_openapi_allof_ref_cycle_finishes_without_recursion_error() -> None:

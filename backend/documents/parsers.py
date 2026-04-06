@@ -642,8 +642,11 @@ def _resolve_response_value(
 
 
 def _resolve_json_pointer(spec: dict[str, Any], ref: str) -> Any | None:
+    path = ref[2:]
+    if not path:
+        return spec
     current: Any = spec
-    for part in ref[2:].split("/"):
+    for part in path.split("/"):
         key = part.replace("~1", "/").replace("~0", "~")
         if not isinstance(current, dict) or key not in current:
             return None

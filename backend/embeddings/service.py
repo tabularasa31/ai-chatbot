@@ -163,7 +163,7 @@ def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
         response_idx = text_body.find(response_marker)
 
         primary_end = min(
-            [idx for idx in (request_detail_idx, response_detail_idx) if idx >= 0],
+            [idx for idx in (request_idx, response_idx, request_detail_idx, response_detail_idx) if idx >= 0],
             default=len(text_body),
         )
         primary_text = text_body[:primary_end].strip()

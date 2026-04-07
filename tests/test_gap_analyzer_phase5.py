@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 import uuid
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer.enums import GapSource
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.models import (
+    GapDismissal,
     GapCluster,
     GapClusterStatus,
     GapDocTopic,
@@ -379,6 +384,62 @@ def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     assert data["title"] == "Invoice exports for finance"
     assert "# Invoice exports for finance" in data["markdown"]
     assert "How do invoice exports work for finance?" in data["markdown"]
+
+
+def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
+    monkeypatch,
+) -> None:
+    topic_id = uuid.uuid4()
+    tenant_id = uuid.uuid4()
+    topic = SimpleNamespace(
+        id=topic_id,
+        tenant_id=tenant_id,
+        topic_label="Webhook retries",
+        example_questions=[
+            "How many retries do webhooks get?",
+            "Can I change the webhook retry delay?",
+            "Do failed webhooks retry automatically?",
+            "Where can I see webhook retry history?",
+            "What status codes trigger webhook retries?",
+            "Can I disable webhook retries per endpoint?",
+        ],
+    )
+
+    class _FakeQuery:
+        def __init__(self, result):
+            self._result = result
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            return self._result
+
+    class _FakeDB:
+        def query(self, model):
+            if model is GapDocTopic:
+                return _FakeQuery(topic)
+            if model is GapDismissal:
+                return _FakeQuery(None)
+            raise AssertionError(f"Unexpected model query: {model}")
+
+    orchestrator = GapAnalyzerOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "_require_sqlalchemy_repository",
+        lambda: SqlAlchemyGapAnalyzerRepository(db=_FakeDB()),
+    )
+
+    draft = orchestrator.build_draft(
+        tenant_id=tenant_id,
+        source=GapSource.mode_a,
+        gap_id=topic_id,
+    )
+
+    assert draft.title == "Webhook retries"
+    assert "How many retries do webhooks get?" in draft.markdown
+    assert "What status codes trigger webhook retries?" in draft.markdown
+    assert "Can I disable webhook retries per endpoint?" not in draft.markdown
 
 
 def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(

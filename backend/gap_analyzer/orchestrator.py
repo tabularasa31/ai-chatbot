@@ -47,6 +47,7 @@ from backend.models import GapCluster, GapDismissal, GapDocTopic, GapQuestion
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
+_MODE_A_DRAFT_EXAMPLE_LIMIT = 5
 
 
 @dataclass(frozen=True)
@@ -524,7 +525,9 @@ class GapAnalyzerOrchestrator:
                 .first()
             )
             label = ((topic.topic_label if topic else None) or (dismissal.topic_label if dismissal else None) or "Untitled gap").strip()
-            example_questions = _clean_questions(topic.example_questions if topic and topic.example_questions else [])
+            example_questions = _clean_questions(topic.example_questions if topic and topic.example_questions else [])[
+                :_MODE_A_DRAFT_EXAMPLE_LIMIT
+            ]
             markdown = _build_mode_a_draft_markdown(label=label, example_questions=example_questions)
             return GapDraftResponse(source=source, gap_id=gap_id, title=label, markdown=markdown)
 
@@ -890,6 +893,20 @@ def _cluster_status_value(status: GapClusterStatus | str) -> str:
 
 
 def _clean_questions(raw_questions: object) -> list[str]:
+    if isinstance(raw_questions, str):
+        try:
+            raw_questions = json.loads(raw_questions)
+        except json.JSONDecodeError:
+            return []
+    elif (
+        isinstance(raw_questions, list)
+        and raw_questions
+        and all(isinstance(item, str) and len(item) == 1 for item in raw_questions)
+    ):
+        try:
+            raw_questions = json.loads("".join(raw_questions))
+        except json.JSONDecodeError:
+            return []
     if not isinstance(raw_questions, list):
         return []
     return [question.strip() for question in raw_questions if isinstance(question, str) and question.strip()]

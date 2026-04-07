@@ -139,8 +139,8 @@ def verify_email(
     user.is_verified = True
     user.verification_token = None
     user.verification_expires_at = None
-    db.commit()
     ensure_client_for_user(user.id, db)
+    db.commit()
 
     jwt_token, expires_in = create_token_for_user(user)
     return VerifyEmailResponse(

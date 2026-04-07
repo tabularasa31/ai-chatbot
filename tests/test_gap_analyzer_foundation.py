@@ -153,6 +153,7 @@ def test_gap_analyzer_model_indexes_are_present() -> None:
         "ix_gap_questions_tenant_signal_weight",
         "ix_gap_dismissals_tenant_gap",
         "ix_gap_question_links_gap_question",
+        "ix_gap_question_links_user_message",
         "ix_gap_question_links_assistant_message",
         "ix_gap_question_links_session_id",
     }
@@ -175,6 +176,9 @@ def test_gap_analyzer_phase1_migration_contains_view_and_indexes() -> None:
     assert "ix_gap_doc_topics_tenant_status" in content
     assert "ix_gap_questions_tenant_signal_weight" in content
     assert "ix_gap_dismissals_topic_embedding_ivfflat" in content
+    assert "CAST(NULL AS FLOAT) AS aggregate_signal_weight" in content
+    assert "CAST(NULL AS INTEGER) AS question_count" in content
+    assert "ix_gap_question_links_user_message" in content
     assert "ix_gap_question_links_session_id" in content
 
 

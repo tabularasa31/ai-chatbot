@@ -993,6 +993,10 @@ Index(
     GapQuestionMessageLink.gap_question_id,
 )
 Index(
+    "ix_gap_question_links_user_message",
+    GapQuestionMessageLink.user_message_id,
+)
+Index(
     "ix_gap_question_links_assistant_message",
     GapQuestionMessageLink.assistant_message_id,
     unique=True,

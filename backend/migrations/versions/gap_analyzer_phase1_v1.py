@@ -33,8 +33,8 @@ def _create_gap_unified_view() -> None:
             'mode_a' AS source,
             status,
             is_new,
-            NULL AS aggregate_signal_weight,
-            NULL AS question_count
+            CAST(NULL AS FLOAT) AS aggregate_signal_weight,
+            CAST(NULL AS INTEGER) AS question_count
         FROM gap_doc_topics
         UNION ALL
         SELECT
@@ -266,6 +266,11 @@ def upgrade() -> None:
         ["gap_question_id"],
     )
     op.create_index(
+        "ix_gap_question_links_user_message",
+        "gap_question_message_links",
+        ["user_message_id"],
+    )
+    op.create_index(
         "ix_gap_question_links_assistant_message",
         "gap_question_message_links",
         ["assistant_message_id"],
@@ -323,6 +328,7 @@ def downgrade() -> None:
         op.execute("DROP INDEX IF EXISTS ix_gap_dismissals_topic_embedding_ivfflat")
 
     op.drop_index("ix_gap_question_links_assistant_message", table_name="gap_question_message_links")
+    op.drop_index("ix_gap_question_links_user_message", table_name="gap_question_message_links")
     op.drop_index("ix_gap_question_links_gap_question", table_name="gap_question_message_links")
     op.drop_index("ix_gap_question_links_session_id", table_name="gap_question_message_links")
     op.drop_index("ix_gap_dismissals_tenant_gap", table_name="gap_dismissals")

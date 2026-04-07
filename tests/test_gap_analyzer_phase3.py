@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.documents import url_service
 from backend.embeddings.service import run_embeddings_background
+from backend.gap_analyzer import jobs as gap_jobs
 from backend.gap_analyzer.enums import GapDismissReason, GapDocTopicStatus, GapSource
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.prompts import ModeATopicCandidate
@@ -329,7 +330,7 @@ def test_run_mode_a_suppresses_dismissed_topics_across_reindex(
     assert active_topics == []
 
 
-def test_run_embeddings_background_triggers_mode_a_after_ready(
+def test_run_embeddings_background_triggers_queue_empty_mode_a_check_after_ready(
     client: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -354,7 +355,7 @@ def test_run_embeddings_background_triggers_mode_a_after_ready(
     trigger = Mock()
     knowledge_extract = Mock()
     monkeypatch.setattr("backend.embeddings.service.create_embeddings_for_document", lambda *args, **kwargs: None)
-    monkeypatch.setattr("backend.embeddings.service.run_mode_a_for_tenant_best_effort", trigger)
+    monkeypatch.setattr("backend.embeddings.service.run_mode_a_for_tenant_when_queue_empty_best_effort", trigger)
     monkeypatch.setattr(
         "backend.tenant_knowledge.extract_tenant_knowledge.run_extract_client_knowledge_for_document",
         knowledge_extract,
@@ -367,7 +368,7 @@ def test_run_embeddings_background_triggers_mode_a_after_ready(
     trigger.assert_called_once_with(client_id)
 
 
-def test_crawl_url_source_triggers_mode_a_after_successful_finalize(
+def test_crawl_url_source_triggers_queue_empty_mode_a_check_after_successful_finalize(
     client: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -410,10 +411,75 @@ def test_crawl_url_source_triggers_mode_a_after_successful_finalize(
             chunks_created=3,
         ),
     )
-    monkeypatch.setattr("backend.documents.url_service.run_mode_a_for_tenant_best_effort", trigger)
+    monkeypatch.setattr("backend.documents.url_service.run_mode_a_for_tenant_when_queue_empty_best_effort", trigger)
     session_factory = sessionmaker(bind=db_session.get_bind(), class_=Session, future=True)
     monkeypatch.setattr(url_service, "SessionLocal", session_factory)
 
     url_service.crawl_url_source(source.id, api_key="sk-test")
+
+    trigger.assert_called_once_with(client_id)
+
+
+def test_mode_a_queue_empty_helper_skips_run_when_documents_or_sources_are_pending(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-a-queue-busy@example.com",
+        name="Gap Mode A Queue Busy Client",
+    )
+    db_session.add_all(
+        [
+            Document(
+                client_id=client_id,
+                filename="pending.md",
+                file_type=DocumentType.markdown,
+                status=DocumentStatus.embedding,
+                parsed_text="pending",
+            ),
+            UrlSource(
+                client_id=client_id,
+                name="Docs",
+                url="https://docs.example.com/start",
+                normalized_domain="docs.example.com",
+                status=SourceStatus.indexing,
+                crawl_schedule=SourceSchedule.manual,
+                metadata_json={},
+            ),
+        ]
+    )
+    db_session.commit()
+
+    trigger = Mock()
+    session_factory = sessionmaker(bind=db_session.get_bind(), class_=Session, future=True)
+    monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", session_factory)
+    monkeypatch.setattr(gap_jobs, "run_mode_a_for_tenant_best_effort", trigger)
+
+    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(client_id)
+
+    trigger.assert_not_called()
+
+
+def test_mode_a_queue_empty_helper_runs_once_when_tenant_queue_is_empty(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-a-queue-empty@example.com",
+        name="Gap Mode A Queue Empty Client",
+    )
+
+    trigger = Mock()
+    session_factory = sessionmaker(bind=db_session.get_bind(), class_=Session, future=True)
+    monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", session_factory)
+    monkeypatch.setattr(gap_jobs, "run_mode_a_for_tenant_best_effort", trigger)
+
+    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(client_id)
 
     trigger.assert_called_once_with(client_id)

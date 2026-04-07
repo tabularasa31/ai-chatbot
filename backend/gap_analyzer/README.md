@@ -61,3 +61,7 @@ This module is intentionally introduced in two thin layers:
 - Successful triggers for Mode A currently fire best-effort after:
   - manual document embedding completion
   - successful URL source indexing completion
+- Trigger execution is coalesced by tenant queue state:
+  - completion paths call a queue-empty gate first
+  - Mode A runs only when the tenant has no `Document` left in `processing` or `embedding`
+  - and no `UrlSource` left in `queued` or `indexing`

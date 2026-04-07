@@ -15,7 +15,7 @@ from backend.documents.parsers import (
     OPENAPI_RESPONSE_DETAIL_MARKER,
     extract_openapi_chunks_from_rendered_text,
 )
-from backend.gap_analyzer.jobs import run_mode_a_for_tenant_best_effort
+from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
 # Optimal chunking parameters per document type.
@@ -359,7 +359,7 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
             )
         if tenant_id is not None:
             try:
-                run_mode_a_for_tenant_best_effort(tenant_id)
+                run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
             except Exception:
                 logger.warning(
                     "Gap Analyzer Mode A trigger failed for document_id=%s tenant_id=%s",

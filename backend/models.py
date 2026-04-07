@@ -112,6 +112,30 @@ class EscalationStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+class GapSource(str, enum.Enum):
+    mode_a = "mode_a"
+    mode_b = "mode_b"
+
+
+class GapClusterStatus(str, enum.Enum):
+    active = "active"
+    dismissed = "dismissed"
+    closed = "closed"
+    inactive = "inactive"
+
+
+class GapDocTopicStatus(str, enum.Enum):
+    active = "active"
+    closed = "closed"
+
+
+class GapDismissReason(str, enum.Enum):
+    feature_request = "feature_request"
+    not_relevant = "not_relevant"
+    already_covered = "already_covered"
+    other = "other"
+
+
 class PiiEventDirection(str, enum.Enum):
     message_storage = "message_storage"
     escalation_ticket = "escalation_ticket"
@@ -743,6 +767,244 @@ class Message(Base):
     )
 
     chat = relationship("Chat", back_populates="messages")
+
+
+class GapCluster(Base):
+    __tablename__ = "gap_clusters"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    label = Column(Text, nullable=True)
+    centroid = Column(Vector(1536), nullable=True)
+    question_count = Column(Integer, nullable=False, default=0, server_default="0")
+    aggregate_signal_weight = Column(
+        Float,
+        nullable=False,
+        default=0.0,
+        server_default="0",
+    )
+    coverage_score = Column(Float, nullable=True)
+    status = Column(
+        Enum(GapClusterStatus, native_enum=False),
+        nullable=False,
+        default=GapClusterStatus.active,
+        server_default=GapClusterStatus.active.value,
+    )
+    linked_doc_topic_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "gap_doc_topics.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_gap_clusters_linked_doc_topic_id",
+        ),
+        nullable=True,
+    )
+    language_coverage = Column(JSON, nullable=True, default=None)
+    is_new = Column(Boolean, nullable=False, default=True, server_default="true")
+    question_count_at_dismissal = Column(Integer, nullable=True)
+    last_computed_at = Column(DateTime, nullable=True)
+    last_question_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class GapDocTopic(Base):
+    __tablename__ = "gap_doc_topics"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    topic_label = Column(Text, nullable=True)
+    topic_embedding = Column(Vector(1536), nullable=True)
+    coverage_score = Column(Float, nullable=True)
+    status = Column(
+        Enum(GapDocTopicStatus, native_enum=False),
+        nullable=False,
+        default=GapDocTopicStatus.active,
+        server_default=GapDocTopicStatus.active.value,
+    )
+    example_questions = Column(ARRAY(Text), nullable=True)
+    extraction_chunk_hash = Column(Text, nullable=True)
+    linked_cluster_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey(
+            "gap_clusters.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_gap_doc_topics_linked_cluster_id",
+        ),
+        nullable=True,
+    )
+    language = Column(String(8), nullable=True)
+    is_new = Column(Boolean, nullable=False, default=True, server_default="true")
+    extracted_at = Column(DateTime, nullable=True)
+
+
+class GapQuestion(Base):
+    __tablename__ = "gap_questions"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    question_text = Column(Text, nullable=False)
+    embedding = Column(Vector(1536), nullable=True)
+    cluster_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gap_clusters.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    gap_signal_weight = Column(
+        Float,
+        nullable=False,
+        default=1.0,
+        server_default="1.0",
+    )
+    answer_confidence = Column(Float, nullable=True)
+    had_fallback = Column(Boolean, nullable=False, default=False, server_default="false")
+    had_escalation = Column(Boolean, nullable=False, default=False, server_default="false")
+    language = Column(String(8), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class GapDismissal(Base):
+    __tablename__ = "gap_dismissals"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source = Column(
+        Enum(GapSource, native_enum=False),
+        nullable=False,
+    )
+    gap_id = Column(PG_UUID(as_uuid=True), nullable=False)
+    topic_label = Column(Text, nullable=True)
+    topic_label_embedding = Column(Vector(1536), nullable=True)
+    reason = Column(
+        Enum(GapDismissReason, native_enum=False),
+        nullable=False,
+    )
+    dismissed_by = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+    dismissed_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class GapQuestionMessageLink(Base):
+    __tablename__ = "gap_question_message_links"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    gap_question_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gap_questions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_message_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    assistant_message_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("messages.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    chat_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("chats.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id = Column(PG_UUID(as_uuid=True), nullable=False)
+    attempt_index = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+Index(
+    "ix_gap_clusters_tenant_status",
+    GapCluster.tenant_id,
+    GapCluster.status,
+)
+Index(
+    "ix_gap_clusters_tenant_signal_weight",
+    GapCluster.tenant_id,
+    GapCluster.aggregate_signal_weight,
+)
+Index(
+    "ix_gap_doc_topics_tenant_status",
+    GapDocTopic.tenant_id,
+    GapDocTopic.status,
+)
+Index(
+    "ix_gap_questions_tenant_cluster",
+    GapQuestion.tenant_id,
+    GapQuestion.cluster_id,
+)
+Index(
+    "ix_gap_questions_tenant_signal_weight",
+    GapQuestion.tenant_id,
+    GapQuestion.gap_signal_weight,
+)
+Index(
+    "ix_gap_dismissals_tenant_gap",
+    GapDismissal.tenant_id,
+    GapDismissal.source,
+    GapDismissal.gap_id,
+)
+Index(
+    "ix_gap_question_links_gap_question",
+    GapQuestionMessageLink.gap_question_id,
+)
+Index(
+    "ix_gap_question_links_user_message",
+    GapQuestionMessageLink.user_message_id,
+)
+Index(
+    "ix_gap_question_links_assistant_message",
+    GapQuestionMessageLink.assistant_message_id,
+    unique=True,
+)
+Index(
+    "ix_gap_question_links_session_id",
+    GapQuestionMessageLink.session_id,
+)
 
 
 class PiiEvent(Base):

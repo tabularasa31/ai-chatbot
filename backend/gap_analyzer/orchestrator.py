@@ -927,17 +927,15 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
 
     for topic in all_topics:
         topic.linked_cluster_id = None
-        db.add(topic)
     for cluster in all_clusters:
         cluster.linked_doc_topic_id = None
-        db.add(cluster)
     db.flush()
 
     topics = [topic for topic in all_topics if topic.topic_label is not None]
     clusters = [
         cluster
         for cluster in all_clusters
-        if cluster.status in {GapClusterStatus.active.value, GapClusterStatus.closed.value, GapClusterStatus.dismissed.value}
+        if cluster.status in {GapClusterStatus.active, GapClusterStatus.closed, GapClusterStatus.dismissed}
     ]
 
     prepared_clusters: list[tuple[list[float], float, GapCluster]] = []
@@ -975,8 +973,6 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
         cluster.linked_doc_topic_id = topic.id
         linked_topic_ids.add(topic.id)
         linked_cluster_ids.add(cluster.id)
-        db.add(topic)
-        db.add(cluster)
     db.flush()
 
 

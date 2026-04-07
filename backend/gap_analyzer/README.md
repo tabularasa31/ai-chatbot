@@ -41,8 +41,6 @@ This module is intentionally introduced in two thin layers:
 
 ## Phase 2 Follow-ups
 
-- Converge duplicated enum/DTO semantics between `backend/gap_analyzer/schemas.py`
-  and `backend/models.py` before the string values drift.
 - Revisit the current scaffold-level IVFFlat index strategy once real data exists;
   tuning or rebuild parameters will likely be needed on Postgres.
 - Reassess the sync `GapAnalyzerRepository` protocol versus the async orchestrator

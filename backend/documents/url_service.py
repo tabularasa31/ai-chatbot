@@ -935,6 +935,38 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
     return vectors
 
 
+def _run_tenant_knowledge_extraction_best_effort(
+    *,
+    document_id: uuid.UUID,
+    db: Session,
+    api_key: str | None,
+) -> None:
+    """
+    Match file-upload embedding flow: after chunks exist, merge profile + FAQ candidates.
+
+    URL crawls bypass ``run_embeddings_background``; without this hook, GitBook/docs
+    URLs index for RAG but never populate ``tenant_faq`` / profile extraction.
+    """
+    if not api_key:
+        return
+    try:
+        from backend.tenant_knowledge.extract_tenant_knowledge import (
+            run_extract_client_knowledge_for_document,
+        )
+
+        run_extract_client_knowledge_for_document(
+            document_id=document_id,
+            db=db,
+            api_key=api_key,
+        )
+    except Exception:
+        logger.warning(
+            "Tenant knowledge extraction failed for URL document_id=%s",
+            document_id,
+            exc_info=True,
+        )
+
+
 def _upsert_page_document(
     *,
     source: UrlSource,
@@ -1001,6 +1033,11 @@ def _upsert_page_document(
         )
     doc.status = DocumentStatus.ready
     db.flush()
+    _run_tenant_knowledge_extraction_best_effort(
+        document_id=doc.id,
+        db=db,
+        api_key=api_key,
+    )
     return doc, len(page.chunks)
 
 
@@ -1089,6 +1126,11 @@ def _upsert_structured_document(
             )
         doc.status = DocumentStatus.ready
         db.flush()
+        _run_tenant_knowledge_extraction_best_effort(
+            document_id=doc.id,
+            db=db,
+            api_key=api_key,
+        )
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})

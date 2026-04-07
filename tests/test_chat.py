@@ -1971,7 +1971,7 @@ def test_debug_with_embeddings_vector_mode(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What is the answer?"},
     )
@@ -2005,7 +2005,7 @@ def test_debug_response_includes_adjudication_fields_and_reliability_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = register_and_verify_user(client, db_session, email="debugadj@example.com")
-    client.post(
+    cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Debug Adjudication Client"},
@@ -2059,7 +2059,7 @@ def test_debug_response_includes_adjudication_fields_and_reliability_payload(
     )
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What changed?"},
     )
@@ -2136,7 +2136,7 @@ def test_debug_with_embeddings_keyword_mode(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "secret number"},
     )
@@ -2163,7 +2163,7 @@ def test_debug_no_embeddings(
     ]
 
     token = register_and_verify_user(client, db_session, email="debugnone@example.com")
-    client.post(
+    cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Debug None Client"},
@@ -2171,7 +2171,7 @@ def test_debug_no_embeddings(
     set_client_openai_key(client, token)
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Anything"},
     )
@@ -2232,7 +2232,7 @@ def test_debug_does_not_persist_chat(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Hello"},
     )
@@ -2248,7 +2248,7 @@ def test_debug_does_not_persist_chat(
 def test_debug_requires_auth(client: TestClient) -> None:
     """Debug endpoint requires JWT."""
     response = client.post(
-        "/chat/debug",
+        "/chat/debug?bot_id=ch_testbot",
         json={"question": "Hello"},
     )
     assert response.status_code == 401
@@ -2257,7 +2257,7 @@ def test_debug_requires_auth(client: TestClient) -> None:
 def test_debug_empty_question(client: TestClient, db_session: Session) -> None:
     """Debug with empty question → 422."""
     token = register_and_verify_user(client, db_session, email="debugempty@example.com")
-    client.post(
+    cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Empty Client"},
@@ -2265,7 +2265,7 @@ def test_debug_empty_question(client: TestClient, db_session: Session) -> None:
     set_client_openai_key(client, token)
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": ""},
     )
@@ -3671,7 +3671,7 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     from backend.search.service import default_retrieval_reliability
 
     token = register_and_verify_user(client, db_session, email="debug-fields@example.com")
-    client.post(
+    cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Debug Fields Client"},
@@ -3733,7 +3733,7 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     )
 
     response = client.post(
-        "/chat/debug",
+        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How does the API work?"},
     )

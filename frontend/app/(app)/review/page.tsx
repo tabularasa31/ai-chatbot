@@ -18,6 +18,7 @@ function truncateSessionId(id: string): string {
 }
 
 export default function ReviewPage() {
+  const [botId, setBotId] = useState("");
   const [items, setItems] = useState<BadAnswerItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -26,8 +27,12 @@ export default function ReviewPage() {
     setError("");
     setLoading(true);
     try {
-      const list = await api.chat.listBadAnswers(50, 0);
+      const [list, currentClient] = await Promise.all([
+        api.chat.listBadAnswers(50, 0),
+        api.clients.getMe(),
+      ]);
       setItems(list);
+      setBotId(currentClient.public_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load bad answers");
     } finally {
@@ -65,7 +70,7 @@ export default function ReviewPage() {
       ) : (
         <div className="space-y-4">
           {items.map((item) => (
-            <BadAnswerCard key={item.message_id} item={item} onUpdate={load} />
+            <BadAnswerCard key={item.message_id} item={item} botId={botId} onUpdate={load} />
           ))}
         </div>
       )}
@@ -81,9 +86,11 @@ type DebugState =
 
 function BadAnswerCard({
   item,
+  botId,
   onUpdate,
 }: {
   item: BadAnswerItem;
+  botId: string;
   onUpdate: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -95,9 +102,16 @@ function BadAnswerCard({
 
   const loadDebug = useCallback(async () => {
     if (!item.question) return;
+    if (!botId) {
+      setDebugState({
+        loading: false,
+        error: "Failed to load bot context for retrieval debug.",
+      });
+      return;
+    }
     setDebugState({ loading: true });
     try {
-      const data = await api.chat.debug(item.question);
+      const data = await api.chat.debug(item.question, botId);
       setDebugState({ loading: false, data });
     } catch (err) {
       setDebugState({
@@ -105,7 +119,7 @@ function BadAnswerCard({
         error: err instanceof Error ? err.message : "Failed to load debug",
       });
     }
-  }, [item.question]);
+  }, [botId, item.question]);
 
   const handleToggleDebug = useCallback(() => {
     if (showDebug) {

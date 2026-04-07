@@ -1,17 +1,66 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { api, type ChatDebugResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
-function DebugPageContent() {
-  const searchParams = useSearchParams();
-  const botId = searchParams.get("bot_id")?.trim() || "";
+function DebugStateMessage({
+  tone,
+  title,
+  description,
+}: {
+  tone: "danger" | "neutral";
+  title: string;
+  description: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-6 ${
+        tone === "danger"
+          ? "border-rose-200 bg-rose-50 text-rose-900"
+          : "border-slate-200 bg-white text-slate-800"
+      }`}
+    >
+      <h1 className="text-xl font-semibold">{title}</h1>
+      <p className="mt-2 text-sm leading-6 opacity-80">{description}</p>
+    </div>
+  );
+}
+
+export default function DebugPage() {
+  const [botId, setBotId] = useState("");
+  const [botLoading, setBotLoading] = useState(true);
+  const [botError, setBotError] = useState("");
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ChatDebugResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadClient() {
+      setBotLoading(true);
+      setBotError("");
+      try {
+        const client = await api.clients.getMe();
+        if (cancelled) return;
+        setBotId(client.public_id);
+      } catch (err) {
+        if (cancelled) return;
+        setBotError(err instanceof Error ? err.message : "Failed to load bot context");
+      } finally {
+        if (!cancelled) {
+          setBotLoading(false);
+        }
+      }
+    }
+
+    loadClient();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleRun() {
     const q = question.trim();
@@ -20,7 +69,7 @@ function DebugPageContent() {
     setResult(null);
     setLoading(true);
     try {
-      const data = await api.chat.debug(q, botId || undefined);
+      const data = await api.chat.debug(q, botId);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Debug failed");
@@ -32,6 +81,26 @@ function DebugPageContent() {
   function truncateId(id: string) {
     if (id.length <= 12) return id;
     return `${id.slice(0, 8)}...${id.slice(-4)}`;
+  }
+
+  if (botLoading) {
+    return (
+      <DebugStateMessage
+        tone="neutral"
+        title="Preparing debug console"
+        description="Loading the current bot context so RAG debug can run without extra parameters."
+      />
+    );
+  }
+
+  if (!botId) {
+    return (
+      <DebugStateMessage
+        tone="danger"
+        title="Debug temporarily unavailable"
+        description={botError || "Couldn't determine the current bot for debug."}
+      />
+    );
   }
 
   return (
@@ -166,13 +235,5 @@ function DebugPageContent() {
         </>
       )}
     </div>
-  );
-}
-
-export default function DebugPage() {
-  return (
-    <Suspense fallback={<div className="text-slate-500 text-sm">Loading debug console...</div>}>
-      <DebugPageContent />
-    </Suspense>
   );
 }

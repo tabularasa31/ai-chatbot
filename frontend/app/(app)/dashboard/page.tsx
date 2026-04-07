@@ -38,19 +38,7 @@ function DashboardContent() {
             router.replace("/login?error=email_not_verified");
             return;
           }
-          // Client doesn't exist yet — create workspace on first login
-          try {
-            client = await api.clients.create("My Workspace");
-          } catch (createErr) {
-            const createMsg = createErr instanceof Error ? createErr.message : "";
-            if (createMsg.toLowerCase().includes("email not verified")) {
-              setRedirecting(true);
-              removeToken();
-              router.replace("/login?error=email_not_verified");
-              return;
-            }
-            throw createErr;
-          }
+          throw err;
         }
 
         setApiKey(client.api_key);

@@ -30,6 +30,8 @@ from backend.models import (
     Embedding,
     GapCluster,
     GapClusterStatus,
+    GapDocTopic,
+    GapDocTopicStatus,
     GapQuestion,
     Message,
     MessageRole,
@@ -194,6 +196,43 @@ def test_run_mode_b_closes_cluster_when_document_coverage_is_high(
     assert cluster.status == GapClusterStatus.closed
     assert cluster.coverage_score is not None
     assert cluster.coverage_score >= 0.70
+
+
+def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-b-link@example.com",
+        name="Gap Mode B Link Client",
+    )
+    topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Invoice exports",
+        topic_embedding=_vector(1.0, 0.0, 0.0),
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How do invoice exports work?",
+        embedding=_vector(0.98, 0.02, 0.0),
+        gap_signal_weight=2.0,
+    )
+    db_session.add_all([topic, question])
+    db_session.commit()
+
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
+    orchestrator.run_mode_b(client_id)
+
+    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).one()
+    db_session.refresh(topic)
+
+    assert cluster.linked_doc_topic_id == topic.id
+    assert topic.linked_cluster_id == cluster.id
 
 
 def test_try_ingest_gap_signal_triggers_mode_b_best_effort(

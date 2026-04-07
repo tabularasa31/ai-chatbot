@@ -16,7 +16,14 @@ from uuid import UUID
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.gap_analyzer.domain import ClusteringPolicy, CoveragePolicy, DocumentScopePolicy, GapLifecyclePolicy, SignalWeightPolicy
+from backend.gap_analyzer.domain import (
+    ClusteringPolicy,
+    CoveragePolicy,
+    DocumentScopePolicy,
+    DraftGenerationPolicy,
+    GapLifecyclePolicy,
+    SignalWeightPolicy,
+)
 from backend.gap_analyzer.enums import GapClusterStatus, GapCommandStatus, GapDismissReason, GapDocTopicStatus, GapRunMode, GapSource
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
@@ -193,6 +200,7 @@ class GapAnalyzerOrchestrator:
             topic_embeddings=topic_embeddings,
             extraction_chunk_hash=extraction_chunk_hash,
         )
+        _sync_mode_links(self._require_sqlalchemy_repository().db, tenant_id=tenant_id)
         return ModeAResult(
             tenant_id=tenant_id,
             status=GapCommandStatus.accepted,
@@ -321,6 +329,7 @@ class GapAnalyzerOrchestrator:
                 last_computed_at=started_at,
             )
 
+        _sync_mode_links(self._require_sqlalchemy_repository().db, tenant_id=tenant_id)
         return ModeBResult(
             tenant_id=tenant_id,
             status=GapCommandStatus.accepted,
@@ -367,12 +376,18 @@ class GapAnalyzerOrchestrator:
         mode_b_sort: ModeBSort = "signal_desc",
     ) -> GapAnalyzerResponse:
         db = self._require_sqlalchemy_repository().db
+        suppressed_active_mode_a_ids = _active_mode_a_ids_suppressed_by_mode_b(
+            db=db,
+            tenant_id=tenant_id,
+            mode_b_status=mode_b_status,
+        )
 
         mode_a_items = _build_mode_a_items(
             db=db,
             tenant_id=tenant_id,
             status_filter=mode_a_status,
             sort=mode_a_sort,
+            suppressed_active_topic_ids=suppressed_active_mode_a_ids,
         )
         mode_b_items = _build_mode_b_items(
             db=db,
@@ -539,10 +554,20 @@ class GapAnalyzerOrchestrator:
         if cluster is None:
             raise ValueError("Gap cluster not found")
         sample_questions = _load_mode_b_question_samples(db, [cluster.id]).get(cluster.id, [])
+        linked_mode_a_questions: list[str] = []
+        if cluster.linked_doc_topic_id is not None and DraftGenerationPolicy().append_mode_a_example_questions:
+            linked_topic = (
+                db.query(GapDocTopic)
+                .filter(GapDocTopic.id == cluster.linked_doc_topic_id, GapDocTopic.tenant_id == tenant_id)
+                .first()
+            )
+            if linked_topic is not None:
+                linked_mode_a_questions = _clean_questions(linked_topic.example_questions)[:_MODE_A_DRAFT_EXAMPLE_LIMIT]
         label = (cluster.label or "Untitled gap").strip()
         markdown = _build_mode_b_draft_markdown(
             label=label,
             sample_questions=sample_questions,
+            linked_mode_a_questions=linked_mode_a_questions,
             coverage_score=cluster.coverage_score,
             signal_weight=cluster.aggregate_signal_weight,
         )
@@ -663,7 +688,9 @@ def _build_mode_a_items(
     tenant_id: UUID,
     status_filter: ModeAStatusFilter,
     sort: ModeASort,
+    suppressed_active_topic_ids: set[UUID] | None = None,
 ) -> list[GapItemResponse]:
+    suppressed_ids = suppressed_active_topic_ids or set()
     dismissed_rows = (
         db.query(GapDismissal)
         .filter(GapDismissal.tenant_id == tenant_id, GapDismissal.source == GapSource.mode_a)
@@ -684,6 +711,8 @@ def _build_mode_a_items(
             if topic.id in dismissed_by_id:
                 continue
             if topic.status != GapDocTopicStatus.active:
+                continue
+            if topic.id in suppressed_ids:
                 continue
             cleaned_questions = _clean_questions(topic.example_questions)
             items.append(
@@ -862,6 +891,83 @@ def _build_gap_summary(
     )
 
 
+def _active_mode_a_ids_suppressed_by_mode_b(
+    *,
+    db: Session,
+    tenant_id: UUID,
+    mode_b_status: ModeBStatusFilter,
+) -> set[UUID]:
+    if mode_b_status not in {"active", "all"}:
+        return set()
+    rows = (
+        db.query(GapCluster.linked_doc_topic_id)
+        .filter(GapCluster.tenant_id == tenant_id)
+        .filter(GapCluster.status == GapClusterStatus.active)
+        .filter(GapCluster.linked_doc_topic_id.isnot(None))
+        .all()
+    )
+    return {linked_topic_id for (linked_topic_id,) in rows if linked_topic_id is not None}
+
+
+def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
+    topics = (
+        db.query(GapDocTopic)
+        .filter(GapDocTopic.tenant_id == tenant_id)
+        .filter(GapDocTopic.topic_label.isnot(None))
+        .all()
+    )
+    clusters = (
+        db.query(GapCluster)
+        .filter(GapCluster.tenant_id == tenant_id)
+        .filter(GapCluster.status.in_([GapClusterStatus.active.value, GapClusterStatus.closed.value, GapClusterStatus.dismissed.value]))
+        .all()
+    )
+
+    for topic in topics:
+        topic.linked_cluster_id = None
+        db.add(topic)
+    for cluster in clusters:
+        cluster.linked_doc_topic_id = None
+        db.add(cluster)
+    db.flush()
+
+    scored_pairs: list[tuple[float, GapDocTopic, GapCluster]] = []
+    link_threshold = ClusteringPolicy().link_threshold
+    for topic in topics:
+        topic_vector = _vector_from_unknown(topic.topic_embedding)
+        topic_norm = _vector_norm(topic_vector)
+        if topic_vector is None:
+            continue
+        for cluster in clusters:
+            cluster_vector = _vector_from_unknown(cluster.centroid)
+            cluster_norm = _vector_norm(cluster_vector)
+            if cluster_vector is None:
+                continue
+            if len(topic_vector) != len(cluster_vector):
+                continue
+            similarity = _cosine_similarity(
+                topic_vector,
+                cluster_vector,
+                first_norm=topic_norm,
+                second_norm=cluster_norm,
+            )
+            if similarity >= link_threshold:
+                scored_pairs.append((similarity, topic, cluster))
+
+    linked_topic_ids: set[UUID] = set()
+    linked_cluster_ids: set[UUID] = set()
+    for _, topic, cluster in sorted(scored_pairs, key=lambda item: item[0], reverse=True):
+        if topic.id in linked_topic_ids or cluster.id in linked_cluster_ids:
+            continue
+        topic.linked_cluster_id = cluster.id
+        cluster.linked_doc_topic_id = topic.id
+        linked_topic_ids.add(topic.id)
+        linked_cluster_ids.add(cluster.id)
+        db.add(topic)
+        db.add(cluster)
+    db.flush()
+
+
 def _impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
     if total_active == 0:
         return "No active gaps detected."
@@ -934,6 +1040,7 @@ def _build_mode_b_draft_markdown(
     *,
     label: str,
     sample_questions: list[str],
+    linked_mode_a_questions: list[str],
     coverage_score: float | None,
     signal_weight: float | None,
 ) -> str:
@@ -947,6 +1054,9 @@ def _build_mode_b_draft_markdown(
     if sample_questions:
         lines.extend(["", "## Sample user questions"])
         lines.extend([f"- {question}" for question in sample_questions])
+    if linked_mode_a_questions:
+        lines.extend(["", "## Also missing in docs"])
+        lines.extend([f"- {question}" for question in linked_mode_a_questions])
     lines.extend(["", "## Draft notes", "- Start from the user pain in the questions above", "- Document the exact workflow or limitation", "- Include prerequisites, examples, and common failure cases"])
     return "\n".join(lines)
 

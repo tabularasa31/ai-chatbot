@@ -121,6 +121,18 @@ This module is intentionally introduced in two thin layers:
   A lighter `GET /gap-analyzer/summary` style endpoint remains a follow-up once dataset size makes
   the extra item payload materially expensive.
 
+## Phase 6 Linking Notes
+
+- Mode A and Mode B links are now synchronized from embedding similarity inside Gap Analyzer itself.
+- Active-list presentation is deduped with Mode B as the primary card when:
+  - Mode A topic is active
+  - linked Mode B cluster is active
+  - and the current response is showing active Mode B items
+- Archive/source-specific behavior remains separate:
+  - dismissed or closed Mode B does not hide an active Mode A topic
+  - dismissed Mode A still appears in dismissed/archive views even when its linked Mode B stays active
+- Linked Mode B drafts append Mode A `example_questions` when present, keeping Mode B as the title/source of truth while preserving the docs-gap context.
+
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.

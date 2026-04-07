@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-06 (question-language localization + localized default greeting)  
+**Last updated:** 2026-04-07 (verification provisioning + bot-scoped debug contract)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -21,7 +21,7 @@ Users sign up with email + password. Passwords are hashed with bcrypt. On login,
 
 ### Email verification
 
-After registration, Brevo sends a verification link. The user must verify before they can use write-only endpoints (e.g. update OpenAI key, change settings). Unverified users see a warning banner in the dashboard.
+After registration, Brevo sends a verification link. The user must verify before they can use write-only endpoints (e.g. update OpenAI key, change settings). Successful `POST /auth/verify-email` now also provisions the user's single client/workspace on the backend, so the authenticated app no longer relies on frontend fallback creation.
 
 ### Forgot password
 
@@ -39,11 +39,11 @@ Users can have `is_admin = true`. Admins see an **Admin** section in the **sideb
 
 ## 2. Tenant (Client) Management
 
-Each registered user has exactly one **Client** record. The client is the unit of isolation — all documents, chats, API keys, and settings belong to a client.
+Each registered user has exactly one **Client** record. The client is the unit of isolation — all documents, chats, API keys, and settings belong to a client. This one-to-one rule is enforced in both application logic and the database schema.
 
 ### API key
 
-Every client gets a random 32-character `api_key` at registration. This key is used for **server-to-server** chat calls (`X-Api-Key` header) and widget authentication. It can be rotated if compromised (delete + recreate client).
+Every client gets a random 32-character `api_key` when the workspace client is provisioned during successful email verification. This key is used for **server-to-server** chat calls (`X-Api-Key` header) and widget authentication. It can be rotated if compromised (delete + recreate client).
 
 ### Public ID
 
@@ -475,7 +475,9 @@ Behavior details:
 |---------|------|----------|
 | Dashboard / API | `X-Api-Key` | `POST /chat` |
 | Widget (public) | `botId` in frontend/UI, legacy `clientId` in embed seam (same `public_id`) | `POST /widget/chat` |
-| Debug tool | JWT | `POST /chat/debug` |
+| Debug tool | JWT + `bot_id` query param (`Client.public_id`) | `POST /chat/debug?bot_id=ch_...` |
+
+The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated client's `public_id`; users are not expected to edit the URL manually. The explicit `bot_id` URL pattern remains part of the eval flow only (`/eval/chat?bot_id=...`).
 
 ### Sessions and history
 

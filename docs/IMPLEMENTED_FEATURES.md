@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-04-06 (question-language responses, localized default greeting, clarification layer)
+**Last updated:** 2026-04-07 (verification provisioning, bot-scoped debug)
 
 ---
 
@@ -11,7 +11,7 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|--------------|
 | Registration, JWT login | Users, JWT sessions; access tokens carry `typ=chat9_user` | `backend/auth/`, `backend/core/security.py`, `backend/core/jwt_kinds.py`, `POST /auth/register`, `POST /auth/login` |
-| Email verification | Brevo email, token | `POST /auth/verify-email`, verify UI |
+| Email verification | Brevo email, token; successful verification provisions the user's workspace client | `POST /auth/verify-email`, verify UI, `backend/clients/service.py` |
 | Forgot password | Email request + token reset (1h TTL), rate limit | `POST /auth/forgot-password`, `POST /auth/reset-password` |
 | Admin flag | `is_admin` for admin metrics | `User.is_admin`, `GET /admin/metrics/*` |
 
@@ -21,7 +21,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| Client per user | API key, `public_id`, data isolation | `backend/models.py` `Client`, `POST /clients`, `GET /clients/me` |
+| Client per user | API key, `public_id`, data isolation; one-to-one user/client invariant enforced in app + DB, normal provisioning happens during `POST /auth/verify-email` | `backend/models.py` `Client`, `backend/clients/service.py`, `POST /clients`, `GET /clients/me` |
 | Per-client OpenAI key | Encrypted in DB, PATCH client | `PATCH /clients/me`, `backend/core/crypto.py` |
 | **FI-DISC v1** | Single tenant-wide response detail level (detailed / standard / corporate), hard limits in prompt | `GET`/`PUT /clients/me/disclosure`, `backend/disclosure_config.py`, `backend/chat/service.py`, UI `/settings/disclosure` |
 | **FI-KYC** | Widget signing secret, rotation | `POST /clients/me/kyc/secret`, `status`, `rotate`; UI `/settings/widget` |
@@ -52,7 +52,7 @@
 | **FI-115 + BM25 symmetry follow-up** | Query-variant retrieval observability plus explicit BM25 expansion policy: default `asymmetric`, opt-in `symmetric_variants`, lexical-safe variant evaluation over the shared candidate pool, deterministic lexical merge before RRF, BM25 variant-eval / merged-hit trace fields, root trace parity for chat and `/search`, variant segmentation tags | `backend/search/service.py`, `backend/search/routes.py`, `backend/chat/service.py`, `backend/core/config.py`, `docs/04-features.md`, `docs/07-observability-rollout.md`, `docs/qa/FI-115-query-variant-cost.md` |
 | RAG pipeline | `run_chat_pipeline` — pure shared function with invariant stage order: injection → embed → FAQ → relevance → retrieve → low-retrieval guard → generate → validate → escalation decision (compute-only). `process_chat_message` wraps it with DB/escalation side effects. `run_debug` calls it directly for zero-persistence debug runs. | `backend/chat/service.py` `run_chat_pipeline`, `process_chat_message`, `POST /chat` (X-API-Key) |
 | Controlled clarification (MVP) | Typed chat outcomes: `answer`, `clarification`, `partial_with_clarification`; deterministic clarification triggers for ambiguous intent / missing critical slot / low retrieval confidence; continuation-vs-new-intent handling via `user_context.clarification_state`; clarification payloads with options/requested fields; widget quick replies; clarification text localized through the shared language helper | `backend/chat/service.py`, `backend/chat/schemas.py`, `backend/routes/widget.py`, `frontend/components/ChatWidget.tsx`, `frontend/lib/api.ts`, `tests/test_chat.py`, `tests/test_widget.py` |
-| **FI-034** | LLM answer validation; `INSUFFICIENT_CONFIDENCE` fallback now localizes to the question language (or locale hint before the first question); debug endpoint exposes `strategy`, `reject_reason`, `is_reject`, `is_faq_direct`, `validation_applied`, `validation_outcome`, `raw_answer`; contradiction observability fields (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`) | `validate_answer()`, `build_reject_response()`, `backend/chat/language.py`, `POST /chat/debug` |
+| **FI-034** | LLM answer validation; `INSUFFICIENT_CONFIDENCE` fallback now localizes to the question language (or locale hint before the first question); debug endpoint is bot-scoped (`POST /chat/debug?bot_id=ch_...`) and exposes `strategy`, `reject_reason`, `is_reject`, `is_faq_direct`, `validation_applied`, `validation_outcome`, `raw_answer`; contradiction observability fields (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`) | `validate_answer()`, `build_reject_response()`, `backend/chat/language.py`, `POST /chat/debug` |
 | Multilingual response localization | Shared localization helper for soft rejects, clarification prompts, escalation fallbacks, and other deterministic assistant text. Priority chain: before the first user question use `locale -> browser_locale -> English`; after that use the language of the question itself. | `backend/chat/language.py`, `backend/chat/service.py`, `backend/guards/reject_response.py`, `backend/escalation/openai_escalation.py` |
 | **FI-043 + privacy hardening** | Regex PII redaction before OpenAI plus encrypted original storage, redacted-safe logs/escalations, tenant privacy settings, `pii_events` audit log, original-content access/delete controls, retention cleanup, Privacy Log UI + CSV export | `backend/chat/pii.py`, `backend/chat/service.py`, `backend/escalation/service.py`, `backend/admin/routes.py`, `frontend/app/(app)/settings/privacy/page.tsx`, `frontend/app/(app)/admin/privacy/page.tsx` |
 | **FI-ESC v1** | L2 escalation: tickets (DB + tenant email), triggers (low similarity, no chunks, human phrase, manual), OpenAI JSON handoff UX, `chat_ended` on `POST /chat` | `backend/escalation/`, `process_chat_message`, `POST /chat/{session_id}/escalate`, JWT `GET/POST /escalations*`, migration `fi_esc_v1` |

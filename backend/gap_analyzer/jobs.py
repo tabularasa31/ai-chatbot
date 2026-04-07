@@ -57,3 +57,20 @@ def run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id: UUID) -> None:
         db.close()
 
     run_mode_a_for_tenant_best_effort(tenant_id)
+
+
+def run_mode_b_for_tenant_best_effort(tenant_id: UUID) -> None:
+    db = core_db.SessionLocal()
+    try:
+        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+        orchestrator.run_mode_b(tenant_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "gap_analyzer_mode_b_best_effort_failed tenant_id=%s",
+            tenant_id,
+            exc_info=True,
+        )
+    finally:
+        db.close()

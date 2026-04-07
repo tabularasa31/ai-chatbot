@@ -1,6 +1,5 @@
 """FastAPI chat endpoints."""
 
-import asyncio
 import uuid
 from collections import defaultdict
 from typing import Annotated, Literal, Optional
@@ -27,8 +26,6 @@ from backend.chat.schemas import (
     MessageFeedbackResponse,
     MessageResponse,
 )
-from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.chat.service import (
@@ -37,6 +34,7 @@ from backend.chat.service import (
     get_session_logs,
     list_chat_sessions,
     process_chat_message,
+    record_gap_feedback_for_message,
     run_debug,
 )
 from backend.clients.service import get_client_by_api_key, get_client_by_user
@@ -485,14 +483,11 @@ def set_message_feedback(
     message.feedback = MessageFeedback(body.feedback.value)
     message.ideal_answer = body.ideal_answer if body.ideal_answer else None
     if body.feedback.value == "down":
-        asyncio.run(
-            GapAnalyzerOrchestrator(
-                repository=SqlAlchemyGapAnalyzerRepository(db)
-            ).record_assistant_feedback(
-                tenant_id=client.id,
-                assistant_message_id=message.id,
-                user_thumbed_down=True,
-            )
+        record_gap_feedback_for_message(
+            db=db,
+            tenant_id=client.id,
+            assistant_message_id=message.id,
+            user_thumbed_down=True,
         )
     db.commit()
     db.refresh(message)

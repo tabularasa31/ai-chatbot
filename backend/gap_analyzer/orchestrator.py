@@ -20,7 +20,7 @@ class GapAnalyzerOrchestrator:
     def __init__(self, repository: GapAnalyzerRepository | None = None) -> None:
         self.repository = repository
 
-    async def ingest_signal(self, signal: GapSignal) -> None:
+    def ingest_signal(self, signal: GapSignal) -> None:
         repository = self._require_repository()
         repository.store_signal(
             signal,
@@ -33,7 +33,7 @@ class GapAnalyzerOrchestrator:
     async def run_mode_b(self, tenant_id: UUID) -> ModeBResult:
         raise NotImplementedError("Mode B pipeline lands in Phase 4")
 
-    async def record_assistant_feedback(
+    def record_assistant_feedback(
         self,
         *,
         tenant_id: UUID,

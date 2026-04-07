@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import uuid
 from unittest.mock import Mock
 
@@ -102,11 +101,7 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
         "user_thumbed_down": False,
     }
     signal_payload.update(signal_kwargs)
-    asyncio.run(
-        orchestrator.ingest_signal(
-            GapSignal(**signal_payload)
-        )
-    )
+    orchestrator.ingest_signal(GapSignal(**signal_payload))
     db_session.commit()
 
     gap_question = db_session.query(GapQuestion).one()

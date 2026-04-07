@@ -7,6 +7,7 @@ and concrete implementations land in later phases.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Protocol
 from uuid import UUID
 
@@ -15,6 +16,8 @@ from sqlalchemy.orm import Session
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.schemas import GapRunMode
 from backend.models import GapQuestion, GapQuestionMessageLink
+
+logger = logging.getLogger(__name__)
 
 
 class GapAnalyzerRepository(Protocol):
@@ -94,7 +97,7 @@ class SqlAlchemyGapAnalyzerRepository:
         assistant_message_id: UUID,
         signal_weight: float,
     ) -> bool:
-        gap_question = (
+        matches = (
             self.db.query(GapQuestion)
             .join(
                 GapQuestionMessageLink,
@@ -104,10 +107,20 @@ class SqlAlchemyGapAnalyzerRepository:
                 GapQuestion.tenant_id == tenant_id,
                 GapQuestionMessageLink.assistant_message_id == assistant_message_id,
             )
-            .first()
+            .order_by(GapQuestion.created_at.desc(), GapQuestion.id.desc())
+            .all()
         )
-        if gap_question is None:
+        if not matches:
             return False
+        if len(matches) > 1:
+            logger.warning(
+                "gap_analyzer_multiple_signal_links_for_assistant_message: tenant_id=%s assistant_message_id=%s matches=%s",
+                tenant_id,
+                assistant_message_id,
+                len(matches),
+            )
+
+        gap_question = matches[0]
 
         gap_question.gap_signal_weight = signal_weight
         self.db.add(gap_question)

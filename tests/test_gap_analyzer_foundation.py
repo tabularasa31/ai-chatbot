@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import importlib.util
 from pathlib import Path
 from unittest.mock import patch
@@ -89,8 +88,9 @@ def test_gap_analyzer_orchestrator_is_command_only_skeleton() -> None:
     )
 
     with pytest.raises(RuntimeError):
-        asyncio.run(orchestrator.ingest_signal(signal))
+        orchestrator.ingest_signal(signal)
     with pytest.raises(NotImplementedError):
+        import asyncio
         asyncio.run(orchestrator.run_mode_a(uuid4()))
     with pytest.raises(NotImplementedError):
         asyncio.run(orchestrator.run_mode_b(uuid4()))

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -1706,34 +1705,55 @@ def _try_ingest_gap_signal(
 ) -> None:
     try:
         orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
-        asyncio.run(
-            orchestrator.ingest_signal(
-                GapSignal(
-                    tenant_id=client_id,
-                    chat_id=chat.id,
-                    session_id=session_id,
-                    user_message_id=user_message.id,
-                    assistant_message_id=assistant_message.id,
-                    question_text=question_text,
-                    answer_confidence=answer_confidence,
-                    was_rejected=was_rejected,
-                    had_fallback=had_fallback,
-                    was_escalated=was_escalated,
-                    user_thumbed_down=False,
-                    language=language,
-                )
+        orchestrator.ingest_signal(
+            GapSignal(
+                tenant_id=client_id,
+                chat_id=chat.id,
+                session_id=session_id,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                question_text=question_text,
+                answer_confidence=answer_confidence,
+                was_rejected=was_rejected,
+                had_fallback=had_fallback,
+                was_escalated=was_escalated,
+                user_thumbed_down=False,
+                language=language,
             )
         )
         db.commit()
-    except Exception:
+    except ValueError:
         db.rollback()
         logger.warning(
-            "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
+            "gap_analyzer_signal_ingestion_contract_failed: client_id=%s session_id=%s assistant_message_id=%s",
             client_id,
             session_id,
             assistant_message.id,
             exc_info=True,
         )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
+            client_id,
+            session_id,
+            assistant_message.id,
+        )
+
+
+def record_gap_feedback_for_message(
+    *,
+    db: Session,
+    tenant_id: uuid.UUID,
+    assistant_message_id: uuid.UUID,
+    user_thumbed_down: bool,
+) -> bool:
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+    return orchestrator.record_assistant_feedback(
+        tenant_id=tenant_id,
+        assistant_message_id=assistant_message_id,
+        user_thumbed_down=user_thumbed_down,
+    )
 
 
 def _trigger_log_analysis_threshold(
@@ -1971,6 +1991,7 @@ def process_chat_message(
             was_rejected=False,
             had_fallback=False,
             was_escalated=False,
+            language=fallback_locale,
         )
         trace.update(
             output={"answer": quick_answer, "source": "quick_answers"},
@@ -2032,6 +2053,7 @@ def process_chat_message(
             was_rejected=True,
             had_fallback=False,
             was_escalated=False,
+            language=fallback_locale,
         )
         trace.update(
             output={"answer": reject_result.text, "source": "guard_reject_injection"},
@@ -2335,6 +2357,7 @@ def process_chat_message(
                 was_rejected=False,
                 had_fallback=False,
                 was_escalated=True,
+                language=fallback_locale,
             )
             trace.update(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
@@ -2408,6 +2431,7 @@ def process_chat_message(
             was_rejected=False,
             had_fallback=result.validation_outcome == "fallback",
             was_escalated=False,
+            language=fallback_locale,
         )
         _trace_event(
             trace,
@@ -2500,6 +2524,7 @@ def process_chat_message(
             was_rejected=result.is_reject,
             had_fallback=result.validation_outcome == "fallback",
             was_escalated=False,
+            language=fallback_locale,
         )
         source_map = {
             "injection": "guard_reject_injection",
@@ -2632,6 +2657,7 @@ def process_chat_message(
         was_rejected=False,
         had_fallback=result.validation_outcome == "fallback",
         was_escalated=bool(escalate),
+        language=fallback_locale,
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.

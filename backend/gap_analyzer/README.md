@@ -133,6 +133,28 @@ This module is intentionally introduced in two thin layers:
   - dismissed Mode A still appears in dismissed/archive views even when its linked Mode B stays active
 - Linked Mode B drafts append Mode A `example_questions` when present, keeping Mode B as the title/source of truth while preserving the docs-gap context.
 
+## Phase 6 Follow-up Plan
+
+- Weekly reclustering and archive UX hardening intentionally ship in a separate follow-up PR after
+  the current Phase 6 linking slice merges.
+- Recommended branch shape:
+  - cut a fresh branch from updated `main`
+  - suggested name: `codex/gap-analyzer-p6b-reclustering-archive`
+- Follow-up scope should include:
+  - weekly full reclustering over recent Mode B question history
+  - safe merge/rebuild of near-duplicate clusters under the existing lifecycle rules
+  - archive/dismissed/closed UX hardening so active-list and archive semantics stay consistent
+  - any supporting API shaping needed for archive views, without reopening the current linking PR
+- Follow-up scope should explicitly avoid mixing in unrelated work such as:
+  - new summary/badge endpoints
+  - durable queue infrastructure for Mode A/Mode B background execution
+  - cross-language grouping changes
+  - broader search/retrieval refactors
+- Acceptance for that follow-up should prove:
+  - reclustering does not regress active-list dedupe or linked draft behavior
+  - archive views preserve source-specific lifecycle truth
+  - closed/dismissed linked pairs behave consistently before and after reclustering
+
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.

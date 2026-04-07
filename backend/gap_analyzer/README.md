@@ -136,12 +136,19 @@ This module is intentionally introduced in two thin layers:
 - Cluster loading for Mode B is not paginated yet.
   Tenants with very large numbers of active/closed clusters will still need batching or a narrower
   candidate-selection strategy in a later phase.
+- The sidebar badge still pays for the full dashboard payload shape.
+  A dedicated lightweight summary endpoint is a Phase 5 follow-up if this becomes a noticeable
+  source of extra DB load or response payload size.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.
 - `UrlSource` states such as `stale`, `paused`, and `error` do not block Mode A execution.
   This is intentional so a problematic source does not prevent gap analysis from running against
   the rest of the tenant corpus.
+- `update_mode_b_question_embedding(...)` now tolerates missing questions with a warning rather than
+  aborting the whole follow-up job.
+  If this path starts triggering in real traffic, it should grow tenant-aware logging and/or a
+  dedicated metric so silent data-shape bugs are easier to spot.
 
 ## Future Cleanup
 

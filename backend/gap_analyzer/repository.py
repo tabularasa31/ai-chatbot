@@ -25,6 +25,7 @@ class StoredGapSignalState:
     gap_question_id: UUID
     answer_confidence: float | None
     had_fallback: bool
+    had_rejected: bool
     had_escalation: bool
 
 
@@ -128,6 +129,8 @@ class SqlAlchemyGapAnalyzerRepository:
             gap_question_id=gap_question.id,
             answer_confidence=gap_question.answer_confidence,
             had_fallback=bool(gap_question.had_fallback),
+            # Phase 2 persists reject/fallback turns in the same underlying bucket.
+            had_rejected=bool(gap_question.had_fallback),
             had_escalation=bool(gap_question.had_escalation),
         )
 

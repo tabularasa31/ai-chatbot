@@ -53,6 +53,8 @@ def test_expects_contact_info_only_for_support_like_docs() -> None:
     assert not _expects_contact_info("product.md", "FAQ: how do I reset my password?")
     assert not _expects_contact_info("api-reference.md", "List users endpoint and response schema.")
     assert not _expects_contact_info("features.md", "This page describes analytics dashboards and filters.")
+    assert not _expects_contact_info("product.md", "This helpful overview covers onboarding and setup.")
+    assert not _expects_contact_info("glossary.md", "The term afaq appears here as sample data only.")
 
 
 def test_get_document_health_404_when_null(client: TestClient, db_session: Session) -> None:

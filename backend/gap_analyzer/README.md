@@ -43,7 +43,46 @@ This module is intentionally introduced in two thin layers:
 
 - Revisit the current scaffold-level IVFFlat index strategy once real data exists;
   tuning or rebuild parameters will likely be needed on Postgres.
-- Reassess the sync `GapAnalyzerRepository` protocol versus the async orchestrator
-  surface when Phase 2 introduces concrete persistence behavior.
 - Keep the current AST boundary tests for foundation, but refine them later if
   `TYPE_CHECKING` or conditional imports make them too noisy.
+
+## Phase 3 Mode A Notes
+
+- Mode A samples the tenant corpus deterministically:
+  - group by `section_title`, then `page_title`, then filename/source fallback
+  - take the longest chunk per group first
+  - backfill by longest remaining chunks up to 40 total
+- The extraction hash is computed from the sorted sampled chunk ids.
+- If the extraction hash is unchanged, Mode A must:
+  - skip the LLM call
+  - skip rewriting `gap_doc_topics`
+  - preserve the previous `extracted_at` freshness state
+- Coverage and dismissal policy remain owned by Gap Analyzer itself.
+- Successful triggers for Mode A currently fire best-effort after:
+  - manual document embedding completion
+  - successful URL source indexing completion
+- Trigger execution is coalesced by tenant queue state:
+  - completion paths call a queue-empty gate first
+  - Mode A runs only when the tenant has no `Document` left in `processing` or `embedding`
+  - and no `UrlSource` left in `queued` or `indexing`
+
+## Residual Trade-Offs
+
+- `embed_texts(...)` still compacts empty strings out of a batch before the OpenAI call.
+  Current Mode A callers pass non-empty labels and coverage queries, so index drift is treated
+  as a low-risk follow-up rather than a Phase 3 blocker.
+- The queue-empty gate is best-effort across short-lived sessions.
+  A new indexing job could start between the queue check and the follow-up Mode A run, so the
+  coalescing behavior is intentionally helpful rather than strictly serialized.
+- `UrlSource` states such as `stale`, `paused`, and `error` do not block Mode A execution.
+  This is intentional so a problematic source does not prevent gap analysis from running against
+  the rest of the tenant corpus.
+
+## Future Cleanup
+
+- `backend/gap_analyzer/prompts.py` still parses raw JSON responses from the LLM manually.
+  If the candidate schema grows, this should move to Pydantic-backed parsing or OpenAI
+  Structured Outputs for stricter validation and less handwritten shape checking.
+- `_vector_from_unknown(...)` in `backend/gap_analyzer/orchestrator.py` is still a permissive
+  normalization helper. Longer term, the repository boundary should preferably return typed
+  vectors directly so Mode A does not need to coerce unknown vector payloads at runtime.

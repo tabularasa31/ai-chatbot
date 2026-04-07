@@ -15,6 +15,7 @@ from backend.documents.parsers import (
     OPENAPI_RESPONSE_DETAIL_MARKER,
     extract_openapi_chunks_from_rendered_text,
 )
+from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
 # Optimal chunking parameters per document type.
@@ -333,6 +334,7 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
     try:
         create_embeddings_for_document(document_id, db, api_key=api_key)
         doc = db.query(Document).filter(Document.id == document_id).first()
+        tenant_id = doc.client_id if doc is not None else None
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
@@ -355,6 +357,16 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
                 document_id,
                 exc_info=True,
             )
+        if tenant_id is not None:
+            try:
+                run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
+            except Exception:
+                logger.warning(
+                    "Gap Analyzer Mode A trigger failed for document_id=%s tenant_id=%s",
+                    document_id,
+                    tenant_id,
+                    exc_info=True,
+                )
     except Exception:
         logger.exception("Background embedding failed for document %s", document_id)
         doc = db.query(Document).filter(Document.id == document_id).first()

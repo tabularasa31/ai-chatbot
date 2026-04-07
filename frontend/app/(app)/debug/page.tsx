@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, type ChatDebugResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
-export default function DebugPage() {
+function DebugPageContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("bot_id")?.trim() || "";
   const [question, setQuestion] = useState("");
@@ -166,5 +166,13 @@ export default function DebugPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function DebugPage() {
+  return (
+    <Suspense fallback={<div className="text-slate-500 text-sm">Loading debug console...</div>}>
+      <DebugPageContent />
+    </Suspense>
   );
 }

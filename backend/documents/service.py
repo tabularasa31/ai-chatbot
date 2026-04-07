@@ -66,11 +66,10 @@ def _truncate_to_approx_tokens(text: str, max_tokens: int = 3000) -> str:
 
 
 def _contains_keyword_phrase(haystacks: list[str], keywords: tuple[str, ...]) -> bool:
-    return any(
-        re.search(rf"\b{re.escape(keyword)}\b", haystack)
-        for haystack in haystacks
-        for keyword in keywords
-    )
+    if not keywords:
+        return False
+    pattern = rf"\b(?:{'|'.join(re.escape(keyword) for keyword in keywords)})\b"
+    return any(re.search(pattern, haystack) for haystack in haystacks)
 
 
 def _expects_contact_info(filename: str | None, excerpt: str) -> bool:

@@ -32,3 +32,14 @@ This module is intentionally introduced in two thin layers:
 
 - Linked active pair uses Mode B label as the primary display and draft label.
 - Mode A `example_questions` are appended to draft context when present.
+
+## Phase 2 Follow-ups
+
+- Converge duplicated enum/DTO semantics between `backend/gap_analyzer/schemas.py`
+  and `backend/models.py` before the string values drift.
+- Revisit the current scaffold-level IVFFlat index strategy once real data exists;
+  tuning or rebuild parameters will likely be needed on Postgres.
+- Reassess the sync `GapAnalyzerRepository` protocol versus the async orchestrator
+  surface when Phase 2 introduces concrete persistence behavior.
+- Keep the current AST boundary tests for foundation, but refine them later if
+  `TYPE_CHECKING` or conditional imports make them too noisy.

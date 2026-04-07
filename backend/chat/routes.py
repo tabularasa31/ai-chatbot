@@ -112,14 +112,8 @@ def _resolve_debug_client(
     *,
     db: Session,
     current_user: User,
-    bot_id: Optional[str],
+    bot_id: str,
 ) -> Client:
-    if not bot_id:
-        client = get_client_by_user(current_user.id, db)
-        if not client:
-            raise HTTPException(status_code=404, detail="Client not found")
-        return client
-
     client = (
         db.query(Client)
         .filter(Client.public_id == bot_id, Client.user_id == current_user.id)
@@ -203,7 +197,7 @@ def chat_debug(
     body: DebugRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Annotated[Optional[str], Query()] = None,
+    bot_id: Annotated[str, Query(min_length=1)],
 ) -> ChatDebugResponse:
     """
     Debug endpoint: run RAG pipeline without persisting to DB.

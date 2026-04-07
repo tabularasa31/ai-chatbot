@@ -95,9 +95,20 @@ function BadAnswerCard({
 
   const loadDebug = useCallback(async () => {
     if (!item.question) return;
+    const botId =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("bot_id")?.trim() || ""
+        : "";
+    if (!botId) {
+      setDebugState({
+        loading: false,
+        error: "Open this page with ?bot_id=ch_... to run retrieval debug.",
+      });
+      return;
+    }
     setDebugState({ loading: true });
     try {
-      const data = await api.chat.debug(item.question);
+      const data = await api.chat.debug(item.question, botId);
       setDebugState({ loading: false, data });
     } catch (err) {
       setDebugState({

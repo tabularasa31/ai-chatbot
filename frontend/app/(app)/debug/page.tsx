@@ -5,6 +5,29 @@ import { useSearchParams } from "next/navigation";
 import { api, type ChatDebugResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
+function DebugStateMessage({
+  tone,
+  title,
+  description,
+}: {
+  tone: "danger" | "neutral";
+  title: string;
+  description: string;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-6 ${
+        tone === "danger"
+          ? "border-rose-200 bg-rose-50 text-rose-900"
+          : "border-slate-200 bg-white text-slate-800"
+      }`}
+    >
+      <h1 className="text-xl font-semibold">{title}</h1>
+      <p className="mt-2 text-sm leading-6 text-inherit/80">{description}</p>
+    </div>
+  );
+}
+
 function DebugPageContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("bot_id")?.trim() || "";
@@ -20,7 +43,7 @@ function DebugPageContent() {
     setResult(null);
     setLoading(true);
     try {
-      const data = await api.chat.debug(q, botId || undefined);
+      const data = await api.chat.debug(q, botId);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Debug failed");
@@ -32,6 +55,16 @@ function DebugPageContent() {
   function truncateId(id: string) {
     if (id.length <= 12) return id;
     return `${id.slice(0, 8)}...${id.slice(-4)}`;
+  }
+
+  if (!botId) {
+    return (
+      <DebugStateMessage
+        tone="danger"
+        title="Нужен bot_id в URL"
+        description="Откройте страницу в формате /debug?bot_id=ch_... , чтобы запускать RAG debug для конкретного бота."
+      />
+    );
   }
 
   return (

@@ -832,10 +832,8 @@ export const api = {
         }>;
       };
     },
-    async debug(question: string, botId?: string): Promise<ChatDebugResponse> {
-      const q = botId?.trim()
-        ? `?bot_id=${encodeURIComponent(botId.trim())}`
-        : "";
+    async debug(question: string, botId: string): Promise<ChatDebugResponse> {
+      const q = `?bot_id=${encodeURIComponent(botId.trim())}`;
       const res = await authFetch(`${BASE_URL}/chat/debug${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

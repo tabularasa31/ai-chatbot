@@ -126,6 +126,11 @@ function GapCard({
                 new
               </span>
             )}
+            {item.also_missing_in_docs && (
+              <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
+                also missing in docs
+              </span>
+            )}
             <span className="text-xs uppercase tracking-wide text-slate-400">{item.source === "mode_a" ? "Mode A" : "Mode B"}</span>
           </div>
           <div>

@@ -26,6 +26,12 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import declarative_base, relationship
 
+from backend.gap_analyzer.enums import (
+    GapClusterStatus,
+    GapDismissReason,
+    GapDocTopicStatus,
+    GapSource,
+)
 from backend.core.utils import generate_public_id
 
 Base = declarative_base()
@@ -110,14 +116,6 @@ class EscalationStatus(str, enum.Enum):
     open = "open"
     in_progress = "in_progress"
     resolved = "resolved"
-
-
-from backend.gap_analyzer.enums import (
-    GapClusterStatus,
-    GapDismissReason,
-    GapDocTopicStatus,
-    GapSource,
-)
 
 
 class PiiEventDirection(str, enum.Enum):

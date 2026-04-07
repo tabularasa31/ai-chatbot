@@ -176,7 +176,8 @@ This module is intentionally introduced in two thin layers:
 - `_sync_mode_links(...)` still does a full topic × eligible-cluster similarity pass after each
   Mode A or Mode B run.
   That is acceptable for the current Phase 6 slice, but larger tenants will likely need a narrower
-  candidate-selection strategy, cached embeddings, or batched relinking in the follow-up job work.
+  candidate-selection strategy, cached embeddings, batched relinking, or a pgvector-backed nearest-
+  neighbor path in the follow-up job work.
 - The sidebar badge still pays for the full dashboard payload shape.
   A dedicated lightweight summary endpoint is a Phase 5 follow-up if this becomes a noticeable
   source of extra DB load or response payload size.

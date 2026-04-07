@@ -10,11 +10,20 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from backend.gap_analyzer.enums import GapDocTopicStatus, GapSource
+from backend.gap_analyzer.enums import GapClusterStatus, GapDocTopicStatus, GapSource
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate
 from backend.gap_analyzer.schemas import GapRunMode
-from backend.models import Client, Document, Embedding, GapDismissal, GapDocTopic, GapQuestion, GapQuestionMessageLink
+from backend.models import (
+    Client,
+    Document,
+    Embedding,
+    GapCluster,
+    GapDismissal,
+    GapDocTopic,
+    GapQuestion,
+    GapQuestionMessageLink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +56,36 @@ class ModeADismissalRecord:
     topic_label_embedding: object
 
 
+@dataclass(frozen=True)
+class ModeBQuestionRecord:
+    question_id: UUID
+    question_text: str
+    embedding: object
+    gap_signal_weight: float
+    language: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class ModeBClusterRecord:
+    cluster_id: UUID
+    label: str | None
+    centroid: object
+    question_count: int
+    aggregate_signal_weight: float
+    coverage_score: float | None
+    status: str
+    last_question_at: datetime | None
+
+
+@dataclass(frozen=True)
+class _RepositoryCapabilities:
+    enum_values_as_strings: bool
+    supports_array_values: bool
+
+
 class GapAnalyzerRepository(Protocol):
-    """Phase 1 command-side persistence boundary."""
+    """Command-side persistence boundary for Gap Analyzer."""
 
     def store_signal(self, signal: GapSignal, *, signal_weight: float) -> None:
         ...
@@ -97,6 +134,64 @@ class GapAnalyzerRepository(Protocol):
     ) -> None:
         ...
 
+    def list_unclustered_mode_b_questions(self, tenant_id: UUID) -> list[ModeBQuestionRecord]:
+        ...
+
+    def list_mode_b_clusters(self, tenant_id: UUID) -> list[ModeBClusterRecord]:
+        ...
+
+    def update_mode_b_question_embedding(
+        self,
+        *,
+        question_id: UUID,
+        embedding: list[float],
+    ) -> None:
+        ...
+
+    def bulk_update_mode_b_question_embeddings(
+        self,
+        *,
+        embeddings_by_question_id: dict[UUID, list[float]],
+    ) -> None:
+        ...
+
+    def create_mode_b_cluster(
+        self,
+        *,
+        tenant_id: UUID,
+        label: str,
+        centroid: list[float],
+        question_count: int,
+        aggregate_signal_weight: float,
+        coverage_score: float,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
+    ) -> UUID:
+        ...
+
+    def assign_question_to_cluster(
+        self,
+        *,
+        question_id: UUID,
+        cluster_id: UUID,
+    ) -> None:
+        ...
+
+    def update_mode_b_cluster(
+        self,
+        *,
+        cluster_id: UUID,
+        centroid: list[float],
+        question_count: int,
+        aggregate_signal_weight: float,
+        coverage_score: float,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
+    ) -> None:
+        ...
+
     def enqueue_recalculation(self, tenant_id: UUID, mode: GapRunMode) -> None:
         ...
 
@@ -106,6 +201,10 @@ class SqlAlchemyGapAnalyzerRepository:
     """Command-side persistence implementation for Gap Analyzer."""
 
     db: Session
+
+    @property
+    def _capabilities(self) -> _RepositoryCapabilities:
+        return _repository_capabilities(self.db)
 
     def store_signal(self, signal: GapSignal, *, signal_weight: float) -> None:
         if signal.chat_id is None or signal.session_id is None:
@@ -271,7 +370,7 @@ class SqlAlchemyGapAnalyzerRepository:
         extraction_chunk_hash: str,
     ) -> None:
         extracted_at = datetime.now(timezone.utc)
-        is_sqlite = self.db.bind is not None and self.db.bind.dialect.name == "sqlite"
+        capabilities = self._capabilities
         self.db.query(GapDocTopic).filter(GapDocTopic.tenant_id == tenant_id).delete()
         if not candidates:
             self.db.add(
@@ -279,7 +378,7 @@ class SqlAlchemyGapAnalyzerRepository:
                     tenant_id=tenant_id,
                     topic_label=None,
                     coverage_score=None,
-                    status=GapDocTopicStatus.closed.value if is_sqlite else GapDocTopicStatus.closed,
+                    status=_enum_value(GapDocTopicStatus.closed, capabilities=capabilities),
                     example_questions=None,
                     extraction_chunk_hash=extraction_chunk_hash,
                     is_new=False,
@@ -290,22 +389,172 @@ class SqlAlchemyGapAnalyzerRepository:
             return
 
         for candidate in candidates:
-            example_questions: object = candidate.example_questions
-            if is_sqlite:
-                example_questions = None
+            example_questions: object = _example_questions_value(
+                candidate.example_questions,
+                capabilities=capabilities,
+            )
             self.db.add(
                 GapDocTopic(
                     tenant_id=tenant_id,
                     topic_label=candidate.topic_label,
                     topic_embedding=topic_embeddings.get(candidate.topic_label),
                     coverage_score=coverage_scores.get(candidate.topic_label),
-                    status=GapDocTopicStatus.active.value if is_sqlite else GapDocTopicStatus.active,
+                    status=_enum_value(GapDocTopicStatus.active, capabilities=capabilities),
                     example_questions=example_questions,
                     extraction_chunk_hash=extraction_chunk_hash,
                     is_new=True,
                     extracted_at=extracted_at,
                 )
             )
+        self.db.flush()
+
+    def list_unclustered_mode_b_questions(self, tenant_id: UUID) -> list[ModeBQuestionRecord]:
+        rows = (
+            self.db.query(GapQuestion)
+            .filter(GapQuestion.tenant_id == tenant_id)
+            .filter(GapQuestion.cluster_id.is_(None))
+            .order_by(GapQuestion.created_at.asc(), GapQuestion.id.asc())
+            .all()
+        )
+        return [
+            ModeBQuestionRecord(
+                question_id=row.id,
+                question_text=row.question_text,
+                embedding=row.embedding,
+                gap_signal_weight=float(row.gap_signal_weight or 0.0),
+                language=row.language,
+                created_at=_aware_datetime(row.created_at),
+            )
+            for row in rows
+        ]
+
+    def list_mode_b_clusters(self, tenant_id: UUID) -> list[ModeBClusterRecord]:
+        rows = (
+            self.db.query(GapCluster)
+            .filter(GapCluster.tenant_id == tenant_id)
+            .filter(
+                GapCluster.status.in_(
+                    [
+                        GapClusterStatus.active.value,
+                        GapClusterStatus.closed.value,
+                    ]
+                )
+            )
+            .order_by(GapCluster.created_at.asc(), GapCluster.id.asc())
+            .all()
+        )
+        return [
+            ModeBClusterRecord(
+                cluster_id=row.id,
+                label=row.label,
+                centroid=row.centroid,
+                question_count=int(row.question_count or 0),
+                aggregate_signal_weight=float(row.aggregate_signal_weight or 0.0),
+                coverage_score=float(row.coverage_score) if row.coverage_score is not None else None,
+                status=row.status.value if hasattr(row.status, "value") else str(row.status),
+                last_question_at=_aware_datetime(row.last_question_at) if row.last_question_at else None,
+            )
+            for row in rows
+        ]
+
+    def update_mode_b_question_embedding(
+        self,
+        *,
+        question_id: UUID,
+        embedding: list[float],
+    ) -> None:
+        question = self.db.get(GapQuestion, question_id)
+        if question is None:
+            raise ValueError(f"GapQuestion not found for id={question_id}")
+        question.embedding = embedding
+        self.db.add(question)
+        self.db.flush()
+
+    def bulk_update_mode_b_question_embeddings(
+        self,
+        *,
+        embeddings_by_question_id: dict[UUID, list[float]],
+    ) -> None:
+        if not embeddings_by_question_id:
+            return
+        self.db.bulk_update_mappings(
+            GapQuestion,
+            [
+                {"id": question_id, "embedding": embedding}
+                for question_id, embedding in embeddings_by_question_id.items()
+            ],
+        )
+        self.db.flush()
+
+    def create_mode_b_cluster(
+        self,
+        *,
+        tenant_id: UUID,
+        label: str,
+        centroid: list[float],
+        question_count: int,
+        aggregate_signal_weight: float,
+        coverage_score: float,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
+    ) -> UUID:
+        capabilities = self._capabilities
+        cluster = GapCluster(
+            tenant_id=tenant_id,
+            label=label,
+            centroid=centroid,
+            question_count=question_count,
+            aggregate_signal_weight=aggregate_signal_weight,
+            coverage_score=coverage_score,
+            status=_enum_value(status, capabilities=capabilities),
+            is_new=True,
+            last_question_at=last_question_at,
+            last_computed_at=last_computed_at,
+        )
+        self.db.add(cluster)
+        self.db.flush()
+        return cluster.id
+
+    def assign_question_to_cluster(
+        self,
+        *,
+        question_id: UUID,
+        cluster_id: UUID,
+    ) -> None:
+        updated_rows = (
+            self.db.query(GapQuestion)
+            .filter(GapQuestion.id == question_id)
+            .update({GapQuestion.cluster_id: cluster_id}, synchronize_session=False)
+        )
+        if updated_rows == 0:
+            raise ValueError(f"GapQuestion not found for id={question_id}")
+        self.db.flush()
+
+    def update_mode_b_cluster(
+        self,
+        *,
+        cluster_id: UUID,
+        centroid: list[float],
+        question_count: int,
+        aggregate_signal_weight: float,
+        coverage_score: float,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
+    ) -> None:
+        capabilities = self._capabilities
+        cluster = self.db.get(GapCluster, cluster_id)
+        if cluster is None:
+            raise ValueError(f"GapCluster not found for id={cluster_id}")
+        cluster.centroid = centroid
+        cluster.question_count = question_count
+        cluster.aggregate_signal_weight = aggregate_signal_weight
+        cluster.coverage_score = coverage_score
+        cluster.status = _enum_value(status, capabilities=capabilities)
+        cluster.last_question_at = last_question_at
+        cluster.last_computed_at = last_computed_at
+        self.db.add(cluster)
         self.db.flush()
 
     def enqueue_recalculation(self, tenant_id: UUID, mode: GapRunMode) -> None:
@@ -315,4 +564,34 @@ class SqlAlchemyGapAnalyzerRepository:
 def _string_or_none(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
+    return None
+
+
+def _aware_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _repository_capabilities(db: Session) -> _RepositoryCapabilities:
+    dialect_name = db.bind.dialect.name if db.bind is not None else ""
+    return _RepositoryCapabilities(
+        enum_values_as_strings=dialect_name == "sqlite",
+        supports_array_values=dialect_name != "sqlite",
+    )
+
+
+def _enum_value(value: GapClusterStatus | GapDocTopicStatus, *, capabilities: _RepositoryCapabilities) -> str | GapClusterStatus | GapDocTopicStatus:
+    if capabilities.enum_values_as_strings:
+        return value.value
+    return value
+
+
+def _example_questions_value(
+    value: list[str],
+    *,
+    capabilities: _RepositoryCapabilities,
+) -> object:
+    if capabilities.supports_array_values:
+        return value
     return None

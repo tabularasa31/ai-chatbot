@@ -66,11 +66,50 @@ This module is intentionally introduced in two thin layers:
   - Mode A runs only when the tenant has no `Document` left in `processing` or `embedding`
   - and no `UrlSource` left in `queued` or `indexing`
 
+## Phase 4 Mode B Notes
+
+- Mode B is intentionally MVP-scoped in this phase:
+  - ingest unclustered `gap_questions`
+  - incrementally create or join clusters
+  - update centroid, `question_count`, and `aggregate_signal_weight`
+  - compute coverage against the non-swagger tenant corpus
+  - transition only between basic `active` and `closed` states based on coverage
+- Mode B runs best-effort after successful signal ingestion.
+- In Phase 4 MVP the chat-side ingestion path only spawns an in-process background thread.
+  That removes the direct latency hit from the request path, but it is still not a durable queue
+  and can still compete for process resources until it moves behind a proper worker model.
+- Phase 4 also uses an in-process tenant guard so one worker process does not start multiple
+  concurrent Mode B follow-ups for the same tenant at once.
+  This reduces duplicate cluster creation inside a single process, but it is not a cross-process
+  lock and does not replace a durable queue or a database-level coordination primitive.
+- Mode B cluster loading is currently narrowed to `active` and `closed` clusters only.
+  That trims obvious non-active history from the in-memory matching set, but it is still not a
+  paginated or batched loading strategy.
+- Each Phase 4 trigger currently processes all tenant questions with `cluster_id IS NULL`.
+  That is acceptable for the MVP, but large backlogs will need batching and/or queued workers.
+- Phase 4 explicitly does not add:
+  - Mode A ↔ Mode B linking
+  - weekly/full reclustering
+  - archive or inactive automation
+  - trending logic
+  - cross-language grouping or label regeneration policies beyond the minimal cluster label
+  - durable background execution, retries, or cross-process locking for Mode B follow-ups
+
 ## Residual Trade-Offs
 
-- `embed_texts(...)` still compacts empty strings out of a batch before the OpenAI call.
-  Current Mode A callers pass non-empty labels and coverage queries, so index drift is treated
-  as a low-risk follow-up rather than a Phase 3 blocker.
+- Mode B now filters blank question texts before batch embedding so vector writes stay aligned.
+  Fully blank questions remain unembedded and unclustered until later sanitation or admin cleanup.
+- Phase 4 no longer blocks the chat response thread on Mode B work, but follow-ups still run via
+  in-process `threading.Thread(...)`.
+  This is an MVP compromise for latency, not a production-grade queueing model.
+- The same-tenant follow-up guard is process-local only.
+  Multiple app workers can still start concurrent Mode B runs for the same tenant until a durable
+  worker queue or database-level coordination primitive is introduced.
+- There is still no durable retry path for failed Mode B follow-ups.
+  A transient crash or worker restart can drop an in-flight follow-up until the next signal arrives.
+- Cluster loading for Mode B is not paginated yet.
+  Tenants with very large numbers of active/closed clusters will still need batching or a narrower
+  candidate-selection strategy in a later phase.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.

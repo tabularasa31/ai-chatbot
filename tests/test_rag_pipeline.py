@@ -143,6 +143,10 @@ def test_embedding_once(
             decision_reason="test",
         ),
     )
+    monkeypatch.setattr(
+        "backend.chat.service._start_mode_b_followup",
+        lambda _tenant_id: None,
+    )
 
     _ = process_chat_message(
         cl_row.id,

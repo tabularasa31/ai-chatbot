@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -67,6 +68,7 @@ from backend.search.service import (
 )
 from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
 from backend.gap_analyzer.events import GapSignal
+from backend.gap_analyzer.jobs import run_mode_b_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.guards.injection_detector import detect_injection
@@ -77,6 +79,9 @@ from backend.guards.reject_response import (
 )
 
 logger = logging.getLogger(__name__)
+
+_mode_b_followup_guard = threading.Lock()
+_mode_b_followups_inflight: set[uuid.UUID] = set()
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 CLARIFICATION_STATE_KEY = "clarification_state"
@@ -1725,6 +1730,7 @@ def _try_ingest_gap_signal(
             )
         )
         ingestion_db.commit()
+        _start_mode_b_followup(client_id)
     except ValueError:
         ingestion_db.rollback()
         logger.warning(
@@ -1744,6 +1750,26 @@ def _try_ingest_gap_signal(
         )
     finally:
         ingestion_db.close()
+
+
+def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
+    with _mode_b_followup_guard:
+        if tenant_id in _mode_b_followups_inflight:
+            logger.info("gap_analyzer_mode_b_followup_already_running tenant_id=%s", tenant_id)
+            return
+        _mode_b_followups_inflight.add(tenant_id)
+
+    def _runner() -> None:
+        try:
+            run_mode_b_for_tenant_best_effort(tenant_id)
+        finally:
+            with _mode_b_followup_guard:
+                _mode_b_followups_inflight.discard(tenant_id)
+
+    threading.Thread(
+        target=_runner,
+        daemon=True,
+    ).start()
 
 
 def record_gap_feedback_for_message(

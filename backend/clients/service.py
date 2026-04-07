@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
@@ -47,13 +48,21 @@ def create_client(user_id: uuid.UUID, name: str, db: Session) -> Client:
         api_key=api_key,
     )
     db.add(client)
-    db.commit()
-    db.refresh(client)
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if user:
-        user.client_id = client.id
+    try:
+        db.flush()
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.client_id = client.id
         db.commit()
+        db.refresh(client)
+    except IntegrityError as exc:
+        db.rollback()
+        if get_client_by_user(user_id, db):
+            raise HTTPException(
+                status_code=409,
+                detail="Client already exists for this user",
+            ) from exc
+        raise
 
     return client
 
@@ -66,12 +75,16 @@ def ensure_client_for_user(
     """Return the user's client, creating it if needed."""
     client = get_client_by_user(user_id, db)
     if client:
-        user = db.query(User).filter(User.id == user_id).first()
-        if user and user.client_id != client.id:
-            user.client_id = client.id
-            db.commit()
         return client
-    return create_client(user_id, name, db)
+    try:
+        return create_client(user_id, name, db)
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise
+        client = get_client_by_user(user_id, db)
+        if client:
+            return client
+        raise
 
 
 def get_client_by_user(user_id: uuid.UUID, db: Session) -> Client | None:

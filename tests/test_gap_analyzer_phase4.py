@@ -14,6 +14,7 @@ from backend.gap_analyzer.orchestrator import (
     GapAnalyzerOrchestrator,
     _ModeBClusterUpdateRejected,
     _prepare_mode_b_clusters,
+    _sync_mode_links,
     _tokenize,
     _update_mode_b_cluster,
 )
@@ -30,6 +31,8 @@ from backend.models import (
     Embedding,
     GapCluster,
     GapClusterStatus,
+    GapDocTopic,
+    GapDocTopicStatus,
     GapQuestion,
     Message,
     MessageRole,
@@ -194,6 +197,153 @@ def test_run_mode_b_closes_cluster_when_document_coverage_is_high(
     assert cluster.status == GapClusterStatus.closed
     assert cluster.coverage_score is not None
     assert cluster.coverage_score >= 0.70
+
+
+def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-b-link@example.com",
+        name="Gap Mode B Link Client",
+    )
+    topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Invoice exports",
+        topic_embedding=_vector(1.0, 0.0, 0.0),
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How do invoice exports work?",
+        embedding=_vector(0.98, 0.02, 0.0),
+        gap_signal_weight=2.0,
+    )
+    db_session.add_all([topic, question])
+    db_session.commit()
+
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
+    orchestrator.run_mode_b(client_id)
+
+    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).one()
+    db_session.refresh(topic)
+
+    assert cluster.linked_doc_topic_id == topic.id
+    assert topic.linked_cluster_id == cluster.id
+
+
+def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-b-inactive-link@example.com",
+        name="Gap Mode B Inactive Link Client",
+    )
+    stale_topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Legacy imports",
+        topic_embedding=_vector(0.0, 1.0, 0.0),
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    fresh_topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Invoice exports",
+        topic_embedding=_vector(0.98, 0.02, 0.0),
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    inactive_cluster = GapCluster(
+        tenant_id=client_id,
+        label="Legacy imports",
+        centroid=_vector(0.0, 1.0, 0.0),
+        question_count=2,
+        aggregate_signal_weight=1.0,
+        coverage_score=0.9,
+        status=GapClusterStatus.inactive,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    active_cluster = GapCluster(
+        tenant_id=client_id,
+        label="Invoice exports",
+        centroid=_vector(0.99, 0.01, 0.0),
+        question_count=3,
+        aggregate_signal_weight=2.0,
+        coverage_score=0.2,
+        status=GapClusterStatus.active,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([stale_topic, fresh_topic, inactive_cluster, active_cluster])
+    db_session.commit()
+
+    stale_topic.linked_cluster_id = inactive_cluster.id
+    inactive_cluster.linked_doc_topic_id = stale_topic.id
+    db_session.add_all([stale_topic, inactive_cluster])
+    db_session.commit()
+
+    _sync_mode_links(db_session, tenant_id=client_id)
+    db_session.refresh(stale_topic)
+    db_session.refresh(fresh_topic)
+    db_session.refresh(inactive_cluster)
+    db_session.refresh(active_cluster)
+
+    assert stale_topic.linked_cluster_id is None
+    assert inactive_cluster.linked_doc_topic_id is None
+    assert fresh_topic.linked_cluster_id == active_cluster.id
+    assert active_cluster.linked_doc_topic_id == fresh_topic.id
+
+
+def test_sync_mode_links_clears_stale_links_for_unlabeled_topics(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-a-unlabeled-link@example.com",
+        name="Gap Mode A Unlabeled Link Client",
+    )
+    unlabeled_topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label=None,
+        topic_embedding=_vector(1.0, 0.0, 0.0),
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="Legacy unlabeled docs gap",
+        centroid=_vector(1.0, 0.0, 0.0),
+        question_count=1,
+        aggregate_signal_weight=1.0,
+        coverage_score=0.3,
+        status=GapClusterStatus.active,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([unlabeled_topic, cluster])
+    db_session.commit()
+
+    unlabeled_topic.linked_cluster_id = cluster.id
+    cluster.linked_doc_topic_id = unlabeled_topic.id
+    db_session.add_all([unlabeled_topic, cluster])
+    db_session.commit()
+
+    _sync_mode_links(db_session, tenant_id=client_id)
+    db_session.refresh(unlabeled_topic)
+    db_session.refresh(cluster)
+
+    assert unlabeled_topic.linked_cluster_id is None
+    assert cluster.linked_doc_topic_id is None
 
 
 def test_try_ingest_gap_signal_triggers_mode_b_best_effort(

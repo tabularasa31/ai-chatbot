@@ -125,6 +125,98 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     ]
 
 
+def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase6-linked-active@example.com",
+        name="Gap Phase 6 Linked Active Client",
+    )
+    topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Billing exports",
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="How do invoice exports work?",
+        question_count=1,
+        aggregate_signal_weight=4.0,
+        coverage_score=0.25,
+        status=GapClusterStatus.active,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([topic, cluster])
+    db_session.flush()
+    topic.linked_cluster_id = cluster.id
+    cluster.linked_doc_topic_id = topic.id
+    db_session.add_all([topic, cluster])
+    db_session.commit()
+
+    response = client.get(
+        "/gap-analyzer",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["mode_a_items"] == []
+    assert len(data["mode_b_items"]) == 1
+    assert data["mode_b_items"][0]["linked_source"] == "mode_a"
+    assert data["mode_b_items"][0]["also_missing_in_docs"] is True
+
+
+def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase6-linked-dismissed@example.com",
+        name="Gap Phase 6 Linked Dismissed Client",
+    )
+    topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Billing exports",
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="How do invoice exports work?",
+        question_count=1,
+        aggregate_signal_weight=4.0,
+        coverage_score=0.25,
+        status=GapClusterStatus.dismissed,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([topic, cluster])
+    db_session.flush()
+    topic.linked_cluster_id = cluster.id
+    cluster.linked_doc_topic_id = topic.id
+    db_session.add_all([topic, cluster])
+    db_session.commit()
+
+    response = client.get(
+        "/gap-analyzer?mode_b_status=dismissed",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["mode_a_items"]) == 1
+    assert data["mode_a_items"][0]["label"] == "Billing exports"
+    assert len(data["mode_b_items"]) == 1
+    assert data["mode_b_items"][0]["status"] == "dismissed"
+
+
 def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
     client: TestClient,
     db_session: Session,
@@ -268,6 +360,40 @@ def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
     assert second.json()["status"] == "dismissed"
 
 
+def test_gap_analyzer_returns_not_found_for_missing_mode_b_cluster_actions(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, _client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-missing-cluster@example.com",
+        name="Gap Phase 5 Missing Cluster Client",
+    )
+    missing_cluster_id = uuid.uuid4()
+
+    dismiss_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+    reactivate_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/reactivate",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    draft_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert dismiss_response.status_code == 404, dismiss_response.text
+    assert dismiss_response.json()["detail"] == "Gap cluster not found"
+    assert reactivate_response.status_code == 404, reactivate_response.text
+    assert reactivate_response.json()["detail"] == "Gap cluster not found"
+    assert draft_response.status_code == 404, draft_response.text
+    assert draft_response.json()["detail"] == "Gap cluster not found"
+
+
 def test_gap_analyzer_filters_and_sorts_mode_b_items(
     client: TestClient,
     db_session: Session,
@@ -384,6 +510,72 @@ def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     assert data["title"] == "Invoice exports for finance"
     assert "# Invoice exports for finance" in data["markdown"]
     assert "How do invoice exports work for finance?" in data["markdown"]
+
+
+def test_gap_analyzer_draft_for_linked_mode_b_cluster_appends_mode_a_examples(
+    monkeypatch,
+) -> None:
+    tenant_id = uuid.uuid4()
+    topic_id = uuid.uuid4()
+    cluster_id = uuid.uuid4()
+    topic = SimpleNamespace(
+        id=topic_id,
+        tenant_id=tenant_id,
+        topic_label="Invoice exports",
+        example_questions=[
+            "How do invoice exports work for accounting?",
+            "Can I export invoices by month?",
+        ],
+    )
+    cluster = SimpleNamespace(
+        id=cluster_id,
+        tenant_id=tenant_id,
+        label="Invoice exports for finance",
+        linked_doc_topic_id=topic_id,
+        coverage_score=0.25,
+        aggregate_signal_weight=2.0,
+    )
+
+    class _FakeQuery:
+        def __init__(self, model):
+            self._model = model
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def first(self):
+            if self._model is GapCluster:
+                return cluster
+            if self._model is GapDocTopic:
+                return topic
+            return None
+
+    class _FakeDB:
+        def query(self, model):
+            return _FakeQuery(model)
+
+    orchestrator = GapAnalyzerOrchestrator()
+    monkeypatch.setattr(
+        orchestrator,
+        "_require_sqlalchemy_repository",
+        lambda: SqlAlchemyGapAnalyzerRepository(db=_FakeDB()),
+    )
+    monkeypatch.setattr(
+        "backend.gap_analyzer.orchestrator._load_mode_b_question_samples",
+        lambda db, cluster_ids: {
+            cluster_id: ["How do invoice exports work for finance?"]
+        },
+    )
+
+    draft = orchestrator.build_draft(
+        tenant_id=tenant_id,
+        source=GapSource.mode_b,
+        gap_id=cluster_id,
+    )
+
+    assert "## Also missing in docs" in draft.markdown
+    assert "How do invoice exports work for accounting?" in draft.markdown
+    assert "Can I export invoices by month?" in draft.markdown
 
 
 def test_gap_analyzer_draft_for_mode_a_limits_example_questions(

@@ -16,7 +16,7 @@ from backend.gap_analyzer.jobs import (
     run_mode_a_for_tenant_best_effort,
     run_mode_b_for_tenant_best_effort,
 )
-from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator, GapResourceNotFoundError
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.gap_analyzer.schemas import (
     GapActionResponse,
@@ -99,7 +99,7 @@ def dismiss_gap(
             dismissed_by=current_user.id,
             reason=payload.reason,
         )
-    except ValueError as exc:
+    except GapResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     db.commit()
     return response
@@ -120,7 +120,7 @@ def reactivate_gap(
             source=source,
             gap_id=gap_id,
         )
-    except ValueError as exc:
+    except GapResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     db.commit()
     return response
@@ -137,5 +137,5 @@ def draft_gap(
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     try:
         return orchestrator.build_draft(tenant_id=tenant_id, source=source, gap_id=gap_id)
-    except ValueError as exc:
+    except GapResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))

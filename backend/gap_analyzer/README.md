@@ -66,6 +66,22 @@ This module is intentionally introduced in two thin layers:
   - Mode A runs only when the tenant has no `Document` left in `processing` or `embedding`
   - and no `UrlSource` left in `queued` or `indexing`
 
+## Phase 4 Mode B Notes
+
+- Mode B is intentionally MVP-scoped in this phase:
+  - ingest unclustered `gap_questions`
+  - incrementally create or join clusters
+  - update centroid, `question_count`, and `aggregate_signal_weight`
+  - compute coverage against the non-swagger tenant corpus
+  - transition only between basic `active` and `closed` states based on coverage
+- Mode B runs best-effort after successful signal ingestion.
+- Phase 4 explicitly does not add:
+  - Mode A ↔ Mode B linking
+  - weekly/full reclustering
+  - archive or inactive automation
+  - trending logic
+  - cross-language grouping or label regeneration policies beyond the minimal cluster label
+
 ## Residual Trade-Offs
 
 - `embed_texts(...)` still compacts empty strings out of a batch before the OpenAI call.

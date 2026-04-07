@@ -12,16 +12,22 @@ import math
 import re
 from uuid import UUID
 
-from backend.gap_analyzer.domain import CoveragePolicy, DocumentScopePolicy, GapLifecyclePolicy, SignalWeightPolicy
-from backend.gap_analyzer.enums import GapCommandStatus
+from backend.gap_analyzer.domain import ClusteringPolicy, CoveragePolicy, DocumentScopePolicy, GapLifecyclePolicy, SignalWeightPolicy
+from backend.gap_analyzer.enums import GapClusterStatus, GapCommandStatus
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
-from backend.gap_analyzer.repository import GapAnalyzerRepository, ModeACorpusChunk, ModeADismissalRecord
+from backend.gap_analyzer.repository import (
+    GapAnalyzerRepository,
+    ModeACorpusChunk,
+    ModeADismissalRecord,
+    ModeBClusterRecord,
+    ModeBQuestionRecord,
+)
 from backend.gap_analyzer.schemas import GapRunMode, ModeAResult, ModeBResult, RecalculateCommandResult
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,19 @@ class _PreparedDismissal:
     normalized_label: str
     vector: list[float] | None
     vector_norm: float
+
+
+@dataclass
+class _MutableModeBCluster:
+    cluster_id: UUID
+    label: str
+    centroid: list[float]
+    centroid_norm: float
+    question_count: int
+    aggregate_signal_weight: float
+    coverage_score: float
+    status: GapClusterStatus
+    last_question_at: datetime
 
 
 class GapAnalyzerOrchestrator:
@@ -136,8 +155,110 @@ class GapAnalyzerOrchestrator:
             started_at=started_at,
         )
 
-    async def run_mode_b(self, tenant_id: UUID) -> ModeBResult:
-        raise NotImplementedError("Mode B pipeline lands in Phase 4")
+    def run_mode_b(self, tenant_id: UUID) -> ModeBResult:
+        repository = self._require_repository()
+        started_at = datetime.now(timezone.utc)
+
+        questions = repository.list_unclustered_mode_b_questions(tenant_id)
+        if not questions:
+            return ModeBResult(
+                tenant_id=tenant_id,
+                status=GapCommandStatus.accepted,
+                started_at=started_at,
+            )
+
+        missing_embeddings = any(_vector_from_unknown(question.embedding) is None for question in questions)
+        encrypted_api_key = repository.get_client_openai_key(tenant_id) if missing_embeddings else None
+        if missing_embeddings and not encrypted_api_key:
+            logger.warning("gap_analyzer_mode_b_missing_openai_key tenant_id=%s", tenant_id)
+            return ModeBResult(
+                tenant_id=tenant_id,
+                status=GapCommandStatus.accepted,
+                started_at=started_at,
+            )
+
+        if encrypted_api_key:
+            self._ensure_mode_b_question_embeddings(
+                encrypted_api_key=encrypted_api_key,
+                questions=questions,
+            )
+            refreshed_questions = repository.list_unclustered_mode_b_questions(tenant_id)
+            if not refreshed_questions:
+                return ModeBResult(
+                    tenant_id=tenant_id,
+                    status=GapCommandStatus.accepted,
+                    started_at=started_at,
+                )
+        else:
+            refreshed_questions = questions
+
+        corpus_chunks = repository.get_mode_a_corpus_chunks(
+            tenant_id=tenant_id,
+            excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
+        )
+        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
+        clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
+
+        for question in refreshed_questions:
+            question_embedding = _vector_from_unknown(question.embedding)
+            if question_embedding is None:
+                continue
+            question_norm = _vector_norm(question_embedding)
+            target_cluster = _match_mode_b_cluster(
+                question_embedding=question_embedding,
+                question_norm=question_norm,
+                clusters=clusters,
+                similarity_threshold=ClusteringPolicy().similarity_threshold,
+            )
+            if target_cluster is None:
+                new_cluster = _build_new_mode_b_cluster(
+                    question=question,
+                    question_embedding=question_embedding,
+                    question_norm=question_norm,
+                    corpus_chunks=prepared_corpus,
+                )
+                cluster_id = repository.create_mode_b_cluster(
+                    tenant_id=tenant_id,
+                    label=new_cluster.label,
+                    centroid=new_cluster.centroid,
+                    question_count=new_cluster.question_count,
+                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
+                    coverage_score=new_cluster.coverage_score,
+                    status=new_cluster.status,
+                    last_question_at=new_cluster.last_question_at,
+                    last_computed_at=started_at,
+                )
+                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
+                new_cluster.cluster_id = cluster_id
+                clusters.append(new_cluster)
+                continue
+
+            _update_mode_b_cluster(
+                cluster=target_cluster,
+                question=question,
+                question_embedding=question_embedding,
+                corpus_chunks=prepared_corpus,
+            )
+            repository.assign_question_to_cluster(
+                question_id=question.question_id,
+                cluster_id=target_cluster.cluster_id,
+            )
+            repository.update_mode_b_cluster(
+                cluster_id=target_cluster.cluster_id,
+                centroid=target_cluster.centroid,
+                question_count=target_cluster.question_count,
+                aggregate_signal_weight=target_cluster.aggregate_signal_weight,
+                coverage_score=target_cluster.coverage_score,
+                status=target_cluster.status,
+                last_question_at=target_cluster.last_question_at,
+                last_computed_at=started_at,
+            )
+
+        return ModeBResult(
+            tenant_id=tenant_id,
+            status=GapCommandStatus.accepted,
+            started_at=started_at,
+        )
 
     def record_assistant_feedback(
         self,
@@ -201,6 +322,28 @@ class GapAnalyzerOrchestrator:
                 if index < len(coverage_vectors)
             },
         )
+
+    def _ensure_mode_b_question_embeddings(
+        self,
+        *,
+        encrypted_api_key: str,
+        questions: list[ModeBQuestionRecord],
+    ) -> None:
+        repository = self._require_repository()
+        missing_questions = [question for question in questions if _vector_from_unknown(question.embedding) is None]
+        if not missing_questions:
+            return
+        vectors = embed_texts(
+            encrypted_api_key=encrypted_api_key,
+            texts=[question.question_text for question in missing_questions],
+        )
+        for index, question in enumerate(missing_questions):
+            if index >= len(vectors):
+                break
+            repository.update_mode_b_question_embedding(
+                question_id=question.question_id,
+                embedding=vectors[index],
+            )
 
     def _require_repository(self) -> GapAnalyzerRepository:
         if self.repository is None:
@@ -395,11 +538,123 @@ def _prepare_dismissals(dismissals: list[ModeADismissalRecord]) -> list[_Prepare
     return prepared
 
 
+def _prepare_mode_b_clusters(clusters: list[ModeBClusterRecord]) -> list[_MutableModeBCluster]:
+    prepared: list[_MutableModeBCluster] = []
+    for cluster in clusters:
+        centroid = _vector_from_unknown(cluster.centroid)
+        if centroid is None:
+            continue
+        status = GapClusterStatus(cluster.status)
+        prepared.append(
+            _MutableModeBCluster(
+                cluster_id=cluster.cluster_id,
+                label=(cluster.label or "").strip() or "Untitled gap",
+                centroid=centroid,
+                centroid_norm=_vector_norm(centroid),
+                question_count=cluster.question_count,
+                aggregate_signal_weight=cluster.aggregate_signal_weight,
+                coverage_score=cluster.coverage_score or 0.0,
+                status=status,
+                last_question_at=cluster.last_question_at or datetime.now(timezone.utc),
+            )
+        )
+    return prepared
+
+
+def _match_mode_b_cluster(
+    *,
+    question_embedding: list[float],
+    question_norm: float,
+    clusters: list[_MutableModeBCluster],
+    similarity_threshold: float,
+) -> _MutableModeBCluster | None:
+    best_cluster: _MutableModeBCluster | None = None
+    best_similarity = 0.0
+    for cluster in clusters:
+        if cluster.status != GapClusterStatus.active:
+            continue
+        similarity = _cosine_similarity(
+            question_embedding,
+            cluster.centroid,
+            first_norm=question_norm,
+            second_norm=cluster.centroid_norm,
+        )
+        if similarity >= similarity_threshold and similarity > best_similarity:
+            best_similarity = similarity
+            best_cluster = cluster
+    return best_cluster
+
+
+def _build_new_mode_b_cluster(
+    *,
+    question: ModeBQuestionRecord,
+    question_embedding: list[float],
+    question_norm: float,
+    corpus_chunks: list[_PreparedCorpusChunk],
+) -> _MutableModeBCluster:
+    coverage_score = _compute_mode_a_coverage(
+        query_text=question.question_text,
+        query_embedding=question_embedding,
+        corpus_chunks=corpus_chunks,
+    )
+    status = _mode_b_status_from_coverage(coverage_score)
+    return _MutableModeBCluster(
+        cluster_id=UUID(int=0),
+        label=question.question_text.strip(),
+        centroid=question_embedding,
+        centroid_norm=question_norm,
+        question_count=1,
+        aggregate_signal_weight=question.gap_signal_weight,
+        coverage_score=coverage_score,
+        status=status,
+        last_question_at=question.created_at,
+    )
+
+
+def _update_mode_b_cluster(
+    *,
+    cluster: _MutableModeBCluster,
+    question: ModeBQuestionRecord,
+    question_embedding: list[float],
+    corpus_chunks: list[_PreparedCorpusChunk],
+) -> None:
+    previous_count = cluster.question_count
+    cluster.question_count += 1
+    cluster.aggregate_signal_weight += question.gap_signal_weight
+    cluster.last_question_at = max(cluster.last_question_at, question.created_at)
+    cluster.centroid = [
+        ((left * previous_count) + right) / cluster.question_count
+        for left, right in zip(cluster.centroid, question_embedding)
+    ]
+    cluster.centroid_norm = _vector_norm(cluster.centroid)
+    cluster.coverage_score = _compute_mode_a_coverage(
+        query_text=cluster.label,
+        query_embedding=cluster.centroid,
+        corpus_chunks=corpus_chunks,
+    )
+    cluster.status = _mode_b_status_from_coverage(cluster.coverage_score)
+
+
+def _mode_b_status_from_coverage(coverage_score: float) -> GapClusterStatus:
+    if coverage_score >= CoveragePolicy().covered_threshold:
+        return GapClusterStatus.closed
+    return GapClusterStatus.active
+
+
 def _vector_from_unknown(raw: object) -> list[float] | None:
     if raw is None:
         return None
     if isinstance(raw, list):
         return [float(value) for value in raw]
+    if isinstance(raw, tuple):
+        return [float(value) for value in raw]
+    if hasattr(raw, "tolist"):
+        try:
+            parsed_list = raw.tolist()
+        except Exception:
+            parsed_list = None
+        if isinstance(parsed_list, list):
+            return [float(value) for value in parsed_list]
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)

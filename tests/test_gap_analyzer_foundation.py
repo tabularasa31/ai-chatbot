@@ -92,10 +92,10 @@ def test_gap_analyzer_orchestrator_keeps_read_contracts_out_of_public_surface() 
         orchestrator.ingest_signal(signal)
     with pytest.raises(RuntimeError):
         orchestrator.run_mode_a(uuid4())
+    with pytest.raises(RuntimeError):
+        orchestrator.run_mode_b(uuid4())
     with pytest.raises(NotImplementedError):
         import asyncio
-        asyncio.run(orchestrator.run_mode_b(uuid4()))
-    with pytest.raises(NotImplementedError):
         asyncio.run(orchestrator.request_recalculation(uuid4(), GapRunMode.both))
 
 

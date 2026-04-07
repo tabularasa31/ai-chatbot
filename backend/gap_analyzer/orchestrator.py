@@ -56,7 +56,7 @@ class GapAnalyzerOrchestrator:
             signal_weight=self._resolve_signal_weight_from_values(
                 answer_confidence=signal_state.answer_confidence,
                 had_fallback=signal_state.had_fallback,
-                was_rejected=signal_state.had_fallback,
+                was_rejected=signal_state.had_rejected,
                 was_escalated=signal_state.had_escalation,
                 user_thumbed_down=feedback_value == "down",
             ),

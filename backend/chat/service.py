@@ -18,6 +18,7 @@ PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
 from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
+from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
@@ -1702,8 +1703,6 @@ def _try_ingest_gap_signal(
     was_escalated: bool,
     language: str | None = None,
 ) -> None:
-    from backend.core import db as core_db
-
     ingestion_db = core_db.SessionLocal()
     try:
         orchestrator = GapAnalyzerOrchestrator(

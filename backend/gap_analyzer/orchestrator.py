@@ -935,18 +935,21 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
         db.add(cluster)
     db.flush()
 
+    prepared_clusters: list[tuple[list[float], float, GapCluster]] = []
+    for cluster in clusters:
+        cluster_vector = _vector_from_unknown(cluster.centroid)
+        if cluster_vector is None:
+            continue
+        prepared_clusters.append((cluster_vector, _vector_norm(cluster_vector), cluster))
+
     scored_pairs: list[tuple[float, GapDocTopic, GapCluster]] = []
     link_threshold = ClusteringPolicy().link_threshold
     for topic in topics:
         topic_vector = _vector_from_unknown(topic.topic_embedding)
-        topic_norm = _vector_norm(topic_vector)
         if topic_vector is None:
             continue
-        for cluster in clusters:
-            cluster_vector = _vector_from_unknown(cluster.centroid)
-            cluster_norm = _vector_norm(cluster_vector)
-            if cluster_vector is None:
-                continue
+        topic_norm = _vector_norm(topic_vector)
+        for cluster_vector, cluster_norm, cluster in prepared_clusters:
             if len(topic_vector) != len(cluster_vector):
                 continue
             similarity = _cosine_similarity(

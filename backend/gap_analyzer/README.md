@@ -78,6 +78,10 @@ This module is intentionally introduced in two thin layers:
 - In Phase 4 MVP the chat-side ingestion path only spawns an in-process background thread.
   That removes the direct latency hit from the request path, but it is still not a durable queue
   and can still compete for process resources until it moves behind a proper worker model.
+- Phase 4 also uses an in-process tenant guard so one worker process does not start multiple
+  concurrent Mode B follow-ups for the same tenant at once.
+  This reduces duplicate cluster creation inside a single process, but it is not a cross-process
+  lock and does not replace a durable queue or a database-level coordination primitive.
 - Each Phase 4 trigger currently processes all tenant questions with `cluster_id IS NULL`.
   That is acceptable for the MVP, but large backlogs will need batching and/or queued workers.
 - Phase 4 explicitly does not add:
@@ -89,9 +93,8 @@ This module is intentionally introduced in two thin layers:
 
 ## Residual Trade-Offs
 
-- `embed_texts(...)` still compacts empty strings out of a batch before the OpenAI call.
-  Current Mode A callers pass non-empty labels and coverage queries, so index drift is treated
-  as a low-risk follow-up rather than a Phase 3 blocker.
+- Mode B now filters blank question texts before batch embedding so vector writes stay aligned.
+  Fully blank questions remain unembedded and unclustered until later sanitation or admin cleanup.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import _try_ingest_gap_signal
+from backend.chat import service as chat_service_module
+from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
 from backend.gap_analyzer.orchestrator import (
     GapAnalyzerOrchestrator,
     _prepare_mode_b_clusters,
@@ -338,3 +340,81 @@ def test_update_mode_b_cluster_refuses_mismatched_vector_lengths() -> None:
 
     assert updated is False
     assert cluster.question_count == 1
+
+
+def test_ensure_mode_b_question_embeddings_skips_blank_questions_without_misalignment(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-b-blank-embeddings@example.com",
+        name="Gap Mode B Blank Embeddings Client",
+    )
+    blank_question = GapQuestion(
+        tenant_id=client_id,
+        question_text="   ",
+        embedding=None,
+        gap_signal_weight=1.0,
+    )
+    valid_question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How do invoice exports work?",
+        embedding=None,
+        gap_signal_weight=1.0,
+    )
+    db_session.add_all([blank_question, valid_question])
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.gap_analyzer.orchestrator.embed_texts",
+        lambda *, encrypted_api_key, texts: [[0.9] * 1536] if texts == [valid_question.question_text] else [],
+    )
+
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
+    orchestrator._ensure_mode_b_question_embeddings(
+        encrypted_api_key="encrypted-key",
+        questions=SqlAlchemyGapAnalyzerRepository(db_session).list_unclustered_mode_b_questions(client_id),
+    )
+
+    db_session.refresh(blank_question)
+    db_session.refresh(valid_question)
+
+    assert blank_question.embedding is None
+    assert valid_question.embedding is not None
+
+
+def test_start_mode_b_followup_coalesces_same_tenant_threads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid.uuid4()
+    started = threading.Event()
+    release = threading.Event()
+    call_count = 0
+
+    def _fake_run(_tenant_id: uuid.UUID) -> None:
+        nonlocal call_count
+        call_count += 1
+        started.set()
+        release.wait(timeout=2)
+
+    monkeypatch.setattr(
+        "backend.chat.service.run_mode_b_for_tenant_best_effort",
+        _fake_run,
+    )
+
+    _start_mode_b_followup(tenant_id)
+    assert started.wait(timeout=2)
+    _start_mode_b_followup(tenant_id)
+    release.set()
+
+    for _ in range(50):
+        with chat_service_module._mode_b_followup_guard:
+            inflight = set(chat_service_module._mode_b_followups_inflight)
+        if tenant_id not in inflight:
+            break
+        threading.Event().wait(0.01)
+
+    assert call_count == 1

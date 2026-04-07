@@ -355,14 +355,21 @@ class GapAnalyzerOrchestrator:
         missing_questions = [question for question in questions if _vector_from_unknown(question.embedding) is None]
         if not missing_questions:
             return
+        valid_missing_questions = [
+            question
+            for question in missing_questions
+            if question.question_text.strip()
+        ]
+        if not valid_missing_questions:
+            return
         vectors = embed_texts(
             encrypted_api_key=encrypted_api_key,
-            texts=[question.question_text for question in missing_questions],
+            texts=[question.question_text for question in valid_missing_questions],
         )
         repository.bulk_update_mode_b_question_embeddings(
             embeddings_by_question_id={
                 question.question_id: vectors[index]
-                for index, question in enumerate(missing_questions)
+                for index, question in enumerate(valid_missing_questions)
                 if index < len(vectors)
             }
         )

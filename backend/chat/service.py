@@ -80,6 +80,9 @@ from backend.guards.reject_response import (
 
 logger = logging.getLogger(__name__)
 
+_mode_b_followup_guard = threading.Lock()
+_mode_b_followups_inflight: set[uuid.UUID] = set()
+
 LOW_CONFIDENCE_THRESHOLD = 0.4
 CLARIFICATION_STATE_KEY = "clarification_state"
 CLARIFICATION_STATE_VERSION = 1
@@ -1750,9 +1753,21 @@ def _try_ingest_gap_signal(
 
 
 def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
+    with _mode_b_followup_guard:
+        if tenant_id in _mode_b_followups_inflight:
+            logger.info("gap_analyzer_mode_b_followup_already_running tenant_id=%s", tenant_id)
+            return
+        _mode_b_followups_inflight.add(tenant_id)
+
+    def _runner() -> None:
+        try:
+            run_mode_b_for_tenant_best_effort(tenant_id)
+        finally:
+            with _mode_b_followup_guard:
+                _mode_b_followups_inflight.discard(tenant_id)
+
     threading.Thread(
-        target=run_mode_b_for_tenant_best_effort,
-        args=(tenant_id,),
+        target=_runner,
         daemon=True,
     ).start()
 

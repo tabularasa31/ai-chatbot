@@ -278,6 +278,55 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
     ]
 
 
+def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested_urls: list[str] = []
+    chain_length = url_service.MAX_SITEMAPS_PER_SOURCE + 5
+
+    def sitemap_index(next_url: str) -> str:
+        return f"""<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>{next_url}</loc>
+  </sitemap>
+</sitemapindex>
+"""
+
+    responses = {
+        "https://docs.example.com/sitemap.xml": sitemap_index("https://docs.example.com/sitemap-chain-0.xml"),
+        "https://docs.example.com/sitemap_index.xml": sitemap_index("https://docs.example.com/sitemap-chain-0.xml"),
+    }
+    for index in range(chain_length):
+        current = f"https://docs.example.com/sitemap-chain-{index}.xml"
+        next_url = f"https://docs.example.com/sitemap-chain-{index + 1}.xml"
+        responses[current] = sitemap_index(next_url)
+
+    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+
+    def fake_request(client, method: str, url: str, context):
+        requested_urls.append(url)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            text=responses[url],
+        )
+
+    class DummyClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+
+    urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
+
+    assert urls == []
+    assert len(requested_urls) == url_service.MAX_SITEMAPS_PER_SOURCE
+    assert "https://docs.example.com/sitemap-chain-19.xml" not in requested_urls
+
+
 def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPatch) -> None:
     markdown = "# Docs\n\nThis page is served as markdown."
     monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)

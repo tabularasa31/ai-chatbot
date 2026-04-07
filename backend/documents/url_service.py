@@ -59,6 +59,7 @@ FETCH_TIMEOUT_SECONDS = 10.0
 PREFLIGHT_TIMEOUT_SECONDS = 5.0
 MAX_HTML_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
+MAX_SITEMAPS_PER_SOURCE = 20
 USER_AGENT = "Chat9Bot/1.0 (+https://getchat9.live)"
 DISCOVERY_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
 SUPPORTED_PAGE_CONTENT_TYPES = (
@@ -422,11 +423,13 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
         return tag.rsplit("}", 1)[-1].lower()
 
     with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
-        while queued:
+        sitemaps_fetched = 0
+        while queued and sitemaps_fetched < MAX_SITEMAPS_PER_SOURCE:
             candidate = queued.popleft()
             if candidate in seen_sitemaps:
                 continue
             seen_sitemaps.add(candidate)
+            sitemaps_fetched += 1
             context = FetchContext(stage="preflight:sitemap", url=candidate)
             try:
                 response = _request_with_safe_redirects(client, "GET", candidate, context=context)

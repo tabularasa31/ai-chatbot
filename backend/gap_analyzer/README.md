@@ -124,6 +124,9 @@ This module is intentionally introduced in two thin layers:
 ## Phase 6 Linking Notes
 
 - Mode A and Mode B links are now synchronized from embedding similarity inside Gap Analyzer itself.
+- Link reset now clears all tenant topic/cluster pointers before rebuilding eligible links.
+  Matching still only considers labeled Mode A topics and Mode B clusters in `active`, `closed`,
+  or `dismissed`, but stale pointers on unlabeled topics and `inactive` clusters are wiped first.
 - Active-list presentation is deduped with Mode B as the primary card when:
   - Mode A topic is active
   - linked Mode B cluster is active
@@ -170,6 +173,10 @@ This module is intentionally introduced in two thin layers:
 - Cluster loading for Mode B is not paginated yet.
   Tenants with very large numbers of active/closed clusters will still need batching or a narrower
   candidate-selection strategy in a later phase.
+- `_sync_mode_links(...)` still does a full topic × eligible-cluster similarity pass after each
+  Mode A or Mode B run.
+  That is acceptable for the current Phase 6 slice, but larger tenants will likely need a narrower
+  candidate-selection strategy, cached embeddings, or batched relinking in the follow-up job work.
 - The sidebar badge still pays for the full dashboard payload shape.
   A dedicated lightweight summary endpoint is a Phase 5 follow-up if this becomes a noticeable
   source of extra DB load or response payload size.
@@ -192,3 +199,7 @@ This module is intentionally introduced in two thin layers:
 - `_vector_from_unknown(...)` in `backend/gap_analyzer/orchestrator.py` is still a permissive
   normalization helper. Longer term, the repository boundary should preferably return typed
   vectors directly so Mode A does not need to coerce unknown vector payloads at runtime.
+- Phase 6 UI copy such as `also missing in docs` and the linked-draft markdown section currently
+  stays in English.
+  If the dashboard UI gets localized more broadly, these strings should move behind the same
+  localization strategy instead of remaining hard-coded.

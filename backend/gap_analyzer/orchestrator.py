@@ -914,26 +914,31 @@ def _active_mode_a_ids_suppressed_by_mode_b(
 
 
 def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
-    topics = (
+    all_topics = (
         db.query(GapDocTopic)
         .filter(GapDocTopic.tenant_id == tenant_id)
-        .filter(GapDocTopic.topic_label.isnot(None))
         .all()
     )
-    clusters = (
+    all_clusters = (
         db.query(GapCluster)
         .filter(GapCluster.tenant_id == tenant_id)
-        .filter(GapCluster.status.in_([GapClusterStatus.active.value, GapClusterStatus.closed.value, GapClusterStatus.dismissed.value]))
         .all()
     )
 
-    for topic in topics:
+    for topic in all_topics:
         topic.linked_cluster_id = None
         db.add(topic)
-    for cluster in clusters:
+    for cluster in all_clusters:
         cluster.linked_doc_topic_id = None
         db.add(cluster)
     db.flush()
+
+    topics = [topic for topic in all_topics if topic.topic_label is not None]
+    clusters = [
+        cluster
+        for cluster in all_clusters
+        if cluster.status in {GapClusterStatus.active.value, GapClusterStatus.closed.value, GapClusterStatus.dismissed.value}
+    ]
 
     prepared_clusters: list[tuple[list[float], float, GapCluster]] = []
     for cluster in clusters:

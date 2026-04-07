@@ -27,6 +27,19 @@ _HEALTH_WARNING_TYPES = frozenset(
 )
 _SEVERITY_PENALTY = {"high": 20, "medium": 10, "low": 5}
 _APPROX_CHARS_PER_TOKEN = 4
+_CONTACT_EXPECTED_STRONG_KEYWORDS = (
+    "support",
+    "help",
+    "contact",
+    "customer service",
+    "technical support",
+    "get help",
+    "need help",
+    "reach us",
+    "reach out",
+    "troubleshooting",
+)
+_CONTACT_EXPECTED_WEAK_KEYWORDS = ("faq", "frequently asked questions")
 
 
 def _iso_utc_z() -> str:
@@ -43,6 +56,23 @@ def _truncate_to_approx_tokens(text: str, max_tokens: int = 3000) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def _expects_contact_info(filename: str | None, excerpt: str) -> bool:
+    haystacks = [excerpt.lower()]
+    if filename:
+        haystacks.append(filename.lower().replace("_", " ").replace("-", " "))
+
+    if any(keyword in haystack for haystack in haystacks for keyword in _CONTACT_EXPECTED_STRONG_KEYWORDS):
+        return True
+
+    has_weak_signal = any(keyword in haystack for haystack in haystacks for keyword in _CONTACT_EXPECTED_WEAK_KEYWORDS)
+    has_assistance_context = any(
+        phrase in haystack
+        for haystack in haystacks
+        for phrase in ("support team", "contact us", "get support", "need assistance", "technical issue")
+    )
+    return has_weak_signal and has_assistance_context
 
 
 def _compute_health_score(warnings: list[dict[str, Any]]) -> int:
@@ -135,6 +165,13 @@ def run_document_health_check(
         db.refresh(doc)
         return result
 
+    contact_rule = ""
+    if _expects_contact_info(doc.filename, excerpt):
+        contact_rule = (
+            '- missing_contact_info: Missing support email, phone, or contact section '
+            "for a document that is clearly about help, support, contact, or troubleshooting\n"
+        )
+
     prompt = f"""Analyze this documentation excerpt and identify issues that could reduce the quality of AI-powered search and Q&A.
 
 Return a JSON object with this exact structure:
@@ -145,12 +182,12 @@ Return a JSON object with this exact structure:
 }}
 
 Check for:
-- missing_contact_info: No support email, phone, or contact section
-- poor_structure: Long sections (500+ words) without subheadings
+{contact_rule}- poor_structure: Long sections (500+ words) without subheadings
 - incomplete_sections: Sections that appear cut off or unfinished
 - no_examples: Important features described abstractly with no examples
 - outdated_content: References to specific old dates or deprecated versions
 
+Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting.
 Only report issues that are clearly present. Return empty warnings array if the document looks good.
 Return ONLY the JSON, no other text.
 

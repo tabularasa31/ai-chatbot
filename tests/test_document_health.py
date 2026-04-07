@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.documents.service import (
     _compute_health_score,
+    _expects_contact_info,
     _normalize_warnings,
     run_document_health_check,
 )
@@ -44,6 +45,14 @@ def test_normalize_warnings_filters_invalid() -> None:
     out = _normalize_warnings(raw)
     assert len(out) == 1
     assert out[0]["type"] == "no_examples"
+
+
+def test_expects_contact_info_only_for_support_like_docs() -> None:
+    assert _expects_contact_info("support-guide.md", "How to contact support if billing fails.")
+    assert _expects_contact_info("product.md", "FAQ: if the fix fails, contact us for technical support.")
+    assert not _expects_contact_info("product.md", "FAQ: how do I reset my password?")
+    assert not _expects_contact_info("api-reference.md", "List users endpoint and response schema.")
+    assert not _expects_contact_info("features.md", "This page describes analytics dashboards and filters.")
 
 
 def test_get_document_health_404_when_null(client: TestClient, db_session: Session) -> None:
@@ -142,6 +151,81 @@ def test_run_document_health_check_mocked_openai(db_session: Session, mock_opena
     db_session.refresh(doc)
     assert doc.health_status is not None
     assert doc.health_status.get("score") == 80
+
+
+def test_run_document_health_check_prompt_skips_contact_rule_for_regular_docs(
+    db_session: Session, mock_openai_client: Mock
+) -> None:
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"warnings": []}'))],
+    )
+    user = User(
+        email="prompt@example.com",
+        password_hash="x",
+        is_verified=True,
+        verification_token=None,
+        verification_expires_at=None,
+    )
+    db_session.add(user)
+    db_session.flush()
+    cl = Client(user_id=user.id, name="Prompt Client", api_key="k" * 32)
+    db_session.add(cl)
+    db_session.flush()
+    doc = Document(
+        client_id=cl.id,
+        filename="api-reference.md",
+        file_type=DocumentType.markdown,
+        parsed_text="Users endpoint reference with request and response fields.",
+        status=DocumentStatus.ready,
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    run_document_health_check(doc.id, db_session, "sk-test")
+
+    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert (
+        "Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting."
+        in prompt
+    )
+    assert (
+        "for a document that is clearly about help, support, contact, or troubleshooting"
+        not in prompt
+    )
+
+
+def test_run_document_health_check_prompt_includes_contact_rule_for_support_docs(
+    db_session: Session, mock_openai_client: Mock
+) -> None:
+    mock_openai_client.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"warnings": []}'))],
+    )
+    user = User(
+        email="supportprompt@example.com",
+        password_hash="x",
+        is_verified=True,
+        verification_token=None,
+        verification_expires_at=None,
+    )
+    db_session.add(user)
+    db_session.flush()
+    cl = Client(user_id=user.id, name="Support Prompt Client", api_key="k" * 32)
+    db_session.add(cl)
+    db_session.flush()
+    doc = Document(
+        client_id=cl.id,
+        filename="support-center.md",
+        file_type=DocumentType.markdown,
+        parsed_text="Support guide for customers who need help with account access.",
+        status=DocumentStatus.ready,
+    )
+    db_session.add(doc)
+    db_session.commit()
+
+    run_document_health_check(doc.id, db_session, "sk-test")
+
+    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
+    assert "for a document that is clearly about help, support, contact, or troubleshooting" in prompt
 
 
 @pytest.mark.parametrize(

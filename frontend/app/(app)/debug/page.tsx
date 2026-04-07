@@ -1,7 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 import { api, type ChatDebugResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
@@ -28,13 +27,40 @@ function DebugStateMessage({
   );
 }
 
-function DebugPageContent() {
-  const searchParams = useSearchParams();
-  const botId = searchParams.get("bot_id")?.trim() || "";
+export default function DebugPage() {
+  const [botId, setBotId] = useState("");
+  const [botLoading, setBotLoading] = useState(true);
+  const [botError, setBotError] = useState("");
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<ChatDebugResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadClient() {
+      setBotLoading(true);
+      setBotError("");
+      try {
+        const client = await api.clients.getMe();
+        if (cancelled) return;
+        setBotId(client.public_id);
+      } catch (err) {
+        if (cancelled) return;
+        setBotError(err instanceof Error ? err.message : "Failed to load bot context");
+      } finally {
+        if (!cancelled) {
+          setBotLoading(false);
+        }
+      }
+    }
+
+    loadClient();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleRun() {
     const q = question.trim();
@@ -57,12 +83,22 @@ function DebugPageContent() {
     return `${id.slice(0, 8)}...${id.slice(-4)}`;
   }
 
+  if (botLoading) {
+    return (
+      <DebugStateMessage
+        tone="neutral"
+        title="Подготовка debug console"
+        description="Загружаю контекст текущего бота, чтобы запустить RAG debug без дополнительных параметров."
+      />
+    );
+  }
+
   if (!botId) {
     return (
       <DebugStateMessage
         tone="danger"
-        title="Нужен bot_id в URL"
-        description="Откройте страницу в формате /debug?bot_id=ch_... , чтобы запускать RAG debug для конкретного бота."
+        title="Debug временно недоступен"
+        description={botError || "Не удалось определить текущего бота для debug."}
       />
     );
   }
@@ -199,13 +235,5 @@ function DebugPageContent() {
         </>
       )}
     </div>
-  );
-}
-
-export default function DebugPage() {
-  return (
-    <Suspense fallback={<div className="text-slate-500 text-sm">Loading debug console...</div>}>
-      <DebugPageContent />
-    </Suspense>
   );
 }

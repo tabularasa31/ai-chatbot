@@ -160,12 +160,12 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |--------|------|-------------|
 | POST | `/auth/register` | Register new user (sends verification email) |
 | POST | `/auth/login` | Login, get JWT |
-| POST | `/auth/verify-email` | Verify email with one-time token |
+| POST | `/auth/verify-email` | Verify email with one-time token and provision the user's client/workspace |
 
 ### Clients
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/clients` | Create client (JWT, verified only) |
+| POST | `/clients` | Create client manually; the normal signup flow provisions it on `/auth/verify-email` |
 | GET | `/clients/me` | Get current client info (JWT) |
 | GET | `/clients/me/disclosure` | Tenant-wide response detail level (JWT) |
 | PUT | `/clients/me/disclosure` | Update response level: `detailed` \| `standard` \| `corporate` (JWT, verified) |
@@ -194,7 +194,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | GET | `/chat/logs/session/{id}` | Full session log (JWT) |
 | GET | `/chat/bad-answers` | Answers marked 👎 (JWT) |
 | POST | `/chat/messages/{id}/feedback` | Set 👍/👎 + ideal answer (JWT) |
-| POST | `/chat/debug` | Debug retrieval (JWT) |
+| POST | `/chat/debug?bot_id=ch_...` | Debug retrieval for a specific bot (JWT) |
 
 ### Escalations (FI-ESC)
 | Method | Path | Description |

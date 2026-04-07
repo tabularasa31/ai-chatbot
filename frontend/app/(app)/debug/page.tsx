@@ -1,10 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api, type ChatDebugResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
-export default function DebugPage() {
+function DebugPageContent() {
+  const searchParams = useSearchParams();
+  const botId = searchParams.get("bot_id")?.trim() || "";
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -17,7 +20,7 @@ export default function DebugPage() {
     setResult(null);
     setLoading(true);
     try {
-      const data = await api.chat.debug(q);
+      const data = await api.chat.debug(q, botId || undefined);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Debug failed");
@@ -41,6 +44,11 @@ export default function DebugPage() {
         <p className="text-slate-500 text-sm mt-1">
           Run a question through the RAG pipeline and inspect retrieval results.
         </p>
+        {botId && (
+          <p className="text-slate-500 text-sm mt-1">
+            Bot: <span className="font-mono text-slate-700">{botId}</span>
+          </p>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-6">
@@ -85,6 +93,24 @@ export default function DebugPage() {
               Debug info
             </h2>
             <div className="mb-3 space-y-1 text-slate-600 text-sm">
+              <p>
+                Strategy:{" "}
+                <span className="font-mono font-medium text-slate-800">
+                  {result.debug.strategy ?? "n/a"}
+                </span>
+              </p>
+              <p>
+                Reject reason:{" "}
+                <span className="font-mono font-medium text-slate-800">
+                  {result.debug.reject_reason ?? "n/a"}
+                </span>
+              </p>
+              <p>
+                Validation outcome:{" "}
+                <span className="font-mono font-medium text-slate-800">
+                  {result.debug.validation_outcome ?? "n/a"}
+                </span>
+              </p>
               <p>
                 Top match score:{" "}
                 <span className="font-mono font-medium text-slate-800">
@@ -140,5 +166,13 @@ export default function DebugPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function DebugPage() {
+  return (
+    <Suspense fallback={<div className="text-slate-500 text-sm">Loading debug console...</div>}>
+      <DebugPageContent />
+    </Suspense>
   );
 }

@@ -40,6 +40,13 @@ _CONTACT_EXPECTED_STRONG_KEYWORDS = (
     "troubleshooting",
 )
 _CONTACT_EXPECTED_WEAK_KEYWORDS = ("faq", "frequently asked questions")
+_CONTACT_ASSISTANCE_PHRASES = (
+    "support team",
+    "contact us",
+    "get support",
+    "need assistance",
+    "technical issue",
+)
 
 
 def _iso_utc_z() -> str:
@@ -70,7 +77,7 @@ def _expects_contact_info(filename: str | None, excerpt: str) -> bool:
     has_assistance_context = any(
         phrase in haystack
         for haystack in haystacks
-        for phrase in ("support team", "contact us", "get support", "need assistance", "technical issue")
+        for phrase in _CONTACT_ASSISTANCE_PHRASES
     )
     return has_weak_signal and has_assistance_context
 
@@ -166,10 +173,15 @@ def run_document_health_check(
         return result
 
     contact_rule = ""
+    contact_negation = ""
     if _expects_contact_info(doc.filename, excerpt):
         contact_rule = (
             '- missing_contact_info: Missing support email, phone, or contact section '
             "for a document that is clearly about help, support, contact, or troubleshooting\n"
+        )
+        contact_negation = (
+            "Do not report missing_contact_info unless the document is clearly "
+            "about help, support, contact, FAQ, or troubleshooting.\n"
         )
 
     prompt = f"""Analyze this documentation excerpt and identify issues that could reduce the quality of AI-powered search and Q&A.
@@ -187,8 +199,7 @@ Check for:
 - no_examples: Important features described abstractly with no examples
 - outdated_content: References to specific old dates or deprecated versions
 
-Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting.
-Only report issues that are clearly present. Return empty warnings array if the document looks good.
+{contact_negation}Only report issues that are clearly present. Return empty warnings array if the document looks good.
 Return ONLY the JSON, no other text.
 
 Documentation excerpt:

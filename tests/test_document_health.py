@@ -186,7 +186,7 @@ def test_run_document_health_check_prompt_skips_contact_rule_for_regular_docs(
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert (
         "Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting."
-        in prompt
+        not in prompt
     )
     assert (
         "for a document that is clearly about help, support, contact, or troubleshooting"
@@ -226,6 +226,10 @@ def test_run_document_health_check_prompt_includes_contact_rule_for_support_docs
 
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert "for a document that is clearly about help, support, contact, or troubleshooting" in prompt
+    assert (
+        "Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting."
+        in prompt
+    )
 
 
 @pytest.mark.parametrize(

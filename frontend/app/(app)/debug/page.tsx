@@ -22,7 +22,7 @@ function DebugStateMessage({
       }`}
     >
       <h1 className="text-xl font-semibold">{title}</h1>
-      <p className="mt-2 text-sm leading-6 text-inherit/80">{description}</p>
+      <p className="mt-2 text-sm leading-6 opacity-80">{description}</p>
     </div>
   );
 }
@@ -87,8 +87,8 @@ export default function DebugPage() {
     return (
       <DebugStateMessage
         tone="neutral"
-        title="Подготовка debug console"
-        description="Загружаю контекст текущего бота, чтобы запустить RAG debug без дополнительных параметров."
+        title="Preparing debug console"
+        description="Loading the current bot context so RAG debug can run without extra parameters."
       />
     );
   }
@@ -97,8 +97,8 @@ export default function DebugPage() {
     return (
       <DebugStateMessage
         tone="danger"
-        title="Debug временно недоступен"
-        description={botError || "Не удалось определить текущего бота для debug."}
+        title="Debug temporarily unavailable"
+        description={botError || "Couldn't determine the current bot for debug."}
       />
     );
   }

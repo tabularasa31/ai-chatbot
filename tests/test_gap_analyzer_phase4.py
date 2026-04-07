@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import uuid
 
 import pytest
@@ -7,8 +8,17 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import _try_ingest_gap_signal
-from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator, _tokenize
-from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
+from backend.gap_analyzer.orchestrator import (
+    GapAnalyzerOrchestrator,
+    _prepare_mode_b_clusters,
+    _tokenize,
+    _update_mode_b_cluster,
+)
+from backend.gap_analyzer.repository import (
+    ModeBClusterRecord,
+    ModeBQuestionRecord,
+    SqlAlchemyGapAnalyzerRepository,
+)
 from backend.models import (
     Chat,
     Document,
@@ -234,3 +244,57 @@ def test_tokenize_preserves_hyphenated_terms() -> None:
 
     assert "rate-limit" in tokens
     assert "invoice-export" in tokens
+
+
+def test_prepare_mode_b_clusters_skips_unknown_status() -> None:
+    prepared = _prepare_mode_b_clusters(
+        [
+            ModeBClusterRecord(
+                cluster_id=uuid.uuid4(),
+                label="Broken cluster",
+                centroid=_vector(1.0, 0.0, 0.0),
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.1,
+                status="broken",
+                last_question_at=None,
+            )
+        ]
+    )
+
+    assert prepared == []
+
+
+def test_update_mode_b_cluster_refuses_mismatched_vector_lengths() -> None:
+    cluster = _prepare_mode_b_clusters(
+        [
+            ModeBClusterRecord(
+                cluster_id=uuid.uuid4(),
+                label="Invoice exports",
+                centroid=_vector(1.0, 0.0, 0.0),
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.1,
+                status=GapClusterStatus.active.value,
+                last_question_at=None,
+            )
+        ]
+    )[0]
+    question = ModeBQuestionRecord(
+        question_id=uuid.uuid4(),
+        question_text="Invoice exports for teams?",
+        embedding=[1.0, 0.0],
+        gap_signal_weight=2.0,
+        language="en",
+        created_at=datetime.now(timezone.utc),
+    )
+
+    updated = _update_mode_b_cluster(
+        cluster=cluster,
+        question=question,
+        question_embedding=[1.0, 0.0],
+        corpus_chunks=[],
+    )
+
+    assert updated is False
+    assert cluster.question_count == 1

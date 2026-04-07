@@ -1726,16 +1726,7 @@ def _try_ingest_gap_signal(
             )
         )
         ingestion_db.commit()
-        try:
-            run_mode_b_for_tenant_best_effort(client_id)
-        except Exception:
-            logger.warning(
-                "gap_analyzer_mode_b_trigger_failed: client_id=%s session_id=%s assistant_message_id=%s",
-                client_id,
-                session_id,
-                assistant_message.id,
-                exc_info=True,
-            )
+        run_mode_b_for_tenant_best_effort(client_id)
     except ValueError:
         ingestion_db.rollback()
         logger.warning(

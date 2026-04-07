@@ -233,12 +233,34 @@ class GapAnalyzerOrchestrator:
                 clusters.append(new_cluster)
                 continue
 
-            _update_mode_b_cluster(
+            did_update_cluster = _update_mode_b_cluster(
                 cluster=target_cluster,
                 question=question,
                 question_embedding=question_embedding,
                 corpus_chunks=prepared_corpus,
             )
+            if not did_update_cluster:
+                new_cluster = _build_new_mode_b_cluster(
+                    question=question,
+                    question_embedding=question_embedding,
+                    question_norm=question_norm,
+                    corpus_chunks=prepared_corpus,
+                )
+                cluster_id = repository.create_mode_b_cluster(
+                    tenant_id=tenant_id,
+                    label=new_cluster.label,
+                    centroid=new_cluster.centroid,
+                    question_count=new_cluster.question_count,
+                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
+                    coverage_score=new_cluster.coverage_score,
+                    status=new_cluster.status,
+                    last_question_at=new_cluster.last_question_at,
+                    last_computed_at=started_at,
+                )
+                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
+                new_cluster.cluster_id = cluster_id
+                clusters.append(new_cluster)
+                continue
             repository.assign_question_to_cluster(
                 question_id=question.question_id,
                 cluster_id=target_cluster.cluster_id,
@@ -544,7 +566,15 @@ def _prepare_mode_b_clusters(clusters: list[ModeBClusterRecord]) -> list[_Mutabl
         centroid = _vector_from_unknown(cluster.centroid)
         if centroid is None:
             continue
-        status = GapClusterStatus(cluster.status)
+        try:
+            status = GapClusterStatus(cluster.status)
+        except ValueError:
+            logger.warning(
+                "gap_analyzer_mode_b_invalid_cluster_status cluster_id=%s status=%s",
+                cluster.cluster_id,
+                cluster.status,
+            )
+            continue
         prepared.append(
             _MutableModeBCluster(
                 cluster_id=cluster.cluster_id,
@@ -617,14 +647,23 @@ def _update_mode_b_cluster(
     question: ModeBQuestionRecord,
     question_embedding: list[float],
     corpus_chunks: list[_PreparedCorpusChunk],
-) -> None:
+) -> bool:
+    if len(cluster.centroid) != len(question_embedding):
+        logger.warning(
+            "gap_analyzer_mode_b_centroid_length_mismatch cluster_id=%s centroid_len=%s question_id=%s question_len=%s",
+            cluster.cluster_id,
+            len(cluster.centroid),
+            question.question_id,
+            len(question_embedding),
+        )
+        return False
     previous_count = cluster.question_count
     cluster.question_count += 1
     cluster.aggregate_signal_weight += question.gap_signal_weight
     cluster.last_question_at = max(cluster.last_question_at, question.created_at)
     cluster.centroid = [
-        ((left * previous_count) + right) / cluster.question_count
-        for left, right in zip(cluster.centroid, question_embedding)
+        ((cluster.centroid[index] * previous_count) + question_embedding[index]) / cluster.question_count
+        for index in range(len(cluster.centroid))
     ]
     cluster.centroid_norm = _vector_norm(cluster.centroid)
     cluster.coverage_score = _compute_mode_a_coverage(
@@ -633,6 +672,7 @@ def _update_mode_b_cluster(
         corpus_chunks=corpus_chunks,
     )
     cluster.status = _mode_b_status_from_coverage(cluster.coverage_score)
+    return True
 
 
 def _mode_b_status_from_coverage(coverage_score: float) -> GapClusterStatus:

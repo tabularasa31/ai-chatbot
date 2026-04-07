@@ -65,3 +65,15 @@ This module is intentionally introduced in two thin layers:
   - completion paths call a queue-empty gate first
   - Mode A runs only when the tenant has no `Document` left in `processing` or `embedding`
   - and no `UrlSource` left in `queued` or `indexing`
+
+## Residual Trade-Offs
+
+- `embed_texts(...)` still compacts empty strings out of a batch before the OpenAI call.
+  Current Mode A callers pass non-empty labels and coverage queries, so index drift is treated
+  as a low-risk follow-up rather than a Phase 3 blocker.
+- The queue-empty gate is best-effort across short-lived sessions.
+  A new indexing job could start between the queue check and the follow-up Mode A run, so the
+  coalescing behavior is intentionally helpful rather than strictly serialized.
+- `UrlSource` states such as `stale`, `paused`, and `error` do not block Mode A execution.
+  This is intentional so a problematic source does not prevent gap analysis from running against
+  the rest of the tenant corpus.

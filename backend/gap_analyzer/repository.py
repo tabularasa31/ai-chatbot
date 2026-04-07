@@ -465,7 +465,11 @@ class SqlAlchemyGapAnalyzerRepository:
     ) -> None:
         question = self.db.get(GapQuestion, question_id)
         if question is None:
-            raise ValueError(f"GapQuestion not found for id={question_id}")
+            logger.warning(
+                "gap_analyzer_mode_b_question_embedding_target_missing question_id=%s",
+                question_id,
+            )
+            return
         question.embedding = embedding
         self.db.add(question)
         self.db.flush()

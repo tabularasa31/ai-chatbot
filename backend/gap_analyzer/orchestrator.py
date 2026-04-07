@@ -10,10 +10,13 @@ import json
 import logging
 import math
 import re
+from typing import Iterable
 from uuid import UUID
 
+from sqlalchemy.orm import Session
+
 from backend.gap_analyzer.domain import ClusteringPolicy, CoveragePolicy, DocumentScopePolicy, GapLifecyclePolicy, SignalWeightPolicy
-from backend.gap_analyzer.enums import GapClusterStatus, GapCommandStatus
+from backend.gap_analyzer.enums import GapClusterStatus, GapCommandStatus, GapDismissReason, GapDocTopicStatus, GapRunMode, GapSource
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
 from backend.gap_analyzer.repository import (
@@ -22,8 +25,23 @@ from backend.gap_analyzer.repository import (
     ModeADismissalRecord,
     ModeBClusterRecord,
     ModeBQuestionRecord,
+    SqlAlchemyGapAnalyzerRepository,
 )
-from backend.gap_analyzer.schemas import GapRunMode, ModeAResult, ModeBResult, RecalculateCommandResult
+from backend.gap_analyzer.schemas import (
+    GapActionResponse,
+    GapAnalyzerResponse,
+    GapDraftResponse,
+    GapItemResponse,
+    GapSummaryResponse,
+    ModeAResult,
+    ModeASort,
+    ModeAStatusFilter,
+    ModeBResult,
+    ModeBSort,
+    ModeBStatusFilter,
+    RecalculateCommandResult,
+)
+from backend.models import GapCluster, GapDismissal, GapDocTopic, GapQuestion
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +73,30 @@ class _MutableModeBCluster:
     coverage_score: float
     status: GapClusterStatus
     last_question_at: datetime
+
+    def __post_init__(self) -> None:
+        # Keep mutable cluster state internally consistent even if callers pass a stale norm.
+        self.centroid_norm = _vector_norm(self.centroid)
+
+
+class _ModeBClusterUpdateRejected(RuntimeError):
+    def __init__(
+        self,
+        *,
+        cluster_id: UUID,
+        question_id: UUID,
+        centroid_len: int,
+        question_len: int,
+    ) -> None:
+        super().__init__(
+            "Mode B cluster update rejected due to vector length mismatch: "
+            f"cluster_id={cluster_id} centroid_len={centroid_len} "
+            f"question_id={question_id} question_len={question_len}"
+        )
+        self.cluster_id = cluster_id
+        self.question_id = question_id
+        self.centroid_len = centroid_len
+        self.question_len = question_len
 
 
 class GapAnalyzerOrchestrator:
@@ -233,13 +275,14 @@ class GapAnalyzerOrchestrator:
                 clusters.append(new_cluster)
                 continue
 
-            did_update_cluster = _update_mode_b_cluster(
-                cluster=target_cluster,
-                question=question,
-                question_embedding=question_embedding,
-                corpus_chunks=prepared_corpus,
-            )
-            if not did_update_cluster:
+            try:
+                _update_mode_b_cluster(
+                    cluster=target_cluster,
+                    question=question,
+                    question_embedding=question_embedding,
+                    corpus_chunks=prepared_corpus,
+                )
+            except _ModeBClusterUpdateRejected:
                 new_cluster = _build_new_mode_b_cluster(
                     question=question,
                     question_embedding=question_embedding,
@@ -312,12 +355,206 @@ class GapAnalyzerOrchestrator:
         )
         return True
 
+    def list_gaps(
+        self,
+        *,
+        tenant_id: UUID,
+        mode_a_status: ModeAStatusFilter = "active",
+        mode_b_status: ModeBStatusFilter = "active",
+        mode_a_sort: ModeASort = "coverage_asc",
+        mode_b_sort: ModeBSort = "signal_desc",
+    ) -> GapAnalyzerResponse:
+        db = self._require_sqlalchemy_repository().db
+
+        mode_a_items = _build_mode_a_items(
+            db=db,
+            tenant_id=tenant_id,
+            status_filter=mode_a_status,
+            sort=mode_a_sort,
+        )
+        mode_b_items = _build_mode_b_items(
+            db=db,
+            tenant_id=tenant_id,
+            status_filter=mode_b_status,
+            sort=mode_b_sort,
+        )
+        return GapAnalyzerResponse(
+            summary=_build_gap_summary(mode_a_items=mode_a_items, mode_b_items=mode_b_items),
+            mode_a_items=mode_a_items,
+            mode_b_items=mode_b_items,
+        )
+
+    def dismiss_gap(
+        self,
+        *,
+        tenant_id: UUID,
+        source: GapSource,
+        gap_id: UUID,
+        dismissed_by: UUID,
+        reason: GapDismissReason,
+    ) -> GapActionResponse:
+        db = self._require_sqlalchemy_repository().db
+        if source == GapSource.mode_a:
+            topic = (
+                db.query(GapDocTopic)
+                .filter(GapDocTopic.id == gap_id, GapDocTopic.tenant_id == tenant_id)
+                .first()
+            )
+            if topic is None:
+                raise ValueError("Gap topic not found")
+            existing = (
+                db.query(GapDismissal)
+                .filter(
+                    GapDismissal.tenant_id == tenant_id,
+                    GapDismissal.source == GapSource.mode_a,
+                    GapDismissal.gap_id == gap_id,
+                )
+                .first()
+            )
+            if existing is None:
+                db.add(
+                    GapDismissal(
+                        tenant_id=tenant_id,
+                        source=GapSource.mode_a,
+                        gap_id=gap_id,
+                        topic_label=topic.topic_label,
+                        topic_label_embedding=topic.topic_embedding,
+                        reason=reason,
+                        dismissed_by=dismissed_by,
+                    )
+                )
+            return GapActionResponse(source=source, gap_id=gap_id, status="dismissed")
+
+        cluster = (
+            db.query(GapCluster)
+            .filter(GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id)
+            .first()
+        )
+        if cluster is None:
+            raise ValueError("Gap cluster not found")
+        cluster.status = GapClusterStatus.dismissed
+        cluster.question_count_at_dismissal = cluster.question_count
+        existing = (
+            db.query(GapDismissal)
+            .filter(
+                GapDismissal.tenant_id == tenant_id,
+                GapDismissal.source == GapSource.mode_b,
+                GapDismissal.gap_id == gap_id,
+            )
+            .first()
+        )
+        if existing is None:
+            db.add(
+                GapDismissal(
+                    tenant_id=tenant_id,
+                    source=GapSource.mode_b,
+                    gap_id=gap_id,
+                    topic_label=cluster.label,
+                    topic_label_embedding=cluster.centroid,
+                    reason=reason,
+                    dismissed_by=dismissed_by,
+                )
+            )
+        db.add(cluster)
+        return GapActionResponse(source=source, gap_id=gap_id, status="dismissed")
+
+    def reactivate_gap(
+        self,
+        *,
+        tenant_id: UUID,
+        source: GapSource,
+        gap_id: UUID,
+    ) -> GapActionResponse:
+        db = self._require_sqlalchemy_repository().db
+        if source == GapSource.mode_a:
+            (
+                db.query(GapDismissal)
+                .filter(
+                    GapDismissal.tenant_id == tenant_id,
+                    GapDismissal.source == GapSource.mode_a,
+                    GapDismissal.gap_id == gap_id,
+                )
+                .delete()
+            )
+            return GapActionResponse(source=source, gap_id=gap_id, status="active")
+
+        cluster = (
+            db.query(GapCluster)
+            .filter(GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id)
+            .first()
+        )
+        if cluster is None:
+            raise ValueError("Gap cluster not found")
+        (
+            db.query(GapDismissal)
+            .filter(
+                GapDismissal.tenant_id == tenant_id,
+                GapDismissal.source == GapSource.mode_b,
+                GapDismissal.gap_id == gap_id,
+            )
+            .delete()
+        )
+        status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
+        cluster.status = status
+        db.add(cluster)
+        return GapActionResponse(source=source, gap_id=gap_id, status=status.value)
+
+    def build_draft(
+        self,
+        *,
+        tenant_id: UUID,
+        source: GapSource,
+        gap_id: UUID,
+    ) -> GapDraftResponse:
+        db = self._require_sqlalchemy_repository().db
+        if source == GapSource.mode_a:
+            topic = (
+                db.query(GapDocTopic)
+                .filter(GapDocTopic.id == gap_id, GapDocTopic.tenant_id == tenant_id)
+                .first()
+            )
+            dismissal = (
+                db.query(GapDismissal)
+                .filter(
+                    GapDismissal.tenant_id == tenant_id,
+                    GapDismissal.source == GapSource.mode_a,
+                    GapDismissal.gap_id == gap_id,
+                )
+                .first()
+            )
+            label = ((topic.topic_label if topic else None) or (dismissal.topic_label if dismissal else None) or "Untitled gap").strip()
+            example_questions = _clean_questions(topic.example_questions if topic and topic.example_questions else [])
+            markdown = _build_mode_a_draft_markdown(label=label, example_questions=example_questions)
+            return GapDraftResponse(source=source, gap_id=gap_id, title=label, markdown=markdown)
+
+        cluster = (
+            db.query(GapCluster)
+            .filter(GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id)
+            .first()
+        )
+        if cluster is None:
+            raise ValueError("Gap cluster not found")
+        sample_questions = _load_mode_b_question_samples(db, [cluster.id]).get(cluster.id, [])
+        label = (cluster.label or "Untitled gap").strip()
+        markdown = _build_mode_b_draft_markdown(
+            label=label,
+            sample_questions=sample_questions,
+            coverage_score=cluster.coverage_score,
+            signal_weight=cluster.aggregate_signal_weight,
+        )
+        return GapDraftResponse(source=source, gap_id=gap_id, title=label, markdown=markdown)
+
     async def request_recalculation(
         self,
         tenant_id: UUID,
         mode: GapRunMode,
     ) -> RecalculateCommandResult:
-        raise NotImplementedError("Async recalc orchestration lands in Phase 5")
+        return RecalculateCommandResult(
+            tenant_id=tenant_id,
+            mode=mode,
+            status=GapCommandStatus.accepted,
+            accepted_at=datetime.now(timezone.utc),
+        )
 
     def _embed_mode_a_candidates(
         self,
@@ -379,6 +616,12 @@ class GapAnalyzerOrchestrator:
             raise RuntimeError("Gap Analyzer repository is required for command execution")
         return self.repository
 
+    def _require_sqlalchemy_repository(self) -> SqlAlchemyGapAnalyzerRepository:
+        repository = self._require_repository()
+        if not isinstance(repository, SqlAlchemyGapAnalyzerRepository):
+            raise RuntimeError("Gap Analyzer Phase 5 read surfaces require the SQLAlchemy repository")
+        return repository
+
     def _resolve_signal_weight(self, signal: GapSignal) -> float:
         return self._resolve_signal_weight_from_values(
             answer_confidence=signal.answer_confidence,
@@ -408,6 +651,257 @@ class GapAnalyzerOrchestrator:
         if user_thumbed_down:
             weight = max(weight, policy.thumbdown_weight)
         return weight
+
+
+def _build_mode_a_items(
+    *,
+    db: Session,
+    tenant_id: UUID,
+    status_filter: ModeAStatusFilter,
+    sort: ModeASort,
+) -> list[GapItemResponse]:
+    dismissed_rows = (
+        db.query(GapDismissal)
+        .filter(GapDismissal.tenant_id == tenant_id, GapDismissal.source == GapSource.mode_a)
+        .order_by(GapDismissal.dismissed_at.desc(), GapDismissal.id.desc())
+        .all()
+    )
+    dismissed_by_id = {row.gap_id: row for row in dismissed_rows}
+    topics = (
+        db.query(GapDocTopic)
+        .filter(GapDocTopic.tenant_id == tenant_id)
+        .filter(GapDocTopic.topic_label.isnot(None))
+        .all()
+    )
+
+    items: list[GapItemResponse] = []
+    if status_filter in {"active", "all"}:
+        for topic in topics:
+            if topic.id in dismissed_by_id:
+                continue
+            if topic.status != GapDocTopicStatus.active:
+                continue
+            items.append(
+                GapItemResponse(
+                    id=topic.id,
+                    source=GapSource.mode_a,
+                    label=(topic.topic_label or "Untitled gap").strip(),
+                    coverage_score=topic.coverage_score,
+                    classification=_classify_gap(topic.coverage_score),
+                    status="active",
+                    is_new=bool(topic.is_new),
+                    question_count=len(_clean_questions(topic.example_questions)),
+                    aggregate_signal_weight=None,
+                    example_questions=_clean_questions(topic.example_questions),
+                    linked_source=None,
+                    also_missing_in_docs=False,
+                    last_updated=topic.extracted_at,
+                )
+            )
+    if status_filter in {"dismissed", "all"}:
+        topics_by_id = {topic.id: topic for topic in topics}
+        for dismissal in dismissed_rows:
+            topic = topics_by_id.get(dismissal.gap_id)
+            items.append(
+                GapItemResponse(
+                    id=dismissal.gap_id,
+                    source=GapSource.mode_a,
+                    label=((dismissal.topic_label or (topic.topic_label if topic else None)) or "Untitled gap").strip(),
+                    coverage_score=topic.coverage_score if topic is not None else None,
+                    classification=_classify_gap(topic.coverage_score if topic is not None else None),
+                    status="dismissed",
+                    is_new=False,
+                    question_count=len(_clean_questions(topic.example_questions if topic is not None else None)),
+                    aggregate_signal_weight=None,
+                    example_questions=_clean_questions(topic.example_questions if topic is not None else None),
+                    linked_source=None,
+                    also_missing_in_docs=False,
+                    last_updated=dismissal.dismissed_at,
+                )
+            )
+
+    if sort == "newest":
+        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    else:
+        items.sort(key=lambda item: (_sort_float(item.coverage_score, default=999.0), item.label.casefold()))
+    return items
+
+
+def _build_mode_b_items(
+    *,
+    db: Session,
+    tenant_id: UUID,
+    status_filter: ModeBStatusFilter,
+    sort: ModeBSort,
+) -> list[GapItemResponse]:
+    allowed_statuses: tuple[GapClusterStatus, ...]
+    if status_filter == "active":
+        allowed_statuses = (GapClusterStatus.active,)
+    elif status_filter == "closed":
+        allowed_statuses = (GapClusterStatus.closed,)
+    elif status_filter == "dismissed":
+        allowed_statuses = (GapClusterStatus.dismissed,)
+    else:
+        allowed_statuses = (GapClusterStatus.active, GapClusterStatus.closed, GapClusterStatus.dismissed)
+
+    clusters = (
+        db.query(GapCluster)
+        .filter(GapCluster.tenant_id == tenant_id)
+        .filter(GapCluster.status.in_([status.value for status in allowed_statuses]))
+        .filter(GapCluster.label.isnot(None))
+        .all()
+    )
+    sample_questions = _load_mode_b_question_samples(db, [cluster.id for cluster in clusters])
+
+    items = [
+        GapItemResponse(
+            id=cluster.id,
+            source=GapSource.mode_b,
+            label=(cluster.label or "Untitled gap").strip(),
+            coverage_score=cluster.coverage_score,
+            classification=_classify_gap(cluster.coverage_score),
+            status=_cluster_status_value(cluster.status),
+            is_new=bool(cluster.is_new),
+            question_count=int(cluster.question_count or 0),
+            aggregate_signal_weight=float(cluster.aggregate_signal_weight or 0.0),
+            example_questions=sample_questions.get(cluster.id, []),
+            linked_source=GapSource.mode_a if cluster.linked_doc_topic_id is not None else None,
+            also_missing_in_docs=cluster.linked_doc_topic_id is not None,
+            last_updated=cluster.last_computed_at or cluster.last_question_at or cluster.created_at,
+        )
+        for cluster in clusters
+    ]
+
+    if sort == "coverage_asc":
+        items.sort(key=lambda item: (_sort_float(item.coverage_score, default=999.0), item.label.casefold()))
+    elif sort == "newest":
+        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    else:
+        items.sort(
+            key=lambda item: (
+                -float(item.aggregate_signal_weight or 0.0),
+                _sort_float(item.coverage_score, default=999.0),
+                item.label.casefold(),
+            )
+        )
+    return items
+
+
+def _load_mode_b_question_samples(db: Session, cluster_ids: Iterable[UUID]) -> dict[UUID, list[str]]:
+    ids = [cluster_id for cluster_id in cluster_ids if cluster_id is not None]
+    if not ids:
+        return {}
+    rows = (
+        db.query(GapQuestion.cluster_id, GapQuestion.question_text)
+        .filter(GapQuestion.cluster_id.in_(ids))
+        .order_by(GapQuestion.created_at.desc(), GapQuestion.id.desc())
+        .all()
+    )
+    grouped: dict[UUID, list[str]] = defaultdict(list)
+    for cluster_id, question_text in rows:
+        if cluster_id is None:
+            continue
+        cleaned = question_text.strip()
+        if not cleaned or len(grouped[cluster_id]) >= 3:
+            continue
+        grouped[cluster_id].append(cleaned)
+    return dict(grouped)
+
+
+def _build_gap_summary(
+    *,
+    mode_a_items: list[GapItemResponse],
+    mode_b_items: list[GapItemResponse],
+) -> GapSummaryResponse:
+    active_items = [item for item in [*mode_a_items, *mode_b_items] if item.status == "active"]
+    uncovered_count = sum(1 for item in active_items if item.classification == "uncovered")
+    partial_count = sum(1 for item in active_items if item.classification == "partial")
+    total_active = len(active_items)
+    new_badge_count = sum(1 for item in active_items if item.is_new)
+    timestamps = [item.last_updated for item in [*mode_a_items, *mode_b_items] if item.last_updated is not None]
+    return GapSummaryResponse(
+        total_active=total_active,
+        uncovered_count=uncovered_count,
+        partial_count=partial_count,
+        impact_statement=_impact_statement(total_active=total_active, uncovered_count=uncovered_count, partial_count=partial_count),
+        new_badge_count=new_badge_count,
+        last_updated=max(timestamps) if timestamps else None,
+    )
+
+
+def _impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
+    if total_active == 0:
+        return "No active gaps detected."
+    if uncovered_count > 0:
+        noun = "gap" if uncovered_count == 1 else "gaps"
+        return f"{uncovered_count} uncovered {noun} need attention."
+    if partial_count > 0:
+        noun = "gap" if partial_count == 1 else "gaps"
+        return f"{partial_count} partially covered {noun} are worth reviewing."
+    noun = "gap" if total_active == 1 else "gaps"
+    return f"{total_active} active {noun} are being tracked."
+
+
+def _classify_gap(coverage_score: float | None) -> str:
+    if coverage_score is None:
+        return "unknown"
+    coverage_policy = CoveragePolicy()
+    if coverage_score >= coverage_policy.covered_threshold:
+        return "covered"
+    if coverage_score >= coverage_policy.mode_b_uncovered:
+        return "partial"
+    return "uncovered"
+
+
+def _cluster_status_value(status: GapClusterStatus | str) -> str:
+    if isinstance(status, GapClusterStatus):
+        return status.value
+    return str(status)
+
+
+def _clean_questions(raw_questions: object) -> list[str]:
+    if not isinstance(raw_questions, list):
+        return []
+    return [question.strip() for question in raw_questions if isinstance(question, str) and question.strip()]
+
+
+def _sort_float(value: float | None, *, default: float) -> float:
+    return float(value) if value is not None else default
+
+
+def _build_mode_a_draft_markdown(*, label: str, example_questions: list[str]) -> str:
+    lines = [
+        f"# {label}",
+        "",
+        "## Why this matters",
+        "This docs gap was detected from the current knowledge base and needs explicit coverage.",
+    ]
+    if example_questions:
+        lines.extend(["", "## Example questions"])
+        lines.extend([f"- {question}" for question in example_questions])
+    lines.extend(["", "## Draft notes", "- Add a concise overview", "- Explain the main workflow", "- Link related limits, edge cases, and troubleshooting"])
+    return "\n".join(lines)
+
+
+def _build_mode_b_draft_markdown(
+    *,
+    label: str,
+    sample_questions: list[str],
+    coverage_score: float | None,
+    signal_weight: float | None,
+) -> str:
+    lines = [
+        f"# {label}",
+        "",
+        "## User signal",
+        f"- Aggregate signal weight: {signal_weight or 0.0:.1f}",
+        f"- Coverage score: {coverage_score:.2f}" if coverage_score is not None else "- Coverage score: unknown",
+    ]
+    if sample_questions:
+        lines.extend(["", "## Sample user questions"])
+        lines.extend([f"- {question}" for question in sample_questions])
+    lines.extend(["", "## Draft notes", "- Start from the user pain in the questions above", "- Document the exact workflow or limitation", "- Include prerequisites, examples, and common failure cases"])
+    return "\n".join(lines)
 
 
 def _select_mode_a_sample(
@@ -654,16 +1148,21 @@ def _update_mode_b_cluster(
     question: ModeBQuestionRecord,
     question_embedding: list[float],
     corpus_chunks: list[_PreparedCorpusChunk],
-) -> bool:
+) -> None:
     if len(cluster.centroid) != len(question_embedding):
         logger.warning(
-            "gap_analyzer_mode_b_centroid_length_mismatch cluster_id=%s centroid_len=%s question_id=%s question_len=%s",
+            "gap_analyzer_mode_b_centroid_length_mismatch_falling_back_to_new_cluster cluster_id=%s centroid_len=%s question_id=%s question_len=%s",
             cluster.cluster_id,
             len(cluster.centroid),
             question.question_id,
             len(question_embedding),
         )
-        return False
+        raise _ModeBClusterUpdateRejected(
+            cluster_id=cluster.cluster_id,
+            question_id=question.question_id,
+            centroid_len=len(cluster.centroid),
+            question_len=len(question_embedding),
+        )
     previous_count = cluster.question_count
     cluster.question_count += 1
     cluster.aggregate_signal_weight += question.gap_signal_weight
@@ -679,7 +1178,6 @@ def _update_mode_b_cluster(
         corpus_chunks=corpus_chunks,
     )
     cluster.status = _mode_b_status_from_coverage(cluster.coverage_score)
-    return True
 
 
 def _mode_b_status_from_coverage(coverage_score: float) -> GapClusterStatus:

@@ -25,6 +25,7 @@ from backend.routes.widget import widget_router
 from backend.eval.routes import eval_router
 from backend.search.routes import search_router
 from backend.escalation.routes import escalation_router
+from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.knowledge.routes import knowledge_router
 
 
@@ -82,6 +83,7 @@ app.include_router(embeddings_router, prefix="/embeddings")
 app.include_router(search_router, prefix="/search")
 app.include_router(chat_router, prefix="/chat")
 app.include_router(escalation_router)
+app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
 app.include_router(public_router)
 app.include_router(widget_router)

@@ -12,6 +12,7 @@ from backend.chat import service as chat_service_module
 from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
 from backend.gap_analyzer.orchestrator import (
     GapAnalyzerOrchestrator,
+    _ModeBClusterUpdateRejected,
     _prepare_mode_b_clusters,
     _tokenize,
     _update_mode_b_cluster,
@@ -331,15 +332,36 @@ def test_update_mode_b_cluster_refuses_mismatched_vector_lengths() -> None:
         created_at=datetime.now(timezone.utc),
     )
 
-    updated = _update_mode_b_cluster(
-        cluster=cluster,
-        question=question,
-        question_embedding=[1.0, 0.0],
-        corpus_chunks=[],
-    )
-
-    assert updated is False
+    with pytest.raises(_ModeBClusterUpdateRejected):
+        _update_mode_b_cluster(
+            cluster=cluster,
+            question=question,
+            question_embedding=[1.0, 0.0],
+            corpus_chunks=[],
+        )
     assert cluster.question_count == 1
+
+
+def test_mutable_mode_b_cluster_post_init_recomputes_centroid_norm() -> None:
+    cluster = _prepare_mode_b_clusters(
+        [
+            ModeBClusterRecord(
+                cluster_id=uuid.uuid4(),
+                label="Invoice exports",
+                centroid=_vector(1.0, 0.0, 0.0),
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.1,
+                status=GapClusterStatus.active.value,
+                last_question_at=None,
+            )
+        ]
+    )[0]
+
+    cluster.centroid_norm = 0.0
+    cluster.__post_init__()
+
+    assert cluster.centroid_norm > 0.0
 
 
 def test_ensure_mode_b_question_embeddings_skips_blank_questions_without_misalignment(

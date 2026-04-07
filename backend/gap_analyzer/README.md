@@ -95,6 +95,26 @@ This module is intentionally introduced in two thin layers:
   - cross-language grouping or label regeneration policies beyond the minimal cluster label
   - durable background execution, retries, or cross-process locking for Mode B follow-ups
 
+## Phase 5 API and UI Notes
+
+- Phase 5 adds authenticated dashboard endpoints at:
+  - `GET /gap-analyzer`
+  - `POST /gap-analyzer/recalculate`
+  - `POST /gap-analyzer/{source}/{gap_id}/dismiss`
+  - `POST /gap-analyzer/{source}/{gap_id}/reactivate`
+  - `POST /gap-analyzer/{source}/{gap_id}/draft`
+- `GET /gap-analyzer` is backend-owned and returns:
+  - `summary`
+  - `mode_a_items`
+  - `mode_b_items`
+- Phase 5 keeps the response split into two visible sections.
+  The frontend does not merge Mode A and Mode B cards itself.
+- Manual recalculation remains an orchestration command surface:
+  - returns `202 Accepted`
+  - starts best-effort background work
+  - does not promise synchronous completion to the UI
+- The dashboard sidebar badge reads from `summary.new_badge_count`.
+
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.

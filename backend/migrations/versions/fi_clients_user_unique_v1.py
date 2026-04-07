@@ -47,6 +47,7 @@ def upgrade() -> None:
             SELECT 1
             FROM clients AS c
             WHERE c.user_id = users.id
+              AND (users.client_id IS NULL OR users.client_id <> c.id)
         )
         """
     )

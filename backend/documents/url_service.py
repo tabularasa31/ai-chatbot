@@ -60,6 +60,13 @@ PREFLIGHT_TIMEOUT_SECONDS = 5.0
 MAX_HTML_BYTES = 5 * 1024 * 1024
 MAX_REDIRECTS = 5
 USER_AGENT = "Chat9Bot/1.0 (+https://getchat9.live)"
+DISCOVERY_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
+SUPPORTED_PAGE_CONTENT_TYPES = (
+    "text/html",
+    "application/xhtml+xml",
+    "text/markdown",
+    "text/plain",
+)
 ALLOWED_SCHEDULES = {
     SourceSchedule.daily.value,
     SourceSchedule.weekly.value,
@@ -381,7 +388,13 @@ def _fetch_reachable_page(url: str, timeout_seconds: float) -> tuple[str, str | 
 
 
 def _is_html_like(response: httpx.Response) -> bool:
-    return "text/html" in response.headers.get("content-type", "")
+    content_type = response.headers.get("content-type", "").lower()
+    return any(value in content_type for value in DISCOVERY_CONTENT_TYPES)
+
+
+def _is_supported_page_response(response: httpx.Response) -> bool:
+    content_type = response.headers.get("content-type", "").lower()
+    return any(value in content_type for value in SUPPORTED_PAGE_CONTENT_TYPES)
 
 
 def _extract_links(html: str, current_url: str, domain: str) -> list[str]:
@@ -401,8 +414,19 @@ def _extract_links(html: str, current_url: str, domain: str) -> list[str]:
 def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
     candidates = [urljoin(root_url, "/sitemap.xml"), urljoin(root_url, "/sitemap_index.xml")]
     urls: list[str] = []
+    queued = deque(candidates)
+    seen_sitemaps: set[str] = set()
+    seen_urls: set[str] = set()
+
+    def local_name(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1].lower()
+
     with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
-        for candidate in candidates:
+        while queued:
+            candidate = queued.popleft()
+            if candidate in seen_sitemaps:
+                continue
+            seen_sitemaps.add(candidate)
             context = FetchContext(stage="preflight:sitemap", url=candidate)
             try:
                 response = _request_with_safe_redirects(client, "GET", candidate, context=context)
@@ -421,11 +445,28 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
             except ET.ParseError:
                 _log_fetch(logging.INFO, "Skipping invalid sitemap XML", context)
                 continue
-            for loc in root.findall(".//{*}loc"):
-                if loc.text:
-                    normalized = _normalize_page_url(loc.text.strip(), domain)
-                    if normalized:
-                        urls.append(normalized)
+
+            root_name = local_name(root.tag)
+            if root_name == "sitemapindex":
+                for sitemap in root.findall(".//{*}sitemap/{*}loc"):
+                    if not sitemap.text:
+                        continue
+                    normalized_sitemap = _normalize_page_url(sitemap.text.strip(), domain)
+                    if normalized_sitemap and normalized_sitemap not in seen_sitemaps:
+                        queued.append(normalized_sitemap)
+                continue
+
+            if root_name != "urlset":
+                _log_fetch(logging.INFO, "Skipping unsupported sitemap root", context, root_tag=root.tag)
+                continue
+
+            for loc in root.findall(".//{*}url/{*}loc"):
+                if not loc.text:
+                    continue
+                normalized = _normalize_page_url(loc.text.strip(), domain)
+                if normalized and normalized not in seen_urls:
+                    seen_urls.add(normalized)
+                    urls.append(normalized)
     return urls
 
 
@@ -910,7 +951,7 @@ def _fetch_page_html(url: str) -> str | None:
         except HTTPException as exc:
             _log_fetch(logging.INFO, "Skipping page after fetch failure", context, detail=exc.detail)
             return None
-    if response.status_code >= 400 or not _is_html_like(response):
+    if response.status_code >= 400 or not _is_supported_page_response(response):
         _log_fetch(
             logging.INFO,
             "Skipping page with unsupported response",
@@ -1457,7 +1498,7 @@ def _finalize_crawl(
 
     if failure_ratio > 0.3:
         source.status = SourceStatus.error
-        source.error_message = "Indexing failed — most pages were unreachable."
+        source.error_message = _summarize_crawl_failure(result.failures)
         _mark_run_finished(run, status=SourceStatus.error.value, error_message=source.error_message)
     else:
         source.status = SourceStatus.ready
@@ -1467,6 +1508,25 @@ def _finalize_crawl(
     run.failed_urls = result.failures
     run.duration_seconds = max(0, int(time.monotonic() - started))
     db.commit()
+
+
+def _summarize_crawl_failure(failures: list[dict[str, str]]) -> str:
+    reason_counts: dict[str, int] = {}
+    for failure in failures:
+        reason = (failure.get("reason") or "").strip()
+        if not reason:
+            continue
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+    if not reason_counts:
+        return "Indexing failed — most pages could not be indexed."
+
+    dominant_reason = max(reason_counts.items(), key=lambda item: item[1])[0]
+    if dominant_reason == "Could not fetch HTML":
+        return "Indexing failed — most pages could not be fetched or returned an unsupported format."
+    if dominant_reason == "No readable content extracted":
+        return "Indexing failed — most pages did not contain readable content."
+    return "Indexing failed — most pages could not be indexed."
 
 
 def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:

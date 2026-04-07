@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -21,6 +22,20 @@ from backend.gap_analyzer.schemas import GapRunMode, ModeAResult, ModeBResult, R
 logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+@dataclass(frozen=True)
+class _PreparedCorpusChunk:
+    tokens: set[str]
+    vector: list[float] | None
+    vector_norm: float
+
+
+@dataclass(frozen=True)
+class _PreparedDismissal:
+    normalized_label: str
+    vector: list[float] | None
+    vector_norm: float
 
 
 class GapAnalyzerOrchestrator:
@@ -73,6 +88,8 @@ class GapAnalyzerOrchestrator:
             candidates=candidates,
         )
         dismissals = repository.list_mode_a_dismissals(tenant_id)
+        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
+        prepared_dismissals = _prepare_dismissals(dismissals)
 
         coverage_policy = CoveragePolicy()
         lifecycle_policy = GapLifecyclePolicy()
@@ -82,18 +99,21 @@ class GapAnalyzerOrchestrator:
 
         for candidate in candidates:
             label_embedding = label_embeddings.get(candidate.topic_label)
+            label_embedding_norm = _vector_norm(label_embedding)
             if _is_dismissed_candidate(
                 candidate=candidate,
                 candidate_embedding=label_embedding,
-                dismissals=dismissals,
+                candidate_embedding_norm=label_embedding_norm,
+                dismissals=prepared_dismissals,
                 similarity_threshold=lifecycle_policy.dismissal_similarity,
             ):
                 continue
 
+            coverage_query = _build_coverage_query(candidate)
             coverage_score = _compute_mode_a_coverage(
-                query_text=_build_coverage_query(candidate),
+                query_text=coverage_query,
                 query_embedding=coverage_embeddings.get(candidate.topic_label),
-                corpus_chunks=corpus_chunks,
+                corpus_chunks=prepared_corpus,
             )
             if coverage_score >= coverage_policy.mode_a_gate:
                 continue
@@ -301,16 +321,25 @@ def _compute_mode_a_coverage(
     *,
     query_text: str,
     query_embedding: list[float] | None,
-    corpus_chunks: list[ModeACorpusChunk],
+    corpus_chunks: list[_PreparedCorpusChunk],
 ) -> float:
     query_tokens = _tokenize(query_text)
+    query_embedding_norm = _vector_norm(query_embedding)
     best_semantic = 0.0
     best_lexical = 0.0
     for chunk in corpus_chunks:
         if query_embedding is not None:
-            best_semantic = max(best_semantic, _cosine_similarity(query_embedding, _vector_from_unknown(chunk.vector)))
+            best_semantic = max(
+                best_semantic,
+                _cosine_similarity(
+                    query_embedding,
+                    chunk.vector,
+                    first_norm=query_embedding_norm,
+                    second_norm=chunk.vector_norm,
+                ),
+            )
         if query_tokens:
-            best_lexical = max(best_lexical, _token_overlap(query_tokens, chunk.chunk_text))
+            best_lexical = max(best_lexical, _token_overlap(query_tokens, chunk.tokens))
     return max(best_semantic, best_lexical)
 
 
@@ -318,49 +347,93 @@ def _is_dismissed_candidate(
     *,
     candidate: ModeATopicCandidate,
     candidate_embedding: list[float] | None,
-    dismissals: list[ModeADismissalRecord],
+    candidate_embedding_norm: float,
+    dismissals: list[_PreparedDismissal],
     similarity_threshold: float,
 ) -> bool:
     candidate_label = candidate.topic_label.strip().casefold()
     for dismissal in dismissals:
-        if candidate_label == dismissal.topic_label.strip().casefold():
+        if candidate_label == dismissal.normalized_label:
             return True
-        dismissal_embedding = _vector_from_unknown(dismissal.topic_label_embedding)
-        if candidate_embedding is None or dismissal_embedding is None:
+        if candidate_embedding is None or dismissal.vector is None:
             continue
-        if _cosine_similarity(candidate_embedding, dismissal_embedding) > similarity_threshold:
+        if _cosine_similarity(
+            candidate_embedding,
+            dismissal.vector,
+            first_norm=candidate_embedding_norm,
+            second_norm=dismissal.vector_norm,
+        ) > similarity_threshold:
             return True
     return False
+
+
+def _prepare_corpus_chunks(corpus_chunks: list[ModeACorpusChunk]) -> list[_PreparedCorpusChunk]:
+    prepared: list[_PreparedCorpusChunk] = []
+    for chunk in corpus_chunks:
+        vector = _vector_from_unknown(chunk.vector)
+        prepared.append(
+            _PreparedCorpusChunk(
+                tokens=_tokenize(chunk.chunk_text),
+                vector=vector,
+                vector_norm=_vector_norm(vector),
+            )
+        )
+    return prepared
+
+
+def _prepare_dismissals(dismissals: list[ModeADismissalRecord]) -> list[_PreparedDismissal]:
+    prepared: list[_PreparedDismissal] = []
+    for dismissal in dismissals:
+        vector = _vector_from_unknown(dismissal.topic_label_embedding)
+        prepared.append(
+            _PreparedDismissal(
+                normalized_label=dismissal.topic_label.strip().casefold(),
+                vector=vector,
+                vector_norm=_vector_norm(vector),
+            )
+        )
+    return prepared
 
 
 def _vector_from_unknown(raw: object) -> list[float] | None:
     if raw is None:
         return None
-    if isinstance(raw, list) and all(isinstance(value, (int, float)) for value in raw):
+    if isinstance(raw, list):
         return [float(value) for value in raw]
     if isinstance(raw, str):
         try:
             parsed = json.loads(raw)
         except Exception:
             return None
-        if isinstance(parsed, list) and all(isinstance(value, (int, float)) for value in parsed):
+        if isinstance(parsed, list):
             return [float(value) for value in parsed]
     return None
 
 
-def _cosine_similarity(first: list[float] | None, second: list[float] | None) -> float:
+def _vector_norm(vector: list[float] | None) -> float:
+    if vector is None:
+        return 0.0
+    return math.sqrt(sum(value * value for value in vector))
+
+
+def _cosine_similarity(
+    first: list[float] | None,
+    second: list[float] | None,
+    *,
+    first_norm: float,
+    second_norm: float,
+) -> float:
     if first is None or second is None or len(first) != len(second):
         return 0.0
-    dot = sum(left * right for left, right in zip(first, second))
-    norm_first = math.sqrt(sum(value * value for value in first))
-    norm_second = math.sqrt(sum(value * value for value in second))
-    if norm_first == 0.0 or norm_second == 0.0:
+    if first_norm == 0.0 or second_norm == 0.0:
         return 0.0
-    return max(0.0, min(1.0, dot / (norm_first * norm_second)))
+    dot = 0.0
+    for left, right in zip(first, second):
+        dot += left * right
+    return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 
 
-def _token_overlap(query_tokens: set[str], chunk_text: str) -> float:
-    chunk_tokens = _tokenize(chunk_text)
+def _token_overlap(query_tokens: set[str], chunk_tokens: set[str]) -> float:
     if not query_tokens or not chunk_tokens:
         return 0.0
     return len(query_tokens & chunk_tokens) / len(query_tokens)

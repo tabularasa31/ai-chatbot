@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, ensureClientReady, getToken, saveToken } from "@/lib/api";
+import { api, getToken, saveToken } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 import { AuthTransition } from "@/components/AuthTransition";
 
@@ -38,7 +38,6 @@ function LoginForm() {
     try {
       const { token } = await api.auth.login(email, password);
       saveToken(token);
-      await ensureClientReady();
       setTransitioning(true);
     } catch (err) {
       const msg = (err as Error)?.message || (err as { detail?: string })?.detail || "An error occurred";

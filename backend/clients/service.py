@@ -17,6 +17,8 @@ from backend.privacy_config import public_redaction_config_dict, with_redaction_
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.models import Chat, Client, User
 
+DEFAULT_CLIENT_NAME = "My Workspace"
+
 
 def _dt_utc_aware(d: dt.datetime | None) -> dt.datetime | None:
     if d is None:
@@ -54,6 +56,22 @@ def create_client(user_id: uuid.UUID, name: str, db: Session) -> Client:
         db.commit()
 
     return client
+
+
+def ensure_client_for_user(
+    user_id: uuid.UUID,
+    db: Session,
+    name: str = DEFAULT_CLIENT_NAME,
+) -> Client:
+    """Return the user's client, creating it if needed."""
+    client = get_client_by_user(user_id, db)
+    if client:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user and user.client_id != client.id:
+            user.client_id = client.id
+            db.commit()
+        return client
+    return create_client(user_id, name, db)
 
 
 def get_client_by_user(user_id: uuid.UUID, db: Session) -> Client | None:

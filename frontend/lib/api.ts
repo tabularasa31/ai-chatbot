@@ -334,32 +334,6 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
   return response;
 }
 
-export async function ensureClientReady(defaultName = "My Workspace"): Promise<ClientResponse> {
-  const currentRes = await authFetch(`${BASE_URL}/clients/me`);
-  const currentData = await currentRes.json().catch(() => ({}));
-  if (currentRes.ok) {
-    return currentData as ClientMeResponse;
-  }
-
-  const currentError = getErrorMessage(currentData, "Failed to get client");
-  const missingClient =
-    currentRes.status === 404 || currentError.toLowerCase().includes("client not found");
-  if (!missingClient) {
-    throw new Error(currentError);
-  }
-
-  const createRes = await authFetch(`${BASE_URL}/clients`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: defaultName }),
-  });
-  const createData = await createRes.json().catch(() => ({}));
-  if (!createRes.ok) {
-    throw new Error(getErrorMessage(createData, "Failed to create client"));
-  }
-  return createData as ClientResponse;
-}
-
 export const api = {
   auth: {
     async register(email: string, password: string) {

@@ -39,7 +39,7 @@ from backend.chat.service import (
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.auth.middleware import get_current_user, require_admin_user
-from backend.models import Chat, EscalationTrigger, Message, MessageFeedback, MessageRole, User
+from backend.models import Chat, Client, EscalationTrigger, Message, MessageFeedback, MessageRole, User
 from backend.models import PiiEvent, PiiEventDirection
 from backend.privacy_schemas import OriginalContentDeleteResponse
 
@@ -106,6 +106,28 @@ class ChatDebugResponse(BaseModel):
     debug: DebugInfoResponse
 
 chat_router = APIRouter(tags=["chat"])
+
+
+def _resolve_debug_client(
+    *,
+    db: Session,
+    current_user: User,
+    bot_id: Optional[str],
+) -> Client:
+    if bot_id is None:
+        client = get_client_by_user(current_user.id, db)
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found")
+        return client
+
+    client = (
+        db.query(Client)
+        .filter(Client.public_id == bot_id, Client.user_id == current_user.id)
+        .first()
+    )
+    if not client:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return client
 
 
 def _require_original_access(current_user: User) -> None:
@@ -181,14 +203,13 @@ def chat_debug(
     body: DebugRequest,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[Session, Depends(get_db)],
+    bot_id: Annotated[Optional[str], Query()] = None,
 ) -> ChatDebugResponse:
     """
     Debug endpoint: run RAG pipeline without persisting to DB.
     JWT auth required. Returns answer + retrieval debug info.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    client = _resolve_debug_client(db=db, current_user=current_user, bot_id=bot_id)
     if not client.openai_api_key:
         raise HTTPException(
             status_code=400,

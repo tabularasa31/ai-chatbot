@@ -107,6 +107,9 @@ This module is intentionally introduced in two thin layers:
   - `summary`
   - `mode_a_items`
   - `mode_b_items`
+- Phase 5 now requires verified users for all dashboard reads and actions.
+  This keeps operational gap-analysis data behind the same verification boundary as dismiss,
+  reactivate, and recalculate flows.
 - Phase 5 keeps the response split into two visible sections.
   The frontend does not merge Mode A and Mode B cards itself.
 - Manual recalculation remains an orchestration command surface:
@@ -114,6 +117,9 @@ This module is intentionally introduced in two thin layers:
   - starts best-effort background work
   - does not promise synchronous completion to the UI
 - The dashboard sidebar badge reads from `summary.new_badge_count`.
+  In this MVP the sidebar still calls the full `GET /gap-analyzer` payload to obtain that badge.
+  A lighter `GET /gap-analyzer/summary` style endpoint remains a follow-up once dataset size makes
+  the extra item payload materially expensive.
 
 ## Residual Trade-Offs
 

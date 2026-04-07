@@ -171,6 +171,173 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
     assert active_list.json()["mode_a_items"][0]["status"] == "active"
 
 
+def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-modeb-dismiss@example.com",
+        name="Gap Phase 5 Mode B Dismiss Client",
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="Webhook retry policy",
+        question_count=2,
+        aggregate_signal_weight=4.0,
+        coverage_score=0.15,
+        status=GapClusterStatus.active,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add(cluster)
+    db_session.commit()
+    db_session.refresh(cluster)
+
+    dismiss_response = client.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+    assert dismiss_response.status_code == 200, dismiss_response.text
+    assert dismiss_response.json()["status"] == "dismissed"
+
+    dismissed_list = client.get(
+        "/gap-analyzer?mode_b_status=dismissed",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert dismissed_list.status_code == 200, dismissed_list.text
+    assert dismissed_list.json()["mode_b_items"][0]["status"] == "dismissed"
+
+    reactivate_response = client.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/reactivate",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert reactivate_response.status_code == 200, reactivate_response.text
+    assert reactivate_response.json()["status"] == "active"
+
+    active_list = client.get(
+        "/gap-analyzer?mode_b_status=active",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert active_list.status_code == 200, active_list.text
+    assert active_list.json()["mode_b_items"][0]["status"] == "active"
+
+
+def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-repeat-dismiss@example.com",
+        name="Gap Phase 5 Repeat Dismiss Client",
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="Webhook signatures",
+        question_count=1,
+        aggregate_signal_weight=2.0,
+        coverage_score=0.1,
+        status=GapClusterStatus.active,
+    )
+    db_session.add(cluster)
+    db_session.commit()
+    db_session.refresh(cluster)
+
+    first = client.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+    second = client.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["status"] == "dismissed"
+    assert second.json()["status"] == "dismissed"
+
+
+def test_gap_analyzer_filters_and_sorts_mode_b_items(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-modeb-filters@example.com",
+        name="Gap Phase 5 Mode B Filters Client",
+    )
+    oldest = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    middle = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    newest = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            GapCluster(
+                tenant_id=client_id,
+                label="CSV export retention",
+                question_count=1,
+                aggregate_signal_weight=2.5,
+                coverage_score=0.4,
+                status=GapClusterStatus.active,
+                last_computed_at=middle,
+            ),
+            GapCluster(
+                tenant_id=client_id,
+                label="Audit log webhooks",
+                question_count=1,
+                aggregate_signal_weight=6.0,
+                coverage_score=0.2,
+                status=GapClusterStatus.active,
+                last_computed_at=oldest,
+            ),
+            GapCluster(
+                tenant_id=client_id,
+                label="SAML metadata refresh",
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.85,
+                status=GapClusterStatus.closed,
+                last_computed_at=newest,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    closed_only = client.get(
+        "/gap-analyzer?mode_b_status=closed",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert closed_only.status_code == 200, closed_only.text
+    assert [item["label"] for item in closed_only.json()["mode_b_items"]] == ["SAML metadata refresh"]
+
+    signal_sorted = client.get(
+        "/gap-analyzer?mode_b_sort=signal_desc",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert signal_sorted.status_code == 200, signal_sorted.text
+    assert [item["label"] for item in signal_sorted.json()["mode_b_items"]] == [
+        "Audit log webhooks",
+        "CSV export retention",
+    ]
+
+    newest_sorted = client.get(
+        "/gap-analyzer?mode_b_status=all&mode_b_sort=newest",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert newest_sorted.status_code == 200, newest_sorted.text
+    assert [item["label"] for item in newest_sorted.json()["mode_b_items"]] == [
+        "SAML metadata refresh",
+        "CSV export retention",
+        "Audit log webhooks",
+    ]
+
+
 def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     client: TestClient,
     db_session: Session,

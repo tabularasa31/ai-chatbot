@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user, require_verified_user
+from backend.auth.middleware import require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
@@ -47,7 +47,7 @@ def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
 
 @gap_analyzer_router.get("", response_model=GapAnalyzerResponse)
 def get_gap_analyzer(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     mode_a_status: ModeAStatusFilter = Query("active"),
     mode_b_status: ModeBStatusFilter = Query("active"),
@@ -130,7 +130,7 @@ def reactivate_gap(
 def draft_gap(
     source: GapSource,
     gap_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> GapDraftResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)

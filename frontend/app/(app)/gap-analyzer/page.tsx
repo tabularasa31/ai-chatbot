@@ -171,8 +171,8 @@ function GapCard({
         <div className="mt-4">
           <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Example questions</p>
           <ul className="space-y-1 text-sm text-slate-700">
-            {item.example_questions.map((question) => (
-              <li key={question} className="rounded-lg bg-slate-50 px-3 py-2">
+            {item.example_questions.map((question, index) => (
+              <li key={`${item.id}:${index}:${question}`} className="rounded-lg bg-slate-50 px-3 py-2">
                 {question}
               </li>
             ))}

@@ -295,6 +295,85 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     assert chunk_count == 1
 
 
+def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED", "1")
+    calls: list[dict] = []
+
+    def capture_extraction(**kwargs):
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(url_service, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
+
+    user = User(
+        email="hash-extract-env@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    client = create_client(user.id, "Client", db_session)
+
+    source = UrlSource(
+        client_id=client.id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+
+    document = Document(
+        client_id=client.id,
+        source_id=source.id,
+        filename="Existing",
+        file_type=DocumentType.url,
+        status=DocumentStatus.ready,
+        source_url="https://docs.example.com/page",
+        parsed_text="Same content",
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        Embedding(
+            document_id=document.id,
+            chunk_text="chunk",
+            vector=[0.1] * 1536,
+            metadata_json={},
+        )
+    )
+    db_session.commit()
+
+    page = url_service.ExtractedPage(
+        url="https://docs.example.com/page",
+        title="Updated title",
+        text="Same content",
+        chunks=[],
+    )
+
+    def fail_embed(*args, **kwargs):
+        raise AssertionError("_embed_chunks should not be called for unchanged content")
+
+    monkeypatch.setattr(url_service, "_embed_chunks", fail_embed)
+
+    updated_doc, chunk_count = url_service._upsert_page_document(
+        source=source,
+        page=page,
+        db=db_session,
+        api_key="sk-test",
+    )
+
+    assert updated_doc.id == document.id
+    assert chunk_count == 1
+    assert len(calls) == 1
+    assert calls[0]["document_id"] == document.id
+    assert calls[0]["api_key"] == "sk-test"
+
+
 def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

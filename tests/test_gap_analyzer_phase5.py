@@ -360,6 +360,40 @@ def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
     assert second.json()["status"] == "dismissed"
 
 
+def test_gap_analyzer_returns_not_found_for_missing_mode_b_cluster_actions(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, _client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-missing-cluster@example.com",
+        name="Gap Phase 5 Missing Cluster Client",
+    )
+    missing_cluster_id = uuid.uuid4()
+
+    dismiss_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+    reactivate_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/reactivate",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    draft_response = client.post(
+        f"/gap-analyzer/mode_b/{missing_cluster_id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert dismiss_response.status_code == 404, dismiss_response.text
+    assert dismiss_response.json()["detail"] == "Gap cluster not found"
+    assert reactivate_response.status_code == 404, reactivate_response.text
+    assert reactivate_response.json()["detail"] == "Gap cluster not found"
+    assert draft_response.status_code == 404, draft_response.text
+    assert draft_response.json()["detail"] == "Gap cluster not found"
+
+
 def test_gap_analyzer_filters_and_sorts_mode_b_items(
     client: TestClient,
     db_session: Session,

@@ -108,6 +108,10 @@ class _ModeBClusterUpdateRejected(RuntimeError):
         self.question_len = question_len
 
 
+class GapResourceNotFoundError(ValueError):
+    """Raised when a requested gap resource does not exist for the tenant."""
+
+
 class GapAnalyzerOrchestrator:
     """Command routing and bounded Gap Analyzer behavior."""
 
@@ -418,7 +422,7 @@ class GapAnalyzerOrchestrator:
                 .first()
             )
             if topic is None:
-                raise ValueError("Gap topic not found")
+                raise GapResourceNotFoundError("Gap topic not found")
             existing = (
                 db.query(GapDismissal)
                 .filter(
@@ -448,7 +452,7 @@ class GapAnalyzerOrchestrator:
             .first()
         )
         if cluster is None:
-            raise ValueError("Gap cluster not found")
+            raise GapResourceNotFoundError("Gap cluster not found")
         cluster.status = GapClusterStatus.dismissed
         cluster.question_count_at_dismissal = cluster.question_count
         existing = (
@@ -501,7 +505,7 @@ class GapAnalyzerOrchestrator:
             .first()
         )
         if cluster is None:
-            raise ValueError("Gap cluster not found")
+            raise GapResourceNotFoundError("Gap cluster not found")
         (
             db.query(GapDismissal)
             .filter(
@@ -552,7 +556,7 @@ class GapAnalyzerOrchestrator:
             .first()
         )
         if cluster is None:
-            raise ValueError("Gap cluster not found")
+            raise GapResourceNotFoundError("Gap cluster not found")
         sample_questions = _load_mode_b_question_samples(db, [cluster.id]).get(cluster.id, [])
         linked_mode_a_questions: list[str] = []
         if cluster.linked_doc_topic_id is not None and DraftGenerationPolicy().append_mode_a_example_questions:

@@ -77,3 +77,12 @@ This module is intentionally introduced in two thin layers:
 - `UrlSource` states such as `stale`, `paused`, and `error` do not block Mode A execution.
   This is intentional so a problematic source does not prevent gap analysis from running against
   the rest of the tenant corpus.
+
+## Future Cleanup
+
+- `backend/gap_analyzer/prompts.py` still parses raw JSON responses from the LLM manually.
+  If the candidate schema grows, this should move to Pydantic-backed parsing or OpenAI
+  Structured Outputs for stricter validation and less handwritten shape checking.
+- `_vector_from_unknown(...)` in `backend/gap_analyzer/orchestrator.py` is still a permissive
+  normalization helper. Longer term, the repository boundary should preferably return typed
+  vectors directly so Mode A does not need to coerce unknown vector payloads at runtime.

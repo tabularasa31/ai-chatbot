@@ -13,10 +13,11 @@ from alembic.operations import Operations
 
 import backend.gap_analyzer as gap_analyzer
 from backend.gap_analyzer.domain import CoveragePolicy, DocumentScopePolicy, DraftGenerationPolicy
+from backend.gap_analyzer.enums import GapDismissReason
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.schemas import GapRunMode, RecalculateCommandResult
-from backend.models import Base
+from backend.gap_analyzer.schemas import DismissReason, GapRunMode, RecalculateCommandResult
+from backend.models import Base, GapDismissReason as ModelGapDismissReason
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +112,11 @@ def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
     document_scope_policy = DocumentScopePolicy()
     assert document_scope_policy.excluded_mode_a_file_types == ("swagger",)
     assert "separate analyzer" in document_scope_policy.excluded_mode_a_reason
+
+
+def test_gap_analyzer_shared_enums_are_single_source_of_truth() -> None:
+    assert DismissReason is GapDismissReason
+    assert ModelGapDismissReason is GapDismissReason
 
 
 def test_gap_signal_default_timestamp_is_timezone_aware() -> None:

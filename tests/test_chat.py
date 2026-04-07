@@ -1723,6 +1723,47 @@ def test_set_message_feedback_success_down(
     assert data["ideal_answer"] == "This is the ideal answer."
 
 
+def test_set_message_feedback_survives_gap_analyzer_sync_failure(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primary feedback save should survive best-effort Gap Analyzer failure."""
+    from backend.models import Chat, Message, MessageFeedback, MessageRole
+
+    token = register_and_verify_user(client, db_session, email="fb-gap-fail@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Fb Gap Fail Client"},
+    )
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    msg = Message(chat_id=chat.id, role=MessageRole.assistant, content="Bad answer")
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+
+    monkeypatch.setattr(
+        "backend.chat.routes.record_gap_feedback_for_message",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("gap sync failed")),
+    )
+
+    resp = client.post(
+        f"/chat/messages/{msg.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "down", "ideal_answer": "This is the ideal answer."},
+    )
+    assert resp.status_code == 200
+
+    db_session.refresh(msg)
+    assert msg.feedback == MessageFeedback.down
+    assert msg.ideal_answer == "This is the ideal answer."
+
+
 def test_set_message_feedback_rejects_user_message(
     client: TestClient,
     db_session: Session,

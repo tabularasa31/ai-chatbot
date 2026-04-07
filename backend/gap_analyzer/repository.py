@@ -68,17 +68,6 @@ class SqlAlchemyGapAnalyzerRepository:
                 "GapSignal requires user_message_id and assistant_message_id for Phase 2 ingestion"
             )
 
-        attempt_index = signal.attempt_index
-        if attempt_index == 0:
-            attempt_index = (
-                self.db.query(GapQuestionMessageLink)
-                .filter(
-                    GapQuestionMessageLink.chat_id == signal.chat_id,
-                    GapQuestionMessageLink.user_message_id == signal.user_message_id,
-                )
-                .count()
-            )
-
         gap_question = GapQuestion(
             tenant_id=signal.tenant_id,
             question_text=signal.question_text,
@@ -99,7 +88,7 @@ class SqlAlchemyGapAnalyzerRepository:
                 assistant_message_id=signal.assistant_message_id,
                 chat_id=signal.chat_id,
                 session_id=signal.session_id,
-                attempt_index=attempt_index,
+                attempt_index=signal.attempt_index,
                 created_at=signal.created_at,
             )
         )

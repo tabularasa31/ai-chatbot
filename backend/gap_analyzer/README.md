@@ -90,11 +90,20 @@ This module is intentionally introduced in two thin layers:
   - archive or inactive automation
   - trending logic
   - cross-language grouping or label regeneration policies beyond the minimal cluster label
+  - durable background execution, retries, or cross-process locking for Mode B follow-ups
 
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.
   Fully blank questions remain unembedded and unclustered until later sanitation or admin cleanup.
+- Phase 4 no longer blocks the chat response thread on Mode B work, but follow-ups still run via
+  in-process `threading.Thread(...)`.
+  This is an MVP compromise for latency, not a production-grade queueing model.
+- The same-tenant follow-up guard is process-local only.
+  Multiple app workers can still start concurrent Mode B runs for the same tenant until a durable
+  worker queue or database-level coordination primitive is introduced.
+- There is still no durable retry path for failed Mode B follow-ups.
+  A transient crash or worker restart can drop an in-flight follow-up until the next signal arrives.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.

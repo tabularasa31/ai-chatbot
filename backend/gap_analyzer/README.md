@@ -75,9 +75,9 @@ This module is intentionally introduced in two thin layers:
   - compute coverage against the non-swagger tenant corpus
   - transition only between basic `active` and `closed` states based on coverage
 - Mode B runs best-effort after successful signal ingestion.
-- In Phase 4 MVP this trigger still runs synchronously from the chat-side ingestion path.
-  That keeps delivery simple, but it also means Mode B can add latency and OpenAI dependency
-  to a hot request path until it moves behind a proper queue/background execution model.
+- In Phase 4 MVP the chat-side ingestion path only spawns an in-process background thread.
+  That removes the direct latency hit from the request path, but it is still not a durable queue
+  and can still compete for process resources until it moves behind a proper worker model.
 - Each Phase 4 trigger currently processes all tenant questions with `cluster_id IS NULL`.
   That is acceptable for the MVP, but large backlogs will need batching and/or queued workers.
 - Phase 4 explicitly does not add:

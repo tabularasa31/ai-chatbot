@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1726,7 +1727,7 @@ def _try_ingest_gap_signal(
             )
         )
         ingestion_db.commit()
-        run_mode_b_for_tenant_best_effort(client_id)
+        _start_mode_b_followup(client_id)
     except ValueError:
         ingestion_db.rollback()
         logger.warning(
@@ -1746,6 +1747,14 @@ def _try_ingest_gap_signal(
         )
     finally:
         ingestion_db.close()
+
+
+def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:
+    threading.Thread(
+        target=run_mode_b_for_tenant_best_effort,
+        args=(tenant_id,),
+        daemon=True,
+    ).start()
 
 
 def record_gap_feedback_for_message(

@@ -148,6 +148,13 @@ class GapAnalyzerRepository(Protocol):
     ) -> None:
         ...
 
+    def bulk_update_mode_b_question_embeddings(
+        self,
+        *,
+        embeddings_by_question_id: dict[UUID, list[float]],
+    ) -> None:
+        ...
+
     def create_mode_b_cluster(
         self,
         *,
@@ -425,6 +432,14 @@ class SqlAlchemyGapAnalyzerRepository:
         rows = (
             self.db.query(GapCluster)
             .filter(GapCluster.tenant_id == tenant_id)
+            .filter(
+                GapCluster.status.in_(
+                    [
+                        GapClusterStatus.active.value,
+                        GapClusterStatus.closed.value,
+                    ]
+                )
+            )
             .order_by(GapCluster.created_at.asc(), GapCluster.id.asc())
             .all()
         )
@@ -453,6 +468,22 @@ class SqlAlchemyGapAnalyzerRepository:
             raise ValueError(f"GapQuestion not found for id={question_id}")
         question.embedding = embedding
         self.db.add(question)
+        self.db.flush()
+
+    def bulk_update_mode_b_question_embeddings(
+        self,
+        *,
+        embeddings_by_question_id: dict[UUID, list[float]],
+    ) -> None:
+        if not embeddings_by_question_id:
+            return
+        self.db.bulk_update_mappings(
+            GapQuestion,
+            [
+                {"id": question_id, "embedding": embedding}
+                for question_id, embedding in embeddings_by_question_id.items()
+            ],
+        )
         self.db.flush()
 
     def create_mode_b_cluster(
@@ -491,11 +522,13 @@ class SqlAlchemyGapAnalyzerRepository:
         question_id: UUID,
         cluster_id: UUID,
     ) -> None:
-        question = self.db.get(GapQuestion, question_id)
-        if question is None:
+        updated_rows = (
+            self.db.query(GapQuestion)
+            .filter(GapQuestion.id == question_id)
+            .update({GapQuestion.cluster_id: cluster_id}, synchronize_session=False)
+        )
+        if updated_rows == 0:
             raise ValueError(f"GapQuestion not found for id={question_id}")
-        question.cluster_id = cluster_id
-        self.db.add(question)
         self.db.flush()
 
     def update_mode_b_cluster(

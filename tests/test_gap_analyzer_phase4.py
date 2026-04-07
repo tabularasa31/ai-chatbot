@@ -218,7 +218,7 @@ def test_try_ingest_gap_signal_triggers_mode_b_best_effort(
 
     trigger_calls: list[uuid.UUID] = []
     monkeypatch.setattr(
-        "backend.chat.service.run_mode_b_for_tenant_best_effort",
+        "backend.chat.service._start_mode_b_followup",
         lambda tenant_id: trigger_calls.append(tenant_id),
     )
 
@@ -237,6 +237,46 @@ def test_try_ingest_gap_signal_triggers_mode_b_best_effort(
     )
 
     assert trigger_calls == [client_id]
+
+
+def test_run_mode_b_joins_existing_closed_cluster_when_similarity_matches(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-mode-b-closed-join@example.com",
+        name="Gap Mode B Closed Join Client",
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="How do invoice exports work?",
+        centroid=_vector(1.0, 0.0, 0.0),
+        question_count=1,
+        aggregate_signal_weight=1.5,
+        coverage_score=0.9,
+        status=GapClusterStatus.closed,
+    )
+    question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How do invoice exports work for teams?",
+        embedding=_vector(0.95, 0.05, 0.0),
+        gap_signal_weight=2.0,
+    )
+    db_session.add_all([cluster, question])
+    db_session.commit()
+
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
+    orchestrator.run_mode_b(client_id)
+
+    clusters = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).all()
+    db_session.refresh(cluster)
+    db_session.refresh(question)
+
+    assert len(clusters) == 1
+    assert question.cluster_id == cluster.id
+    assert cluster.question_count == 2
 
 
 def test_tokenize_preserves_hyphenated_terms() -> None:

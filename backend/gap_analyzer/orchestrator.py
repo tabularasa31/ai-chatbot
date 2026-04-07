@@ -359,13 +359,13 @@ class GapAnalyzerOrchestrator:
             encrypted_api_key=encrypted_api_key,
             texts=[question.question_text for question in missing_questions],
         )
-        for index, question in enumerate(missing_questions):
-            if index >= len(vectors):
-                break
-            repository.update_mode_b_question_embedding(
-                question_id=question.question_id,
-                embedding=vectors[index],
-            )
+        repository.bulk_update_mode_b_question_embeddings(
+            embeddings_by_question_id={
+                question.question_id: vectors[index]
+                for index, question in enumerate(missing_questions)
+                if index < len(vectors)
+            }
+        )
 
     def _require_repository(self) -> GapAnalyzerRepository:
         if self.repository is None:
@@ -601,7 +601,7 @@ def _match_mode_b_cluster(
     best_cluster: _MutableModeBCluster | None = None
     best_similarity = 0.0
     for cluster in clusters:
-        if cluster.status != GapClusterStatus.active:
+        if cluster.status in {GapClusterStatus.dismissed, GapClusterStatus.inactive}:
             continue
         similarity = _cosine_similarity(
             question_embedding,

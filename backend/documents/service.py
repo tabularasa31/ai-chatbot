@@ -65,20 +65,23 @@ def _truncate_to_approx_tokens(text: str, max_tokens: int = 3000) -> str:
     return text[:max_chars]
 
 
+def _contains_keyword_phrase(haystacks: list[str], keywords: tuple[str, ...]) -> bool:
+    if not keywords:
+        return False
+    pattern = rf"\b(?:{'|'.join(re.escape(keyword) for keyword in keywords)})\b"
+    return any(re.search(pattern, haystack) for haystack in haystacks)
+
+
 def _expects_contact_info(filename: str | None, excerpt: str) -> bool:
     haystacks = [excerpt.lower()]
     if filename:
         haystacks.append(filename.lower().replace("_", " ").replace("-", " "))
 
-    if any(keyword in haystack for haystack in haystacks for keyword in _CONTACT_EXPECTED_STRONG_KEYWORDS):
+    if _contains_keyword_phrase(haystacks, _CONTACT_EXPECTED_STRONG_KEYWORDS):
         return True
 
-    has_weak_signal = any(keyword in haystack for haystack in haystacks for keyword in _CONTACT_EXPECTED_WEAK_KEYWORDS)
-    has_assistance_context = any(
-        phrase in haystack
-        for haystack in haystacks
-        for phrase in _CONTACT_ASSISTANCE_PHRASES
-    )
+    has_weak_signal = _contains_keyword_phrase(haystacks, _CONTACT_EXPECTED_WEAK_KEYWORDS)
+    has_assistance_context = _contains_keyword_phrase(haystacks, _CONTACT_ASSISTANCE_PHRASES)
     return has_weak_signal and has_assistance_context
 
 

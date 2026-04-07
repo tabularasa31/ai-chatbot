@@ -1,5 +1,6 @@
 """FastAPI chat endpoints."""
 
+import logging
 import uuid
 from collections import defaultdict
 from typing import Annotated, Literal, Optional
@@ -34,6 +35,7 @@ from backend.chat.service import (
     get_session_logs,
     list_chat_sessions,
     process_chat_message,
+    record_gap_feedback_for_message,
     run_debug,
 )
 from backend.clients.service import get_client_by_api_key, get_client_by_user
@@ -42,6 +44,8 @@ from backend.auth.middleware import get_current_user, require_admin_user
 from backend.models import Chat, Client, EscalationTrigger, Message, MessageFeedback, MessageRole, User
 from backend.models import PiiEvent, PiiEventDirection
 from backend.privacy_schemas import OriginalContentDeleteResponse
+
+logger = logging.getLogger(__name__)
 
 
 class DebugRequest(BaseModel):
@@ -483,6 +487,23 @@ def set_message_feedback(
     message.ideal_answer = body.ideal_answer if body.ideal_answer else None
     db.commit()
     db.refresh(message)
+    try:
+        record_gap_feedback_for_message(
+            db=db,
+            tenant_id=client.id,
+            assistant_message_id=message.id,
+            feedback_value=body.feedback.value,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "gap_analyzer_feedback_sync_failed: tenant_id=%s assistant_message_id=%s feedback=%s",
+            client.id,
+            message.id,
+            body.feedback.value,
+            exc_info=True,
+        )
 
     return MessageFeedbackResponse(
         id=message.id,

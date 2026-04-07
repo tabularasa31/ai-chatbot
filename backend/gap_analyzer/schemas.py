@@ -3,30 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
 from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel
+from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode
 
 
-class GapRunMode(str, Enum):
-    mode_a = "mode_a"
-    mode_b = "mode_b"
-    both = "both"
-
-
-class GapCommandStatus(str, Enum):
-    accepted = "accepted"
-    in_progress = "in_progress"
-    rate_limited = "rate_limited"
-
-
-class DismissReason(str, Enum):
-    feature_request = "feature_request"
-    not_relevant = "not_relevant"
-    already_covered = "already_covered"
-    other = "other"
+DismissReason = GapDismissReason
 
 
 class ModeAResult(BaseModel):

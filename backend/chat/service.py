@@ -18,6 +18,7 @@ PREVIEW_MAX_LEN = 120
 
 from backend.chat.pii import redact
 from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
+from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
@@ -65,6 +66,9 @@ from backend.search.service import (
     search_similar_chunks_detailed,
 )
 from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
+from backend.gap_analyzer.events import GapSignal
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.guards.injection_detector import detect_injection
 from backend.guards.relevance_checker import check_relevance_precheck
 from backend.guards.reject_response import (
@@ -1606,8 +1610,8 @@ def _persist_turn(
     document_ids: list[uuid.UUID],
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
-) -> None:
-    _create_message(
+) -> tuple[Message, Message]:
+    user_message = _create_message(
         db,
         chat=chat,
         client_id=client_id,
@@ -1615,7 +1619,7 @@ def _persist_turn(
         content=user_content,
         optional_entity_types=optional_entity_types,
     )
-    _create_message(
+    assistant_message = _create_message(
         db,
         chat=chat,
         client_id=client_id,
@@ -1630,6 +1634,7 @@ def _persist_turn(
         client_id=client_id,
         extra_tokens=extra_tokens,
     )
+    return user_message, assistant_message
 
 
 def _finalize_persisted_messages(
@@ -1681,6 +1686,78 @@ def _persist_assistant_message(
         chat=chat,
         client_id=client_id,
         extra_tokens=extra_tokens,
+    )
+
+
+def _try_ingest_gap_signal(
+    *,
+    chat: Chat,
+    client_id: uuid.UUID,
+    session_id: uuid.UUID,
+    user_message: Message,
+    assistant_message: Message,
+    question_text: str,
+    answer_confidence: float | None,
+    was_rejected: bool,
+    had_fallback: bool,
+    was_escalated: bool,
+    language: str | None = None,
+) -> None:
+    ingestion_db = core_db.SessionLocal()
+    try:
+        orchestrator = GapAnalyzerOrchestrator(
+            repository=SqlAlchemyGapAnalyzerRepository(ingestion_db)
+        )
+        orchestrator.ingest_signal(
+            GapSignal(
+                tenant_id=client_id,
+                chat_id=chat.id,
+                session_id=session_id,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
+                question_text=question_text,
+                answer_confidence=answer_confidence,
+                was_rejected=was_rejected,
+                had_fallback=had_fallback,
+                was_escalated=was_escalated,
+                user_thumbed_down=False,
+                language=language,
+            )
+        )
+        ingestion_db.commit()
+    except ValueError:
+        ingestion_db.rollback()
+        logger.warning(
+            "gap_analyzer_signal_ingestion_contract_failed: client_id=%s session_id=%s assistant_message_id=%s",
+            client_id,
+            session_id,
+            assistant_message.id,
+            exc_info=True,
+        )
+    except Exception:
+        ingestion_db.rollback()
+        logger.exception(
+            "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
+            client_id,
+            session_id,
+            assistant_message.id,
+        )
+    finally:
+        ingestion_db.close()
+
+
+def record_gap_feedback_for_message(
+    *,
+    db: Session,
+    tenant_id: uuid.UUID,
+    assistant_message_id: uuid.UUID,
+    feedback_value: str,
+) -> bool:
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+    return orchestrator.record_assistant_feedback(
+        tenant_id=tenant_id,
+        assistant_message_id=assistant_message_id,
+        feedback_value=feedback_value,
     )
 
 
@@ -1897,7 +1974,7 @@ def process_chat_message(
         output={"matched": bool(quick_answer), "answer": quick_answer}
     )
     if quick_answer:
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -1906,6 +1983,19 @@ def process_chat_message(
             [],
             0,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=None,
+            was_rejected=False,
+            had_fallback=False,
+            was_escalated=False,
+            language=fallback_locale,
         )
         trace.update(
             output={"answer": quick_answer, "source": "quick_answers"},
@@ -1945,7 +2035,7 @@ def process_chat_message(
             api_key=api_key,
             fallback_locale=fallback_locale,
         )
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -1954,6 +2044,19 @@ def process_chat_message(
             [],
             reject_result.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=None,
+            was_rejected=True,
+            had_fallback=False,
+            was_escalated=False,
+            language=fallback_locale,
         )
         trace.update(
             output={"answer": reject_result.text, "source": "guard_reject_injection"},
@@ -2235,7 +2338,7 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
             db.add(chat)
             db.commit()
-            _persist_turn(
+            user_message, assistant_message = _persist_turn(
                 db,
                 chat,
                 client_id,
@@ -2244,6 +2347,19 @@ def process_chat_message(
                 [],
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
+            )
+            _try_ingest_gap_signal(
+                chat=chat,
+                client_id=client_id,
+                session_id=session_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                question_text=redacted_question,
+                answer_confidence=None,
+                was_rejected=False,
+                had_fallback=False,
+                was_escalated=True,
+                language=fallback_locale,
             )
             trace.update(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
@@ -2293,7 +2409,7 @@ def process_chat_message(
         )
         _set_clarification_state(chat, clarification_decision.state)
         db.add(chat)
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -2302,6 +2418,21 @@ def process_chat_message(
             clarification_document_ids,
             result.tokens_used + clarification_decision.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=(
+                result.retrieval.best_confidence_score if result.retrieval is not None else None
+            ),
+            was_rejected=False,
+            had_fallback=result.validation_outcome == "fallback",
+            was_escalated=False,
+            language=fallback_locale,
         )
         _trace_event(
             trace,
@@ -2370,7 +2501,7 @@ def process_chat_message(
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).
     if result.is_reject or result.is_faq_direct:
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -2379,6 +2510,21 @@ def process_chat_message(
             [],
             result.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=(
+                result.retrieval.best_confidence_score if result.retrieval is not None else None
+            ),
+            was_rejected=result.is_reject,
+            had_fallback=result.validation_outcome == "fallback",
+            was_escalated=False,
+            language=fallback_locale,
         )
         source_map = {
             "injection": "guard_reject_injection",
@@ -2489,7 +2635,7 @@ def process_chat_message(
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
-    _persist_turn(
+    user_message, assistant_message = _persist_turn(
         db,
         chat,
         client_id,
@@ -2498,6 +2644,19 @@ def process_chat_message(
         document_ids,
         tokens_used,
         optional_entity_types=optional_entity_types,
+    )
+    _try_ingest_gap_signal(
+        chat=chat,
+        client_id=client_id,
+        session_id=session_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        question_text=redacted_question,
+        answer_confidence=retrieval.best_confidence_score,
+        was_rejected=False,
+        had_fallback=result.validation_outcome == "fallback",
+        was_escalated=bool(escalate),
+        language=fallback_locale,
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.

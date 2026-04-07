@@ -9,7 +9,6 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.clients.service import get_client_by_user
 from backend.core.config import settings
 from backend.core.security import ALGORITHM
 
@@ -68,27 +67,6 @@ def test_login_success(client: TestClient, db_session) -> None:
     data = response.json()
     assert "token" in data
     assert data["user"]["email"] == "login@example.com"
-
-
-def test_login_provisions_missing_client(client: TestClient, db_session) -> None:
-    """Login backfills a client for legacy verified users who do not have one yet."""
-    from tests.conftest import register_and_verify_user
-    from backend.models import User
-
-    register_and_verify_user(client, db_session, email="login-provision@example.com")
-    user = db_session.query(User).filter(User.email == "login-provision@example.com").first()
-    assert user is not None
-    assert get_client_by_user(user.id, db_session) is None
-
-    response = client.post(
-        "/auth/login",
-        json={"email": "login-provision@example.com", "password": "SecurePass1!"},
-    )
-
-    assert response.status_code == 200
-    provisioned_client = get_client_by_user(user.id, db_session)
-    assert provisioned_client is not None
-    assert provisioned_client.name == "My Workspace"
 
 
 def test_login_wrong_password(client: TestClient) -> None:

@@ -103,7 +103,6 @@ def login(
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox.")
-    ensure_client_for_user(user.id, db)
     token, expires_in = create_token_for_user(user)
     return AuthResponse(
         token=token,

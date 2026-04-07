@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import fnmatch
 import hashlib
+import os
 import ipaddress
 import logging
 import math
@@ -26,6 +27,7 @@ from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+from backend.core import db as core_db
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -935,6 +937,53 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
     return vectors
 
 
+def _url_knowledge_extract_when_unchanged() -> bool:
+    """If true, run tenant knowledge extraction even when page/spec content hash is unchanged.
+
+    Default false to avoid extra LLM cost on every scheduled re-crawl. Set env to ``1``/``true``
+    once after deploy to backfill ``tenant_faq`` / profile for already-indexed URL sources.
+    """
+    raw = os.getenv("URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED", "")
+    return raw.strip().lower() in ("1", "true", "yes")
+
+
+def _run_tenant_knowledge_extraction_best_effort(
+    *,
+    document_id: uuid.UUID,
+    api_key: str | None,
+) -> None:
+    """
+    Match file-upload embedding flow: after chunks exist, merge profile + FAQ candidates.
+
+    URL crawls bypass ``run_embeddings_background``; without this hook, GitBook/docs
+    URLs index for RAG but never populate ``tenant_faq`` / profile extraction.
+
+    Uses a **fresh** DB session from ``backend.core.db`` so ``db.rollback()`` inside
+    ``upsert_faq_candidates`` / extraction error paths cannot undo the crawler session.
+    """
+    if not api_key:
+        return
+    db_extract = core_db.SessionLocal()
+    try:
+        from backend.tenant_knowledge.extract_tenant_knowledge import (
+            run_extract_client_knowledge_for_document,
+        )
+
+        run_extract_client_knowledge_for_document(
+            document_id=document_id,
+            db=db_extract,
+            api_key=api_key,
+        )
+    except Exception:
+        logger.warning(
+            "Tenant knowledge extraction failed for URL document_id=%s",
+            document_id,
+            exc_info=True,
+        )
+    finally:
+        db_extract.close()
+
+
 def _upsert_page_document(
     *,
     source: UrlSource,
@@ -954,6 +1003,11 @@ def _upsert_page_document(
         existing.filename = page.title[:255]
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.url
+        if _url_knowledge_extract_when_unchanged():
+            _run_tenant_knowledge_extraction_best_effort(
+                document_id=existing.id,
+                api_key=api_key,
+            )
         return existing, len(existing.embeddings)
 
     if existing:
@@ -1001,6 +1055,11 @@ def _upsert_page_document(
         )
     doc.status = DocumentStatus.ready
     db.flush()
+    db.commit()
+    _run_tenant_knowledge_extraction_best_effort(
+        document_id=doc.id,
+        api_key=api_key,
+    )
     return doc, len(page.chunks)
 
 
@@ -1026,6 +1085,11 @@ def _upsert_structured_document(
         existing.filename = title[:255]
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.swagger
+        if _url_knowledge_extract_when_unchanged():
+            _run_tenant_knowledge_extraction_best_effort(
+                document_id=existing.id,
+                api_key=api_key,
+            )
         return existing, len(existing.embeddings)
 
     if existing:
@@ -1089,6 +1153,11 @@ def _upsert_structured_document(
             )
         doc.status = DocumentStatus.ready
         db.flush()
+        db.commit()
+        _run_tenant_knowledge_extraction_best_effort(
+            document_id=doc.id,
+            api_key=api_key,
+        )
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})

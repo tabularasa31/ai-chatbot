@@ -30,7 +30,7 @@ from backend.auth.service import (
     register_user,
     reset_password,
 )
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import require_verified_user
 from backend.email.service import send_email
 from backend.clients.service import ensure_client_for_user
 from backend.models import User
@@ -216,7 +216,7 @@ def reset_password_endpoint(
 
 @auth_router.get("/me", response_model=UserResponse)
 def get_me(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
 ) -> UserResponse:
     """
     Get current user info (protected route).

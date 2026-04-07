@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-07 (verification provisioning + bot-scoped debug contract)  
+**Last updated:** 2026-04-07 (verification-first dashboard access + bot-scoped debug contract)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -21,7 +21,13 @@ Users sign up with email + password. Passwords are hashed with bcrypt. On login,
 
 ### Email verification
 
-After registration, Brevo sends a verification link. The user must verify before they can use write-only endpoints (e.g. update OpenAI key, change settings). Successful `POST /auth/verify-email` now also provisions the user's single client/workspace on the backend, so the authenticated app no longer relies on frontend fallback creation.
+After registration, Brevo sends a verification link. The user must verify before they can use the authenticated dashboard or any tenant-scoped JWT API routes. Successful `POST /auth/verify-email` also provisions the user's single client/workspace on the backend, so the authenticated app no longer relies on frontend fallback creation.
+
+In practice this means:
+
+- public onboarding routes such as register, login, verify-email, forgot-password, and reset-password stay available without a verified dashboard session
+- dashboard/API routes that operate on a tenant workspace use `require_verified_user`
+- public widget flows and eval/widget-specific auth paths are not part of this rule unless they explicitly use the dashboard JWT stack
 
 ### Forgot password
 
@@ -184,6 +190,7 @@ Contract notes:
 - Deleting a single URL-derived page adds its `source_url` to a persistent manual exclusion list for that source, so the crawler does not recreate it on later refreshes.
 - `recent_runs[].failed_urls` uses a fixed object shape: `{ "url": string, "reason": string }`.
 - Mutating URL source actions (`create`, `edit`, `refresh`, `delete`, `delete page`) require a verified user.
+- Read-side dashboard routes for documents, knowledge, embeddings, search, chat logs/history/feedback, escalations, and gap analyzer now also require a verified user, keeping the whole tenant workspace behind the same verification boundary.
 
 ---
 

@@ -8,7 +8,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user, require_admin_user
+from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
@@ -64,7 +64,7 @@ def _serialize_ticket(ticket: EscalationTicket, *, include_original: bool) -> Es
 
 @escalation_router.get("", response_model=EscalationListResponse)
 def list_escalations(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     status: Annotated[Optional[str], Query()] = None,
     include_original: bool = Query(False),
@@ -108,7 +108,7 @@ def list_escalations(
 @escalation_router.get("/{ticket_id}", response_model=EscalationTicketOut)
 def get_escalation(
     ticket_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     include_original: bool = Query(False),
 ) -> EscalationTicketOut:
@@ -145,7 +145,7 @@ def get_escalation(
 def resolve_escalation(
     ticket_id: uuid.UUID,
     body: EscalationResolveRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> EscalationTicketOut:
     client = get_client_by_user(current_user.id, db)

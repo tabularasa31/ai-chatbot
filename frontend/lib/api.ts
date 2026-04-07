@@ -267,6 +267,71 @@ export type KnowledgeFaqListResponse = {
   pending_count: number;
 };
 
+export type GapSource = "mode_a" | "mode_b";
+export type GapItemStatus = "active" | "closed" | "dismissed";
+export type GapClassification = "uncovered" | "partial" | "covered" | "unknown";
+export type GapModeAStatusFilter = "active" | "dismissed" | "all";
+export type GapModeBStatusFilter = "active" | "closed" | "dismissed" | "all";
+export type GapModeASort = "coverage_asc" | "newest";
+export type GapModeBSort = "signal_desc" | "coverage_asc" | "newest";
+export type GapDismissReason = "feature_request" | "not_relevant" | "already_covered" | "other";
+export type GapRunMode = "mode_a" | "mode_b" | "both";
+
+export type GapItem = {
+  id: string;
+  source: GapSource;
+  label: string;
+  coverage_score: number | null;
+  classification: GapClassification;
+  status: GapItemStatus;
+  is_new: boolean;
+  question_count: number;
+  aggregate_signal_weight: number | null;
+  example_questions: string[];
+  linked_source: GapSource | null;
+  also_missing_in_docs: boolean;
+  last_updated: string | null;
+};
+
+export type GapSummary = {
+  total_active: number;
+  uncovered_count: number;
+  partial_count: number;
+  impact_statement: string;
+  new_badge_count: number;
+  last_updated: string | null;
+};
+
+export type GapAnalyzerResponse = {
+  summary: GapSummary;
+  mode_a_items: GapItem[];
+  mode_b_items: GapItem[];
+};
+
+export type GapActionResponse = {
+  success: boolean;
+  source: GapSource;
+  gap_id: string;
+  status: GapItemStatus;
+};
+
+export type GapDraftResponse = {
+  source: GapSource;
+  gap_id: string;
+  title: string;
+  markdown: string;
+};
+
+export type GapRecalculateResponse = {
+  tenant_id: string;
+  mode: GapRunMode;
+  status: "accepted" | "in_progress" | "rate_limited";
+  command_kind: "orchestration";
+  http_status_code: 202;
+  accepted_at: string | null;
+  retry_after_seconds: number | null;
+};
+
 function getErrorMessage(data: unknown, fallback: string): string {
   const d = data as { detail?: unknown; message?: string };
   if (typeof d?.detail === "string") return d.detail;
@@ -722,6 +787,63 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create embeddings"));
       return data as { document_id: string; status: string };
+    },
+  },
+  gapAnalyzer: {
+    async get(params?: {
+      modeAStatus?: GapModeAStatusFilter;
+      modeBStatus?: GapModeBStatusFilter;
+      modeASort?: GapModeASort;
+      modeBSort?: GapModeBSort;
+    }): Promise<GapAnalyzerResponse> {
+      const search = new URLSearchParams();
+      if (params?.modeAStatus) search.set("mode_a_status", params.modeAStatus);
+      if (params?.modeBStatus) search.set("mode_b_status", params.modeBStatus);
+      if (params?.modeASort) search.set("mode_a_sort", params.modeASort);
+      if (params?.modeBSort) search.set("mode_b_sort", params.modeBSort);
+      const suffix = search.toString() ? `?${search.toString()}` : "";
+      const res = await authFetch(`${BASE_URL}/gap-analyzer${suffix}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer"));
+      return data as GapAnalyzerResponse;
+    },
+    async recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
+      const res = await authFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to start recalculation"));
+      return data as GapRecalculateResponse;
+    },
+    async dismiss(
+      source: GapSource,
+      gapId: string,
+      reason: GapDismissReason = "other",
+    ): Promise<GapActionResponse> {
+      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to dismiss gap"));
+      return data as GapActionResponse;
+    },
+    async reactivate(source: GapSource, gapId: string): Promise<GapActionResponse> {
+      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/reactivate`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to reactivate gap"));
+      return data as GapActionResponse;
+    },
+    async draft(source: GapSource, gapId: string): Promise<GapDraftResponse> {
+      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/draft`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate draft"));
+      return data as GapDraftResponse;
     },
   },
   chat: {

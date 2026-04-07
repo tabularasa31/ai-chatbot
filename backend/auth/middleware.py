@@ -1,7 +1,10 @@
 """
 JWT authentication middleware.
 Uses FastAPI dependency injection — no route registration needed.
-Routes protect themselves via Depends(get_current_user).
+
+Base auth: Depends(get_current_user) — valid JWT only.
+Dashboard / tenant APIs should use Depends(require_verified_user) unless a route
+must work with a not-yet-verified principal (rare; login/register stay public).
 """
 import uuid
 
@@ -67,7 +70,7 @@ async def require_verified_user(
 
 
 async def require_admin_user(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_verified_user),
 ) -> User:
     """Ensure that the current user has admin privileges."""
     if not current_user.is_admin:

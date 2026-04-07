@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-04-07 (verification provisioning, bot-scoped debug)
+**Last updated:** 2026-04-07 (verification-first dashboard access, bot-scoped debug)
 
 ---
 
@@ -11,7 +11,7 @@
 | ID / area | What shipped | Code / API |
 |-----------|--------------|--------------|
 | Registration, JWT login | Users, JWT sessions; access tokens carry `typ=chat9_user` | `backend/auth/`, `backend/core/security.py`, `backend/core/jwt_kinds.py`, `POST /auth/register`, `POST /auth/login` |
-| Email verification | Brevo email, token; successful verification provisions the user's workspace client | `POST /auth/verify-email`, verify UI, `backend/clients/service.py` |
+| Email verification | Brevo email, token; successful verification provisions the user's workspace client and unlocks dashboard / tenant JWT APIs guarded by `require_verified_user` | `POST /auth/verify-email`, verify UI, `backend/auth/middleware.py`, `backend/clients/service.py` |
 | Forgot password | Email request + token reset (1h TTL), rate limit | `POST /auth/forgot-password`, `POST /auth/reset-password` |
 | Admin flag | `is_admin` for admin metrics | `User.is_admin`, `GET /admin/metrics/*` |
 

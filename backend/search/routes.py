@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import APIError
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user
+from backend.auth.middleware import require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 def search_route(
     request: Request,
     body: SearchRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SearchResponse:
     """

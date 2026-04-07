@@ -17,7 +17,7 @@ from backend.admin.schemas import (
     AdminPiiEventItem,
     AdminPiiEventList,
 )
-from backend.auth.middleware import get_current_user, require_admin_user
+from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.core.db import get_db
 from backend.models import Chat, Client, Document, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
 from backend.privacy_schemas import DeletedCountResponse
@@ -26,7 +26,7 @@ admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 def get_admin_user(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
 ) -> User:
     """Require admin role. Raises 403 if not admin."""
     if not current_user.is_admin:

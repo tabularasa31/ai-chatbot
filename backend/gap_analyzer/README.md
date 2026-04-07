@@ -95,6 +95,32 @@ This module is intentionally introduced in two thin layers:
   - cross-language grouping or label regeneration policies beyond the minimal cluster label
   - durable background execution, retries, or cross-process locking for Mode B follow-ups
 
+## Phase 5 API and UI Notes
+
+- Phase 5 adds authenticated dashboard endpoints at:
+  - `GET /gap-analyzer`
+  - `POST /gap-analyzer/recalculate`
+  - `POST /gap-analyzer/{source}/{gap_id}/dismiss`
+  - `POST /gap-analyzer/{source}/{gap_id}/reactivate`
+  - `POST /gap-analyzer/{source}/{gap_id}/draft`
+- `GET /gap-analyzer` is backend-owned and returns:
+  - `summary`
+  - `mode_a_items`
+  - `mode_b_items`
+- Phase 5 now requires verified users for all dashboard reads and actions.
+  This keeps operational gap-analysis data behind the same verification boundary as dismiss,
+  reactivate, and recalculate flows.
+- Phase 5 keeps the response split into two visible sections.
+  The frontend does not merge Mode A and Mode B cards itself.
+- Manual recalculation remains an orchestration command surface:
+  - returns `202 Accepted`
+  - starts best-effort background work
+  - does not promise synchronous completion to the UI
+- The dashboard sidebar badge reads from `summary.new_badge_count`.
+  In this MVP the sidebar still calls the full `GET /gap-analyzer` payload to obtain that badge.
+  A lighter `GET /gap-analyzer/summary` style endpoint remains a follow-up once dataset size makes
+  the extra item payload materially expensive.
+
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.
@@ -110,12 +136,19 @@ This module is intentionally introduced in two thin layers:
 - Cluster loading for Mode B is not paginated yet.
   Tenants with very large numbers of active/closed clusters will still need batching or a narrower
   candidate-selection strategy in a later phase.
+- The sidebar badge still pays for the full dashboard payload shape.
+  A dedicated lightweight summary endpoint is a Phase 5 follow-up if this becomes a noticeable
+  source of extra DB load or response payload size.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.
 - `UrlSource` states such as `stale`, `paused`, and `error` do not block Mode A execution.
   This is intentional so a problematic source does not prevent gap analysis from running against
   the rest of the tenant corpus.
+- `update_mode_b_question_embedding(...)` now tolerates missing questions with a warning rather than
+  aborting the whole follow-up job.
+  If this path starts triggering in real traffic, it should grow tenant-aware logging and/or a
+  dedicated metric so silent data-shape bugs are easier to spot.
 
 ## Future Cleanup
 

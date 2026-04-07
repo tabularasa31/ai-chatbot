@@ -10,6 +10,7 @@ type NavItem = {
   label: string;
   icon: React.ReactNode;
   adminOnly?: boolean;
+  badgeKey?: "gapAnalyzer";
 };
 
 const mainNav: NavItem[] = [
@@ -32,6 +33,17 @@ const mainNav: NavItem[] = [
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
         <path d="M7.5 1L13 4v7l-5.5 3L2 11V4L7.5 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
         <path d="M7.5 1v13M2 4l5.5 3 5.5-3" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
+    href: "/gap-analyzer",
+    label: "Gap Analyzer",
+    badgeKey: "gapAnalyzer",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M2 11.5L5.2 8.3L7.3 10.4L11.8 5.9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M9.8 5.9H11.8V7.9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     ),
   },
@@ -116,9 +128,17 @@ const adminNav: NavItem[] = [
 export function Sidebar() {
   const pathname = usePathname();
   const [isAdmin, setIsAdmin] = useState(false);
+  const [gapBadgeCount, setGapBadgeCount] = useState(0);
 
   useEffect(() => {
     api.clients.getMe().then((c) => setIsAdmin(c.is_admin)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    api.gapAnalyzer
+      .get()
+      .then((data) => setGapBadgeCount(data.summary.new_badge_count))
+      .catch(() => {});
   }, []);
 
   function isActive(href: string) {
@@ -128,6 +148,7 @@ export function Sidebar() {
   }
 
   function NavLink({ item }: { item: NavItem }) {
+    const badgeValue = item.badgeKey === "gapAnalyzer" ? gapBadgeCount : 0;
     return (
       <Link
         href={item.href}
@@ -143,7 +164,12 @@ export function Sidebar() {
         <span className={isActive(item.href) ? "opacity-90" : "opacity-60"}>
           {item.icon}
         </span>
-        {item.label}
+        <span className="flex-1">{item.label}</span>
+        {badgeValue > 0 && (
+          <span className="rounded-full bg-[#E879F9]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#F5D0FE]">
+            {badgeValue > 99 ? "99+" : badgeValue}
+          </span>
+        )}
       </Link>
     );
   }

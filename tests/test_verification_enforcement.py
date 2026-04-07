@@ -36,6 +36,20 @@ def _get_verified_user_token(client: TestClient, db_session) -> str:
 
 
 @patch("backend.auth.routes.send_email")
+def test_get_me_forbidden_for_unverified_user(
+    mock_send_email: Mock, client: TestClient, db_session
+) -> None:
+    """GET /auth/me with unverified user JWT → 403."""
+    token = _get_unverified_user_token(client, db_session)
+    response = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Email not verified."
+
+
+@patch("backend.auth.routes.send_email")
 def test_create_client_forbidden_for_unverified_user(
     mock_send_email: Mock, client: TestClient, db_session
 ) -> None:

@@ -210,6 +210,7 @@ def mock_openai_client():
          patch("backend.chat.language.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client), \
+         patch("backend.gap_analyzer.prompts.get_openai_client", return_value=mock_client), \
          patch("backend.knowledge.routes.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \

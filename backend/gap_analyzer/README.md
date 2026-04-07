@@ -43,7 +43,21 @@ This module is intentionally introduced in two thin layers:
 
 - Revisit the current scaffold-level IVFFlat index strategy once real data exists;
   tuning or rebuild parameters will likely be needed on Postgres.
-- Reassess the sync `GapAnalyzerRepository` protocol versus the async orchestrator
-  surface when Phase 2 introduces concrete persistence behavior.
 - Keep the current AST boundary tests for foundation, but refine them later if
   `TYPE_CHECKING` or conditional imports make them too noisy.
+
+## Phase 3 Mode A Notes
+
+- Mode A samples the tenant corpus deterministically:
+  - group by `section_title`, then `page_title`, then filename/source fallback
+  - take the longest chunk per group first
+  - backfill by longest remaining chunks up to 40 total
+- The extraction hash is computed from the sorted sampled chunk ids.
+- If the extraction hash is unchanged, Mode A must:
+  - skip the LLM call
+  - skip rewriting `gap_doc_topics`
+  - preserve the previous `extracted_at` freshness state
+- Coverage and dismissal policy remain owned by Gap Analyzer itself.
+- Successful triggers for Mode A currently fire best-effort after:
+  - manual document embedding completion
+  - successful URL source indexing completion

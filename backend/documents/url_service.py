@@ -35,6 +35,7 @@ from backend.documents.parsers import (
     looks_like_openapi,
     load_openapi_spec,
 )
+from backend.gap_analyzer.jobs import run_mode_a_for_tenant_best_effort
 from backend.models import (
     Client,
     Document,
@@ -1437,6 +1438,16 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             return
 
         _finalize_crawl(source, run, plan, result, started, db)
+        if source.status == SourceStatus.ready:
+            try:
+                run_mode_a_for_tenant_best_effort(source.client_id)
+            except Exception:
+                logger.warning(
+                    "Gap Analyzer Mode A trigger failed for source_id=%s tenant_id=%s",
+                    source.id,
+                    source.client_id,
+                    exc_info=True,
+                )
     except HTTPException as exc:
         logger.warning("URL crawl rejected for source %s: %s", source_id, exc.detail)
         source = db.query(UrlSource).filter(UrlSource.id == source_id).first()

@@ -72,7 +72,7 @@ def test_gap_analyzer_orchestrator_and_repository_avoid_cross_domain_imports() -
         assert not forbidden, f"{filename} should not import cross-domain modules: {forbidden}"
 
 
-def test_gap_analyzer_orchestrator_is_command_only_skeleton() -> None:
+def test_gap_analyzer_orchestrator_keeps_read_contracts_out_of_public_surface() -> None:
     orchestrator = GapAnalyzerOrchestrator()
 
     assert not hasattr(orchestrator, "list_active_gaps")
@@ -90,10 +90,10 @@ def test_gap_analyzer_orchestrator_is_command_only_skeleton() -> None:
 
     with pytest.raises(RuntimeError):
         orchestrator.ingest_signal(signal)
+    with pytest.raises(RuntimeError):
+        orchestrator.run_mode_a(uuid4())
     with pytest.raises(NotImplementedError):
         import asyncio
-        asyncio.run(orchestrator.run_mode_a(uuid4()))
-    with pytest.raises(NotImplementedError):
         asyncio.run(orchestrator.run_mode_b(uuid4()))
     with pytest.raises(NotImplementedError):
         asyncio.run(orchestrator.request_recalculation(uuid4(), GapRunMode.both))

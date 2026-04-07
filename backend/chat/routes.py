@@ -40,7 +40,7 @@ from backend.chat.service import (
 )
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
-from backend.auth.middleware import get_current_user, require_admin_user
+from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.models import Chat, Client, EscalationTrigger, Message, MessageFeedback, MessageRole, User
 from backend.models import PiiEvent, PiiEventDirection
 from backend.privacy_schemas import OriginalContentDeleteResponse
@@ -199,7 +199,7 @@ def chat(
 def chat_debug(
     request: Request,
     body: DebugRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     bot_id: Annotated[str, Query(min_length=1)],
 ) -> ChatDebugResponse:
@@ -339,7 +339,7 @@ def chat_escalate(
 
 @chat_router.get("/sessions", response_model=ChatSessionListResponse)
 def get_sessions(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionListResponse:
     """
@@ -368,7 +368,7 @@ def get_sessions(
 @chat_router.get("/logs/session/{session_id}", response_model=ChatMessageLogResponse)
 def get_session_logs_route(
     session_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     include_original: bool = Query(False),
 ) -> ChatMessageLogResponse:
@@ -456,7 +456,7 @@ def delete_session_original_route(
 def set_message_feedback(
     message_id: uuid.UUID,
     body: MessageFeedbackRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> MessageFeedbackResponse:
     """
@@ -514,7 +514,7 @@ def set_message_feedback(
 
 @chat_router.get("/bad-answers", response_model=BadAnswerListResponse)
 def list_bad_answers(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -574,7 +574,7 @@ def list_bad_answers(
 @chat_router.get("/history/{session_id}", response_model=ChatHistoryResponse)
 def get_history(
     session_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatHistoryResponse:
     """

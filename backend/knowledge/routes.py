@@ -8,7 +8,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user, require_verified_user
+from backend.auth.middleware import require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core import db as core_db
 from backend.core.db import get_db
@@ -115,7 +115,7 @@ def _generate_faq_embedding_background(
     "/api/v1/bots/{bot_id}/knowledge/profile", response_model=KnowledgeProfileResponse
 )
 def get_knowledge_profile(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     bot_id: Optional[str] = None,
 ) -> KnowledgeProfileResponse:
@@ -175,7 +175,7 @@ def patch_knowledge_profile(
 @knowledge_router.get("/knowledge/faq", response_model=KnowledgeFaqListResponse)
 @knowledge_router.get("/api/v1/bots/{bot_id}/knowledge/faq", response_model=KnowledgeFaqListResponse)
 def list_knowledge_faq(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     approved: Literal["true", "false", "all"] = Query("all"),
     source: Literal["docs", "logs", "swagger", "all"] = Query("all"),

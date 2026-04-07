@@ -6,7 +6,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session, selectinload
 
-from backend.auth.middleware import get_current_user, require_verified_user
+from backend.auth.middleware import require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
@@ -152,7 +152,7 @@ def upload_document_route(
 
 @documents_router.get("", response_model=DocumentListResponse)
 def list_documents_route(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentListResponse:
     """
@@ -167,7 +167,7 @@ def list_documents_route(
 
 @documents_router.get("/sources", response_model=KnowledgeSourcesResponse)
 def list_knowledge_sources_route(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeSourcesResponse:
     """List file documents and URL sources for the Knowledge page."""
@@ -210,7 +210,7 @@ def create_url_source_route(
 @documents_router.get("/sources/{source_id}", response_model=UrlSourceDetailResponse)
 def get_url_source_route(
     source_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceDetailResponse:
     """Return detail, recent crawl history, and indexed pages for one URL source."""
@@ -322,7 +322,7 @@ def delete_source_page_route(
 @documents_router.get("/{document_id}/health", response_model=DocumentHealthStatusResponse)
 def get_document_health_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentHealthStatusResponse:
     """
@@ -373,7 +373,7 @@ def run_document_health_check_route(
 @documents_router.get("/{document_id}", response_model=DocumentDetailResponse)
 def get_document_detail_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentDetailResponse:
     """
@@ -404,7 +404,7 @@ def get_document_detail_route(
 @documents_router.delete("/{document_id}", status_code=204, response_model=None)
 def delete_document_route(
     document_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """

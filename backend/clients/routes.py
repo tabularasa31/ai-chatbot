@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from backend.auth.middleware import get_current_user, require_verified_user
+from backend.auth.middleware import require_verified_user
 from backend.clients.schemas import (
     ClientMeResponse,
     ClientResponse,
@@ -186,7 +186,7 @@ def put_support_settings_route(
 @clients_router.patch("/me", response_model=ClientResponse)
 def update_my_client(
     body: UpdateClientRequest,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClientResponse:
     """
@@ -241,7 +241,7 @@ def validate_api_key(
 @clients_router.get("/{client_id}", response_model=ClientResponse)
 def get_client_by_id_route(
     client_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> ClientResponse:
     """
@@ -256,7 +256,7 @@ def get_client_by_id_route(
 @clients_router.delete("/{client_id}", status_code=204, response_model=None)
 def delete_client_route(
     client_id: uuid.UUID,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """

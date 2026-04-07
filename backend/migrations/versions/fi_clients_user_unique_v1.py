@@ -35,11 +35,20 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        UPDATE users AS u
-        SET client_id = c.id
-        FROM clients AS c
-        WHERE c.user_id = u.id
-          AND u.client_id IS DISTINCT FROM c.id
+        UPDATE users
+        SET client_id = (
+            SELECT c.id
+            FROM clients AS c
+            WHERE c.user_id = users.id
+            ORDER BY c.created_at ASC, c.id ASC
+            LIMIT 1
+        )
+        WHERE EXISTS (
+            SELECT 1
+            FROM clients AS c
+            WHERE c.user_id = users.id
+              AND (users.client_id IS NULL OR users.client_id <> c.id)
+        )
         """
     )
     op.create_unique_constraint("uq_clients_user_id", "clients", ["user_id"])

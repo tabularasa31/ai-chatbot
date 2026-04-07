@@ -1624,6 +1624,21 @@ def _persist_turn(
         source_documents=_source_docs_for_db(db, document_ids),
         optional_entity_types=optional_entity_types,
     )
+    _finalize_persisted_messages(
+        db=db,
+        chat=chat,
+        client_id=client_id,
+        extra_tokens=extra_tokens,
+    )
+
+
+def _finalize_persisted_messages(
+    *,
+    db: Session,
+    chat: Chat,
+    client_id: uuid.UUID,
+    extra_tokens: int,
+) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     db.add(chat)
     try:
@@ -1661,24 +1676,12 @@ def _persist_assistant_message(
         source_documents=None,
         optional_entity_types=optional_entity_types,
     )
-    chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
-    db.add(chat)
-    try:
-        with db.begin_nested():
-            record_user_session_turn(
-                db,
-                client_id=client_id,
-                user_context=chat.user_context,
-                ended_at=chat.ended_at,
-            )
-    except Exception:
-        logger.warning(
-            "user_session_turn_tracking_failed: client_id=%s session_id=%s",
-            client_id,
-            chat.session_id,
-            exc_info=True,
-        )
-    db.commit()
+    _finalize_persisted_messages(
+        db=db,
+        chat=chat,
+        client_id=client_id,
+        extra_tokens=extra_tokens,
+    )
 
 
 def _trigger_log_analysis_threshold(

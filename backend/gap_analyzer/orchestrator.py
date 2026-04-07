@@ -13,6 +13,7 @@ import re
 from typing import Iterable
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer.domain import ClusteringPolicy, CoveragePolicy, DocumentScopePolicy, GapLifecyclePolicy, SignalWeightPolicy
@@ -681,6 +682,7 @@ def _build_mode_a_items(
                 continue
             if topic.status != GapDocTopicStatus.active:
                 continue
+            cleaned_questions = _clean_questions(topic.example_questions)
             items.append(
                 GapItemResponse(
                     id=topic.id,
@@ -690,9 +692,9 @@ def _build_mode_a_items(
                     classification=_classify_gap(topic.coverage_score),
                     status="active",
                     is_new=bool(topic.is_new),
-                    question_count=len(_clean_questions(topic.example_questions)),
+                    question_count=len(cleaned_questions),
                     aggregate_signal_weight=None,
-                    example_questions=_clean_questions(topic.example_questions),
+                    example_questions=cleaned_questions,
                     linked_source=None,
                     also_missing_in_docs=False,
                     last_updated=topic.extracted_at,
@@ -702,6 +704,7 @@ def _build_mode_a_items(
         topics_by_id = {topic.id: topic for topic in topics}
         for dismissal in dismissed_rows:
             topic = topics_by_id.get(dismissal.gap_id)
+            cleaned_questions = _clean_questions(topic.example_questions if topic is not None else None)
             items.append(
                 GapItemResponse(
                     id=dismissal.gap_id,
@@ -711,9 +714,9 @@ def _build_mode_a_items(
                     classification=_classify_gap(topic.coverage_score if topic is not None else None),
                     status="dismissed",
                     is_new=False,
-                    question_count=len(_clean_questions(topic.example_questions if topic is not None else None)),
+                    question_count=len(cleaned_questions),
                     aggregate_signal_weight=None,
-                    example_questions=_clean_questions(topic.example_questions if topic is not None else None),
+                    example_questions=cleaned_questions,
                     linked_source=None,
                     also_missing_in_docs=False,
                     last_updated=dismissal.dismissed_at,
@@ -791,10 +794,24 @@ def _load_mode_b_question_samples(db: Session, cluster_ids: Iterable[UUID]) -> d
     ids = [cluster_id for cluster_id in cluster_ids if cluster_id is not None]
     if not ids:
         return {}
-    rows = (
-        db.query(GapQuestion.cluster_id, GapQuestion.question_text)
+    ranked_rows = (
+        db.query(
+            GapQuestion.cluster_id.label("cluster_id"),
+            GapQuestion.question_text.label("question_text"),
+            func.row_number()
+            .over(
+                partition_by=GapQuestion.cluster_id,
+                order_by=(GapQuestion.created_at.desc(), GapQuestion.id.desc()),
+            )
+            .label("row_number"),
+        )
         .filter(GapQuestion.cluster_id.in_(ids))
-        .order_by(GapQuestion.created_at.desc(), GapQuestion.id.desc())
+        .subquery()
+    )
+    rows = (
+        db.query(ranked_rows.c.cluster_id, ranked_rows.c.question_text)
+        .filter(ranked_rows.c.row_number <= 3)
+        .order_by(ranked_rows.c.cluster_id.asc(), ranked_rows.c.row_number.asc())
         .all()
     )
     grouped: dict[UUID, list[str]] = defaultdict(list)
@@ -802,7 +819,7 @@ def _load_mode_b_question_samples(db: Session, cluster_ids: Iterable[UUID]) -> d
         if cluster_id is None:
             continue
         cleaned = question_text.strip()
-        if not cleaned or len(grouped[cluster_id]) >= 3:
+        if not cleaned:
             continue
         grouped[cluster_id].append(cleaned)
     return dict(grouped)
@@ -813,19 +830,32 @@ def _build_gap_summary(
     mode_a_items: list[GapItemResponse],
     mode_b_items: list[GapItemResponse],
 ) -> GapSummaryResponse:
-    active_items = [item for item in [*mode_a_items, *mode_b_items] if item.status == "active"]
-    uncovered_count = sum(1 for item in active_items if item.classification == "uncovered")
-    partial_count = sum(1 for item in active_items if item.classification == "partial")
-    total_active = len(active_items)
-    new_badge_count = sum(1 for item in active_items if item.is_new)
-    timestamps = [item.last_updated for item in [*mode_a_items, *mode_b_items] if item.last_updated is not None]
+    uncovered_count = 0
+    partial_count = 0
+    total_active = 0
+    new_badge_count = 0
+    last_updated: datetime | None = None
+
+    for item in [*mode_a_items, *mode_b_items]:
+        if item.last_updated is not None and (last_updated is None or item.last_updated > last_updated):
+            last_updated = item.last_updated
+        if item.status != "active":
+            continue
+        total_active += 1
+        if item.classification == "uncovered":
+            uncovered_count += 1
+        elif item.classification == "partial":
+            partial_count += 1
+        if item.is_new:
+            new_badge_count += 1
+
     return GapSummaryResponse(
         total_active=total_active,
         uncovered_count=uncovered_count,
         partial_count=partial_count,
         impact_statement=_impact_statement(total_active=total_active, uncovered_count=uncovered_count, partial_count=partial_count),
         new_badge_count=new_badge_count,
-        last_updated=max(timestamps) if timestamps else None,
+        last_updated=last_updated,
     )
 
 

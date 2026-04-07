@@ -65,13 +65,38 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     )
     db_session.add_all([mode_a_topic, mode_b_cluster])
     db_session.flush()
-    db_session.add(
-        GapQuestion(
-            tenant_id=client_id,
-            question_text="How do invoice exports work?",
-            cluster_id=mode_b_cluster.id,
-            gap_signal_weight=2.0,
-        )
+    now = datetime.now(timezone.utc)
+    db_session.add_all(
+        [
+            GapQuestion(
+                tenant_id=client_id,
+                question_text="How do invoice exports work?",
+                cluster_id=mode_b_cluster.id,
+                gap_signal_weight=2.0,
+                created_at=now.replace(microsecond=1),
+            ),
+            GapQuestion(
+                tenant_id=client_id,
+                question_text="Can finance export invoices by month?",
+                cluster_id=mode_b_cluster.id,
+                gap_signal_weight=2.0,
+                created_at=now.replace(microsecond=2),
+            ),
+            GapQuestion(
+                tenant_id=client_id,
+                question_text="Where do invoice export files appear?",
+                cluster_id=mode_b_cluster.id,
+                gap_signal_weight=2.0,
+                created_at=now.replace(microsecond=3),
+            ),
+            GapQuestion(
+                tenant_id=client_id,
+                question_text="Are invoice exports available in CSV?",
+                cluster_id=mode_b_cluster.id,
+                gap_signal_weight=2.0,
+                created_at=now.replace(microsecond=4),
+            ),
+        ]
     )
     db_session.commit()
 
@@ -88,6 +113,11 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     assert len(data["mode_b_items"]) == 1
     assert data["mode_a_items"][0]["label"] == "Billing exports"
     assert data["mode_b_items"][0]["label"] == "How do invoice exports work?"
+    assert data["mode_b_items"][0]["example_questions"] == [
+        "Are invoice exports available in CSV?",
+        "Where do invoice export files appear?",
+        "Can finance export invoices by month?",
+    ]
 
 
 def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(

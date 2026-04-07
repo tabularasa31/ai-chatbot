@@ -49,3 +49,9 @@ class GapLifecyclePolicy:
 class DraftGenerationPolicy:
     linked_primary_label_source: Literal["mode_b"] = "mode_b"
     append_mode_a_example_questions: bool = True
+
+
+@dataclass(frozen=True)
+class DocumentScopePolicy:
+    excluded_mode_a_file_types: tuple[str, ...] = ("swagger",)
+    excluded_mode_a_reason: str = "Swagger/OpenAPI documents are analyzed by a separate analyzer."

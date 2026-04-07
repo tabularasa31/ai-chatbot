@@ -13,7 +13,7 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 
 import backend.gap_analyzer as gap_analyzer
-from backend.gap_analyzer.domain import CoveragePolicy, DraftGenerationPolicy
+from backend.gap_analyzer.domain import CoveragePolicy, DocumentScopePolicy, DraftGenerationPolicy
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.schemas import GapRunMode, RecalculateCommandResult
@@ -107,6 +107,10 @@ def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
     assert draft_policy.linked_primary_label_source == "mode_b"
     assert draft_policy.append_mode_a_example_questions is True
 
+    document_scope_policy = DocumentScopePolicy()
+    assert document_scope_policy.excluded_mode_a_file_types == ("swagger",)
+    assert "separate analyzer" in document_scope_policy.excluded_mode_a_reason
+
 
 def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
     signal = GapSignal(
@@ -188,6 +192,8 @@ def test_gap_analyzer_phase0_contracts_are_explicit_and_reviewable() -> None:
     assert "POST /gap-analyzer/recalculate" in content
     assert "202 Accepted" in content
     assert "Mode B label as the primary" in content
+    assert 'file_type = "swagger"' in content
+    assert "separate analyzer later" in content
     assert "backend.search" in content
     assert "backend.chat" in content
 

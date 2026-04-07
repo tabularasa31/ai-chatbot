@@ -33,6 +33,12 @@ This module is intentionally introduced in two thin layers:
 - Linked active pair uses Mode B label as the primary display and draft label.
 - Mode A `example_questions` are appended to draft context when present.
 
+## Document analysis scope
+
+- Mode A document analysis explicitly excludes documents with `file_type = "swagger"`.
+- Swagger/OpenAPI content will have a separate analyzer later and must not be folded into
+  Gap Analyzer's document-side analysis by default.
+
 ## Phase 2 Follow-ups
 
 - Converge duplicated enum/DTO semantics between `backend/gap_analyzer/schemas.py`

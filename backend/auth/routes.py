@@ -32,6 +32,7 @@ from backend.auth.service import (
 )
 from backend.auth.middleware import get_current_user
 from backend.email.service import send_email
+from backend.clients.service import ensure_client_for_user
 from backend.models import User
 
 auth_router = APIRouter(tags=["auth"])
@@ -139,6 +140,7 @@ def verify_email(
     user.verification_token = None
     user.verification_expires_at = None
     db.commit()
+    ensure_client_for_user(user.id, db)
 
     jwt_token, expires_in = create_token_for_user(user)
     return VerifyEmailResponse(

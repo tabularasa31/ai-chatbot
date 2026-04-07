@@ -229,17 +229,23 @@ def test_timestamps_are_utc(db_session) -> None:
     assert message.created_at <= now
 
 
-def test_multiple_clients_for_one_user(db_session) -> None:
-    """Один пользователь может иметь несколько клиентов."""
+def test_multiple_clients_for_one_user_rejected(db_session) -> None:
+    """Один пользователь не может иметь несколько клиентов."""
     user = _create_user(db_session)
-    c1 = _create_client(db_session, user, name="Client 1")
-    c2 = _create_client(db_session, user, name="Client 2")
+    _create_client(db_session, user, name="Client 1")
 
-    db_session.refresh(user)
-    client_names = {c.name for c in user.clients}
-    assert client_names == {"Client 1", "Client 2"}
-    assert c1.user_id == user.id
-    assert c2.user_id == user.id
+    client = Client(
+        user_id=user.id,
+        name="Client 2",
+        api_key=f"{uuid.uuid4().hex[:32]}",
+        settings={"language": "en"},
+    )
+    db_session.add(client)
+    try:
+        db_session.commit()
+        assert False, "Ожидался IntegrityError при попытке создать второго клиента"
+    except IntegrityError:
+        db_session.rollback()
 
 
 def test_multiple_messages_in_chat_order(db_session) -> None:
@@ -258,4 +264,3 @@ def test_multiple_messages_in_chat_order(db_session) -> None:
         .all()
     )
     assert [m.id for m in messages] == [msg1.id, msg2.id]
-

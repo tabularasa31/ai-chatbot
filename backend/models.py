@@ -202,6 +202,7 @@ class Client(Base):
         PG_UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
+        unique=True,
         index=True,
     )
     name = Column(String(255), nullable=False)

@@ -281,15 +281,19 @@ def register_and_verify_user(
     email: str = "verified@example.com",
     password: str = "SecurePass1!",
 ) -> str:
-    """Register user, verify email, return JWT. Use for tests that need mutating actions."""
+    """Register user, mark them verified directly, and return JWT for generic test setup."""
     with patch("backend.auth.routes.send_email"):
         resp = test_client.post("/auth/register", json={"email": email, "password": password})
     assert resp.status_code == 200, resp.json()
+    from backend.auth.service import create_token_for_user
     from backend.models import User
 
     user = db_session.query(User).filter(User.email == email).first()
     assert user is not None
-    verify_resp = test_client.post("/auth/verify-email", json={"token": user.verification_token})
-    assert verify_resp.status_code == 200, verify_resp.json()
-    token = verify_resp.json()["token"]
+    user.is_verified = True
+    user.verification_token = None
+    user.verification_expires_at = None
+    db_session.commit()
+    db_session.refresh(user)
+    token, _ = create_token_for_user(user)
     return token

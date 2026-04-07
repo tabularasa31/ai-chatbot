@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.clients.service import ensure_client_for_user
 from tests.conftest import register_and_verify_user
 
 
@@ -42,6 +44,45 @@ def test_create_client_duplicate(client: TestClient, db_session: Session) -> Non
     )
     assert response.status_code == 409
     assert "already exists" in response.json()["detail"].lower()
+
+
+def test_ensure_client_for_user_returns_existing_on_conflict(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ensure_client_for_user should stay idempotent if create races with another request."""
+    from backend.clients import service as clients_service
+    from backend.core.security import hash_password
+    from backend.models import User
+
+    user = User(
+        email="ensure-client@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    existing_client = clients_service.create_client(user.id, "Existing Client", db_session)
+    lookup_calls = 0
+
+    def fake_create_client(user_id, name, db):
+        raise HTTPException(status_code=409, detail="Client already exists for this user")
+
+    def fake_get_client_by_user(user_id, db):
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if user_id != user.id:
+            return None
+        return None if lookup_calls == 1 else existing_client
+
+    monkeypatch.setattr(clients_service, "create_client", fake_create_client)
+    monkeypatch.setattr(clients_service, "get_client_by_user", fake_get_client_by_user)
+
+    resolved = ensure_client_for_user(user.id, db_session)
+    assert resolved.id == existing_client.id
+    assert lookup_calls == 2
 
 
 def test_create_client_unauthenticated(client: TestClient) -> None:

@@ -114,7 +114,7 @@ def _resolve_debug_client(
     current_user: User,
     bot_id: Optional[str],
 ) -> Client:
-    if bot_id is None:
+    if not bot_id:
         client = get_client_by_user(current_user.id, db)
         if not client:
             raise HTTPException(status_code=404, detail="Client not found")

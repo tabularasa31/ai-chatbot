@@ -83,11 +83,12 @@ def test_gap_analyzer_orchestrator_is_command_only_skeleton() -> None:
         question_text="How does this work?",
         answer_confidence=0.4,
         was_rejected=False,
+        had_fallback=False,
         was_escalated=False,
         user_thumbed_down=False,
     )
 
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(RuntimeError):
         asyncio.run(orchestrator.ingest_signal(signal))
     with pytest.raises(NotImplementedError):
         asyncio.run(orchestrator.run_mode_a(uuid4()))
@@ -118,6 +119,7 @@ def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
         question_text="How does this work?",
         answer_confidence=0.4,
         was_rejected=False,
+        had_fallback=False,
         was_escalated=False,
         user_thumbed_down=False,
     )

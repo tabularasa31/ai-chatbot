@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -65,6 +66,9 @@ from backend.search.service import (
     search_similar_chunks_detailed,
 )
 from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
+from backend.gap_analyzer.events import GapSignal
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.guards.injection_detector import detect_injection
 from backend.guards.relevance_checker import check_relevance_precheck
 from backend.guards.reject_response import (
@@ -1606,8 +1610,8 @@ def _persist_turn(
     document_ids: list[uuid.UUID],
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
-) -> None:
-    _create_message(
+) -> tuple[Message, Message]:
+    user_message = _create_message(
         db,
         chat=chat,
         client_id=client_id,
@@ -1615,7 +1619,7 @@ def _persist_turn(
         content=user_content,
         optional_entity_types=optional_entity_types,
     )
-    _create_message(
+    assistant_message = _create_message(
         db,
         chat=chat,
         client_id=client_id,
@@ -1630,6 +1634,7 @@ def _persist_turn(
         client_id=client_id,
         extra_tokens=extra_tokens,
     )
+    return user_message, assistant_message
 
 
 def _finalize_persisted_messages(
@@ -1682,6 +1687,53 @@ def _persist_assistant_message(
         client_id=client_id,
         extra_tokens=extra_tokens,
     )
+
+
+def _try_ingest_gap_signal(
+    *,
+    db: Session,
+    chat: Chat,
+    client_id: uuid.UUID,
+    session_id: uuid.UUID,
+    user_message: Message,
+    assistant_message: Message,
+    question_text: str,
+    answer_confidence: float | None,
+    was_rejected: bool,
+    had_fallback: bool,
+    was_escalated: bool,
+    language: str | None = None,
+) -> None:
+    try:
+        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+        asyncio.run(
+            orchestrator.ingest_signal(
+                GapSignal(
+                    tenant_id=client_id,
+                    chat_id=chat.id,
+                    session_id=session_id,
+                    user_message_id=user_message.id,
+                    assistant_message_id=assistant_message.id,
+                    question_text=question_text,
+                    answer_confidence=answer_confidence,
+                    was_rejected=was_rejected,
+                    had_fallback=had_fallback,
+                    was_escalated=was_escalated,
+                    user_thumbed_down=False,
+                    language=language,
+                )
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
+            client_id,
+            session_id,
+            assistant_message.id,
+            exc_info=True,
+        )
 
 
 def _trigger_log_analysis_threshold(
@@ -1897,7 +1949,7 @@ def process_chat_message(
         output={"matched": bool(quick_answer), "answer": quick_answer}
     )
     if quick_answer:
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -1906,6 +1958,19 @@ def process_chat_message(
             [],
             0,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=None,
+            was_rejected=False,
+            had_fallback=False,
+            was_escalated=False,
         )
         trace.update(
             output={"answer": quick_answer, "source": "quick_answers"},
@@ -1945,7 +2010,7 @@ def process_chat_message(
             api_key=api_key,
             fallback_locale=fallback_locale,
         )
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -1954,6 +2019,19 @@ def process_chat_message(
             [],
             reject_result.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=None,
+            was_rejected=True,
+            had_fallback=False,
+            was_escalated=False,
         )
         trace.update(
             output={"answer": reject_result.text, "source": "guard_reject_injection"},
@@ -2235,7 +2313,7 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
             db.add(chat)
             db.commit()
-            _persist_turn(
+            user_message, assistant_message = _persist_turn(
                 db,
                 chat,
                 client_id,
@@ -2244,6 +2322,19 @@ def process_chat_message(
                 [],
                 out.tokens_used,
                 optional_entity_types=optional_entity_types,
+            )
+            _try_ingest_gap_signal(
+                db=db,
+                chat=chat,
+                client_id=client_id,
+                session_id=session_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                question_text=redacted_question,
+                answer_confidence=None,
+                was_rejected=False,
+                had_fallback=False,
+                was_escalated=True,
             )
             trace.update(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
@@ -2293,7 +2384,7 @@ def process_chat_message(
         )
         _set_clarification_state(chat, clarification_decision.state)
         db.add(chat)
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -2302,6 +2393,21 @@ def process_chat_message(
             clarification_document_ids,
             result.tokens_used + clarification_decision.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=(
+                result.retrieval.best_confidence_score if result.retrieval is not None else None
+            ),
+            was_rejected=False,
+            had_fallback=result.validation_outcome == "fallback",
+            was_escalated=False,
         )
         _trace_event(
             trace,
@@ -2370,7 +2476,7 @@ def process_chat_message(
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).
     if result.is_reject or result.is_faq_direct:
-        _persist_turn(
+        user_message, assistant_message = _persist_turn(
             db,
             chat,
             client_id,
@@ -2379,6 +2485,21 @@ def process_chat_message(
             [],
             result.tokens_used,
             optional_entity_types=optional_entity_types,
+        )
+        _try_ingest_gap_signal(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            session_id=session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=redacted_question,
+            answer_confidence=(
+                result.retrieval.best_confidence_score if result.retrieval is not None else None
+            ),
+            was_rejected=result.is_reject,
+            had_fallback=result.validation_outcome == "fallback",
+            was_escalated=False,
         )
         source_map = {
             "injection": "guard_reject_injection",
@@ -2489,7 +2610,7 @@ def process_chat_message(
         except Exception as e:  # noqa: BLE001
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
-    _persist_turn(
+    user_message, assistant_message = _persist_turn(
         db,
         chat,
         client_id,
@@ -2498,6 +2619,19 @@ def process_chat_message(
         document_ids,
         tokens_used,
         optional_entity_types=optional_entity_types,
+    )
+    _try_ingest_gap_signal(
+        db=db,
+        chat=chat,
+        client_id=client_id,
+        session_id=session_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        question_text=redacted_question,
+        answer_confidence=retrieval.best_confidence_score,
+        was_rejected=False,
+        had_fallback=result.validation_outcome == "fallback",
+        was_escalated=bool(escalate),
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.

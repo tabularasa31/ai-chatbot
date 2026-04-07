@@ -952,7 +952,7 @@ class GapQuestionMessageLink(Base):
         ForeignKey("chats.id", ondelete="CASCADE"),
         nullable=False,
     )
-    session_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    session_id = Column(PG_UUID(as_uuid=True), nullable=False)
     attempt_index = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
@@ -996,6 +996,10 @@ Index(
     "ix_gap_question_links_assistant_message",
     GapQuestionMessageLink.assistant_message_id,
     unique=True,
+)
+Index(
+    "ix_gap_question_links_session_id",
+    GapQuestionMessageLink.session_id,
 )
 
 

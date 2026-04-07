@@ -271,6 +271,11 @@ def upgrade() -> None:
         ["assistant_message_id"],
         unique=True,
     )
+    op.create_index(
+        "ix_gap_question_links_session_id",
+        "gap_question_message_links",
+        ["session_id"],
+    )
 
     if is_postgres:
         op.execute(
@@ -319,6 +324,7 @@ def downgrade() -> None:
 
     op.drop_index("ix_gap_question_links_assistant_message", table_name="gap_question_message_links")
     op.drop_index("ix_gap_question_links_gap_question", table_name="gap_question_message_links")
+    op.drop_index("ix_gap_question_links_session_id", table_name="gap_question_message_links")
     op.drop_index("ix_gap_dismissals_tenant_gap", table_name="gap_dismissals")
     op.drop_index("ix_gap_questions_tenant_signal_weight", table_name="gap_questions")
     op.drop_index("ix_gap_questions_tenant_cluster", table_name="gap_questions")

@@ -108,6 +108,19 @@ def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
     assert draft_policy.append_mode_a_example_questions is True
 
 
+def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
+    signal = GapSignal(
+        tenant_id=uuid4(),
+        question_text="How does this work?",
+        answer_confidence=0.4,
+        was_rejected=False,
+        was_escalated=False,
+        user_thumbed_down=False,
+    )
+    assert signal.created_at.tzinfo is not None
+    assert signal.created_at.utcoffset() is not None
+
+
 def test_gap_analyzer_models_are_registered_in_metadata() -> None:
     table_names = set(Base.metadata.tables)
     assert {
@@ -141,6 +154,7 @@ def test_gap_analyzer_model_indexes_are_present() -> None:
         "ix_gap_dismissals_tenant_gap",
         "ix_gap_question_links_gap_question",
         "ix_gap_question_links_assistant_message",
+        "ix_gap_question_links_session_id",
     }
 
     seen_indexes = {
@@ -161,6 +175,7 @@ def test_gap_analyzer_phase1_migration_contains_view_and_indexes() -> None:
     assert "ix_gap_doc_topics_tenant_status" in content
     assert "ix_gap_questions_tenant_signal_weight" in content
     assert "ix_gap_dismissals_topic_embedding_ivfflat" in content
+    assert "ix_gap_question_links_session_id" in content
 
 
 def test_gap_analyzer_phase0_contracts_are_explicit_and_reviewable() -> None:

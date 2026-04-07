@@ -482,13 +482,12 @@ def set_message_feedback(
 
     message.feedback = MessageFeedback(body.feedback.value)
     message.ideal_answer = body.ideal_answer if body.ideal_answer else None
-    if body.feedback.value == "down":
-        record_gap_feedback_for_message(
-            db=db,
-            tenant_id=client.id,
-            assistant_message_id=message.id,
-            user_thumbed_down=True,
-        )
+    record_gap_feedback_for_message(
+        db=db,
+        tenant_id=client.id,
+        assistant_message_id=message.id,
+        feedback_value=body.feedback.value,
+    )
     db.commit()
     db.refresh(message)
 

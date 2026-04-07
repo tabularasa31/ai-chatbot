@@ -190,6 +190,67 @@ def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
     assert gap_question_second.gap_signal_weight == 4.0
 
 
+def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-feedback-up@example.com",
+        name="Gap Feedback Up Client",
+    )
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    user_message = Message(chat_id=chat.id, role=MessageRole.user, content="How does this work?")
+    assistant_message = Message(
+        chat_id=chat.id,
+        role=MessageRole.assistant,
+        content="First answer",
+        feedback=MessageFeedback.down,
+    )
+    db_session.add_all([user_message, assistant_message])
+    db_session.commit()
+    db_session.refresh(user_message)
+    db_session.refresh(assistant_message)
+
+    gap_question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How does this work?",
+        gap_signal_weight=4.0,
+        answer_confidence=0.4,
+    )
+    db_session.add(gap_question)
+    db_session.flush()
+    db_session.add(
+        GapQuestionMessageLink(
+            gap_question_id=gap_question.id,
+            user_message_id=user_message.id,
+            assistant_message_id=assistant_message.id,
+            chat_id=chat.id,
+            session_id=chat.session_id,
+            attempt_index=0,
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        f"/chat/messages/{assistant_message.id}/feedback",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"feedback": "up"},
+    )
+    assert response.status_code == 200, response.json()
+
+    db_session.refresh(assistant_message)
+    db_session.refresh(gap_question)
+
+    assert assistant_message.feedback == MessageFeedback.up
+    assert gap_question.gap_signal_weight == 1.5
+
+
 def test_process_chat_message_persists_gap_signal_for_fallback_turn(
     client: TestClient,
     db_session: Session,

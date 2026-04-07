@@ -1690,7 +1690,6 @@ def _persist_assistant_message(
 
 def _try_ingest_gap_signal(
     *,
-    db: Session,
     chat: Chat,
     client_id: uuid.UUID,
     session_id: uuid.UUID,
@@ -1703,8 +1702,13 @@ def _try_ingest_gap_signal(
     was_escalated: bool,
     language: str | None = None,
 ) -> None:
+    from backend.core import db as core_db
+
+    ingestion_db = core_db.SessionLocal()
     try:
-        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+        orchestrator = GapAnalyzerOrchestrator(
+            repository=SqlAlchemyGapAnalyzerRepository(ingestion_db)
+        )
         orchestrator.ingest_signal(
             GapSignal(
                 tenant_id=client_id,
@@ -1721,9 +1725,9 @@ def _try_ingest_gap_signal(
                 language=language,
             )
         )
-        db.commit()
+        ingestion_db.commit()
     except ValueError:
-        db.rollback()
+        ingestion_db.rollback()
         logger.warning(
             "gap_analyzer_signal_ingestion_contract_failed: client_id=%s session_id=%s assistant_message_id=%s",
             client_id,
@@ -1732,13 +1736,15 @@ def _try_ingest_gap_signal(
             exc_info=True,
         )
     except Exception:
-        db.rollback()
+        ingestion_db.rollback()
         logger.exception(
             "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
             client_id,
             session_id,
             assistant_message.id,
         )
+    finally:
+        ingestion_db.close()
 
 
 def record_gap_feedback_for_message(
@@ -1746,13 +1752,13 @@ def record_gap_feedback_for_message(
     db: Session,
     tenant_id: uuid.UUID,
     assistant_message_id: uuid.UUID,
-    user_thumbed_down: bool,
+    feedback_value: str,
 ) -> bool:
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
     return orchestrator.record_assistant_feedback(
         tenant_id=tenant_id,
         assistant_message_id=assistant_message_id,
-        user_thumbed_down=user_thumbed_down,
+        feedback_value=feedback_value,
     )
 
 
@@ -1980,7 +1986,6 @@ def process_chat_message(
             optional_entity_types=optional_entity_types,
         )
         _try_ingest_gap_signal(
-            db=db,
             chat=chat,
             client_id=client_id,
             session_id=session_id,
@@ -2042,7 +2047,6 @@ def process_chat_message(
             optional_entity_types=optional_entity_types,
         )
         _try_ingest_gap_signal(
-            db=db,
             chat=chat,
             client_id=client_id,
             session_id=session_id,
@@ -2346,7 +2350,6 @@ def process_chat_message(
                 optional_entity_types=optional_entity_types,
             )
             _try_ingest_gap_signal(
-                db=db,
                 chat=chat,
                 client_id=client_id,
                 session_id=session_id,
@@ -2418,7 +2421,6 @@ def process_chat_message(
             optional_entity_types=optional_entity_types,
         )
         _try_ingest_gap_signal(
-            db=db,
             chat=chat,
             client_id=client_id,
             session_id=session_id,
@@ -2511,7 +2513,6 @@ def process_chat_message(
             optional_entity_types=optional_entity_types,
         )
         _try_ingest_gap_signal(
-            db=db,
             chat=chat,
             client_id=client_id,
             session_id=session_id,
@@ -2646,7 +2647,6 @@ def process_chat_message(
         optional_entity_types=optional_entity_types,
     )
     _try_ingest_gap_signal(
-        db=db,
         chat=chat,
         client_id=client_id,
         session_id=session_id,

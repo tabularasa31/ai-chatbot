@@ -38,18 +38,30 @@ class GapAnalyzerOrchestrator:
         *,
         tenant_id: UUID,
         assistant_message_id: UUID,
-        user_thumbed_down: bool,
+        feedback_value: str,
     ) -> bool:
-        if not user_thumbed_down:
+        if feedback_value not in {"up", "down", "none"}:
             return False
 
         repository = self._require_repository()
-        policy = SignalWeightPolicy()
-        return repository.reweight_signal_for_assistant_message(
+        signal_state = repository.get_signal_state_for_assistant_message(
             tenant_id=tenant_id,
             assistant_message_id=assistant_message_id,
-            signal_weight=policy.thumbdown_weight,
         )
+        if signal_state is None:
+            return False
+
+        repository.update_signal_weight(
+            gap_question_id=signal_state.gap_question_id,
+            signal_weight=self._resolve_signal_weight_from_values(
+                answer_confidence=signal_state.answer_confidence,
+                had_fallback=signal_state.had_fallback,
+                was_rejected=signal_state.had_fallback,
+                was_escalated=signal_state.had_escalation,
+                user_thumbed_down=feedback_value == "down",
+            ),
+        )
+        return True
 
     async def request_recalculation(
         self,
@@ -64,14 +76,31 @@ class GapAnalyzerOrchestrator:
         return self.repository
 
     def _resolve_signal_weight(self, signal: GapSignal) -> float:
+        return self._resolve_signal_weight_from_values(
+            answer_confidence=signal.answer_confidence,
+            had_fallback=signal.had_fallback,
+            was_rejected=signal.was_rejected,
+            was_escalated=signal.was_escalated,
+            user_thumbed_down=signal.user_thumbed_down,
+        )
+
+    def _resolve_signal_weight_from_values(
+        self,
+        *,
+        answer_confidence: float | None,
+        had_fallback: bool,
+        was_rejected: bool,
+        was_escalated: bool,
+        user_thumbed_down: bool,
+    ) -> float:
         policy = SignalWeightPolicy()
         weight = policy.normal_weight
-        if signal.answer_confidence is not None and signal.answer_confidence < policy.low_conf_threshold:
+        if answer_confidence is not None and answer_confidence < policy.low_conf_threshold:
             weight = max(weight, policy.low_conf_weight)
-        if signal.was_rejected or signal.had_fallback:
+        if was_rejected or had_fallback:
             weight = max(weight, policy.rejection_weight)
-        if signal.was_escalated:
+        if was_escalated:
             weight = max(weight, policy.escalation_weight)
-        if signal.user_thumbed_down:
+        if user_thumbed_down:
             weight = max(weight, policy.thumbdown_weight)
         return weight

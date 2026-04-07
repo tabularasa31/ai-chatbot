@@ -82,6 +82,9 @@ This module is intentionally introduced in two thin layers:
   concurrent Mode B follow-ups for the same tenant at once.
   This reduces duplicate cluster creation inside a single process, but it is not a cross-process
   lock and does not replace a durable queue or a database-level coordination primitive.
+- Mode B cluster loading is currently narrowed to `active` and `closed` clusters only.
+  That trims obvious non-active history from the in-memory matching set, but it is still not a
+  paginated or batched loading strategy.
 - Each Phase 4 trigger currently processes all tenant questions with `cluster_id IS NULL`.
   That is acceptable for the MVP, but large backlogs will need batching and/or queued workers.
 - Phase 4 explicitly does not add:
@@ -104,6 +107,9 @@ This module is intentionally introduced in two thin layers:
   worker queue or database-level coordination primitive is introduced.
 - There is still no durable retry path for failed Mode B follow-ups.
   A transient crash or worker restart can drop an in-flight follow-up until the next signal arrives.
+- Cluster loading for Mode B is not paginated yet.
+  Tenants with very large numbers of active/closed clusters will still need batching or a narrower
+  candidate-selection strategy in a later phase.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.

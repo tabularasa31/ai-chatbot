@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-07 (verification-first dashboard access + bot-scoped debug contract)  
+**Last updated:** 2026-04-08 (Gap Analyzer Phase 6B reclustering + archive hardening)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -257,6 +257,55 @@ The chat pipeline can now return three typed outcomes instead of only a plain an
 - `answer`
 - `clarification`
 - `partial_with_clarification`
+
+---
+
+## 5. Gap Analyzer
+
+Gap Analyzer is the dashboard feature that turns both documentation coverage gaps and real user-question pain into a reviewable backlog for the tenant.
+
+It has two coordinated pipelines:
+
+- `Mode A` analyzes the indexed documentation corpus itself to suggest topics that appear missing or under-covered in docs
+- `Mode B` clusters real user questions that produced low confidence, fallback, rejection, escalation, or explicit negative feedback signals
+
+### Mode A — docs-side gap discovery
+
+Mode A runs only when the retrieval corpus materially changes. It uses deterministic corpus sampling plus an extraction hash so repeated runs can skip both the LLM call and DB churn when the sampled corpus has not changed.
+
+Important constraints:
+
+- candidates are cross-validated with Gap Analyzer's own coverage score before they are persisted
+- dismissals survive re-indexing through a separate dismissal store
+- Swagger / OpenAPI sources are intentionally excluded from Mode A and are reserved for a future dedicated analyzer
+
+### Mode B — user-question clustering
+
+Mode B ingests signals from the chat pipeline after the final turn outcome is known. Signals are stored with explicit message correlation, so thumbs-down feedback can reweight the exact underlying question signal rather than guessing from chat history.
+
+Current behavior:
+
+- new unclustered questions are matched into an existing cluster or create a new one
+- cluster coverage is re-evaluated against the current corpus
+- linked `Mode A` and `Mode B` items dedupe on the active list, with `Mode B` as the primary visible card
+- a periodic full reclustering pass now rebuilds recent active/closed cluster history to reduce duplicate or drifted clusters over time
+
+### Dashboard and API surface
+
+The app includes a dedicated `/gap-analyzer` dashboard page for verified users. It exposes:
+
+- summary stats and sidebar badge
+- separate Mode A and Mode B sections
+- active vs archive views
+- dismiss / reactivate actions
+- draft generation for follow-up documentation work
+- orchestration-style recalculation requests via `POST /gap-analyzer/recalculate`
+
+Archive semantics are intentionally source-specific:
+
+- archived Mode A means dismissed Mode A topics
+- archived Mode B means closed or dismissed Mode B clusters
+- an archived linked Mode B item does not hide an active Mode A item; suppression only happens when the linked Mode B item is active
 
 Clarification is intentionally narrow. The bot does not ask follow-up questions by default; it does so only when the current request is not sufficiently answerable under the existing pipeline signals and one of these deterministic trigger families is matched:
 

@@ -8,7 +8,7 @@ from uuid import UUID
 from backend.core import db as core_db
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.models import Document, DocumentStatus, UrlSource, SourceStatus
+from backend.models import Client, Document, DocumentStatus, UrlSource, SourceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -74,3 +74,31 @@ def run_mode_b_for_tenant_best_effort(tenant_id: UUID) -> None:
         )
     finally:
         db.close()
+
+
+def run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id: UUID) -> None:
+    db = core_db.SessionLocal()
+    try:
+        orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
+        orchestrator.run_mode_b_weekly_reclustering(tenant_id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "gap_analyzer_mode_b_weekly_reclustering_failed tenant_id=%s",
+            tenant_id,
+            exc_info=True,
+        )
+    finally:
+        db.close()
+
+
+def run_mode_b_weekly_reclustering_for_all_tenants_best_effort() -> None:
+    db = core_db.SessionLocal()
+    try:
+        tenant_ids = [tenant_id for (tenant_id,) in db.query(Client.id).order_by(Client.id.asc()).all()]
+    finally:
+        db.close()
+
+    for tenant_id in tenant_ids:
+        run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id)

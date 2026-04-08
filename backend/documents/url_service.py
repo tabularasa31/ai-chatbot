@@ -13,7 +13,7 @@ import re
 import socket
 import time
 import uuid
-import defusedxml.ElementTree as ElementTree
+from defusedxml import ElementTree
 from collections import deque
 from dataclasses import dataclass
 from typing import Any

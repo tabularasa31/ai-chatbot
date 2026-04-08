@@ -46,7 +46,7 @@ Use this template when adding a new deferred review follow-up:
 - Risk if postponed:
   - what can go wrong while it stays deferred
 - Start here:
-  - [/absolute/path/in/repo](/Users/tabularasa/Projects/ai-chatbot/path/to/file)
+  - [/absolute/path/in/repo](../path/to/file)
 - Suggested scope for one PR:
   - flat bullet list of intended changes
 - Definition of done:
@@ -74,9 +74,9 @@ Use this template when adding a new deferred review follow-up:
   - lower per-document FAQ extraction overhead
   - cleaner path toward future rate-limit/backpressure handling
 - Start here:
-  - [backend/tenant_knowledge/faq_service.py](/Users/tabularasa/Projects/ai-chatbot/backend/tenant_knowledge/faq_service.py)
-  - [backend/tenant_knowledge/extract_tenant_knowledge.py](/Users/tabularasa/Projects/ai-chatbot/backend/tenant_knowledge/extract_tenant_knowledge.py)
-  - [tests/test_tenant_knowledge_faq_service.py](/Users/tabularasa/Projects/ai-chatbot/tests/test_tenant_knowledge_faq_service.py)
+  - [backend/tenant_knowledge/faq_service.py](../backend/tenant_knowledge/faq_service.py)
+  - [backend/tenant_knowledge/extract_tenant_knowledge.py](../backend/tenant_knowledge/extract_tenant_knowledge.py)
+  - [tests/test_tenant_knowledge_faq_service.py](../tests/test_tenant_knowledge_faq_service.py)
 - Suggested scope for one PR:
   - gather medium/high-confidence candidates first
   - normalize and drop empty candidates before embedding
@@ -102,9 +102,9 @@ Use this template when adding a new deferred review follow-up:
   - better decision-making on whether more retrieval optimization is needed
   - avoids premature micro-benchmarking
 - Start here:
-  - [backend/gap_analyzer/repository.py](/Users/tabularasa/Projects/ai-chatbot/backend/gap_analyzer/repository.py)
-  - [tests/test_gap_analyzer_phase5.py](/Users/tabularasa/Projects/ai-chatbot/tests/test_gap_analyzer_phase5.py)
-  - [docs/qa/FI-115-query-variant-cost.md](/Users/tabularasa/Projects/ai-chatbot/docs/qa/FI-115-query-variant-cost.md)
+  - [backend/gap_analyzer/repository.py](../backend/gap_analyzer/repository.py)
+  - [tests/test_gap_analyzer_phase5.py](../tests/test_gap_analyzer_phase5.py)
+  - [docs/qa/FI-115-query-variant-cost.md](qa/FI-115-query-variant-cost.md)
 - Suggested scope when the signal appears:
   - add lightweight timing instrumentation or counters for cache hit/miss visibility
   - add a bounded perf/regression harness only if latency or DB load justifies it
@@ -126,7 +126,7 @@ Use this template when adding a new deferred review follow-up:
 - Goal:
   - only if needed, prevent duplicate corpus rebuilds for the same key during a cold miss
 - Start here:
-  - [backend/gap_analyzer/repository.py](/Users/tabularasa/Projects/ai-chatbot/backend/gap_analyzer/repository.py)
+  - [backend/gap_analyzer/repository.py](../backend/gap_analyzer/repository.py)
 - Suggested future options:
   - per-key in-flight registry
   - promise/future-style coalescing

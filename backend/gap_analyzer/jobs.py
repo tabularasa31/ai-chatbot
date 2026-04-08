@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import logging
 import threading
 from uuid import UUID
@@ -13,10 +14,33 @@ from backend.gap_analyzer.repository import GapJobRecord, SqlAlchemyGapAnalyzerR
 from backend.models import Client, Document, DocumentStatus, UrlSource, SourceStatus
 
 logger = logging.getLogger(__name__)
-_job_runner_lock = threading.Lock()
-_job_runner_active = False
-_job_runner_restart_requested = False
 _GAP_JOB_HEARTBEAT_SECONDS = 300
+
+
+@dataclass
+class _GapJobRunnerState:
+    lock: threading.Lock = field(default_factory=threading.Lock)
+    active: bool = False
+    restart_requested: bool = False
+
+    def request_start(self) -> bool:
+        with self.lock:
+            if self.active:
+                self.restart_requested = True
+                return False
+            self.active = True
+            return True
+
+    def finish_cycle(self) -> bool:
+        with self.lock:
+            if self.restart_requested:
+                self.restart_requested = False
+                return True
+            self.active = False
+            return False
+
+
+_job_runner_state = _GapJobRunnerState()
 
 
 def enqueue_gap_job_for_tenant_best_effort(
@@ -51,22 +75,13 @@ def enqueue_gap_job_for_tenant_best_effort(
 
 
 def start_gap_analyzer_job_runner() -> None:
-    global _job_runner_active, _job_runner_restart_requested
-    with _job_runner_lock:
-        if _job_runner_active:
-            _job_runner_restart_requested = True
-            return
-        _job_runner_active = True
+    if not _job_runner_state.request_start():
+        return
 
     def _runner() -> None:
-        global _job_runner_active, _job_runner_restart_requested
         while True:
             run_pending_gap_analyzer_jobs_best_effort()
-            with _job_runner_lock:
-                if _job_runner_restart_requested:
-                    _job_runner_restart_requested = False
-                    continue
-                _job_runner_active = False
+            if not _job_runner_state.finish_cycle():
                 return
 
     threading.Thread(target=_runner, daemon=True).start()

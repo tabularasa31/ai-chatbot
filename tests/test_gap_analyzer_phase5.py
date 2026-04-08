@@ -10,10 +10,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer.enums import GapSource
-from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
+from backend.gap_analyzer.jobs import _GapJobRunnerState, start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
+from backend.gap_analyzer.repository import (
+    _GAP_JOB_LAST_ERROR_MAX_CHARS,
+    SqlAlchemyGapAnalyzerRepository,
+)
 from backend.models import (
+    Document,
+    Embedding,
     GapAnalyzerJob,
     GapDismissal,
     GapCluster,
@@ -21,6 +26,8 @@ from backend.models import (
     GapDocTopic,
     GapDocTopicStatus,
     GapQuestion,
+    DocumentStatus,
+    DocumentType,
 )
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -800,8 +807,7 @@ def test_gap_analyzer_refresh_gap_job_lease_extends_expiration(
 def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> None:
     import backend.gap_analyzer.jobs as gap_jobs_module
 
-    monkeypatch.setattr(gap_jobs_module, "_job_runner_active", False)
-    monkeypatch.setattr(gap_jobs_module, "_job_runner_restart_requested", False)
+    monkeypatch.setattr(gap_jobs_module, "_job_runner_state", _GapJobRunnerState())
 
     calls: list[str] = []
     done = threading.Event()
@@ -824,10 +830,115 @@ def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown
 
     assert done.wait(1.0), "runner should perform a second drain pass after restart is requested"
     for _ in range(50):
-        if not gap_jobs_module._job_runner_active:
+        if not gap_jobs_module._job_runner_state.active:
             break
         time.sleep(0.01)
     assert calls == ["run", "run"]
+
+
+def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-bm25-stream@example.com",
+        name="Gap Phase 5 BM25 Stream Client",
+    )
+    title_document = Document(
+        client_id=client_id,
+        filename="Invoice Exports",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    body_document = Document(
+        client_id=client_id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    filler_document = Document(
+        client_id=client_id,
+        filename="faq.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    db_session.add_all([title_document, body_document, filler_document])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Embedding(
+                document_id=title_document.id,
+                chunk_text="overview only",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=body_document.id,
+                chunk_text="invoice exports and billing workflows",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=filler_document.id,
+                chunk_text="account profile settings and notifications",
+                vector=[0.1] * 1536,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    title_match = repository.bm25_match_for_tenant(
+        tenant_id=client_id,
+        query_text="invoice exports",
+        excluded_file_types=(),
+    )
+    body_match = repository.bm25_match_for_tenant(
+        tenant_id=client_id,
+        query_text="billing workflows",
+        excluded_file_types=(),
+    )
+
+    assert title_match.hit is True
+    assert title_match.match_kind == "exact_title"
+    assert title_match.score == 1.0
+    assert body_match.hit is True
+    assert body_match.match_kind == "body"
+    assert 0.0 < body_match.score < 1.0
+
+
+def test_gap_analyzer_fail_gap_job_truncates_to_tail(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-job-error@example.com",
+        name="Gap Phase 5 Job Error Client",
+    )
+    job = GapAnalyzerJob(
+        tenant_id=client_id,
+        job_kind="mode_a",
+        status="in_progress",
+        trigger="manual",
+        attempt_count=1,
+        max_attempts=1,
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    error_message = "head\n" + ("middle\n" * 1000) + "ValueError: final failure"
+    repository.fail_gap_job(job_id=job.id, error_message=error_message)
+    db_session.commit()
+    db_session.refresh(job)
+
+    assert job.status == "failed"
+    assert job.last_error is not None
+    assert len(job.last_error) <= _GAP_JOB_LAST_ERROR_MAX_CHARS
+    assert "ValueError: final failure" in job.last_error
 
 
 def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(

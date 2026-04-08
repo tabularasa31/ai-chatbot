@@ -204,3 +204,15 @@ This module is intentionally introduced in two thin layers:
   stays in English.
   If the dashboard UI gets localized more broadly, these strings should move behind the same
   localization strategy instead of remaining hard-coded.
+
+## Post-Plan Hardening and Polish
+
+The rollout plan itself is complete. The remaining work is now hardening and polish:
+
+- move durable job draining from the in-app runner to a dedicated external worker or scheduler so
+  queued work resumes automatically after a full outage
+- optimize larger-tenant Mode B processing with more batching and/or candidate narrowing
+- localize remaining Gap Analyzer dashboard copy and draft headings
+- optionally deepen the linked-card presentation if operators need stronger linked-pair semantics
+- optionally make `inactive` a more explicit first-class UX state rather than mainly an archive
+  bucket

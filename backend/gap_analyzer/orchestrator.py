@@ -1238,7 +1238,8 @@ def _score_mode_link_pairs_pgvector(
     if not cluster_by_id:
         return []
     scored_pairs: list[tuple[float, GapDocTopic, GapCluster]] = []
-    distance_cutoff = 1.0 - ClusteringPolicy().link_threshold
+    clustering_policy = ClusteringPolicy()
+    distance_cutoff = 1.0 - clustering_policy.link_threshold
     for topic in topics:
         topic_vector = _vector_from_unknown(topic.topic_embedding)
         if topic_vector is None:
@@ -1249,7 +1250,7 @@ def _score_mode_link_pairs_pgvector(
             .filter(GapCluster.id.in_(cluster_by_id.keys()))
             .filter(GapCluster.centroid.isnot(None))
             .order_by(distance_expr.asc(), GapCluster.id.asc())
-            .limit(10)
+            .limit(clustering_policy.pgvector_link_candidate_limit)
             .all()
         )
         for cluster_id, distance in rows:

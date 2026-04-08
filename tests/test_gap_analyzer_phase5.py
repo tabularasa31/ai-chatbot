@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import threading
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -8,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer.enums import GapSource
+from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.models import (
@@ -670,6 +673,161 @@ def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
     assert data["summary"]["new_badge_count"] == 1
     assert "mode_a_items" not in data
     assert "mode_b_items" not in data
+
+
+def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    token, _client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-summary-lightweight@example.com",
+        name="Gap Phase 5 Summary Lightweight Client",
+    )
+    summary = {
+        "total_active": 7,
+        "uncovered_count": 3,
+        "partial_count": 2,
+        "impact_statement": "3 uncovered gaps need attention.",
+        "new_badge_count": 4,
+        "last_updated": None,
+    }
+
+    class _FakeRepository:
+        def get_gap_summary(self, *, tenant_id):
+            return summary
+
+    monkeypatch.setattr(
+        "backend.gap_analyzer.routes._resolve_gap_analyzer_repository",
+        lambda *, db: _FakeRepository(),
+    )
+    monkeypatch.setattr(
+        "backend.gap_analyzer.routes._resolve_gap_analyzer_orchestrator",
+        lambda *, db: (_ for _ in ()).throw(AssertionError("summary route should not build full gap payload")),
+    )
+
+    response = client.get(
+        "/gap-analyzer/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"summary": summary}
+
+
+def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linked_mode_b(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-summary-linked@example.com",
+        name="Gap Phase 5 Summary Linked Client",
+    )
+    topic = GapDocTopic(
+        tenant_id=client_id,
+        topic_label="Billing exports",
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        is_new=True,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    cluster = GapCluster(
+        tenant_id=client_id,
+        label="How do invoice exports work?",
+        question_count=2,
+        aggregate_signal_weight=3.0,
+        coverage_score=0.2,
+        status=GapClusterStatus.active,
+        is_new=True,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([topic, cluster])
+    db_session.flush()
+    topic.linked_cluster_id = cluster.id
+    cluster.linked_doc_topic_id = topic.id
+    db_session.add_all([topic, cluster])
+    db_session.commit()
+
+    response = client.get(
+        "/gap-analyzer/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()["summary"]
+    assert data["total_active"] == 1
+    assert data["new_badge_count"] == 1
+    assert data["uncovered_count"] == 1
+
+
+def test_gap_analyzer_refresh_gap_job_lease_extends_expiration(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _token, tenant_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-refresh-lease@example.com",
+        name="Gap Phase 5 Refresh Lease Client",
+    )
+    job = GapAnalyzerJob(
+        tenant_id=tenant_id,
+        job_kind="mode_b",
+        status="in_progress",
+        trigger="manual",
+        lease_expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db_session.add(job)
+    db_session.commit()
+    db_session.refresh(job)
+    previous_expiry = job.lease_expires_at
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    refreshed = repository.refresh_gap_job_lease(job_id=job.id)
+    db_session.commit()
+    db_session.refresh(job)
+
+    assert refreshed is True
+    assert previous_expiry is not None
+    assert job.lease_expires_at is not None
+    assert job.lease_expires_at > previous_expiry
+
+
+def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> None:
+    import backend.gap_analyzer.jobs as gap_jobs_module
+
+    monkeypatch.setattr(gap_jobs_module, "_job_runner_active", False)
+    monkeypatch.setattr(gap_jobs_module, "_job_runner_restart_requested", False)
+
+    calls: list[str] = []
+    done = threading.Event()
+
+    def _fake_run_pending(*, max_jobs=None):
+        calls.append("run")
+        if len(calls) == 1:
+            start_gap_analyzer_job_runner()
+            return 0
+        done.set()
+        return 0
+
+    monkeypatch.setattr(
+        gap_jobs_module,
+        "run_pending_gap_analyzer_jobs_best_effort",
+        _fake_run_pending,
+    )
+
+    start_gap_analyzer_job_runner()
+
+    assert done.wait(1.0), "runner should perform a second drain pass after restart is requested"
+    for _ in range(50):
+        if not gap_jobs_module._job_runner_active:
+            break
+        time.sleep(0.01)
+    assert calls == ["run", "run"]
 
 
 def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(

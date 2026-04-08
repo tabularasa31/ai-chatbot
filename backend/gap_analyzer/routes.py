@@ -36,6 +36,10 @@ def _resolve_gap_analyzer_orchestrator(*, db: Session) -> GapAnalyzerOrchestrato
     return GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db))
 
 
+def _resolve_gap_analyzer_repository(*, db: Session) -> SqlAlchemyGapAnalyzerRepository:
+    return SqlAlchemyGapAnalyzerRepository(db)
+
+
 def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
     client = get_client_by_user(current_user.id, db)
     if client is None:
@@ -69,15 +73,8 @@ def get_gap_analyzer_summary(
     db: Annotated[Session, Depends(get_db)],
 ) -> GapSummaryOnlyResponse:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
-    orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
-    response = orchestrator.list_gaps(
-        tenant_id=tenant_id,
-        mode_a_status="active",
-        mode_b_status="active",
-        mode_a_sort="coverage_asc",
-        mode_b_sort="signal_desc",
-    )
-    return GapSummaryOnlyResponse(summary=response.summary)
+    repository = _resolve_gap_analyzer_repository(db=db)
+    return GapSummaryOnlyResponse(summary=repository.get_gap_summary(tenant_id=tenant_id))
 
 
 @gap_analyzer_router.post("/recalculate", response_model=RecalculateCommandResult, status_code=202)

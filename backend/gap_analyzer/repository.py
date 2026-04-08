@@ -23,9 +23,10 @@ from backend.gap_analyzer.enums import (
     GapJobStatus,
     GapSource,
 )
+from backend.gap_analyzer.domain import CoveragePolicy
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate
-from backend.gap_analyzer.schemas import GapRunMode
+from backend.gap_analyzer.schemas import GapRunMode, GapSummaryResponse
 from backend.models import (
     Client,
     Document,
@@ -40,8 +41,9 @@ from backend.models import (
 
 logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
-_GAP_JOB_LEASE_SECONDS = 120
+_GAP_JOB_LEASE_SECONDS = 1800
 _GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
+_GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,12 @@ class GapJobRecord:
     trigger: str
     attempt_count: int
     max_attempts: int
+
+
+@dataclass(frozen=True)
+class _TenantBm25Corpus:
+    normalized_titles: tuple[str, ...]
+    bm25: BM25Okapi | None
 
 
 @dataclass(frozen=True)
@@ -286,6 +294,10 @@ class SqlAlchemyGapAnalyzerRepository:
     """Command-side persistence implementation for Gap Analyzer."""
 
     db: Session
+
+    def __init__(self, db: Session):
+        self.db = db
+        self._bm25_cache: dict[tuple[UUID, tuple[str, ...]], _TenantBm25Corpus] = {}
 
     @property
     def _capabilities(self) -> _RepositoryCapabilities:
@@ -611,37 +623,21 @@ class SqlAlchemyGapAnalyzerRepository:
         if not normalized_query:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
 
-        rows = self._mode_a_embedding_rows(
+        corpus = self._bm25_corpus_for_tenant(
             tenant_id=tenant_id,
             excluded_file_types=excluded_file_types,
         )
-        if not rows:
+        if not corpus.normalized_titles and corpus.bm25 is None:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
 
-        exact_title_hit = False
-        tokenized_corpus: list[list[str]] = []
-        corpus_index: list[tuple[Embedding, Document]] = []
-        for embedding, document in rows:
-            metadata = embedding.metadata_json if isinstance(embedding.metadata_json, dict) else {}
-            title_candidates = [
-                _string_or_none(metadata.get("section_title")),
-                _string_or_none(metadata.get("page_title")),
-                _string_or_none(document.filename),
-            ]
-            if any(candidate and candidate.casefold() == normalized_query for candidate in title_candidates):
-                exact_title_hit = True
-            tokenized_corpus.append(_tokenize(embedding.chunk_text or ""))
-            corpus_index.append((embedding, document))
-
-        if exact_title_hit:
+        if any(title == normalized_query for title in corpus.normalized_titles):
             return TenantBm25Match(hit=True, score=1.0, match_kind="exact_title")
 
         query_tokens = _tokenize(query_text)
-        if not query_tokens:
+        if not query_tokens or corpus.bm25 is None:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
 
-        bm25 = BM25Okapi(tokenized_corpus)
-        scores = bm25.get_scores(query_tokens)
+        scores = corpus.bm25.get_scores(query_tokens)
         best_score = max((float(score) for score in scores), default=0.0)
         if best_score <= 0.0:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
@@ -788,76 +784,97 @@ class SqlAlchemyGapAnalyzerRepository:
         return GapJobEnqueueResult(status=GapCommandStatus.accepted, enqueued=True)
 
     def claim_next_gap_job(self) -> GapJobRecord | None:
-        now = datetime.now(timezone.utc)
-        lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
-        candidate = (
-            self.db.query(GapAnalyzerJob.id)
-            .filter(
-                or_(
-                    and_(
-                        GapAnalyzerJob.status.in_([GapJobStatus.queued.value, GapJobStatus.retry.value]),
-                        GapAnalyzerJob.available_at <= now,
-                    ),
-                    and_(
-                        GapAnalyzerJob.status == GapJobStatus.in_progress,
-                        GapAnalyzerJob.lease_expires_at.isnot(None),
-                        GapAnalyzerJob.lease_expires_at < now,
-                    ),
+        for _ in range(_GAP_JOB_CLAIM_MAX_ATTEMPTS):
+            now = datetime.now(timezone.utc)
+            lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
+            candidate = (
+                self.db.query(GapAnalyzerJob.id)
+                .filter(
+                    or_(
+                        and_(
+                            GapAnalyzerJob.status.in_([GapJobStatus.queued.value, GapJobStatus.retry.value]),
+                            GapAnalyzerJob.available_at <= now,
+                        ),
+                        and_(
+                            GapAnalyzerJob.status == GapJobStatus.in_progress,
+                            GapAnalyzerJob.lease_expires_at.isnot(None),
+                            GapAnalyzerJob.lease_expires_at < now,
+                        ),
+                    )
+                )
+                .order_by(GapAnalyzerJob.available_at.asc(), GapAnalyzerJob.created_at.asc(), GapAnalyzerJob.id.asc())
+                .first()
+            )
+            if candidate is None:
+                return None
+
+            job_id = candidate[0]
+            updated_rows = (
+                self.db.query(GapAnalyzerJob)
+                .filter(GapAnalyzerJob.id == job_id)
+                .filter(
+                    or_(
+                        and_(
+                            GapAnalyzerJob.status.in_([GapJobStatus.queued.value, GapJobStatus.retry.value]),
+                            GapAnalyzerJob.available_at <= now,
+                        ),
+                        and_(
+                            GapAnalyzerJob.status == GapJobStatus.in_progress,
+                            GapAnalyzerJob.lease_expires_at.isnot(None),
+                            GapAnalyzerJob.lease_expires_at < now,
+                        ),
+                    )
+                )
+                .update(
+                    {
+                        GapAnalyzerJob.status: _enum_value(GapJobStatus.in_progress, capabilities=self._capabilities),
+                        GapAnalyzerJob.leased_at: now,
+                        GapAnalyzerJob.lease_expires_at: lease_expires_at,
+                        GapAnalyzerJob.started_at: case(
+                            (GapAnalyzerJob.started_at.is_(None), now),
+                            else_=GapAnalyzerJob.started_at,
+                        ),
+                        GapAnalyzerJob.attempt_count: GapAnalyzerJob.attempt_count + 1,
+                        GapAnalyzerJob.updated_at: now,
+                    },
+                    synchronize_session=False,
                 )
             )
-            .order_by(GapAnalyzerJob.available_at.asc(), GapAnalyzerJob.created_at.asc(), GapAnalyzerJob.id.asc())
-            .first()
-        )
-        if candidate is None:
-            return None
+            if updated_rows == 0:
+                continue
+            self.db.flush()
+            job = self.db.get(GapAnalyzerJob, job_id)
+            if job is None:
+                return None
+            return GapJobRecord(
+                job_id=job.id,
+                tenant_id=job.tenant_id,
+                job_kind=_gap_job_kind(job.job_kind),
+                status=_gap_job_status(job.status),
+                trigger=job.trigger,
+                attempt_count=int(job.attempt_count or 0),
+                max_attempts=int(job.max_attempts or 0),
+            )
+        return None
 
-        job_id = candidate[0]
+    def refresh_gap_job_lease(self, *, job_id: UUID) -> bool:
+        now = datetime.now(timezone.utc)
+        lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
         updated_rows = (
             self.db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
-            .filter(
-                or_(
-                    and_(
-                        GapAnalyzerJob.status.in_([GapJobStatus.queued.value, GapJobStatus.retry.value]),
-                        GapAnalyzerJob.available_at <= now,
-                    ),
-                    and_(
-                        GapAnalyzerJob.status == GapJobStatus.in_progress,
-                        GapAnalyzerJob.lease_expires_at.isnot(None),
-                        GapAnalyzerJob.lease_expires_at < now,
-                    ),
-                )
-            )
+            .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
             .update(
                 {
-                    GapAnalyzerJob.status: _enum_value(GapJobStatus.in_progress, capabilities=self._capabilities),
                     GapAnalyzerJob.leased_at: now,
                     GapAnalyzerJob.lease_expires_at: lease_expires_at,
-                    GapAnalyzerJob.started_at: case(
-                        (GapAnalyzerJob.started_at.is_(None), now),
-                        else_=GapAnalyzerJob.started_at,
-                    ),
-                    GapAnalyzerJob.attempt_count: GapAnalyzerJob.attempt_count + 1,
                     GapAnalyzerJob.updated_at: now,
                 },
                 synchronize_session=False,
             )
         )
-        if updated_rows == 0:
-            return None
         self.db.flush()
-        job = self.db.get(GapAnalyzerJob, job_id)
-        if job is None:
-            return None
-        return GapJobRecord(
-            job_id=job.id,
-            tenant_id=job.tenant_id,
-            job_kind=_gap_job_kind(job.job_kind),
-            status=_gap_job_status(job.status),
-            trigger=job.trigger,
-            attempt_count=int(job.attempt_count or 0),
-            max_attempts=int(job.max_attempts or 0),
-        )
+        return updated_rows > 0
 
     def complete_gap_job(self, *, job_id: UUID) -> None:
         now = datetime.now(timezone.utc)
@@ -930,6 +947,103 @@ class SqlAlchemyGapAnalyzerRepository:
             retry_after_seconds=retry_after_seconds,
         )
 
+    def get_gap_summary(self, *, tenant_id: UUID) -> GapSummaryResponse:
+        active_linked_mode_a_ids = {
+            linked_doc_topic_id
+            for (linked_doc_topic_id,) in (
+                self.db.query(GapCluster.linked_doc_topic_id)
+                .filter(GapCluster.tenant_id == tenant_id)
+                .filter(GapCluster.label.isnot(None))
+                .filter(GapCluster.status == GapClusterStatus.active)
+                .filter(GapCluster.linked_doc_topic_id.isnot(None))
+                .all()
+            )
+            if linked_doc_topic_id is not None
+        }
+        dismissed_mode_a_ids = {
+            gap_id
+            for (gap_id,) in (
+                self.db.query(GapDismissal.gap_id)
+                .filter(GapDismissal.tenant_id == tenant_id)
+                .filter(GapDismissal.source == GapSource.mode_a)
+                .all()
+            )
+        }
+
+        topic_query = (
+            self.db.query(
+                GapDocTopic.id,
+                GapDocTopic.coverage_score,
+                GapDocTopic.is_new,
+                GapDocTopic.extracted_at,
+            )
+            .filter(GapDocTopic.tenant_id == tenant_id)
+            .filter(GapDocTopic.topic_label.isnot(None))
+            .filter(GapDocTopic.status == GapDocTopicStatus.active)
+        )
+        if dismissed_mode_a_ids:
+            topic_query = topic_query.filter(~GapDocTopic.id.in_(dismissed_mode_a_ids))
+        if active_linked_mode_a_ids:
+            topic_query = topic_query.filter(~GapDocTopic.id.in_(active_linked_mode_a_ids))
+
+        cluster_rows = (
+            self.db.query(
+                GapCluster.coverage_score,
+                GapCluster.is_new,
+                GapCluster.last_computed_at,
+                GapCluster.last_question_at,
+                GapCluster.created_at,
+            )
+            .filter(GapCluster.tenant_id == tenant_id)
+            .filter(GapCluster.label.isnot(None))
+            .filter(GapCluster.status == GapClusterStatus.active)
+            .all()
+        )
+
+        uncovered_count = 0
+        partial_count = 0
+        total_active = 0
+        new_badge_count = 0
+        last_updated: datetime | None = None
+
+        for _topic_id, coverage_score, is_new, extracted_at in topic_query.all():
+            total_active += 1
+            classification = _classify_gap_value(coverage_score)
+            if classification == "uncovered":
+                uncovered_count += 1
+            elif classification == "partial":
+                partial_count += 1
+            if bool(is_new):
+                new_badge_count += 1
+            if extracted_at is not None and (last_updated is None or extracted_at > last_updated):
+                last_updated = extracted_at
+
+        for coverage_score, is_new, last_computed_at, last_question_at, created_at in cluster_rows:
+            total_active += 1
+            classification = _classify_gap_value(coverage_score)
+            if classification == "uncovered":
+                uncovered_count += 1
+            elif classification == "partial":
+                partial_count += 1
+            if bool(is_new):
+                new_badge_count += 1
+            cluster_updated_at = last_computed_at or last_question_at or created_at
+            if cluster_updated_at is not None and (last_updated is None or cluster_updated_at > last_updated):
+                last_updated = cluster_updated_at
+
+        return GapSummaryResponse(
+            total_active=total_active,
+            uncovered_count=uncovered_count,
+            partial_count=partial_count,
+            impact_statement=_gap_summary_impact_statement(
+                total_active=total_active,
+                uncovered_count=uncovered_count,
+                partial_count=partial_count,
+            ),
+            new_badge_count=new_badge_count,
+            last_updated=last_updated,
+        )
+
     @property
     def _is_postgres(self) -> bool:
         return (self.db.bind.dialect.name if self.db.bind is not None else "") == "postgresql"
@@ -940,21 +1054,74 @@ class SqlAlchemyGapAnalyzerRepository:
         tenant_id: UUID,
         excluded_file_types: tuple[str, ...],
     ) -> list[tuple[Embedding, Document]]:
-        rows = (
+        rows_query = (
             self.db.query(Embedding, Document)
             .join(Document, Embedding.document_id == Document.id)
             .filter(Document.client_id == tenant_id)
             .filter(Document.status == "ready")
             .filter(Embedding.chunk_text.isnot(None))
             .order_by(Document.id.asc(), Embedding.id.asc())
-            .all()
         )
+        if excluded_file_types:
+            rows_query = rows_query.filter(~Document.file_type.in_(excluded_file_types))
+        rows = rows_query.all()
         excluded = {value.casefold() for value in excluded_file_types}
         return [
             (embedding, document)
             for embedding, document in rows
             if str(getattr(document.file_type, "value", document.file_type)).casefold() not in excluded
         ]
+
+    def _bm25_corpus_for_tenant(
+        self,
+        *,
+        tenant_id: UUID,
+        excluded_file_types: tuple[str, ...],
+    ) -> _TenantBm25Corpus:
+        cache_key = (tenant_id, tuple(sorted(excluded_file_types)))
+        cached = self._bm25_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        excluded = {value.casefold() for value in excluded_file_types}
+        tokenized_corpus: list[list[str]] = []
+        normalized_titles: list[str] = []
+        rows = (
+            self.db.query(
+                Embedding.chunk_text,
+                Embedding.metadata_json,
+                Document.filename,
+                Document.file_type,
+            )
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.client_id == tenant_id)
+            .filter(Document.status == "ready")
+            .filter(Embedding.chunk_text.isnot(None))
+            .order_by(Document.id.asc(), Embedding.id.asc())
+            .yield_per(500)
+        )
+        for chunk_text, metadata_json, filename, file_type in rows:
+            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
+            if file_type_value in excluded:
+                continue
+            metadata = metadata_json if isinstance(metadata_json, dict) else {}
+            for candidate in (
+                _string_or_none(metadata.get("section_title")),
+                _string_or_none(metadata.get("page_title")),
+                _string_or_none(filename),
+            ):
+                if candidate:
+                    normalized_titles.append(candidate.casefold())
+            tokens = _tokenize(chunk_text or "")
+            if tokens:
+                tokenized_corpus.append(tokens)
+
+        corpus = _TenantBm25Corpus(
+            normalized_titles=tuple(normalized_titles),
+            bm25=BM25Okapi(tokenized_corpus) if tokenized_corpus else None,
+        )
+        self._bm25_cache[cache_key] = corpus
+        return corpus
 
 
 def _string_or_none(value: object) -> str | None:
@@ -1067,3 +1234,27 @@ def _remaining_lease_seconds(lease_expires_at: datetime | None) -> int | None:
     aware_lease_expires_at = _aware_datetime(lease_expires_at)
     remaining = int((aware_lease_expires_at - datetime.now(timezone.utc)).total_seconds())
     return max(1, remaining) if remaining > 0 else None
+
+
+def _classify_gap_value(coverage_score: float | None) -> str:
+    if coverage_score is None:
+        return "unknown"
+    coverage_policy = CoveragePolicy()
+    if coverage_score >= coverage_policy.covered_threshold:
+        return "covered"
+    if coverage_score >= coverage_policy.mode_b_uncovered:
+        return "partial"
+    return "uncovered"
+
+
+def _gap_summary_impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
+    if total_active == 0:
+        return "No active gaps detected."
+    if uncovered_count > 0:
+        noun = "gap" if uncovered_count == 1 else "gaps"
+        return f"{uncovered_count} uncovered {noun} need attention."
+    if partial_count > 0:
+        noun = "gap" if partial_count == 1 else "gaps"
+        return f"{partial_count} partially covered {noun} are worth reviewing."
+    noun = "gap" if total_active == 1 else "gaps"
+    return f"{total_active} active {noun} are being tracked."

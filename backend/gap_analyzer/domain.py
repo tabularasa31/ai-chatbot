@@ -22,6 +22,7 @@ class ClusteringPolicy:
     similarity_threshold: float = 0.75
     link_threshold: float = 0.80
     merge_threshold: float = 0.85
+    pgvector_link_candidate_limit: int = 10
     full_recluster_interval_days: int = 7
     question_lookback_days: int = 30
 

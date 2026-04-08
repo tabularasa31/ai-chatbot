@@ -25,6 +25,7 @@
 - ✅ **Docs sync:** updated `AGENTS.md`, `docs/04-features.md`, and `docs/IMPLEMENTED_FEATURES.md` to describe Gap Analyzer as shipped through Phase 6B.
 - ✅ **Weekly path DB safety:** reclustering now uses naive UTC cutoff comparison for the current `DateTime` storage contract, batches large `cluster_id = NULL` updates, and expires the SQLAlchemy session after destructive bulk delete operations.
 - ✅ **Archive UI performance cleanup:** archive counters on the dashboard were memoized and lint-cleaned.
+- ✅ **Archive UX grouping:** the archive view now keeps `Mode A dismissed`, `Mode B closed`, and `Mode B dismissed` visibly separate in the dashboard instead of collapsing them into one undifferentiated archive list.
 - ✅ **Unembedded-question protection:** weekly reclustering now skips destructive rebuild for touched active/closed clusters that still contain questions without valid embeddings after the embed attempt, preventing historical questions from silently losing cluster membership.
 - ✅ **Regression coverage:** added Phase 6B tests for duplicate-cluster merge behavior, archive truth-table behavior, and the blank/unembedded-question protection path.
 

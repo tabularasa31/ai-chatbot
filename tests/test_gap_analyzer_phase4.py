@@ -12,7 +12,7 @@ from backend.chat import service as chat_service_module
 from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
 from backend.gap_analyzer.orchestrator import (
     GapAnalyzerOrchestrator,
-    _ModeBClusterUpdateRejected,
+    _ModeBClusterUpdateRejectedError,
     _prepare_mode_b_clusters,
     _sync_mode_links,
     _tokenize,
@@ -482,12 +482,11 @@ def test_update_mode_b_cluster_refuses_mismatched_vector_lengths() -> None:
         created_at=datetime.now(timezone.utc),
     )
 
-    with pytest.raises(_ModeBClusterUpdateRejected):
+    with pytest.raises(_ModeBClusterUpdateRejectedError):
         _update_mode_b_cluster(
             cluster=cluster,
             question=question,
             question_embedding=[1.0, 0.0],
-            corpus_chunks=[],
         )
     assert cluster.question_count == 1
 

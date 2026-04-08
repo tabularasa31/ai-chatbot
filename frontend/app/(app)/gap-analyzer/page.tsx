@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   type GapAnalyzerResponse,
@@ -59,6 +59,14 @@ function StatCard({
       <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
       <p className="mt-2 text-2xl font-semibold text-slate-900">{value}</p>
       {note && <p className="mt-1 text-xs text-slate-500">{note}</p>}
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
+      {message}
     </div>
   );
 }
@@ -190,6 +198,75 @@ function GapCard({
   );
 }
 
+function GapCardList({
+  items,
+  busyItemId,
+  onDismiss,
+  onReactivate,
+  onDraft,
+}: {
+  items: GapItem[];
+  busyItemId: string | null;
+  onDismiss: (item: GapItem) => Promise<void>;
+  onReactivate: (item: GapItem) => Promise<void>;
+  onDraft: (item: GapItem) => Promise<void>;
+}) {
+  return (
+    <>
+      {items.map((item) => (
+        <GapCard
+          key={item.id}
+          item={item}
+          busy={busyItemId === item.id}
+          onDismiss={onDismiss}
+          onReactivate={onReactivate}
+          onDraft={onDraft}
+        />
+      ))}
+    </>
+  );
+}
+
+function ArchiveGroup({
+  title,
+  note,
+  items,
+  emptyMessage,
+  busyItemId,
+  onDismiss,
+  onReactivate,
+  onDraft,
+}: {
+  title: string;
+  note: string;
+  items: GapItem[];
+  emptyMessage: string;
+  busyItemId: string | null;
+  onDismiss: (item: GapItem) => Promise<void>;
+  onReactivate: (item: GapItem) => Promise<void>;
+  onDraft: (item: GapItem) => Promise<void>;
+}) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+        <p className="text-xs text-slate-500">{note}</p>
+      </div>
+      {items.length > 0 ? (
+        <GapCardList
+          items={items}
+          busyItemId={busyItemId}
+          onDismiss={onDismiss}
+          onReactivate={onReactivate}
+          onDraft={onDraft}
+        />
+      ) : (
+        <EmptyState message={emptyMessage} />
+      )}
+    </div>
+  );
+}
+
 export default function GapAnalyzerPage() {
   const [data, setData] = useState<GapAnalyzerResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -278,6 +355,42 @@ export default function GapAnalyzerPage() {
   }, []);
 
   const summary = data?.summary;
+  const archiveModeSelected = modeAStatus === "archived" && modeBStatus === "archived";
+  const archiveItems = useMemo(
+    () => [...(data?.mode_a_items ?? []), ...(data?.mode_b_items ?? [])],
+    [data?.mode_a_items, data?.mode_b_items],
+  );
+  const archiveModeAItems = useMemo(
+    () => (data?.mode_a_items ?? []).filter((item) => item.status === "dismissed"),
+    [data?.mode_a_items],
+  );
+  const archiveModeBClosedItems = useMemo(
+    () => (data?.mode_b_items ?? []).filter((item) => item.status === "closed"),
+    [data?.mode_b_items],
+  );
+  const archiveModeBDismissedItems = useMemo(
+    () => (data?.mode_b_items ?? []).filter((item) => item.status === "dismissed"),
+    [data?.mode_b_items],
+  );
+  const archiveModeADismissedCount = archiveModeAItems.length;
+  const archiveClosedCount = useMemo(
+    () => archiveItems.filter((item) => item.status === "closed").length,
+    [archiveItems],
+  );
+  const archiveDismissedCount = useMemo(
+    () => archiveItems.filter((item) => item.status === "dismissed").length,
+    [archiveItems],
+  );
+
+  const activateActiveView = () => {
+    setModeAStatus("active");
+    setModeBStatus("active");
+  };
+
+  const activateArchiveView = () => {
+    setModeAStatus("archived");
+    setModeBStatus("archived");
+  };
 
   return (
     <div className="space-y-6">
@@ -301,11 +414,49 @@ export default function GapAnalyzerPage() {
       {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
       {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={activateActiveView}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+            !archiveModeSelected ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"
+          }`}
+        >
+          Active view
+        </button>
+        <button
+          type="button"
+          onClick={activateArchiveView}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+            archiveModeSelected ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"
+          }`}
+        >
+          Archive view
+        </button>
+      </div>
+
+      {archiveModeSelected && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Archive keeps docs-side dismissals separate from Mode B closed and dismissed clusters, so lifecycle history stays source-specific.
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
-        <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
-        <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
-        <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+        {archiveModeSelected ? (
+          <>
+            <StatCard label="Archived total" value={archiveItems.length} note="Source-specific archive inventory." />
+            <StatCard label="Mode A dismissed" value={archiveModeADismissedCount} />
+            <StatCard label="Mode B closed" value={archiveClosedCount} />
+            <StatCard label="Mode B dismissed" value={archiveDismissedCount} />
+          </>
+        ) : (
+          <>
+            <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
+            <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
+            <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
+            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+          </>
+        )}
       </div>
 
       {draft && <DraftPanel draft={draft} onClose={() => setDraft(null)} />}
@@ -315,7 +466,9 @@ export default function GapAnalyzerPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Mode A</h2>
-              <p className="text-sm text-slate-500">Docs-side coverage gaps</p>
+              <p className="text-sm text-slate-500">
+                {archiveModeSelected ? "Dismissed docs-side topics" : "Docs-side coverage gaps"}
+              </p>
             </div>
             <select
               value={modeAStatus}
@@ -323,27 +476,34 @@ export default function GapAnalyzerPage() {
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>
-              <option value="dismissed">Dismissed</option>
+              <option value="archived">Archived</option>
+              <option value="dismissed">Dismissed only</option>
               <option value="all">All</option>
             </select>
           </div>
           {loading ? (
             <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading Mode A…</div>
+          ) : archiveModeSelected && modeAStatus === "archived" ? (
+            <ArchiveGroup
+              title="Dismissed Mode A topics"
+              note="Docs-side candidates that were explicitly hidden from the active backlog."
+              items={archiveModeAItems}
+              emptyMessage="No dismissed Mode A topics in archive."
+              busyItemId={busyItemId}
+              onDismiss={handleDismiss}
+              onReactivate={handleReactivate}
+              onDraft={handleDraft}
+            />
           ) : data && data.mode_a_items.length > 0 ? (
-            data.mode_a_items.map((item) => (
-              <GapCard
-                key={item.id}
-                item={item}
-                busy={busyItemId === item.id}
-                onDismiss={handleDismiss}
-                onReactivate={handleReactivate}
-                onDraft={handleDraft}
-              />
-            ))
+            <GapCardList
+              items={data.mode_a_items}
+              busyItemId={busyItemId}
+              onDismiss={handleDismiss}
+              onReactivate={handleReactivate}
+              onDraft={handleDraft}
+            />
           ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-              No Mode A items for the current filter.
-            </div>
+            <EmptyState message="No Mode A items for the current filter." />
           )}
         </section>
 
@@ -351,7 +511,9 @@ export default function GapAnalyzerPage() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Mode B</h2>
-              <p className="text-sm text-slate-500">Real user question clusters</p>
+              <p className="text-sm text-slate-500">
+                {archiveModeSelected ? "Closed and dismissed user-question clusters" : "Real user question clusters"}
+              </p>
             </div>
             <select
               value={modeBStatus}
@@ -359,6 +521,7 @@ export default function GapAnalyzerPage() {
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>
+              <option value="archived">Archived</option>
               <option value="closed">Closed</option>
               <option value="dismissed">Dismissed</option>
               <option value="all">All</option>
@@ -366,21 +529,39 @@ export default function GapAnalyzerPage() {
           </div>
           {loading ? (
             <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading Mode B…</div>
-          ) : data && data.mode_b_items.length > 0 ? (
-            data.mode_b_items.map((item) => (
-              <GapCard
-                key={item.id}
-                item={item}
-                busy={busyItemId === item.id}
+          ) : archiveModeSelected && modeBStatus === "archived" ? (
+            <div className="space-y-5">
+              <ArchiveGroup
+                title="Closed Mode B clusters"
+                note="Resolved or sufficiently covered user-question clusters that remain visible in archive."
+                items={archiveModeBClosedItems}
+                emptyMessage="No closed Mode B clusters in archive."
+                busyItemId={busyItemId}
                 onDismiss={handleDismiss}
                 onReactivate={handleReactivate}
                 onDraft={handleDraft}
               />
-            ))
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-500">
-              No Mode B items for the current filter.
+              <ArchiveGroup
+                title="Dismissed Mode B clusters"
+                note="Clusters explicitly hidden from the active backlog by an operator action."
+                items={archiveModeBDismissedItems}
+                emptyMessage="No dismissed Mode B clusters in archive."
+                busyItemId={busyItemId}
+                onDismiss={handleDismiss}
+                onReactivate={handleReactivate}
+                onDraft={handleDraft}
+              />
             </div>
+          ) : data && data.mode_b_items.length > 0 ? (
+            <GapCardList
+              items={data.mode_b_items}
+              busyItemId={busyItemId}
+              onDismiss={handleDismiss}
+              onReactivate={handleReactivate}
+              onDraft={handleDraft}
+            />
+          ) : (
+            <EmptyState message="No Mode B items for the current filter." />
           )}
         </section>
       </div>

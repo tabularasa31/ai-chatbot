@@ -5,9 +5,9 @@ target-version = "py311"
 extend-exclude = ["migrations"]
 
 [lint]
-# E/F/W only: isort (I) would require widespread import reordering across backend;
-# run `ruff check backend --select I --fix` when you want to normalize imports.
-select = ["E", "F", "W"]
+# E/F/W + naming (N): keeps backend style checks broad without requiring import reordering.
+# Run `ruff check backend --select I --fix` when you want to normalize imports.
+select = ["E", "F", "W", "N"]
 ignore = ["E501"]
 
 [lint.per-file-ignores]

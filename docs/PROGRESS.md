@@ -1,7 +1,39 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-06 (UTC) — question-language localization + localized default greeting
+**Last updated:** 2026-04-08 (UTC) — Gap Analyzer Phase 6B reclustering + archive hardening
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-04-08) — Gap Analyzer Phase 6B reclustering + archive hardening
+
+### Weekly Mode B reclustering
+
+- ✅ **Weekly full reclustering path** (`backend/gap_analyzer/orchestrator.py`): `run_mode_b_weekly_reclustering(...)` now rebuilds recent `Mode B` history for the tenant instead of relying only on incremental clustering.
+- ✅ **Scoped rebuild semantics:** the weekly pass pulls in recent unclustered questions plus all questions from active/closed clusters touched inside the reclustering window, then rebuilds those clusters from scratch.
+- ✅ **Dismissal preservation:** dismissed `Mode B` clusters are intentionally excluded from rebuild scope so dismissal semantics are not erased by background maintenance.
+- ✅ **Historical churn without false “new” badges:** rebuilt clusters are created with `is_new = false`, so weekly maintenance does not surface old gaps as newly discovered.
+
+### Archive and linked-gap semantics
+
+- ✅ **Archive filters shipped end-to-end:** backend schemas, orchestrator read-side logic, frontend API types, and the dashboard UI now support an explicit archive view.
+- ✅ **Source-specific archive truth table:** archived `Mode A` maps to dismissed topics; archived `Mode B` maps to closed + dismissed clusters; archived linked `Mode B` items do not hide active `Mode A` topics.
+- ✅ **Archive-focused dashboard controls:** `/gap-analyzer` now has `Active view` / `Archive view` shortcuts plus archive summary cards for closed and dismissed inventory.
+
+### Hardening + review follow-ups
+
+- ✅ **Docs sync:** updated `AGENTS.md`, `docs/04-features.md`, and `docs/IMPLEMENTED_FEATURES.md` to describe Gap Analyzer as shipped through Phase 6B.
+- ✅ **Weekly path DB safety:** reclustering now uses naive UTC cutoff comparison for the current `DateTime` storage contract, batches large `cluster_id = NULL` updates, and expires the SQLAlchemy session after destructive bulk delete operations.
+- ✅ **Archive UI performance cleanup:** archive counters on the dashboard were memoized and lint-cleaned.
+- ✅ **Archive UX grouping:** the archive view now keeps `Mode A dismissed`, `Mode B closed`, and `Mode B dismissed` visibly separate in the dashboard instead of collapsing them into one undifferentiated archive list.
+- ✅ **Unembedded-question protection:** weekly reclustering now skips destructive rebuild for touched active/closed clusters that still contain questions without valid embeddings after the embed attempt, preventing historical questions from silently losing cluster membership.
+- ✅ **Regression coverage:** added Phase 6B tests for duplicate-cluster merge behavior, archive truth-table behavior, and the blank/unembedded-question protection path.
+
+### Remaining follow-up after Phase 6B
+
+- ⏳ durable queue / retry / cross-process coordination for background Gap Analyzer jobs
+- ⏳ `pgvector`-backed relinking optimization path instead of full Python-side `O(N×M)` similarity pass
+- ⏳ lighter summary-only endpoint for sidebar badge reads
 
 ---
 

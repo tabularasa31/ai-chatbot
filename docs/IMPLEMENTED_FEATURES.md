@@ -2,7 +2,7 @@
 
 **Purpose:** A single grouped list of **what the product already does**, with pointers to code and APIs. It does **not** replace the full commit/session history — see [`PROGRESS.md`](./PROGRESS.md) for that.
 
-**Last updated:** 2026-04-07 (verification-first dashboard access, bot-scoped debug)
+**Last updated:** 2026-04-08 (Gap Analyzer through Phase 6B)
 
 ---
 
@@ -63,6 +63,7 @@
 | FAQ match (Phase 3) | Post-relevance FAQ hybrid routing with `faq_direct`/`faq_context`/`rag_only`, guarded direct path, single embedding reuse across FAQ + retrieval, FAQ hints in prompt, and stable `faq_match` span contract (`top_score` = best raw candidate score, `selected_score` = selected FAQ score) | `backend/faq/faq_matcher.py`, `backend/chat/service.py`, `backend/search/service.py`, `tests/test_faq_matcher.py`, `tests/test_rag_pipeline.py` |
 | Knowledge API (Profile + FAQ) | Tenant knowledge endpoints for profile and FAQ moderation: `GET/PATCH /knowledge/profile`, `GET /knowledge/faq`, `POST /knowledge/faq/{id}/approve`, `POST /knowledge/faq/{id}/reject`, `POST /knowledge/faq/approve-all`, `PUT/DELETE /knowledge/faq/{id}`; extraction status exposed as profile field | `backend/knowledge/routes.py`, `backend/knowledge/schemas.py`, `backend/main.py`, `backend/models.py`, `tests/test_knowledge_api.py` |
 | Sessions / logs / feedback | Session list, logs, thumbs, ideal answer, bad answers | `GET /chat/sessions`, logs, feedback, bad-answers |
+| Gap Analyzer (Phases 1-6B) | Bounded `backend/gap_analyzer` module with docs-side Mode A gap discovery, chat-signal Mode B clustering, verified-user dashboard/API, Mode A ↔ Mode B linking/dedupe, linked draft context, archive view semantics, and weekly recent-history Mode B reclustering | `backend/gap_analyzer/*`, `GET /gap-analyzer`, `POST /gap-analyzer/recalculate`, `POST /gap-analyzer/{source}/{gap_id}/dismiss`, `POST /gap-analyzer/{source}/{gap_id}/reactivate`, `POST /gap-analyzer/{source}/{gap_id}/draft`, `frontend/app/(app)/gap-analyzer/page.tsx`, `tests/test_gap_analyzer_phase*.py` |
 
 ---
 

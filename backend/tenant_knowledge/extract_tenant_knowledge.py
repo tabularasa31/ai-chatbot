@@ -127,9 +127,25 @@ def run_extract_client_knowledge_for_document(
         )
         chunks = [r.chunk_text for r in rows if r.chunk_text and r.chunk_text.strip()]
         if not chunks:
+            logger.info(
+                "Tenant knowledge extraction skipped: no chunks "
+                "(document_id=%s client_id=%s)",
+                document_id,
+                client_id,
+            )
             return
 
         combined_text = _truncate_to_approx_tokens("\n\n".join(chunks), max_tokens=6000)
+        logger.info(
+            "Tenant knowledge extraction started "
+            "(document_id=%s client_id=%s file_type=%s embedding_rows=%s chunks_used=%s combined_chars=%s)",
+            document_id,
+            client_id,
+            doc.file_type.value,
+            len(rows),
+            len(chunks),
+            len(combined_text),
+        )
 
         openai_client = get_openai_client(api_key)
 
@@ -164,7 +180,16 @@ def run_extract_client_knowledge_for_document(
 
         extracted = json.loads(raw_content)
         if not isinstance(extracted, dict):
+            logger.warning(
+                "Tenant knowledge extraction returned non-dict payload "
+                "(document_id=%s client_id=%s payload_type=%s)",
+                document_id,
+                client_id,
+                type(extracted).__name__,
+            )
             return
+        raw_faq = extracted.get("faq_candidates") or []
+        raw_faq_count = len(raw_faq) if isinstance(raw_faq, list) else 0
 
         product_name = extracted.get("product_name")
         product_name_norm = product_name.strip() if isinstance(product_name, str) else None
@@ -220,22 +245,29 @@ def run_extract_client_knowledge_for_document(
         )
 
         faq_candidates: list[FaqCandidate] = []
-        raw_faq = extracted.get("faq_candidates") or []
+        faq_skipped_non_dict = 0
+        faq_skipped_non_string = 0
+        faq_skipped_too_short = 0
+        faq_skipped_duplicate_question = 0
         if isinstance(raw_faq, list):
             seen_questions: set[str] = set()
             for item in raw_faq:
                 if not isinstance(item, dict):
+                    faq_skipped_non_dict += 1
                     continue
                 q = item.get("question")
                 a = item.get("answer")
                 if not isinstance(q, str) or not isinstance(a, str):
+                    faq_skipped_non_string += 1
                     continue
                 question = q.strip()
                 answer = a.strip()
                 if len(question) < 10 or len(answer) < 20:
+                    faq_skipped_too_short += 1
                     continue
                 norm_q = question.casefold()
                 if norm_q in seen_questions:
+                    faq_skipped_duplicate_question += 1
                     continue
                 seen_questions.add(norm_q)
                 conf = _faq_confidence(question, combined_text)
@@ -247,6 +279,36 @@ def run_extract_client_knowledge_for_document(
                         source="docs",
                     )
                 )
+        faq_low_confidence = sum(
+            1 for candidate in faq_candidates if candidate.confidence < 0.5
+        )
+        faq_medium_or_high_confidence = len(faq_candidates) - faq_low_confidence
+        logger.info(
+            "Tenant knowledge extraction parsed FAQ candidates "
+            "(document_id=%s client_id=%s raw_faq_count=%s parsed_faq_count=%s "
+            "medium_or_high_confidence=%s low_confidence=%s skipped_non_dict=%s "
+            "skipped_non_string=%s skipped_too_short=%s skipped_duplicate_question=%s)",
+            document_id,
+            client_id,
+            raw_faq_count,
+            len(faq_candidates),
+            faq_medium_or_high_confidence,
+            faq_low_confidence,
+            faq_skipped_non_dict,
+            faq_skipped_non_string,
+            faq_skipped_too_short,
+            faq_skipped_duplicate_question,
+        )
+        for candidate in faq_candidates:
+            logger.info(
+                "Tenant knowledge extraction FAQ candidate "
+                "(document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                document_id,
+                client_id,
+                candidate.question,
+                float(candidate.confidence),
+                candidate.source,
+            )
 
         # Swagger/OpenAPI parsing without extra LLM calls.
         aliases: list[AliasEntry] = []
@@ -282,6 +344,19 @@ def run_extract_client_knowledge_for_document(
             aliases=aliases,
             updated_at=updated_at,
         )
+        logger.info(
+            "Tenant knowledge extraction merged profile "
+            "(document_id=%s client_id=%s product_name_present=%s modules=%s glossary_entries=%s "
+            "support_email_present=%s support_urls=%s aliases=%s)",
+            document_id,
+            client_id,
+            bool(product_name_norm),
+            len(modules),
+            len(glossary_entries),
+            bool(support_email),
+            len(support_urls),
+            len(aliases),
+        )
 
         # Upsert FAQ candidates (medium/high only, duplicates skipped).
         if faq_candidates:
@@ -290,6 +365,13 @@ def run_extract_client_knowledge_for_document(
                 client_id=client_id,
                 faq_candidates=faq_candidates,
                 api_key=api_key,
+            )
+        else:
+            logger.info(
+                "Tenant knowledge extraction finished with no FAQ candidates to upsert "
+                "(document_id=%s client_id=%s)",
+                document_id,
+                client_id,
             )
 
     except Exception:

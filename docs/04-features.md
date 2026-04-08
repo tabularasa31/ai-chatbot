@@ -129,9 +129,9 @@ Each chunk stores: `chunk_text`, `chunk_index`, `char_offset`, `char_end`, `file
 
 ### Document health check (FI-032)
 
-After embedding, the system runs a GPT-based quality analysis on the document:
+After embedding, the system runs a deterministic health lint pass on the document:
 
-- Checks for: missing content, very short chunks, encoding issues, low information density
+- Checks for: missing or very short content, extraction issues, weak structure, incomplete sections, and low information density
 - Produces a `health_score` (0–100) and a list of `warnings` with severity levels
 - Visible in the dashboard as a colored dot (green / amber / red) next to each document
 - User can manually trigger a re-check at any time via the **Re-check** button

@@ -26,6 +26,35 @@ Status values:
 - `Conditional` — do only if a real signal appears
 - `Done` — finished; keep for history until the next cleanup pass
 
+### Template for new items
+
+Use this template when adding a new deferred review follow-up:
+
+```md
+### N. Short item title
+
+- Status: `Next|Later|Conditional|Done`
+- Priority: High|Medium|Low
+- Source:
+  - PR / review / incident / manual audit
+- Why deferred:
+  - short explanation
+- Goal:
+  - what the change should achieve
+- Expected benefit:
+  - concrete payoff
+- Risk if postponed:
+  - what can go wrong while it stays deferred
+- Start here:
+  - [/absolute/path/in/repo](/Users/tabularasa/Projects/ai-chatbot/path/to/file)
+- Suggested scope for one PR:
+  - flat bullet list of intended changes
+- Definition of done:
+  - flat bullet list of completion criteria
+- Notes:
+  - optional context, tradeoffs, or links
+```
+
 ---
 
 ## Queue
@@ -123,4 +152,3 @@ These were raised during review and are now finished:
 
 Related PR:
 - [PR #280](https://github.com/tabularasa31/ai-chatbot/pull/280)
-

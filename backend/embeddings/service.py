@@ -16,6 +16,7 @@ from backend.documents.parsers import (
     extract_openapi_chunks_from_rendered_text,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
 # Optimal chunking parameters per document type.
@@ -256,6 +257,7 @@ def create_embeddings_for_document(
     # Delete existing embeddings (re-embed on demand)
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
+    invalidate_bm25_cache_for_tenant(doc.client_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -307,6 +309,7 @@ def create_embeddings_for_document(
         db.add(emb)
         embeddings.append(emb)
     db.commit()
+    invalidate_bm25_cache_for_tenant(doc.client_id)
     for emb in embeddings:
         db.refresh(emb)
     try:
@@ -409,6 +412,10 @@ def delete_embeddings_for_document(
     Returns:
         Count of deleted embeddings.
     """
+    tenant_id = (
+        db.query(Document.client_id).filter(Document.id == document_id).scalar()
+    )
     result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
+    invalidate_bm25_cache_for_tenant(tenant_id)
     return result

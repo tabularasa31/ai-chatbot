@@ -5,6 +5,12 @@
 
 ---
 
+## Active review follow-ups
+
+- See [docs/BACKLOG_REVIEW_FOLLOWUPS.md](./BACKLOG_REVIEW_FOLLOWUPS.md) for the living queue of deferred code-review hardening work that should be handled in small follow-up PRs.
+
+---
+
 ## ✅ COMPLETED (2026-04-08) — Gap Analyzer hardening follow-ups
 
 ### Durable job orchestration

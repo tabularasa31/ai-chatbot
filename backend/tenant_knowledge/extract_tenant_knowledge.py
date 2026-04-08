@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentType, Embedding, TenantProfile
-from backend.tenant_knowledge.faq_service import upsert_faq_candidates
+from backend.tenant_knowledge.faq_service import (
+    FAQ_MIN_CONFIDENCE_THRESHOLD,
+    insert_new_faq_candidates,
+)
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
@@ -284,14 +287,19 @@ def run_extract_client_knowledge_for_document(
                     )
                 )
         faq_low_confidence = sum(
-            1 for candidate in faq_candidates if candidate.confidence < 0.5
+            1
+            for candidate in faq_candidates
+            if candidate.confidence is None
+            or candidate.confidence < FAQ_MIN_CONFIDENCE_THRESHOLD
         )
         faq_medium_or_high_confidence = len(faq_candidates) - faq_low_confidence
+        faq_batch_id = uuid.uuid4()
         logger.info(
             "Tenant knowledge extraction parsed FAQ candidates "
-            "(document_id=%s client_id=%s raw_faq_count=%s parsed_faq_count=%s "
+            "(batch_id=%s document_id=%s client_id=%s raw_faq_count=%s parsed_faq_count=%s "
             "medium_or_high_confidence=%s low_confidence=%s skipped_non_dict=%s "
             "skipped_non_string=%s skipped_too_short=%s skipped_duplicate_question=%s)",
+            faq_batch_id,
             document_id,
             client_id,
             raw_faq_count,
@@ -306,7 +314,8 @@ def run_extract_client_knowledge_for_document(
         for candidate in faq_candidates:
             logger.info(
                 "Tenant knowledge extraction FAQ candidate "
-                "(document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                faq_batch_id,
                 document_id,
                 client_id,
                 candidate.question,
@@ -362,18 +371,28 @@ def run_extract_client_knowledge_for_document(
             len(aliases),
         )
 
-        # Upsert FAQ candidates (medium/high only, duplicates skipped).
-        if faq_candidates:
-            upsert_faq_candidates(
+        faq_candidates_for_insert = [
+            candidate
+            for candidate in faq_candidates
+            if candidate.confidence is not None
+            and candidate.confidence >= FAQ_MIN_CONFIDENCE_THRESHOLD
+        ]
+
+        # Insert only medium/high-confidence FAQ candidates; duplicates are skipped.
+        if faq_candidates_for_insert:
+            insert_new_faq_candidates(
                 db=db,
                 client_id=client_id,
-                faq_candidates=faq_candidates,
+                faq_candidates=faq_candidates_for_insert,
                 api_key=api_key,
+                document_id=document_id,
+                batch_id=faq_batch_id,
             )
         else:
             logger.info(
-                "Tenant knowledge extraction finished with no FAQ candidates to upsert "
-                "(document_id=%s client_id=%s)",
+                "Tenant knowledge extraction finished with no FAQ candidates to insert "
+                "(batch_id=%s document_id=%s client_id=%s)",
+                faq_batch_id,
                 document_id,
                 client_id,
             )

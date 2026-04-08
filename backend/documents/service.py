@@ -130,10 +130,18 @@ def _detect_parse_or_extraction_issue(text: str) -> dict[str, str] | None:
             "The parsed text contains replacement or null characters, which suggests extraction problems.",
         )
 
-    visible_chars = [ch for ch in text if not ch.isspace()]
-    if len(visible_chars) < 200:
+    visible_count = 0
+    alnum_count = 0
+    for ch in text:
+        if ch.isspace():
+            continue
+        visible_count += 1
+        if ch.isalnum():
+            alnum_count += 1
+
+    if visible_count < 200:
         return None
-    alnum_ratio = sum(ch.isalnum() for ch in visible_chars) / len(visible_chars)
+    alnum_ratio = alnum_count / visible_count
     if alnum_ratio < 0.55:
         return _make_warning(
             "parse_or_extraction_issue",
@@ -194,12 +202,11 @@ def _detect_incomplete_section(text: str) -> dict[str, str] | None:
                 next_heading_match = re.match(r"^\s*(#{1,6})\s+", candidate)
                 if next_heading_match:
                     next_level = len(next_heading_match.group(1))
-                    if current_level == 1 and next_level > current_level:
+                    if next_level > current_level:
                         section_has_body = True
                     break
-                if stripped_candidate:
-                    section_has_body = True
-                    break
+                section_has_body = True
+                break
             if not section_has_body:
                 return _make_warning(
                     "incomplete_section",

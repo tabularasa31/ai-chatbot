@@ -96,15 +96,40 @@ def upsert_faq_candidates(
 ) -> None:
     """Insert medium/high confidence FAQ candidates; skip low and duplicates."""
     openai_client = get_openai_client(api_key)
+    total_candidates = 0
+    skipped_low_confidence = 0
+    skipped_empty = 0
+    skipped_duplicate = 0
+    inserted = 0
+    auto_approved = 0
+    candidate_errors = 0
 
     for candidate in faq_candidates:
+        total_candidates += 1
         try:
             if candidate.confidence is None or candidate.confidence < 0.5:
+                skipped_low_confidence += 1
+                logger.info(
+                    "FAQ candidate skipped: low confidence "
+                    "(client_id=%s question=%r confidence=%s source=%s)",
+                    client_id,
+                    candidate.question,
+                    candidate.confidence,
+                    candidate.source,
+                )
                 continue
 
             question = candidate.question.strip()
             answer = candidate.answer.strip()
             if not question or not answer:
+                skipped_empty += 1
+                logger.info(
+                    "FAQ candidate skipped: empty normalized question/answer "
+                    "(client_id=%s question=%r source=%s)",
+                    client_id,
+                    candidate.question,
+                    candidate.source,
+                )
                 continue
 
             embedding_resp = openai_client.embeddings.create(
@@ -130,10 +155,46 @@ def upsert_faq_candidates(
                         approved=approved,
                     )
                 )
+                inserted += 1
+                if approved:
+                    auto_approved += 1
+                logger.info(
+                    "FAQ candidate queued for insert "
+                    "(client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
+                    client_id,
+                    question,
+                    float(candidate.confidence),
+                    candidate.source,
+                    approved,
+                )
+            else:
+                skipped_duplicate += 1
+                logger.info(
+                    "FAQ candidate skipped: semantic duplicate "
+                    "(client_id=%s question=%r confidence=%.3f source=%s)",
+                    client_id,
+                    question,
+                    float(candidate.confidence),
+                    candidate.source,
+                )
         except Exception:
             # Best-effort: don't let one bad candidate break the whole batch.
+            candidate_errors += 1
             logger.exception("Failed to upsert FAQ candidate (client_id=%s)", client_id)
             db.rollback()
             continue
 
     db.commit()
+    logger.info(
+        "FAQ upsert summary "
+        "(client_id=%s total=%s inserted=%s auto_approved=%s skipped_low_confidence=%s "
+        "skipped_empty=%s skipped_duplicate=%s candidate_errors=%s)",
+        client_id,
+        total_candidates,
+        inserted,
+        auto_approved,
+        skipped_low_confidence,
+        skipped_empty,
+        skipped_duplicate,
+        candidate_errors,
+    )

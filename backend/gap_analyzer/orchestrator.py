@@ -88,7 +88,7 @@ class _MutableModeBCluster:
         self.centroid_norm = _vector_norm(self.centroid)
 
 
-class _ModeBClusterUpdateRejected(RuntimeError):
+class _ModeBClusterUpdateRejectedError(RuntimeError):
     def __init__(
         self,
         *,
@@ -296,7 +296,7 @@ class GapAnalyzerOrchestrator:
                     question_embedding=question_embedding,
                     corpus_chunks=prepared_corpus,
                 )
-            except _ModeBClusterUpdateRejected:
+            except _ModeBClusterUpdateRejectedError:
                 new_cluster = _build_new_mode_b_cluster(
                     question=question,
                     question_embedding=question_embedding,
@@ -1322,7 +1322,7 @@ def _update_mode_b_cluster(
             question.question_id,
             len(question_embedding),
         )
-        raise _ModeBClusterUpdateRejected(
+        raise _ModeBClusterUpdateRejectedError(
             cluster_id=cluster.cluster_id,
             question_id=question.question_id,
             centroid_len=len(cluster.centroid),

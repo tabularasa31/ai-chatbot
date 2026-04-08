@@ -13,7 +13,7 @@ import re
 import socket
 import time
 import uuid
-import defusedxml.ElementTree as ET
+from defusedxml import ElementTree
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -444,8 +444,8 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
                 )
                 continue
             try:
-                root = ET.fromstring(response.text)
-            except ET.ParseError:
+                root = ElementTree.fromstring(response.text)
+            except ElementTree.ParseError:
                 _log_fetch(logging.INFO, "Skipping invalid sitemap XML", context)
                 continue
 
@@ -1338,7 +1338,7 @@ def _mark_run_finished(run: UrlSourceRun, *, status: str, error_message: str | N
         run.duration_seconds = max(0, int((run.finished_at - started).total_seconds()))
 
 
-class _CrawlAborted(Exception):
+class _CrawlAbortedError(Exception):
     """Raised when the crawl loop terminates early (e.g. bad OpenAI key)."""
 
 
@@ -1388,7 +1388,7 @@ def _index_pages(
     """Fetch, extract, and index each URL.
 
     Returns a _CrawlResult.
-    Raises _CrawlAborted if the crawl must stop early — currently triggered by
+    Raises _CrawlAbortedError if the crawl must stop early — currently triggered by
     HTTPException with status {400, 401, 500} from _upsert_page_document (covers
     OpenAI auth failures and upstream embedding errors, but not exclusively).
     TODO: narrow to explicit OpenAI/auth/embedding error recognition rather than
@@ -1442,7 +1442,7 @@ def _index_pages(
                 source.error_message = "Indexing paused — check your OpenAI key."
                 _mark_run_finished(run, status=SourceStatus.paused.value, error_message=source.error_message)
                 db.commit()
-                raise _CrawlAborted
+                raise _CrawlAbortedError
             raise
         indexed_urls.add(url)
         chunks_created += page_chunks
@@ -1566,7 +1566,7 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
 
         try:
             result = _index_pages(source, run, plan, api_key, db)
-        except _CrawlAborted:
+        except _CrawlAbortedError:
             return
 
         _finalize_crawl(source, run, plan, result, started, db)

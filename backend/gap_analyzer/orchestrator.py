@@ -1205,7 +1205,6 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
         cluster.linked_doc_topic_id = topic.id
         linked_topic_ids.add(topic.id)
         linked_cluster_ids.add(cluster.id)
-    db.flush()
 
 
 def _score_mode_link_pairs(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -44,6 +45,8 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 _GAP_JOB_LEASE_SECONDS = 1800
 _GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
 _GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
+_GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
+_BM25_CACHE_MAX_ENTRIES = 32
 
 
 @dataclass(frozen=True)
@@ -297,7 +300,7 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def __init__(self, db: Session):
         self.db = db
-        self._bm25_cache: dict[tuple[UUID, tuple[str, ...]], _TenantBm25Corpus] = {}
+        self._bm25_cache: OrderedDict[tuple[UUID, tuple[str, ...]], _TenantBm25Corpus] = OrderedDict()
 
     @property
     def _capabilities(self) -> _RepositoryCapabilities:
@@ -913,7 +916,7 @@ class SqlAlchemyGapAnalyzerRepository:
         job.leased_at = None
         job.lease_expires_at = None
         job.updated_at = now
-        job.last_error = error_message[:4000]
+        job.last_error = _truncate_gap_job_error(error_message)
         self.db.add(job)
         self.db.flush()
 
@@ -1081,6 +1084,7 @@ class SqlAlchemyGapAnalyzerRepository:
         cache_key = (tenant_id, tuple(sorted(excluded_file_types)))
         cached = self._bm25_cache.get(cache_key)
         if cached is not None:
+            self._bm25_cache.move_to_end(cache_key)
             return cached
 
         excluded = {value.casefold() for value in excluded_file_types}
@@ -1121,6 +1125,9 @@ class SqlAlchemyGapAnalyzerRepository:
             bm25=BM25Okapi(tokenized_corpus) if tokenized_corpus else None,
         )
         self._bm25_cache[cache_key] = corpus
+        self._bm25_cache.move_to_end(cache_key)
+        while len(self._bm25_cache) > _BM25_CACHE_MAX_ENTRIES:
+            self._bm25_cache.popitem(last=False)
         return corpus
 
 
@@ -1134,6 +1141,17 @@ def _aware_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _truncate_gap_job_error(error_message: str) -> str:
+    if len(error_message) <= _GAP_JOB_LAST_ERROR_MAX_CHARS:
+        return error_message
+    truncated_prefix = "...[truncated]\n"
+    tail_size = _GAP_JOB_LAST_ERROR_MAX_CHARS - len(truncated_prefix)
+    if tail_size <= 0:
+        return error_message[-_GAP_JOB_LAST_ERROR_MAX_CHARS :]
+    # Keep the traceback tail because the final frames and exception text are usually the most actionable.
+    return truncated_prefix + error_message[-tail_size:]
 
 
 def _repository_capabilities(db: Session) -> _RepositoryCapabilities:

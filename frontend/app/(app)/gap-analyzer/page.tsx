@@ -278,6 +278,22 @@ export default function GapAnalyzerPage() {
   }, []);
 
   const summary = data?.summary;
+  const modeAItems = data?.mode_a_items ?? [];
+  const modeBItems = data?.mode_b_items ?? [];
+  const archiveModeSelected = modeAStatus === "archived" && modeBStatus === "archived";
+  const archiveItems = [...modeAItems, ...modeBItems];
+  const archiveClosedCount = archiveItems.filter((item) => item.status === "closed").length;
+  const archiveDismissedCount = archiveItems.filter((item) => item.status === "dismissed").length;
+
+  const activateActiveView = () => {
+    setModeAStatus("active");
+    setModeBStatus("active");
+  };
+
+  const activateArchiveView = () => {
+    setModeAStatus("archived");
+    setModeBStatus("archived");
+  };
 
   return (
     <div className="space-y-6">
@@ -301,11 +317,43 @@ export default function GapAnalyzerPage() {
       {error && <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
       {notice && <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={activateActiveView}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+            !archiveModeSelected ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"
+          }`}
+        >
+          Active view
+        </button>
+        <button
+          type="button"
+          onClick={activateArchiveView}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium ${
+            archiveModeSelected ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-700"
+          }`}
+        >
+          Archive view
+        </button>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-4">
-        <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
-        <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
-        <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
-        <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+        {archiveModeSelected ? (
+          <>
+            <StatCard label="Archived items" value={archiveItems.length} note="Dismissed Mode A plus closed and dismissed Mode B." />
+            <StatCard label="Closed" value={archiveClosedCount} />
+            <StatCard label="Dismissed" value={archiveDismissedCount} />
+            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+          </>
+        ) : (
+          <>
+            <StatCard label="Active gaps" value={summary?.total_active ?? "—"} note={summary?.impact_statement} />
+            <StatCard label="Uncovered" value={summary?.uncovered_count ?? "—"} />
+            <StatCard label="Partial" value={summary?.partial_count ?? "—"} />
+            <StatCard label="Last updated" value={summary?.last_updated ? formatDateTime(summary.last_updated) : "—"} />
+          </>
+        )}
       </div>
 
       {draft && <DraftPanel draft={draft} onClose={() => setDraft(null)} />}
@@ -323,7 +371,8 @@ export default function GapAnalyzerPage() {
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>
-              <option value="dismissed">Dismissed</option>
+              <option value="archived">Archived</option>
+              <option value="dismissed">Dismissed only</option>
               <option value="all">All</option>
             </select>
           </div>
@@ -359,6 +408,7 @@ export default function GapAnalyzerPage() {
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>
+              <option value="archived">Archived</option>
               <option value="closed">Closed</option>
               <option value="dismissed">Dismissed</option>
               <option value="all">All</option>

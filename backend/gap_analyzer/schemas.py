@@ -14,8 +14,8 @@ DismissReason = GapDismissReason
 
 GapItemStatus = Literal["active", "closed", "dismissed"]
 GapClassification = Literal["uncovered", "partial", "covered", "unknown"]
-ModeAStatusFilter = Literal["active", "dismissed", "all"]
-ModeBStatusFilter = Literal["active", "closed", "dismissed", "all"]
+ModeAStatusFilter = Literal["active", "dismissed", "archived", "all"]
+ModeBStatusFilter = Literal["active", "closed", "dismissed", "archived", "all"]
 ModeASort = Literal["coverage_asc", "newest"]
 ModeBSort = Literal["signal_desc", "coverage_asc", "newest"]
 

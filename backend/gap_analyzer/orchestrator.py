@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
@@ -13,7 +13,7 @@ import re
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer.domain import (
@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 _MODE_A_DRAFT_EXAMPLE_LIMIT = 5
+_MODE_B_WEEKLY_RECLUSTER_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -334,6 +335,197 @@ class GapAnalyzerOrchestrator:
             )
 
         _sync_mode_links(self._require_sqlalchemy_repository().db, tenant_id=tenant_id)
+        return ModeBResult(
+            tenant_id=tenant_id,
+            status=GapCommandStatus.accepted,
+            started_at=started_at,
+        )
+
+    def run_mode_b_weekly_reclustering(self, tenant_id: UUID) -> ModeBResult:
+        repository = self._require_repository()
+        db = self._require_sqlalchemy_repository().db
+        started_at = datetime.now(timezone.utc)
+        recent_cutoff = started_at - timedelta(days=_MODE_B_WEEKLY_RECLUSTER_DAYS)
+
+        affected_cluster_ids = [
+            cluster_id
+            for (cluster_id,) in (
+                db.query(GapQuestion.cluster_id)
+                .join(GapCluster, GapQuestion.cluster_id == GapCluster.id)
+                .filter(GapQuestion.tenant_id == tenant_id)
+                .filter(GapQuestion.created_at >= recent_cutoff)
+                .filter(GapQuestion.cluster_id.isnot(None))
+                .filter(GapCluster.status.in_([GapClusterStatus.active, GapClusterStatus.closed]))
+                .distinct()
+                .all()
+            )
+            if cluster_id is not None
+        ]
+
+        scope_query = (
+            db.query(GapQuestion)
+            .filter(GapQuestion.tenant_id == tenant_id)
+            .order_by(GapQuestion.created_at.asc(), GapQuestion.id.asc())
+        )
+        if affected_cluster_ids:
+            scope_query = scope_query.filter(
+                or_(
+                    GapQuestion.cluster_id.in_(affected_cluster_ids),
+                    (GapQuestion.cluster_id.is_(None) & (GapQuestion.created_at >= recent_cutoff)),
+                )
+            )
+        else:
+            scope_query = scope_query.filter(GapQuestion.cluster_id.is_(None), GapQuestion.created_at >= recent_cutoff)
+
+        question_rows = scope_query.all()
+        if not question_rows:
+            return ModeBResult(
+                tenant_id=tenant_id,
+                status=GapCommandStatus.accepted,
+                started_at=started_at,
+            )
+
+        questions = [_mode_b_question_record_from_row(row) for row in question_rows]
+        missing_embeddings = any(_vector_from_unknown(question.embedding) is None for question in questions)
+        encrypted_api_key = repository.get_client_openai_key(tenant_id) if missing_embeddings else None
+        if missing_embeddings and not encrypted_api_key:
+            logger.warning("gap_analyzer_mode_b_weekly_recluster_missing_openai_key tenant_id=%s", tenant_id)
+            return ModeBResult(
+                tenant_id=tenant_id,
+                status=GapCommandStatus.accepted,
+                started_at=started_at,
+            )
+
+        if encrypted_api_key:
+            self._ensure_mode_b_question_embeddings(
+                encrypted_api_key=encrypted_api_key,
+                questions=questions,
+            )
+            question_rows = (
+                db.query(GapQuestion)
+                .filter(GapQuestion.id.in_([question.question_id for question in questions]))
+                .order_by(GapQuestion.created_at.asc(), GapQuestion.id.asc())
+                .all()
+            )
+            if not question_rows:
+                return ModeBResult(
+                    tenant_id=tenant_id,
+                    status=GapCommandStatus.accepted,
+                    started_at=started_at,
+                )
+            questions = [_mode_b_question_record_from_row(row) for row in question_rows]
+
+        corpus_chunks = repository.get_mode_a_corpus_chunks(
+            tenant_id=tenant_id,
+            excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
+        )
+        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
+        scoped_question_ids = [question.question_id for question in questions]
+
+        if scoped_question_ids:
+            (
+                db.query(GapQuestion)
+                .filter(GapQuestion.id.in_(scoped_question_ids))
+                .update({GapQuestion.cluster_id: None}, synchronize_session=False)
+            )
+            db.flush()
+
+        if affected_cluster_ids:
+            (
+                db.query(GapDocTopic)
+                .filter(GapDocTopic.linked_cluster_id.in_(affected_cluster_ids))
+                .update({GapDocTopic.linked_cluster_id: None}, synchronize_session=False)
+            )
+            (
+                db.query(GapCluster)
+                .filter(GapCluster.id.in_(affected_cluster_ids))
+                .delete(synchronize_session=False)
+            )
+            db.flush()
+
+        clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
+        for question in questions:
+            question_embedding = _vector_from_unknown(question.embedding)
+            if question_embedding is None:
+                continue
+            question_norm = _vector_norm(question_embedding)
+            target_cluster = _match_mode_b_cluster(
+                question_embedding=question_embedding,
+                question_norm=question_norm,
+                clusters=clusters,
+                similarity_threshold=ClusteringPolicy().similarity_threshold,
+            )
+            if target_cluster is None:
+                new_cluster = _build_new_mode_b_cluster(
+                    question=question,
+                    question_embedding=question_embedding,
+                    question_norm=question_norm,
+                    corpus_chunks=prepared_corpus,
+                )
+                cluster_id = repository.create_mode_b_cluster(
+                    tenant_id=tenant_id,
+                    label=new_cluster.label,
+                    centroid=new_cluster.centroid,
+                    question_count=new_cluster.question_count,
+                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
+                    coverage_score=new_cluster.coverage_score,
+                    status=new_cluster.status,
+                    is_new=False,
+                    last_question_at=new_cluster.last_question_at,
+                    last_computed_at=started_at,
+                )
+                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
+                new_cluster.cluster_id = cluster_id
+                clusters.append(new_cluster)
+                continue
+
+            try:
+                _update_mode_b_cluster(
+                    cluster=target_cluster,
+                    question=question,
+                    question_embedding=question_embedding,
+                    corpus_chunks=prepared_corpus,
+                )
+            except _ModeBClusterUpdateRejectedError:
+                new_cluster = _build_new_mode_b_cluster(
+                    question=question,
+                    question_embedding=question_embedding,
+                    question_norm=question_norm,
+                    corpus_chunks=prepared_corpus,
+                )
+                cluster_id = repository.create_mode_b_cluster(
+                    tenant_id=tenant_id,
+                    label=new_cluster.label,
+                    centroid=new_cluster.centroid,
+                    question_count=new_cluster.question_count,
+                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
+                    coverage_score=new_cluster.coverage_score,
+                    status=new_cluster.status,
+                    is_new=False,
+                    last_question_at=new_cluster.last_question_at,
+                    last_computed_at=started_at,
+                )
+                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
+                new_cluster.cluster_id = cluster_id
+                clusters.append(new_cluster)
+                continue
+
+            repository.assign_question_to_cluster(
+                question_id=question.question_id,
+                cluster_id=target_cluster.cluster_id,
+            )
+            repository.update_mode_b_cluster(
+                cluster_id=target_cluster.cluster_id,
+                centroid=target_cluster.centroid,
+                question_count=target_cluster.question_count,
+                aggregate_signal_weight=target_cluster.aggregate_signal_weight,
+                coverage_score=target_cluster.coverage_score,
+                status=target_cluster.status,
+                last_question_at=target_cluster.last_question_at,
+                last_computed_at=started_at,
+            )
+
+        _sync_mode_links(db, tenant_id=tenant_id)
         return ModeBResult(
             tenant_id=tenant_id,
             status=GapCommandStatus.accepted,
@@ -736,7 +928,7 @@ def _build_mode_a_items(
                     last_updated=topic.extracted_at,
                 )
             )
-    if status_filter in {"dismissed", "all"}:
+    if status_filter in {"dismissed", "archived", "all"}:
         topics_by_id = {topic.id: topic for topic in topics}
         for dismissal in dismissed_rows:
             topic = topics_by_id.get(dismissal.gap_id)
@@ -776,6 +968,8 @@ def _build_mode_b_items(
     allowed_statuses: tuple[GapClusterStatus, ...]
     if status_filter == "active":
         allowed_statuses = (GapClusterStatus.active,)
+    elif status_filter == "archived":
+        allowed_statuses = (GapClusterStatus.closed, GapClusterStatus.dismissed)
     elif status_filter == "closed":
         allowed_statuses = (GapClusterStatus.closed,)
     elif status_filter == "dismissed":
@@ -859,6 +1053,20 @@ def _load_mode_b_question_samples(db: Session, cluster_ids: Iterable[UUID]) -> d
             continue
         grouped[cluster_id].append(cleaned)
     return dict(grouped)
+
+
+def _mode_b_question_record_from_row(row: GapQuestion) -> ModeBQuestionRecord:
+    created_at = row.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return ModeBQuestionRecord(
+        question_id=row.id,
+        question_text=row.question_text,
+        embedding=row.embedding,
+        gap_signal_weight=float(row.gap_signal_weight or 0.0),
+        language=row.language,
+        created_at=created_at,
+    )
 
 
 def _build_gap_summary(

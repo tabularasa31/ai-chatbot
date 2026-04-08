@@ -158,6 +158,24 @@ This module is intentionally introduced in two thin layers:
   - archive views preserve source-specific lifecycle truth
   - closed/dismissed linked pairs behave consistently before and after reclustering
 
+## Phase 6B Reclustering Notes
+
+- Weekly Mode B reclustering now rebuilds recent active/closed cluster history on a best-effort
+  background path.
+- The rebuild scope includes:
+  - recent unclustered questions inside the current reclustering window
+  - all questions from active/closed clusters that were touched by recent questions
+- Dismissed Mode B clusters are intentionally excluded from rebuild scope so dismissal semantics stay
+  stable.
+- Rebuilt Mode B clusters are created with `is_new = false` to avoid re-badging historical churn as
+  newly discovered gaps.
+- Archive UX now exposes an explicit `archived` filter:
+  - Mode A `archived` maps to dismissed topics
+  - Mode B `archived` maps to closed plus dismissed clusters
+- Archive presentation remains source-specific:
+  - linked archived Mode B items do not suppress active Mode A topics
+  - active-list suppression still applies only when linked Mode B is active
+
 ## Residual Trade-Offs
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.

@@ -274,8 +274,8 @@ async def test_embedding_throttle(db_session, client_row):
     ]
 
     mock_openai = MagicMock()
-    mock_openai.embeddings.create.return_value = MagicMock(
-        data=[MagicMock(embedding=[0.1] * 1536) for _ in range(100)]
+    mock_openai.embeddings.create.side_effect = lambda model, input: MagicMock(
+        data=[MagicMock(embedding=[0.1] * 1536) for _ in range(len(input))]
     )
 
     sleep_calls = []

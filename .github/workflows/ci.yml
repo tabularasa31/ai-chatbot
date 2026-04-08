@@ -53,6 +53,9 @@ jobs:
       - name: Lint with ruff
         run: ruff check backend
 
+      - name: Lint naming on active documents modules
+        run: ruff check backend/documents/url_service.py backend/documents/parsers.py --select N
+
       - name: Run tests (SQLite)
         run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
 

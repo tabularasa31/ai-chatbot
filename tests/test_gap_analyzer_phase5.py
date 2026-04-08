@@ -15,8 +15,10 @@ from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import (
     _GAP_JOB_LAST_ERROR_MAX_CHARS,
     SqlAlchemyGapAnalyzerRepository,
+    invalidate_bm25_cache_for_tenant,
 )
 from backend.models import (
+    Client,
     Document,
     Embedding,
     GapAnalyzerJob,
@@ -28,6 +30,7 @@ from backend.models import (
     GapQuestion,
     DocumentStatus,
     DocumentType,
+    User,
 )
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -966,6 +969,77 @@ def test_gap_analyzer_repository_bm25_match_skips_db_for_empty_token_query(
     assert match.hit is False
     assert match.score == 0.0
     assert match.match_kind == "none"
+
+
+def test_gap_analyzer_repository_bm25_cache_reuses_corpus_until_invalidated(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    user = User(
+        email="gap-phase5-bm25-cache@example.com",
+        password_hash="x",
+        is_verified=True,
+        verification_token=None,
+        verification_expires_at=None,
+    )
+    db_session.add(user)
+    db_session.flush()
+    client_record = Client(user_id=user.id, name="Gap BM25 Cache", api_key="k" * 32)
+    db_session.add(client_record)
+    db_session.flush()
+    document = Document(
+        client_id=client_record.id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        Embedding(
+            document_id=document.id,
+            chunk_text="billing exports workflow",
+            vector=[0.1] * 1536,
+        )
+    )
+    db_session.commit()
+
+    invalidate_bm25_cache_for_tenant(client_record.id)
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    query_calls = 0
+    original_query = repository.db.query
+
+    def _counted_query(*args, **kwargs):
+        nonlocal query_calls
+        query_calls += 1
+        return original_query(*args, **kwargs)
+
+    monkeypatch.setattr(repository.db, "query", _counted_query)
+
+    first_match = repository.bm25_match_for_tenant(
+        tenant_id=client_record.id,
+        query_text="billing",
+        excluded_file_types=(),
+    )
+    second_match = repository.bm25_match_for_tenant(
+        tenant_id=client_record.id,
+        query_text="workflow",
+        excluded_file_types=(),
+    )
+
+    assert first_match.hit is True
+    assert second_match.hit is True
+    assert query_calls == 1
+
+    invalidate_bm25_cache_for_tenant(client_record.id)
+    third_match = repository.bm25_match_for_tenant(
+        tenant_id=client_record.id,
+        query_text="exports",
+        excluded_file_types=(),
+    )
+
+    assert third_match.hit is True
+    assert query_calls == 2
 
 
 def test_gap_analyzer_fail_gap_job_truncates_to_tail(

@@ -38,6 +38,7 @@ from backend.documents.parsers import (
     load_openapi_spec,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
     Client,
     Document,
@@ -1100,6 +1101,7 @@ def _upsert_page_document(
     doc.status = DocumentStatus.ready
     db.flush()
     db.commit()
+    invalidate_bm25_cache_for_tenant(source.client_id)
     _run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         api_key=api_key,
@@ -1198,6 +1200,7 @@ def _upsert_structured_document(
         doc.status = DocumentStatus.ready
         db.flush()
         db.commit()
+        invalidate_bm25_cache_for_tenant(source.client_id)
         _run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
             api_key=api_key,
@@ -1271,6 +1274,7 @@ def delete_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -
     source = get_url_source(source_id, client_id, db)
     db.delete(source)
     db.commit()
+    invalidate_bm25_cache_for_tenant(client_id)
 
 
 def delete_source_document(
@@ -1295,6 +1299,7 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
+    invalidate_bm25_cache_for_tenant(client_id)
 
 
 def trigger_refresh(

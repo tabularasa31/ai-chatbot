@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 
@@ -459,3 +460,4 @@ def delete_document(
     doc = get_document(document_id, client_id, db)
     db.delete(doc)
     db.commit()
+    invalidate_bm25_cache_for_tenant(client_id)

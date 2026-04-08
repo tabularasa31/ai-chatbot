@@ -356,12 +356,7 @@ def run_document_health_check_route(
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     get_document(document_id, client.id, db)
-    if not client.openai_api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
-        )
-    result = run_document_health_check(document_id, db, client.openai_api_key)
+    result = run_document_health_check(document_id, db)
     return DocumentHealthStatusResponse(
         score=result.get("score"),
         checked_at=str(result.get("checked_at", "")),

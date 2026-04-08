@@ -2,20 +2,45 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock
-
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.documents.service import (
-    _compute_health_score,
-    _expects_contact_info,
-    _normalize_warnings,
-    run_document_health_check,
-)
-from backend.models import Client, Document, DocumentStatus, DocumentType, User
-from tests.conftest import register_and_verify_user, set_client_openai_key
+from backend.documents.service import _compute_health_score, _normalize_warnings, run_document_health_check
+from backend.models import Client, Document, DocumentStatus, DocumentType, Embedding, User
+from tests.conftest import register_and_verify_user
+
+
+def _create_ready_document(
+    db_session: Session,
+    *,
+    email: str,
+    filename: str,
+    parsed_text: str,
+    file_type: DocumentType = DocumentType.markdown,
+) -> Document:
+    user = User(
+        email=email,
+        password_hash="x",
+        is_verified=True,
+        verification_token=None,
+        verification_expires_at=None,
+    )
+    db_session.add(user)
+    db_session.flush()
+    client = Client(user_id=user.id, name="Health Client", api_key="k" * 32)
+    db_session.add(client)
+    db_session.flush()
+    doc = Document(
+        client_id=client.id,
+        filename=filename,
+        file_type=file_type,
+        parsed_text=parsed_text,
+        status=DocumentStatus.ready,
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    return doc
 
 
 def test_compute_health_score_penalties() -> None:
@@ -38,23 +63,13 @@ def test_compute_health_score_penalties() -> None:
 
 def test_normalize_warnings_filters_invalid() -> None:
     raw = [
-        {"type": "no_examples", "severity": "medium", "message": "ok"},
+        {"type": "poor_structure", "severity": "medium", "message": "ok"},
         {"type": "bad_type", "severity": "medium", "message": "skip"},
         {"severity": "low", "message": "missing type"},
     ]
     out = _normalize_warnings(raw)
     assert len(out) == 1
-    assert out[0]["type"] == "no_examples"
-
-
-def test_expects_contact_info_only_for_support_like_docs() -> None:
-    assert _expects_contact_info("support-guide.md", "How to contact support if billing fails.")
-    assert _expects_contact_info("product.md", "FAQ: if the fix fails, contact us for technical support.")
-    assert not _expects_contact_info("product.md", "FAQ: how do I reset my password?")
-    assert not _expects_contact_info("api-reference.md", "List users endpoint and response schema.")
-    assert not _expects_contact_info("features.md", "This page describes analytics dashboards and filters.")
-    assert not _expects_contact_info("product.md", "This helpful overview covers onboarding and setup.")
-    assert not _expects_contact_info("glossary.md", "The term afaq appears here as sample data only.")
+    assert out[0]["type"] == "poor_structure"
 
 
 def test_get_document_health_404_when_null(client: TestClient, db_session: Session) -> None:
@@ -87,7 +102,6 @@ def test_document_health_ownership_enforced(client: TestClient, db_session: Sess
         headers={"Authorization": f"Bearer {token_a}"},
         json={"name": "Client A"},
     )
-    set_client_openai_key(client, token_a)
     up = client.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_a}"},
@@ -113,189 +127,142 @@ def test_document_health_ownership_enforced(client: TestClient, db_session: Sess
     assert r_run.status_code == 404
 
 
-def test_run_document_health_check_mocked_openai(db_session: Session, mock_openai_client: Mock) -> None:
-    mock_openai_client.chat.completions.create.return_value = Mock(
-        choices=[
-            Mock(
-                message=Mock(
-                    content='{"warnings": [{"type": "no_examples", "severity": "high", "message": "Too abstract."}]}'
-                )
-            )
-        ],
-    )
-    user = User(
-        email="unit@example.com",
-        password_hash="x",
-        is_verified=True,
-        verification_token=None,
-        verification_expires_at=None,
-    )
-    db_session.add(user)
-    db_session.flush()
-    cl = Client(user_id=user.id, name="C", api_key="k" * 32)
-    db_session.add(cl)
-    db_session.flush()
-    doc = Document(
-        client_id=cl.id,
+def test_run_document_health_check_flags_short_document(db_session: Session) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="short@example.com",
         filename="f.md",
-        file_type=DocumentType.markdown,
-        parsed_text="# Hello\n\nContent here.",
-        status=DocumentStatus.ready,
+        parsed_text="# Title\n\nTiny note.",
     )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
 
-    result = run_document_health_check(doc.id, db_session, "sk-test")
+    result = run_document_health_check(doc.id, db_session)
+
     assert result["score"] == 80
-    assert len(result["warnings"]) == 1
-    assert result["warnings"][0]["type"] == "no_examples"
-    db_session.refresh(doc)
-    assert doc.health_status is not None
-    assert doc.health_status.get("score") == 80
+    assert [warning["type"] for warning in result["warnings"]] == ["empty_or_too_short"]
 
 
-def test_run_document_health_check_prompt_skips_contact_rule_for_regular_docs(
-    db_session: Session, mock_openai_client: Mock
-) -> None:
-    mock_openai_client.chat.completions.create.return_value = Mock(
-        choices=[Mock(message=Mock(content='{"warnings": []}'))],
+def test_run_document_health_check_uses_parsed_text_not_embedding_chunks(db_session: Session) -> None:
+    structured_text = "\n".join(
+        [
+            "# TurboFlare",
+            "",
+            "## Setup",
+            "",
+            (
+                "Install the agent, verify DNS delegation, confirm the SSL status, and review cache rules. "
+                "Map the origin IP, update the registrar settings, and check the readiness states in the panel. "
+                "Use the troubleshooting section if propagation takes longer than expected. "
+                "Document the exact registrar fields, the expected propagation timing, and the recovery steps for failed validation. "
+            ).strip(),
+            "",
+            "## SSL",
+            "",
+            (
+                "Enable HTTPS, validate the certificate, verify redirect behavior, and confirm fallback settings. "
+                "Review stale cache behavior, query string settings, and cookie-aware cache options. "
+                "Test the final domain over HTTPS after traffic is switched. "
+                "Record the expected panel statuses, the final smoke checks, and the rollback steps if traffic cutover fails. "
+            ).strip(),
+        ]
     )
-    user = User(
-        email="prompt@example.com",
-        password_hash="x",
-        is_verified=True,
-        verification_token=None,
-        verification_expires_at=None,
+    doc = _create_ready_document(
+        db_session,
+        email="structure@example.com",
+        filename="structured.md",
+        parsed_text=structured_text,
     )
-    db_session.add(user)
-    db_session.flush()
-    cl = Client(user_id=user.id, name="Prompt Client", api_key="k" * 32)
-    db_session.add(cl)
-    db_session.flush()
-    doc = Document(
-        client_id=cl.id,
-        filename="api-reference.md",
-        file_type=DocumentType.markdown,
-        parsed_text="Users endpoint reference with request and response fields.",
-        status=DocumentStatus.ready,
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text=("Unstructured content without headings. " * 80).strip(),
+            vector=None,
+            metadata_json={},
+        )
     )
-    db_session.add(doc)
     db_session.commit()
 
-    run_document_health_check(doc.id, db_session, "sk-test")
+    result = run_document_health_check(doc.id, db_session)
 
-    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
-    assert (
-        "Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting."
-        not in prompt
-    )
-    assert (
-        "for a document that is clearly about help, support, contact, or troubleshooting"
-        not in prompt
-    )
+    assert result["warnings"] == []
+    assert result["score"] == 100
 
 
-def test_run_document_health_check_prompt_includes_contact_rule_for_support_docs(
-    db_session: Session, mock_openai_client: Mock
-) -> None:
-    mock_openai_client.chat.completions.create.return_value = Mock(
-        choices=[Mock(message=Mock(content='{"warnings": []}'))],
-    )
-    user = User(
-        email="supportprompt@example.com",
-        password_hash="x",
-        is_verified=True,
-        verification_token=None,
-        verification_expires_at=None,
-    )
-    db_session.add(user)
-    db_session.flush()
-    cl = Client(user_id=user.id, name="Support Prompt Client", api_key="k" * 32)
-    db_session.add(cl)
-    db_session.flush()
-    doc = Document(
-        client_id=cl.id,
-        filename="support-center.md",
-        file_type=DocumentType.markdown,
-        parsed_text="Support guide for customers who need help with account access.",
-        status=DocumentStatus.ready,
-    )
-    db_session.add(doc)
-    db_session.commit()
-
-    run_document_health_check(doc.id, db_session, "sk-test")
-
-    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
-    assert "for a document that is clearly about help, support, contact, or troubleshooting" in prompt
-    assert (
-        "Do not report missing_contact_info unless the document is clearly about help, support, contact, FAQ, or troubleshooting."
-        in prompt
+def test_run_document_health_check_flags_poor_structure(db_session: Session) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="poor-structure@example.com",
+        filename="long.md",
+        parsed_text="# Big Guide\n\n" + ("One long section without subheadings. " * 140),
     )
 
+    result = run_document_health_check(doc.id, db_session)
 
-@pytest.mark.parametrize(
-    "bad_content",
-    ["not json", '{"warnings": "nope"}'],
-)
-def test_run_document_health_check_parse_failure_stores_error(
-    db_session: Session, mock_openai_client: Mock, bad_content: str
-) -> None:
-    mock_openai_client.chat.completions.create.return_value = Mock(
-        choices=[Mock(message=Mock(content=bad_content))],
-    )
-    user = User(
-        email="err@example.com",
-        password_hash="x",
-        is_verified=True,
-        verification_token=None,
-        verification_expires_at=None,
-    )
-    db_session.add(user)
-    db_session.flush()
-    cl = Client(user_id=user.id, name="C2", api_key="a" * 32)
-    db_session.add(cl)
-    db_session.flush()
-    doc = Document(
-        client_id=cl.id,
-        filename="e.md",
-        file_type=DocumentType.markdown,
-        parsed_text="Some text.",
-        status=DocumentStatus.ready,
-    )
-    db_session.add(doc)
-    db_session.commit()
-    db_session.refresh(doc)
-
-    result = run_document_health_check(doc.id, db_session, "sk-test")
-    assert result.get("error") == "health check failed"
-    assert result.get("score") is None
-    db_session.refresh(doc)
-    assert doc.health_status is not None
-    assert doc.health_status.get("error") == "health check failed"
+    assert "poor_structure" in [warning["type"] for warning in result["warnings"]]
 
 
-def test_get_health_after_run_via_api(client: TestClient, db_session: Session, mock_openai_client: Mock) -> None:
-    mock_openai_client.chat.completions.create.return_value = Mock(
-        choices=[
-            Mock(
-                message=Mock(
-                    content='{"warnings": [{"type": "poor_structure", "severity": "low", "message": "Long blocks."}]}'
-                )
-            )
-        ],
+def test_run_document_health_check_flags_incomplete_section(db_session: Session) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="incomplete@example.com",
+        filename="todo.md",
+        parsed_text="# Guide\n\n## Next steps\n\nTODO: add the final verification workflow.",
     )
+
+    result = run_document_health_check(doc.id, db_session)
+
+    assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
+
+
+def test_run_document_health_check_flags_parse_issue(db_session: Session) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="parse@example.com",
+        filename="broken.pdf",
+        parsed_text="Valid intro text.\n\nBroken field: \ufffd\ufffd\ufffd",
+        file_type=DocumentType.pdf,
+    )
+
+    result = run_document_health_check(doc.id, db_session)
+
+    assert "parse_or_extraction_issue" in [warning["type"] for warning in result["warnings"]]
+
+
+def test_run_document_health_check_flags_low_information_density(db_session: Session) -> None:
+    repetitive_line = "Status page overview and status page overview for every status page visitor."
+    doc = _create_ready_document(
+        db_session,
+        email="density@example.com",
+        filename="repetitive.md",
+        parsed_text="# Status\n\n" + "\n".join(repetitive_line for _ in range(16)),
+    )
+
+    result = run_document_health_check(doc.id, db_session)
+
+    assert "low_information_density" in [warning["type"] for warning in result["warnings"]]
+
+
+def test_get_health_after_run_via_api_without_openai_key(client: TestClient, db_session: Session) -> None:
     token = register_and_verify_user(client, db_session, email="apihealth@example.com")
     client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "API Health"},
     )
-    set_client_openai_key(client, token)
     up = client.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
-        files={"file": ("x.md", b"# X\n\nWords.", "text/markdown")},
+        files={
+            "file": (
+                "x.md",
+                (
+                    b"# Guide\n\n"
+                    b"TODO: finish the rollout checklist after validating the DNS delegation, SSL status, "
+                    b"cache behavior, and final HTTPS verification for the production domain. "
+                    b"Confirm each step in the panel before publishing the guide."
+                ),
+                "text/markdown",
+            )
+        },
     )
     doc_id = up.json()["id"]
     run = client.post(
@@ -304,10 +271,11 @@ def test_get_health_after_run_via_api(client: TestClient, db_session: Session, m
     )
     assert run.status_code == 200
     data = run.json()
-    assert data["score"] == 95
+    assert data["score"] == 80
+    assert "incomplete_section" in [warning["type"] for warning in data["warnings"]]
     get = client.get(
         f"/documents/{doc_id}/health",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert get.status_code == 200
-    assert get.json()["score"] == 95
+    assert get.json()["score"] == 80

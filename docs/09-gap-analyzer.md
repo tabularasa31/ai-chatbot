@@ -127,6 +127,7 @@ Authenticated verified-user routes live in `backend/gap_analyzer/routes.py`.
 Current endpoints:
 
 - `GET /gap-analyzer`
+- `GET /gap-analyzer/summary`
 - `POST /gap-analyzer/recalculate`
 - `POST /gap-analyzer/{source}/{gap_id}/dismiss`
 - `POST /gap-analyzer/{source}/{gap_id}/reactivate`
@@ -135,22 +136,22 @@ Current endpoints:
 Key contract notes:
 
 - `GET /gap-analyzer` returns backend-owned `summary`, `mode_a_items`, and `mode_b_items`
+- `GET /gap-analyzer/summary` uses a dedicated lightweight repository summary path for sidebar badge reads
 - `POST /gap-analyzer/recalculate` is an orchestration-style command and returns `202 Accepted`
-- the current sidebar badge still reads from the full `GET /gap-analyzer` payload
-- there is no separate lightweight `GET /gap-analyzer/summary` endpoint yet in the current code
 
 ## Background execution
 
-Gap Analyzer background work currently runs through best-effort in-process entrypoints in `backend/gap_analyzer/jobs.py`.
+Gap Analyzer background work currently runs through persisted job rows plus best-effort in-process entrypoints in `backend/gap_analyzer/jobs.py`.
 
 That means:
 
-- manual recalculation schedules best-effort background tasks
-- chat-side follow-up work can also trigger best-effort background execution
+- manual recalculation enqueues durable job records and starts the in-app runner
+- chat-side follow-up work can also enqueue the same durable job records
+- jobs use claim / lease / retry state in the database
 - failures are logged and rolled back at the DB session level
-- this is not yet a durable queue with cross-process coordination or retries
+- long-running jobs refresh their lease while executing
 
-This trade-off is important for operators and future maintainers: the API contract is orchestration-style, but the current worker implementation is still lightweight.
+This trade-off is still important for operators and future maintainers: job state is durable, but automatic draining after a full app outage still depends on the next enqueue/manual trigger unless a dedicated worker or scheduler is added.
 
 ## Retrieval and coverage seams
 
@@ -205,7 +206,6 @@ See:
 
 The current implementation still leaves room for future hardening:
 
-- durable queueing and retry semantics for background work
-- a lighter summary-only endpoint for sidebar badge reads
+- dedicated external scheduler / worker deployment so expired or queued jobs are drained even after a full app outage without waiting for the next trigger
 - richer linked-card presentation if the UI needs stronger pair semantics
 - additional lifecycle exposure if `inactive` becomes a first-class visible state

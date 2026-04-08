@@ -667,6 +667,8 @@ class GapAnalyzerOrchestrator:
         mode: GapRunMode,
     ) -> RecalculateCommandResult:
         if self.repository is None:
+            # This branch is only for skeleton/foundation-style tests that exercise the
+            # orchestration contract without a live persistence layer behind it.
             enqueue_result = RecalculateCommandResult(
                 tenant_id=tenant_id,
                 mode=mode,

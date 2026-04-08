@@ -310,7 +310,7 @@ export type GapAnalyzerResponse = {
   mode_b_items: GapItem[];
 };
 
-export type GapSummaryResponse = {
+export type GapSummaryEnvelope = {
   summary: GapSummary;
 };
 
@@ -813,11 +813,11 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer"));
       return data as GapAnalyzerResponse;
     },
-    async getSummary(): Promise<GapSummaryResponse> {
+    async getSummary(): Promise<GapSummaryEnvelope> {
       const res = await authFetch(`${BASE_URL}/gap-analyzer/summary`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer summary"));
-      return data as GapSummaryResponse;
+      return data as GapSummaryEnvelope;
     },
     async recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
       const res = await authFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {

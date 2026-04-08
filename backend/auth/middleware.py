@@ -9,7 +9,7 @@ must work with a not-yet-verified principal (rare; login/register stay public).
 import uuid
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
@@ -44,7 +44,7 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",
-        )
+        ) from None
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(

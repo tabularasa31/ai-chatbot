@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -49,8 +49,8 @@ class ClientMeResponse(ClientResponse):
 class UpdateClientRequest(BaseModel):
     """Request body for updating a client."""
 
-    name: Optional[str] = None
-    openai_api_key: Optional[str] = None  # None = remove key
+    name: str | None = None
+    openai_api_key: str | None = None  # None = remove key
 
 
 class ClientListResponse(BaseModel):
@@ -78,8 +78,8 @@ class KycStatusResponse(BaseModel):
 
     has_secret: bool
     identified_session_rate_7d: float
-    last_identified_session: Optional[datetime] = None
-    masked_secret_hint: Optional[str] = None
+    last_identified_session: datetime | None = None
+    masked_secret_hint: str | None = None
 
 
 DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
@@ -113,18 +113,18 @@ class UpdatePrivacyConfigRequest(BaseModel):
 class SupportSettingsResponse(BaseModel):
     """Client-wide support inbox settings."""
 
-    l2_email: Optional[str] = None
-    fallback_email: Optional[str] = None
+    l2_email: str | None = None
+    fallback_email: str | None = None
 
 
 class UpdateSupportSettingsRequest(BaseModel):
     """PUT body for /clients/me/support-settings."""
 
-    l2_email: Optional[str] = None
+    l2_email: str | None = None
 
     @field_validator("l2_email")
     @classmethod
-    def validate_l2_email(cls, v: Optional[str]) -> Optional[str]:
+    def validate_l2_email(cls, v: str | None) -> str | None:
         if v is None:
             return None
         value = v.strip().lower()

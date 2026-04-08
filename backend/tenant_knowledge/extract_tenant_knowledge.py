@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -17,7 +17,6 @@ from backend.tenant_knowledge.faq_service import (
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
-
 
 EXTRACTION_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -342,7 +341,7 @@ def run_extract_client_knowledge_for_document(
             else 0.0
         )
 
-        updated_at = datetime.now(timezone.utc)
+        updated_at = datetime.now(UTC)
         merge_into_profile(
             db,
             client_id=client_id,
@@ -372,19 +371,12 @@ def run_extract_client_knowledge_for_document(
             len(aliases),
         )
 
-        faq_candidates_for_insert = [
-            candidate
-            for candidate in faq_candidates
-            if candidate.confidence is not None
-            and candidate.confidence >= FAQ_MIN_CONFIDENCE_THRESHOLD
-        ]
-
-        # Insert only medium/high-confidence FAQ candidates; duplicates are skipped.
-        if faq_candidates_for_insert:
+        # Insert medium/high-confidence FAQ candidates; low-confidence and duplicates are skipped inside.
+        if faq_candidates:
             insert_new_faq_candidates(
                 db=db,
                 client_id=client_id,
-                faq_candidates=faq_candidates_for_insert,
+                faq_candidates=faq_candidates,
                 api_key=api_key,
                 document_id=document_id,
                 batch_id=faq_batch_id,

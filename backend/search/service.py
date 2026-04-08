@@ -108,8 +108,8 @@ class ReliabilityEvidence:
     """Structured evidence families for canonical reliability payloads."""
 
     source_overlap: SourceOverlapEvidence | None = None
-    contradiction: "ContradictionEvidence | None" = None
-    contradiction_adjudication: "ContradictionAdjudicationEvidence | None" = None
+    contradiction: ContradictionEvidence | None = None
+    contradiction_adjudication: ContradictionAdjudicationEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -1031,7 +1031,7 @@ def build_variant_trace_tag(variant_mode: VariantMode) -> str:
 
 def detect_query_script_bucket(text: str) -> str:
     """Detect a coarse script bucket from the query text."""
-    if re.search(r"[а-яё]", text.casefold(), flags=re.UNICODE):
+    if re.search(r"[а-яё]", text.casefold(), flags=re.UNICODE):  # noqa: RUF001
         return "cyrillic"
     if re.search(r"[a-z]", text.casefold(), flags=re.UNICODE):
         return "latin"
@@ -1288,7 +1288,7 @@ def _score_prepared_bm25_corpus(
         return []
 
     raw_scores = [float(score) for score in prepared_corpus.scorer.get_scores(query_tokens)]
-    scored = _sort_scored_embeddings(list(zip(prepared_corpus.candidates, raw_scores)))[:top_k]
+    scored = _sort_scored_embeddings(list(zip(prepared_corpus.candidates, raw_scores, strict=False)))[:top_k]
     if not scored:
         return []
 
@@ -1330,7 +1330,7 @@ def _format_bm25_trace_results(
 ) -> list[dict[str, object]]:
     """Add compact winner provenance to BM25 trace payloads."""
     payload = format_embedding_results(results, score_name="bm25_score")
-    for (embedding, _), item in zip(results, payload):
+    for (embedding, _), item in zip(results, payload, strict=False):
         winner = winner_by_id.get(embedding.id)
         if winner is None:
             continue
@@ -2179,7 +2179,7 @@ def _python_cosine_search(
         # Cosine similarity
         if len(vector) != len(query_vector):
             continue
-        dot = sum(a * b for a, b in zip(query_vector, vector))
+        dot = sum(a * b for a, b in zip(query_vector, vector, strict=True))
         norm1 = math.sqrt(sum(a * a for a in query_vector))
         norm2 = math.sqrt(sum(b * b for b in vector))
         if norm1 == 0 or norm2 == 0:
@@ -2199,7 +2199,7 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
 
     if len(vec1) != len(vec2):
         return 0.0
-    dot = sum(a * b for a, b in zip(vec1, vec2))
+    dot = sum(a * b for a, b in zip(vec1, vec2, strict=False))
     norm1 = math.sqrt(sum(a * a for a in vec1))
     norm2 = math.sqrt(sum(b * b for b in vec2))
     if norm1 == 0 or norm2 == 0:

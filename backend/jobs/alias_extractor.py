@@ -17,6 +17,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass
+from itertools import pairwise
 
 from sqlalchemy.orm import Session
 
@@ -66,7 +67,7 @@ def should_extract_aliases(cluster_questions: list[str]) -> bool:
     all_bigrams: list[tuple[str, str]] = []
     for q in cluster_questions:
         tokens = q.lower().split()
-        all_bigrams.extend(zip(tokens, tokens[1:]))
+        all_bigrams.extend(pairwise(tokens))
 
     if not all_bigrams:
         return False

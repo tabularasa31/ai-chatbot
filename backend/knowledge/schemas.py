@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
 
 class KnowledgeProfileResponse(BaseModel):
-    product_name: Optional[str]
+    product_name: str | None
     topics: list[str] = Field(default_factory=list)
     modules: list[str] = Field(default_factory=list)
     glossary: list[dict] = Field(default_factory=list)
-    support_email: Optional[str]
+    support_email: str | None
     support_urls: list[str] = Field(default_factory=list)
     aliases: list[dict] = Field(default_factory=list)
     updated_at: datetime
@@ -20,15 +20,15 @@ class KnowledgeProfileResponse(BaseModel):
 
 
 class KnowledgeProfilePatchRequest(BaseModel):
-    product_name: Optional[str] = None
-    topics: Optional[list[str]] = None
-    modules: Optional[list[str]] = None
-    glossary: Optional[list[dict]] = None
-    support_email: Optional[str] = None
-    support_urls: Optional[list[str]] = None
+    product_name: str | None = None
+    topics: list[str] | None = None
+    modules: list[str] | None = None
+    glossary: list[dict] | None = None
+    support_email: str | None = None
+    support_urls: list[str] | None = None
 
     @model_validator(mode="after")
-    def _sync_topics_and_modules(self) -> "KnowledgeProfilePatchRequest":
+    def _sync_topics_and_modules(self) -> KnowledgeProfilePatchRequest:
         if self.topics is None and self.modules is not None:
             self.topics = list(self.modules)
         elif self.modules is None and self.topics is not None:
@@ -40,8 +40,8 @@ class KnowledgeFaqItemResponse(BaseModel):
     id: UUID
     question: str
     answer: str
-    confidence: Optional[float]
-    source: Optional[str]
+    confidence: float | None
+    source: str | None
     approved: bool
     created_at: datetime
 

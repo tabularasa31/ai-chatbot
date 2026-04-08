@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func
@@ -63,7 +63,7 @@ def _resolve_client_for_knowledge(
     *,
     db: Session,
     current_user: User,
-    bot_id: Optional[str],
+    bot_id: str | None,
 ) -> Client:
     if bot_id is None:
         client = get_client_by_user(current_user.id, db)
@@ -117,7 +117,7 @@ def _generate_faq_embedding_background(
 def get_knowledge_profile(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeProfileResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     profile = _get_or_create_profile(db, client.id)
@@ -142,7 +142,7 @@ def patch_knowledge_profile(
     payload: KnowledgeProfilePatchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeProfileResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     profile = _profile_or_404(db, client.id)
@@ -185,7 +185,7 @@ def list_knowledge_faq(
     source: Literal["docs", "logs", "swagger", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqListResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
 
@@ -239,7 +239,7 @@ def approve_faq(
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqApproveResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
@@ -267,7 +267,7 @@ def reject_faq(
     faq_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqRejectResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
@@ -285,7 +285,7 @@ def approve_all_faq(
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqApproveAllResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     missing_embedding = (
@@ -325,7 +325,7 @@ def update_faq(
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqItemResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)
@@ -369,7 +369,7 @@ def delete_faq(
     faq_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Optional[str] = None,
+    bot_id: str | None = None,
 ) -> KnowledgeFaqRejectResponse:
     client = _resolve_client_for_knowledge(db=db, current_user=current_user, bot_id=bot_id)
     faq = _faq_or_404(db, client_id=client.id, faq_id=faq_id)

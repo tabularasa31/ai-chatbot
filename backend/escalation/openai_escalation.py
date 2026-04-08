@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -22,7 +22,7 @@ FALLBACK_EN_GENERIC = (
 
 class EscalationLlmResult(BaseModel):
     message_to_user: str
-    followup_decision: Optional[Literal["yes", "no", "unclear"]] = None
+    followup_decision: Literal["yes", "no", "unclear"] | None = None
     tokens_used: int = 0
 
 
@@ -55,7 +55,7 @@ def _format_thread(chat_messages: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _append_ticket_token(text: str, ticket_number: Optional[str]) -> str:
+def _append_ticket_token(text: str, ticket_number: str | None) -> str:
     if not ticket_number:
         return text
     token = f"[[escalation_ticket:{ticket_number}]]"
@@ -69,9 +69,9 @@ def complete_escalation_openai_turn(
     phase: EscalationPhase,
     chat_messages: list[dict[str, str]],
     fact_json: dict[str, Any],
-    latest_user_text: Optional[str],
+    latest_user_text: str | None,
     api_key: str,
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> EscalationLlmResult:
     """One OpenAI JSON-object completion; never raises on API errors."""
     model_name = model or "gpt-4o-mini"
@@ -113,7 +113,7 @@ def complete_escalation_openai_turn(
             msg = localization.text
             tokens += localization.tokens_used
         fd = data.get("followup_decision")
-        followup: Optional[Literal["yes", "no", "unclear"]] = None
+        followup: Literal["yes", "no", "unclear"] | None = None
         if fd in ("yes", "no", "unclear"):
             followup = fd  # type: ignore[assignment]
         tn = fact_json.get("ticket_number")
@@ -124,7 +124,7 @@ def complete_escalation_openai_turn(
             followup_decision=followup,
             tokens_used=tokens,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         tn = fact_json.get("ticket_number")
         localization = localize_text_to_question_language_result(

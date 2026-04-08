@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator, model_validator
@@ -51,8 +51,8 @@ class EvalResultCreateRequest(BaseModel):
     question: str
     bot_answer: str
     verdict: EvalVerdict
-    error_category: Optional[EvalErrorCategory] = None
-    comment: Optional[str] = None
+    error_category: EvalErrorCategory | None = None
+    comment: str | None = None
 
     @field_validator("question", "bot_answer")
     @classmethod
@@ -91,8 +91,8 @@ class EvalResultItemResponse(BaseModel):
     question: str
     bot_answer: str
     verdict: str
-    error_category: Optional[str]
-    comment: Optional[str]
+    error_category: str | None
+    comment: str | None
     created_at: datetime
 
 

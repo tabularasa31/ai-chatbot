@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 MANDATORY_ENTITY_TYPES = frozenset(
     {
         "EMAIL",

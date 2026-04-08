@@ -3,7 +3,7 @@
 Clusters recent user messages per client, extracts FAQ candidates and aliases.
 
 Key design decisions (v2.0 arch-review fixes):
-- O(N×K) clustering: similarity search constrained to current batch only
+- O(N*K) clustering: similarity search constrained to current batch only
 - Dual watermark: primary = last_run_started_at (timestamp), auxiliary = last_processed_id
 - Backpressure: embedding batching with delays + LLM semaphore + job timeout
 - Alias pre-filter: cluster_size >= 5 AND lexical_diversity > 0.6
@@ -19,7 +19,7 @@ import math
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -75,7 +75,7 @@ class ClusterMember:
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     n1 = math.sqrt(sum(x * x for x in a))
     n2 = math.sqrt(sum(y * y for y in b))
     if n1 == 0 or n2 == 0:
@@ -116,9 +116,9 @@ def _load_messages(
     """Load user messages since last run, excluding the last 30 s (delayed-insert guard)."""
     from backend.models import Chat
 
-    cutoff = last_run_started_at or datetime(1970, 1, 1, tzinfo=timezone.utc)
+    cutoff = last_run_started_at or datetime(1970, 1, 1, tzinfo=UTC)
     # 30-second guard against delayed inserts — computed in Python for SQLite compat
-    upper_bound = datetime.now(timezone.utc) - timedelta(seconds=30)
+    upper_bound = datetime.now(UTC) - timedelta(seconds=30)
 
     rows = (
         db.query(Message)
@@ -212,10 +212,10 @@ def _save_embeddings(
     batch: list[MessageRow],
     vectors: list[list[float]],
 ) -> None:
-    for msg, vec in zip(batch, vectors):
+    for msg, vec in zip(batch, vectors, strict=False):
         existing = db.query(MessageEmbedding).filter_by(message_id=msg.id).first()
         if existing:
-            existing.last_used_at = datetime.now(timezone.utc)
+            existing.last_used_at = datetime.now(UTC)
         else:
             db.add(
                 MessageEmbedding(
@@ -237,7 +237,7 @@ def _touch_embeddings(
     db.query(MessageEmbedding).filter(
         MessageEmbedding.message_id.in_(message_ids)
     ).update(
-        {"last_used_at": datetime.now(timezone.utc)},
+        {"last_used_at": datetime.now(UTC)},
         synchronize_session=False,
     )
     db.commit()
@@ -274,7 +274,7 @@ async def _generate_embeddings(
             input=[m.content for m in batch],
         )
         vectors = [item.embedding for item in resp.data]
-        for msg, vec in zip(batch, vectors):
+        for msg, vec in zip(batch, vectors, strict=False):
             msg.embedding = vec
         _save_embeddings(db, client_id, batch, vectors)
         if i + batch_size < len(missing):
@@ -291,7 +291,7 @@ def _cluster_messages(
 ) -> list[list[MessageRow]]:
     """Greedy cosine-similarity clustering, constrained to current batch.
 
-    Complexity: O(N × K) where K is avg cluster size.
+    Complexity: O(N * K) where K is avg cluster size.
     """
     threshold = settings.log_cluster_similarity_threshold
     min_size = settings.log_cluster_min_size
@@ -437,7 +437,7 @@ def try_acquire_job_lock(
         return None
 
     old_watermark = state.last_run_started_at
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     result = db.execute(
         sa_update(LogAnalysisState)
@@ -669,7 +669,7 @@ def _finalize_job(
 
     values: dict = {
         "is_running": False,
-        "last_run_at": datetime.now(timezone.utc),
+        "last_run_at": datetime.now(UTC),
         "last_run_started_at": new_watermark,
         "messages_since_last_run": 0,
         "last_run_status": status,
@@ -702,8 +702,9 @@ def increment_and_check_threshold(
 
     Opens its own DB session — safe to call from any background thread.
     """
-    from backend.core.db import SessionLocal
     from sqlalchemy import update as sa_update
+
+    from backend.core.db import SessionLocal
 
     db = SessionLocal()
     try:
@@ -743,10 +744,11 @@ def run_embedding_retention(db: Session) -> int:
     Should be called once daily from a cron/scheduler.
     Returns number of deleted rows.
     """
-    from sqlalchemy import delete as sa_delete
     from datetime import timedelta
 
-    cutoff = datetime.now(timezone.utc) - timedelta(
+    from sqlalchemy import delete as sa_delete
+
+    cutoff = datetime.now(UTC) - timedelta(
         days=settings.log_embeddings_retention_days
     )
     result = db.execute(

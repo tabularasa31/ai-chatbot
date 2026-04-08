@@ -153,7 +153,7 @@ def mock_openai_client() -> Generator[Mock, None, None]:
         patch("backend.embeddings.service.get_openai_client", return_value=mock_client),
         patch("backend.search.service.get_openai_client", return_value=mock_client),
         patch("backend.chat.service.get_openai_client", return_value=mock_client),
-        patch("backend.documents.service.get_openai_client", return_value=mock_client),
+        patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True),
         patch(
             "backend.escalation.openai_escalation.get_openai_client",
             return_value=mock_esc_client,

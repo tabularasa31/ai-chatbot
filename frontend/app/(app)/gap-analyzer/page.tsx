@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   type GapAnalyzerResponse,
@@ -278,12 +278,19 @@ export default function GapAnalyzerPage() {
   }, []);
 
   const summary = data?.summary;
-  const modeAItems = data?.mode_a_items ?? [];
-  const modeBItems = data?.mode_b_items ?? [];
   const archiveModeSelected = modeAStatus === "archived" && modeBStatus === "archived";
-  const archiveItems = [...modeAItems, ...modeBItems];
-  const archiveClosedCount = archiveItems.filter((item) => item.status === "closed").length;
-  const archiveDismissedCount = archiveItems.filter((item) => item.status === "dismissed").length;
+  const archiveItems = useMemo(
+    () => [...(data?.mode_a_items ?? []), ...(data?.mode_b_items ?? [])],
+    [data?.mode_a_items, data?.mode_b_items],
+  );
+  const archiveClosedCount = useMemo(
+    () => archiveItems.filter((item) => item.status === "closed").length,
+    [archiveItems],
+  );
+  const archiveDismissedCount = useMemo(
+    () => archiveItems.filter((item) => item.status === "dismissed").length,
+    [archiveItems],
+  );
 
   const activateActiveView = () => {
     setModeAStatus("active");

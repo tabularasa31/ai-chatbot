@@ -56,6 +56,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 _MODE_A_DRAFT_EXAMPLE_LIMIT = 5
 _MODE_B_WEEKLY_RECLUSTER_DAYS = 30
+_BULK_ID_BATCH_SIZE = 1000
 
 
 @dataclass(frozen=True)
@@ -345,7 +346,7 @@ class GapAnalyzerOrchestrator:
         repository = self._require_repository()
         db = self._require_sqlalchemy_repository().db
         started_at = datetime.now(timezone.utc)
-        recent_cutoff = started_at - timedelta(days=_MODE_B_WEEKLY_RECLUSTER_DAYS)
+        recent_cutoff = (started_at - timedelta(days=_MODE_B_WEEKLY_RECLUSTER_DAYS)).replace(tzinfo=None)
 
         affected_cluster_ids = [
             cluster_id
@@ -423,11 +424,12 @@ class GapAnalyzerOrchestrator:
         scoped_question_ids = [question.question_id for question in questions]
 
         if scoped_question_ids:
-            (
-                db.query(GapQuestion)
-                .filter(GapQuestion.id.in_(scoped_question_ids))
-                .update({GapQuestion.cluster_id: None}, synchronize_session=False)
-            )
+            for question_id_batch in _batched(scoped_question_ids, _BULK_ID_BATCH_SIZE):
+                (
+                    db.query(GapQuestion)
+                    .filter(GapQuestion.id.in_(question_id_batch))
+                    .update({GapQuestion.cluster_id: None}, synchronize_session=False)
+                )
             db.flush()
 
         if affected_cluster_ids:
@@ -442,6 +444,7 @@ class GapAnalyzerOrchestrator:
                 .delete(synchronize_session=False)
             )
             db.flush()
+            db.expire_all()
 
         clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
         for question in questions:
@@ -1067,6 +1070,11 @@ def _mode_b_question_record_from_row(row: GapQuestion) -> ModeBQuestionRecord:
         language=row.language,
         created_at=created_at,
     )
+
+
+def _batched(values: list[UUID], batch_size: int) -> Iterable[list[UUID]]:
+    for index in range(0, len(values), batch_size):
+        yield values[index : index + batch_size]
 
 
 def _build_gap_summary(

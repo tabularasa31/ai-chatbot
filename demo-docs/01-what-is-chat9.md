@@ -15,6 +15,7 @@ You upload your product documentation, and Chat9 creates a smart chat widget tha
 - **RAG pipeline** — answers come directly from your documentation, not from generic AI knowledge.
 - **Controlled clarification** — if one critical detail is missing, Chat9 can ask one specific follow-up question instead of guessing or bouncing the whole problem back to the user.
 - **Hybrid retrieval + reliability signals** — Chat9 combines vector search with lexical retrieval and keeps overlap / contradiction evidence for debugging.
+- **Gap Analyzer** — turns weak coverage and repeated customer questions into a backlog your team can review from the dashboard.
 - **Full conversation logs** — see every question your customers ask in the dashboard.
 - **👍/👎 feedback** — mark good and bad answers, review and improve over time.
 - **Your OpenAI key** — you connect your own OpenAI API key. You control AI costs directly.

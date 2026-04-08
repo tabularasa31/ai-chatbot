@@ -268,10 +268,10 @@ export type KnowledgeFaqListResponse = {
 };
 
 export type GapSource = "mode_a" | "mode_b";
-export type GapItemStatus = "active" | "closed" | "dismissed";
+export type GapItemStatus = "active" | "closed" | "dismissed" | "inactive";
 export type GapClassification = "uncovered" | "partial" | "covered" | "unknown";
 export type GapModeAStatusFilter = "active" | "dismissed" | "archived" | "all";
-export type GapModeBStatusFilter = "active" | "closed" | "dismissed" | "archived" | "all";
+export type GapModeBStatusFilter = "active" | "closed" | "dismissed" | "inactive" | "archived" | "all";
 export type GapModeASort = "coverage_asc" | "newest";
 export type GapModeBSort = "signal_desc" | "coverage_asc" | "newest";
 export type GapDismissReason = "feature_request" | "not_relevant" | "already_covered" | "other";
@@ -289,6 +289,8 @@ export type GapItem = {
   aggregate_signal_weight: number | null;
   example_questions: string[];
   linked_source: GapSource | null;
+  linked_label: string | null;
+  linked_example_questions: string[];
   also_missing_in_docs: boolean;
   last_updated: string | null;
 };
@@ -306,6 +308,10 @@ export type GapAnalyzerResponse = {
   summary: GapSummary;
   mode_a_items: GapItem[];
   mode_b_items: GapItem[];
+};
+
+export type GapSummaryEnvelope = {
+  summary: GapSummary;
 };
 
 export type GapActionResponse = {
@@ -806,6 +812,12 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer"));
       return data as GapAnalyzerResponse;
+    },
+    async getSummary(): Promise<GapSummaryEnvelope> {
+      const res = await authFetch(`${BASE_URL}/gap-analyzer/summary`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer summary"));
+      return data as GapSummaryEnvelope;
     },
     async recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
       const res = await authFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {

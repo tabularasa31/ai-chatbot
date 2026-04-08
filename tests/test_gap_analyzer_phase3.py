@@ -478,8 +478,12 @@ def test_mode_a_queue_empty_helper_runs_once_when_tenant_queue_is_empty(
     trigger = Mock()
     session_factory = sessionmaker(bind=db_session.get_bind(), class_=Session, future=True)
     monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", session_factory)
-    monkeypatch.setattr(gap_jobs, "run_mode_a_for_tenant_best_effort", trigger)
+    monkeypatch.setattr(gap_jobs, "enqueue_gap_job_for_tenant_best_effort", trigger)
 
     gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(client_id)
 
-    trigger.assert_called_once_with(client_id)
+    trigger.assert_called_once_with(
+        client_id,
+        job_kind=gap_jobs.GapJobKind.mode_a,
+        trigger="queue_empty",
+    )

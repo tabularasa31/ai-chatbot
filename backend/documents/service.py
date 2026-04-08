@@ -1,9 +1,8 @@
-"""Business logic for document upload and parsing."""
+"""Business logic for document upload, parsing, and document health linting."""
 
 from __future__ import annotations
 
 import datetime as dt
-import json
 import re
 import uuid
 from typing import Any
@@ -11,42 +10,27 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-from backend.models import Document, DocumentStatus, DocumentType, Embedding
+from backend.models import Document, DocumentStatus, DocumentType
 from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 
 _HEALTH_WARNING_TYPES = frozenset(
     {
-        "missing_contact_info",
+        "empty_or_too_short",
+        "parse_or_extraction_issue",
         "poor_structure",
-        "incomplete_sections",
-        "no_examples",
-        "outdated_content",
+        "incomplete_section",
+        "low_information_density",
     }
 )
 _SEVERITY_PENALTY = {"high": 20, "medium": 10, "low": 5}
-_APPROX_CHARS_PER_TOKEN = 4
-_CONTACT_EXPECTED_STRONG_KEYWORDS = (
-    "support",
-    "help",
-    "contact",
-    "customer service",
-    "technical support",
-    "get help",
-    "need help",
-    "reach us",
-    "reach out",
-    "troubleshooting",
+_WORD_RE = re.compile(r"\b[\w-]+\b", flags=re.UNICODE)
+_PLACEHOLDER_RE = re.compile(
+    r"\b(?:todo|tbd|coming soon|to be added|fill me|placeholder|заполнить позже|будет добавлено)\b",
+    flags=re.IGNORECASE,
 )
-_CONTACT_EXPECTED_WEAK_KEYWORDS = ("faq", "frequently asked questions")
-_CONTACT_ASSISTANCE_PHRASES = (
-    "support team",
-    "contact us",
-    "get support",
-    "need assistance",
-    "technical issue",
-)
+_MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", flags=re.MULTILINE)
+_PUNCTUATION_ENDINGS = (":", ",", ";", "(", "[", "{", "-", "—", "–", "/", "\\")
 
 
 def _iso_utc_z() -> str:
@@ -56,33 +40,6 @@ def _iso_utc_z() -> str:
         .isoformat()
         .replace("+00:00", "Z")
     )
-
-
-def _truncate_to_approx_tokens(text: str, max_tokens: int = 3000) -> str:
-    max_chars = max_tokens * _APPROX_CHARS_PER_TOKEN
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars]
-
-
-def _contains_keyword_phrase(haystacks: list[str], keywords: tuple[str, ...]) -> bool:
-    if not keywords:
-        return False
-    pattern = rf"\b(?:{'|'.join(re.escape(keyword) for keyword in keywords)})\b"
-    return any(re.search(pattern, haystack) for haystack in haystacks)
-
-
-def _expects_contact_info(filename: str | None, excerpt: str) -> bool:
-    haystacks = [excerpt.lower()]
-    if filename:
-        haystacks.append(filename.lower().replace("_", " ").replace("-", " "))
-
-    if _contains_keyword_phrase(haystacks, _CONTACT_EXPECTED_STRONG_KEYWORDS):
-        return True
-
-    has_weak_signal = _contains_keyword_phrase(haystacks, _CONTACT_EXPECTED_WEAK_KEYWORDS)
-    has_assistance_context = _contains_keyword_phrase(haystacks, _CONTACT_ASSISTANCE_PHRASES)
-    return has_weak_signal and has_assistance_context
 
 
 def _compute_health_score(warnings: list[dict[str, Any]]) -> int:
@@ -117,28 +74,217 @@ def _normalize_warnings(raw: list[Any]) -> list[dict[str, str]]:
     return out
 
 
-def _parse_health_json_from_content(content: str) -> dict[str, Any]:
-    text = content.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
-    raise ValueError("invalid health JSON")
+def _make_warning(wtype: str, severity: str, message: str) -> dict[str, str]:
+    return {"type": wtype, "severity": severity, "message": message}
+
+
+def _word_count(text: str) -> int:
+    return len(_WORD_RE.findall(text))
+
+
+def _split_markdown_sections(text: str) -> list[str]:
+    sections: list[str] = []
+    current: list[str] = []
+
+    for line in text.splitlines():
+        if _MARKDOWN_HEADING_RE.match(line):
+            if current:
+                sections.append("\n".join(current).strip())
+                current = []
+            continue
+        current.append(line)
+
+    if current:
+        sections.append("\n".join(current).strip())
+    return [section for section in sections if section]
+
+
+def _detect_short_document(text: str) -> dict[str, str] | None:
+    words = _word_count(text)
+    if words == 0:
+        return _make_warning(
+            "empty_or_too_short",
+            "high",
+            "The document has no readable text after parsing.",
+        )
+    if words < 20:
+        return _make_warning(
+            "empty_or_too_short",
+            "high",
+            "The document is extremely short, which leaves too little content for reliable retrieval.",
+        )
+    if words < 80:
+        return _make_warning(
+            "empty_or_too_short",
+            "medium",
+            "The document is quite short and may not contain enough content to answer user questions reliably.",
+        )
+    return None
+
+
+def _detect_parse_or_extraction_issue(text: str) -> dict[str, str] | None:
+    if "\x00" in text or "\ufffd" in text:
+        return _make_warning(
+            "parse_or_extraction_issue",
+            "high",
+            "The parsed text contains replacement or null characters, which suggests extraction problems.",
+        )
+
+    visible_count = 0
+    alnum_count = 0
+    for ch in text:
+        if ch.isspace():
+            continue
+        visible_count += 1
+        if ch.isalnum():
+            alnum_count += 1
+
+    if visible_count < 200:
+        return None
+    alnum_ratio = alnum_count / visible_count
+    if alnum_ratio < 0.55:
+        return _make_warning(
+            "parse_or_extraction_issue",
+            "medium",
+            "The parsed text looks noisy or symbol-heavy, which suggests extraction quality issues.",
+        )
+    return None
+
+
+def _detect_poor_structure(text: str, file_type: DocumentType) -> dict[str, str] | None:
+    if file_type != DocumentType.markdown:
+        return None
+
+    section_word_counts = [_word_count(section) for section in _split_markdown_sections(text)]
+    if not section_word_counts:
+        return None
+
+    max_section_words = max(section_word_counts)
+    heading_count = len(_MARKDOWN_HEADING_RE.findall(text))
+    total_words = _word_count(text)
+
+    if max_section_words >= 700:
+        return _make_warning(
+            "poor_structure",
+            "high",
+            "At least one markdown section is very long without enough subheadings, which can hurt chunking and retrieval quality.",
+        )
+    if max_section_words >= 450:
+        return _make_warning(
+            "poor_structure",
+            "medium",
+            "At least one markdown section is long without enough subheadings, which can make retrieval less precise.",
+        )
+    if total_words >= 900 and heading_count <= 1:
+        return _make_warning(
+            "poor_structure",
+            "medium",
+            "The document is long but has almost no markdown headings, so different topics are likely mixed into the same chunks.",
+        )
+    return None
+
+
+def _detect_incomplete_section(text: str) -> dict[str, str] | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        heading_match = re.match(r"^\s*(#{1,6})\s+", line)
+        if heading_match:
+            current_level = len(heading_match.group(1))
+            section_has_body = False
+            for candidate in lines[index + 1 :]:
+                stripped_candidate = candidate.strip()
+                if not stripped_candidate:
+                    continue
+                next_heading_match = re.match(r"^\s*(#{1,6})\s+", candidate)
+                if next_heading_match:
+                    next_level = len(next_heading_match.group(1))
+                    if next_level > current_level:
+                        section_has_body = True
+                    break
+                section_has_body = True
+                break
+            if not section_has_body:
+                return _make_warning(
+                    "incomplete_section",
+                    "medium",
+                    "At least one heading has no body content underneath it, which makes the document look unfinished.",
+                )
+
+    if len(re.findall(r"^```", text, flags=re.MULTILINE)) % 2 == 1:
+        return _make_warning(
+            "incomplete_section",
+            "medium",
+            "A fenced code block is not properly closed, which suggests the document was cut off mid-section.",
+        )
+
+    if _PLACEHOLDER_RE.search(text):
+        return _make_warning(
+            "incomplete_section",
+            "medium",
+            "The document contains placeholder text such as TODO or coming soon, which suggests unfinished sections.",
+        )
+
+    tail = stripped[-160:]
+    if tail.endswith(_PUNCTUATION_ENDINGS) or tail.endswith("..."):
+        return _make_warning(
+            "incomplete_section",
+            "low",
+            "The document appears to end mid-thought, which suggests the last section may be incomplete.",
+        )
+    return None
+
+
+def _detect_low_information_density(text: str) -> dict[str, str] | None:
+    tokens = [token.lower() for token in _WORD_RE.findall(text) if len(token) >= 4]
+    if len(tokens) < 120:
+        return None
+
+    unique_ratio = len(set(tokens)) / len(tokens)
+    if unique_ratio < 0.22:
+        return _make_warning(
+            "low_information_density",
+            "medium",
+            "The document repeats the same vocabulary heavily, which suggests low information density for retrieval.",
+        )
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) >= 8:
+        duplicate_ratio = 1 - (len(set(lines)) / len(lines))
+        if duplicate_ratio >= 0.35:
+            return _make_warning(
+                "low_information_density",
+                "low",
+                "Large parts of the document are repeated verbatim, which reduces the amount of distinct information available for answers.",
+            )
+    return None
+
+
+def _build_rule_based_warnings(text: str, file_type: DocumentType) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    detectors = (
+        _detect_short_document,
+        _detect_parse_or_extraction_issue,
+        lambda value: _detect_poor_structure(value, file_type),
+        _detect_incomplete_section,
+        _detect_low_information_density,
+    )
+    for detector in detectors:
+        warning = detector(text)
+        if warning is not None:
+            warnings.append(warning)
+    return warnings
 
 
 def run_document_health_check(
     document_id: uuid.UUID,
     db: Session,
-    api_key: str,
 ) -> dict[str, Any]:
     """
-    Run GPT-based health check on a document's chunk texts.
+    Run deterministic health lint checks on a document's parsed text.
     Updates document.health_status in DB.
     Returns the health_status dict.
     """
@@ -151,81 +297,27 @@ def run_document_health_check(
             "error": "health check failed",
         }
 
-    rows = (
-        db.query(Embedding.chunk_text)
-        .filter(Embedding.document_id == document_id)
-        .order_by(Embedding.created_at.asc())
-        .all()
-    )
-    parts = [r[0] for r in rows if r[0] and r[0].strip()]
-    combined = "\n\n".join(parts)
-    if not combined.strip() and doc.parsed_text:
-        combined = doc.parsed_text
-
-    excerpt = _truncate_to_approx_tokens(combined)
-    if not excerpt.strip():
+    parsed_text = doc.parsed_text or ""
+    if not parsed_text.strip():
         checked = _iso_utc_z()
         result: dict[str, Any] = {
-            "score": 100,
+            "score": 80,
             "checked_at": checked,
-            "warnings": [],
+            "warnings": [
+                _make_warning(
+                    "empty_or_too_short",
+                    "high",
+                    "The document has no readable text after parsing.",
+                )
+            ],
         }
         doc.health_status = result
         db.commit()
         db.refresh(doc)
         return result
 
-    contact_rule = ""
-    contact_negation = ""
-    if _expects_contact_info(doc.filename, excerpt):
-        contact_rule = (
-            '- missing_contact_info: Missing support email, phone, or contact section '
-            "for a document that is clearly about help, support, contact, or troubleshooting\n"
-        )
-        contact_negation = (
-            "Do not report missing_contact_info unless the document is clearly "
-            "about help, support, contact, FAQ, or troubleshooting.\n"
-        )
-
-    prompt = f"""Analyze this documentation excerpt and identify issues that could reduce the quality of AI-powered search and Q&A.
-
-Return a JSON object with this exact structure:
-{{
-  "warnings": [
-    {{"type": "<type>", "severity": "<low|medium|high>", "message": "<human-readable explanation>"}}
-  ]
-}}
-
-Check for:
-{contact_rule}- poor_structure: Long sections (500+ words) without subheadings
-- incomplete_sections: Sections that appear cut off or unfinished
-- no_examples: Important features described abstractly with no examples
-- outdated_content: References to specific old dates or deprecated versions
-
-{contact_negation}Only report issues that are clearly present. Return empty warnings array if the document looks good.
-Return ONLY the JSON, no other text.
-
-Documentation excerpt:
-{excerpt}
-"""
-
     try:
-        openai_client = get_openai_client(api_key)
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-        )
-        raw_content = response.choices[0].message.content or ""
-        parsed = _parse_health_json_from_content(raw_content)
-        if "warnings" not in parsed:
-            raw_warnings: list[Any] = []
-        else:
-            raw_warnings = parsed["warnings"]
-            if not isinstance(raw_warnings, list):
-                raise ValueError("warnings must be a list")
-        warnings = _normalize_warnings(raw_warnings)
+        warnings = _normalize_warnings(_build_rule_based_warnings(parsed_text, doc.file_type))
         checked = _iso_utc_z()
         result = {
             "score": _compute_health_score(warnings),

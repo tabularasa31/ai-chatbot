@@ -312,7 +312,7 @@ def create_embeddings_for_document(
     try:
         from backend.documents.service import run_document_health_check
 
-        run_document_health_check(document_id, db, api_key)
+        run_document_health_check(document_id, db)
     except Exception:
         pass
     return embeddings

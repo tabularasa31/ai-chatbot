@@ -275,7 +275,6 @@ def _build_rule_based_warnings(text: str, file_type: DocumentType) -> list[dict[
 def run_document_health_check(
     document_id: uuid.UUID,
     db: Session,
-    api_key: str | None = None,
 ) -> dict[str, Any]:
     """
     Run deterministic health lint checks on a document's parsed text.

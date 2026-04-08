@@ -1288,7 +1288,7 @@ def _score_prepared_bm25_corpus(
         return []
 
     raw_scores = [float(score) for score in prepared_corpus.scorer.get_scores(query_tokens)]
-    scored = _sort_scored_embeddings(list(zip(prepared_corpus.candidates, raw_scores, strict=False)))[:top_k]
+    scored = _sort_scored_embeddings(list(zip(prepared_corpus.candidates, raw_scores, strict=True)))[:top_k]
     if not scored:
         return []
 
@@ -1330,7 +1330,7 @@ def _format_bm25_trace_results(
 ) -> list[dict[str, object]]:
     """Add compact winner provenance to BM25 trace payloads."""
     payload = format_embedding_results(results, score_name="bm25_score")
-    for (embedding, _), item in zip(results, payload, strict=False):
+    for (embedding, _), item in zip(results, payload, strict=True):
         winner = winner_by_id.get(embedding.id)
         if winner is None:
             continue

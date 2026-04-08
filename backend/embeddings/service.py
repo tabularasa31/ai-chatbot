@@ -412,10 +412,10 @@ def delete_embeddings_for_document(
     Returns:
         Count of deleted embeddings.
     """
-    result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     tenant_id = (
         db.query(Document.client_id).filter(Document.id == document_id).scalar()
     )
+    result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
     invalidate_bm25_cache_for_tenant(tenant_id)
     return result

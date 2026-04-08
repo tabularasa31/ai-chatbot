@@ -197,7 +197,9 @@ def run_extract_client_knowledge_for_document(
         modules: list[str] = []
         raw_topics = extracted.get("topics")
         if not isinstance(raw_topics, list):
-            raw_topics = extracted.get("modules") or []
+            raw_topics = extracted.get("modules")
+        if not isinstance(raw_topics, list):
+            raw_topics = []
         for m in raw_topics:
             if not isinstance(m, str):
                 continue

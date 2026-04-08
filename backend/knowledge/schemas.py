@@ -18,14 +18,6 @@ class KnowledgeProfileResponse(BaseModel):
     updated_at: datetime
     extraction_status: Literal["pending", "done", "failed"]
 
-    @model_validator(mode="after")
-    def _sync_topics_and_modules(self) -> "KnowledgeProfileResponse":
-        if self.topics and not self.modules:
-            self.modules = list(self.topics)
-        elif self.modules and not self.topics:
-            self.topics = list(self.modules)
-        return self
-
 
 class KnowledgeProfilePatchRequest(BaseModel):
     product_name: Optional[str] = None

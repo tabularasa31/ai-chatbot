@@ -48,7 +48,7 @@ _GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
 _BM25_K1 = 1.5
 _BM25_B = 0.75
 _BM25_SMOOTHING = 0.5
-_BM25_MIN_DISTINCT_QUERY_TERMS = 2
+_BM25_MIN_MATCHED_QUERY_TERMS = 2
 
 
 @dataclass(frozen=True)
@@ -689,8 +689,9 @@ class SqlAlchemyGapAnalyzerRepository:
             for token, doc_frequency in doc_frequencies.items()
             if doc_frequency > 0
         }
-        max_distinct_query_terms = max(len(term_frequencies) for _, term_frequencies in matching_docs)
-        if max_distinct_query_terms < _BM25_MIN_DISTINCT_QUERY_TERMS:
+        max_matched_query_terms = max(len(term_frequencies) for _, term_frequencies in matching_docs)
+        required_matched_query_terms = min(len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS)
+        if max_matched_query_terms < required_matched_query_terms:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         best_score = max(
             _bm25_streamed_score(

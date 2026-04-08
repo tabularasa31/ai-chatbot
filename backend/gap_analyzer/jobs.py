@@ -96,9 +96,7 @@ def run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id: UUID) -> No
 def run_mode_b_weekly_reclustering_for_all_tenants_best_effort() -> None:
     db = core_db.SessionLocal()
     try:
-        tenant_ids = [tenant_id for (tenant_id,) in db.query(Client.id).order_by(Client.id.asc()).all()]
+        for (tenant_id,) in db.query(Client.id).order_by(Client.id.asc()).yield_per(1000):
+            run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id)
     finally:
         db.close()
-
-    for tenant_id in tenant_ids:
-        run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id)

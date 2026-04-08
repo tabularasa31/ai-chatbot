@@ -256,84 +256,15 @@ class GapAnalyzerOrchestrator:
         )
         prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
         clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
-
-        for question in refreshed_questions:
-            question_embedding = _vector_from_unknown(question.embedding)
-            if question_embedding is None:
-                continue
-            question_norm = _vector_norm(question_embedding)
-            target_cluster = _match_mode_b_cluster(
-                question_embedding=question_embedding,
-                question_norm=question_norm,
-                clusters=clusters,
-                similarity_threshold=ClusteringPolicy().similarity_threshold,
-            )
-            if target_cluster is None:
-                new_cluster = _build_new_mode_b_cluster(
-                    question=question,
-                    question_embedding=question_embedding,
-                    question_norm=question_norm,
-                    corpus_chunks=prepared_corpus,
-                )
-                cluster_id = repository.create_mode_b_cluster(
-                    tenant_id=tenant_id,
-                    label=new_cluster.label,
-                    centroid=new_cluster.centroid,
-                    question_count=new_cluster.question_count,
-                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
-                    coverage_score=new_cluster.coverage_score,
-                    status=new_cluster.status,
-                    last_question_at=new_cluster.last_question_at,
-                    last_computed_at=started_at,
-                )
-                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
-                new_cluster.cluster_id = cluster_id
-                clusters.append(new_cluster)
-                continue
-
-            try:
-                _update_mode_b_cluster(
-                    cluster=target_cluster,
-                    question=question,
-                    question_embedding=question_embedding,
-                    corpus_chunks=prepared_corpus,
-                )
-            except _ModeBClusterUpdateRejectedError:
-                new_cluster = _build_new_mode_b_cluster(
-                    question=question,
-                    question_embedding=question_embedding,
-                    question_norm=question_norm,
-                    corpus_chunks=prepared_corpus,
-                )
-                cluster_id = repository.create_mode_b_cluster(
-                    tenant_id=tenant_id,
-                    label=new_cluster.label,
-                    centroid=new_cluster.centroid,
-                    question_count=new_cluster.question_count,
-                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
-                    coverage_score=new_cluster.coverage_score,
-                    status=new_cluster.status,
-                    last_question_at=new_cluster.last_question_at,
-                    last_computed_at=started_at,
-                )
-                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
-                new_cluster.cluster_id = cluster_id
-                clusters.append(new_cluster)
-                continue
-            repository.assign_question_to_cluster(
-                question_id=question.question_id,
-                cluster_id=target_cluster.cluster_id,
-            )
-            repository.update_mode_b_cluster(
-                cluster_id=target_cluster.cluster_id,
-                centroid=target_cluster.centroid,
-                question_count=target_cluster.question_count,
-                aggregate_signal_weight=target_cluster.aggregate_signal_weight,
-                coverage_score=target_cluster.coverage_score,
-                status=target_cluster.status,
-                last_question_at=target_cluster.last_question_at,
-                last_computed_at=started_at,
-            )
+        _apply_mode_b_questions_to_clusters(
+            repository=repository,
+            tenant_id=tenant_id,
+            questions=refreshed_questions,
+            prepared_corpus=prepared_corpus,
+            clusters=clusters,
+            started_at=started_at,
+            new_cluster_is_new=True,
+        )
 
         _sync_mode_links(self._require_sqlalchemy_repository().db, tenant_id=tenant_id)
         return ModeBResult(
@@ -486,86 +417,15 @@ class GapAnalyzerOrchestrator:
             db.expire_all()
 
         clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
-        for question in questions:
-            question_embedding = _vector_from_unknown(question.embedding)
-            if question_embedding is None:
-                continue
-            question_norm = _vector_norm(question_embedding)
-            target_cluster = _match_mode_b_cluster(
-                question_embedding=question_embedding,
-                question_norm=question_norm,
-                clusters=clusters,
-                similarity_threshold=ClusteringPolicy().similarity_threshold,
-            )
-            if target_cluster is None:
-                new_cluster = _build_new_mode_b_cluster(
-                    question=question,
-                    question_embedding=question_embedding,
-                    question_norm=question_norm,
-                    corpus_chunks=prepared_corpus,
-                )
-                cluster_id = repository.create_mode_b_cluster(
-                    tenant_id=tenant_id,
-                    label=new_cluster.label,
-                    centroid=new_cluster.centroid,
-                    question_count=new_cluster.question_count,
-                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
-                    coverage_score=new_cluster.coverage_score,
-                    status=new_cluster.status,
-                    is_new=False,
-                    last_question_at=new_cluster.last_question_at,
-                    last_computed_at=started_at,
-                )
-                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
-                new_cluster.cluster_id = cluster_id
-                clusters.append(new_cluster)
-                continue
-
-            try:
-                _update_mode_b_cluster(
-                    cluster=target_cluster,
-                    question=question,
-                    question_embedding=question_embedding,
-                    corpus_chunks=prepared_corpus,
-                )
-            except _ModeBClusterUpdateRejectedError:
-                new_cluster = _build_new_mode_b_cluster(
-                    question=question,
-                    question_embedding=question_embedding,
-                    question_norm=question_norm,
-                    corpus_chunks=prepared_corpus,
-                )
-                cluster_id = repository.create_mode_b_cluster(
-                    tenant_id=tenant_id,
-                    label=new_cluster.label,
-                    centroid=new_cluster.centroid,
-                    question_count=new_cluster.question_count,
-                    aggregate_signal_weight=new_cluster.aggregate_signal_weight,
-                    coverage_score=new_cluster.coverage_score,
-                    status=new_cluster.status,
-                    is_new=False,
-                    last_question_at=new_cluster.last_question_at,
-                    last_computed_at=started_at,
-                )
-                repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
-                new_cluster.cluster_id = cluster_id
-                clusters.append(new_cluster)
-                continue
-
-            repository.assign_question_to_cluster(
-                question_id=question.question_id,
-                cluster_id=target_cluster.cluster_id,
-            )
-            repository.update_mode_b_cluster(
-                cluster_id=target_cluster.cluster_id,
-                centroid=target_cluster.centroid,
-                question_count=target_cluster.question_count,
-                aggregate_signal_weight=target_cluster.aggregate_signal_weight,
-                coverage_score=target_cluster.coverage_score,
-                status=target_cluster.status,
-                last_question_at=target_cluster.last_question_at,
-                last_computed_at=started_at,
-            )
+        _apply_mode_b_questions_to_clusters(
+            repository=repository,
+            tenant_id=tenant_id,
+            questions=questions,
+            prepared_corpus=prepared_corpus,
+            clusters=clusters,
+            started_at=started_at,
+            new_cluster_is_new=False,
+        )
 
         _sync_mode_links(db, tenant_id=tenant_id)
         return ModeBResult(
@@ -1109,6 +969,113 @@ def _mode_b_question_record_from_row(row: GapQuestion) -> ModeBQuestionRecord:
         language=row.language,
         created_at=created_at,
     )
+
+
+def _apply_mode_b_questions_to_clusters(
+    *,
+    repository: GapAnalyzerRepository,
+    tenant_id: UUID,
+    questions: Iterable[ModeBQuestionRecord],
+    prepared_corpus: list[_PreparedCorpusChunk],
+    clusters: list[_MutableModeBCluster],
+    started_at: datetime,
+    new_cluster_is_new: bool,
+) -> None:
+    for question in questions:
+        question_embedding = _vector_from_unknown(question.embedding)
+        if question_embedding is None:
+            continue
+        question_norm = _vector_norm(question_embedding)
+        target_cluster = _match_mode_b_cluster(
+            question_embedding=question_embedding,
+            question_norm=question_norm,
+            clusters=clusters,
+            similarity_threshold=ClusteringPolicy().similarity_threshold,
+        )
+        if target_cluster is None:
+            new_cluster = _build_new_mode_b_cluster(
+                question=question,
+                question_embedding=question_embedding,
+                question_norm=question_norm,
+                corpus_chunks=prepared_corpus,
+            )
+            _persist_new_mode_b_cluster(
+                repository=repository,
+                tenant_id=tenant_id,
+                question=question,
+                cluster=new_cluster,
+                clusters=clusters,
+                started_at=started_at,
+                is_new=new_cluster_is_new,
+            )
+            continue
+
+        try:
+            _update_mode_b_cluster(
+                cluster=target_cluster,
+                question=question,
+                question_embedding=question_embedding,
+                corpus_chunks=prepared_corpus,
+            )
+        except _ModeBClusterUpdateRejectedError:
+            new_cluster = _build_new_mode_b_cluster(
+                question=question,
+                question_embedding=question_embedding,
+                question_norm=question_norm,
+                corpus_chunks=prepared_corpus,
+            )
+            _persist_new_mode_b_cluster(
+                repository=repository,
+                tenant_id=tenant_id,
+                question=question,
+                cluster=new_cluster,
+                clusters=clusters,
+                started_at=started_at,
+                is_new=new_cluster_is_new,
+            )
+            continue
+
+        repository.assign_question_to_cluster(
+            question_id=question.question_id,
+            cluster_id=target_cluster.cluster_id,
+        )
+        repository.update_mode_b_cluster(
+            cluster_id=target_cluster.cluster_id,
+            centroid=target_cluster.centroid,
+            question_count=target_cluster.question_count,
+            aggregate_signal_weight=target_cluster.aggregate_signal_weight,
+            coverage_score=target_cluster.coverage_score,
+            status=target_cluster.status,
+            last_question_at=target_cluster.last_question_at,
+            last_computed_at=started_at,
+        )
+
+
+def _persist_new_mode_b_cluster(
+    *,
+    repository: GapAnalyzerRepository,
+    tenant_id: UUID,
+    question: ModeBQuestionRecord,
+    cluster: _MutableModeBCluster,
+    clusters: list[_MutableModeBCluster],
+    started_at: datetime,
+    is_new: bool,
+) -> None:
+    cluster_id = repository.create_mode_b_cluster(
+        tenant_id=tenant_id,
+        label=cluster.label,
+        centroid=cluster.centroid,
+        question_count=cluster.question_count,
+        aggregate_signal_weight=cluster.aggregate_signal_weight,
+        coverage_score=cluster.coverage_score,
+        status=cluster.status,
+        is_new=is_new,
+        last_question_at=cluster.last_question_at,
+        last_computed_at=started_at,
+    )
+    repository.assign_question_to_cluster(question_id=question.question_id, cluster_id=cluster_id)
+    cluster.cluster_id = cluster_id
+    clusters.append(cluster)
 
 
 def _batched(values: list[UUID], batch_size: int) -> Iterable[list[UUID]]:

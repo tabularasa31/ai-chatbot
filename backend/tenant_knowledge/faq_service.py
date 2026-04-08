@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 DEDUP_SIMILARITY_THRESHOLD = 0.92
+FAQ_MIN_CONFIDENCE_THRESHOLD = 0.5
 
 
 def _vector_from_unknown(raw: object) -> list[float] | None:
@@ -110,7 +111,10 @@ def insert_new_faq_candidates(
     for candidate in faq_candidates:
         total_candidates += 1
         try:
-            if candidate.confidence is None or candidate.confidence < 0.5:
+            if (
+                candidate.confidence is None
+                or candidate.confidence < FAQ_MIN_CONFIDENCE_THRESHOLD
+            ):
                 skipped_low_confidence += 1
                 logger.info(
                     "FAQ candidate skipped: low confidence "

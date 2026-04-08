@@ -57,6 +57,12 @@ def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
                 source="docs",
             ),
             FaqCandidate(
+                question="Can confidence be missing?",
+                answer="This candidate should be skipped before embedding.",
+                confidence=None,
+                source="docs",
+            ),
+            FaqCandidate(
                 question="How do billing exports work?",
                 answer="A duplicate answer should be skipped.",
                 confidence=0.91,

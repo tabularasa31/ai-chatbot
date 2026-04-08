@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentType, Embedding, TenantProfile
-from backend.tenant_knowledge.faq_service import insert_new_faq_candidates
+from backend.tenant_knowledge.faq_service import (
+    FAQ_MIN_CONFIDENCE_THRESHOLD,
+    insert_new_faq_candidates,
+)
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
@@ -285,7 +288,10 @@ def run_extract_client_knowledge_for_document(
                     )
                 )
         faq_low_confidence = sum(
-            1 for candidate in faq_candidates if candidate.confidence < 0.5
+            1
+            for candidate in faq_candidates
+            if candidate.confidence is None
+            or candidate.confidence < FAQ_MIN_CONFIDENCE_THRESHOLD
         )
         faq_medium_or_high_confidence = len(faq_candidates) - faq_low_confidence
         faq_batch_id = uuid.uuid4()
@@ -367,7 +373,10 @@ def run_extract_client_knowledge_for_document(
         )
 
         faq_candidates_for_insert = [
-            candidate for candidate in faq_candidates if candidate.confidence >= 0.5
+            candidate
+            for candidate in faq_candidates
+            if candidate.confidence is not None
+            and candidate.confidence >= FAQ_MIN_CONFIDENCE_THRESHOLD
         ]
 
         # Insert only medium/high-confidence FAQ candidates; duplicates are skipped.

@@ -1205,6 +1205,9 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
         cluster.linked_doc_topic_id = topic.id
         linked_topic_ids.add(topic.id)
         linked_cluster_ids.add(cluster.id)
+    # Persist the rebuilt link graph inside the current unit of work so callers that refresh
+    # objects before the outer commit still observe the new associations deterministically.
+    db.flush()
 
 
 def _score_mode_link_pairs(

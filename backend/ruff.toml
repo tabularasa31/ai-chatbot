@@ -11,7 +11,6 @@ select = ["E", "F", "W", "N", "I", "B", "UP", "RUF"]
 ignore = [
     "E501",   # line too long — handled by formatter
     "B008",   # function-call-in-default-argument — standard FastAPI Depends() pattern
-    "B904",   # raise-without-from-inside-except — converting to HTTPException is intentional
     "UP042",  # replace-str-enum — behavioural change, requires dedicated migration
 ]
 

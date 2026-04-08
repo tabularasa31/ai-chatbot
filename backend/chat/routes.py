@@ -182,12 +182,12 @@ def chat(
             clarification_option_id=body.clarification_option_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except APIError:
         raise HTTPException(
             status_code=503,
             detail="OpenAI service unavailable",
-        )
+        ) from None
 
     return ChatResponse(
         text=outcome.text,
@@ -234,7 +234,7 @@ def chat_debug(
         raise HTTPException(
             status_code=503,
             detail="OpenAI service unavailable",
-        )
+        ) from None
 
     debug_resp = DebugInfoResponse(
         mode=debug_dict["mode"],
@@ -340,9 +340,9 @@ def chat_escalate(
             trigger=trig,
         )
     except ValueError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found") from None
     except APIError:
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable")
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)
 
 

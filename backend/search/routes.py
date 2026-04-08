@@ -85,7 +85,7 @@ def search_route(
         raise HTTPException(
             status_code=503,
             detail="OpenAI service unavailable",
-        )
+        ) from None
 
     results_tuples = bundle.results
 

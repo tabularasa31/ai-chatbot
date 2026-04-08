@@ -110,7 +110,7 @@ def dismiss_gap(
             reason=payload.reason,
         )
     except GapResourceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     db.commit()
     return response
 
@@ -131,7 +131,7 @@ def reactivate_gap(
             gap_id=gap_id,
         )
     except GapResourceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from None
     db.commit()
     return response
 
@@ -148,4 +148,4 @@ def draft_gap(
     try:
         return orchestrator.build_draft(tenant_id=tenant_id, source=source, gap_id=gap_id)
     except GapResourceNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from None

@@ -2179,7 +2179,7 @@ def _python_cosine_search(
         # Cosine similarity
         if len(vector) != len(query_vector):
             continue
-        dot = sum(a * b for a, b in zip(query_vector, vector, strict=False))
+        dot = sum(a * b for a, b in zip(query_vector, vector, strict=True))
         norm1 = math.sqrt(sum(a * a for a in query_vector))
         norm2 = math.sqrt(sum(b * b for b in vector))
         if norm1 == 0 or norm2 == 0:

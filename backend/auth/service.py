@@ -37,7 +37,7 @@ def register_user(email: str, password: str, db: Session) -> User:
         db.refresh(user)
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Email already registered")
+        raise HTTPException(status_code=409, detail="Email already registered") from None
     return user
 
 
@@ -74,9 +74,9 @@ def get_current_user_from_token(token: str, db: Session) -> User:
             raise HTTPException(status_code=401, detail="Invalid token payload")
         user_id = uuid.UUID(user_id_str)
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
+        raise HTTPException(status_code=401, detail="Token expired") from None
     except (jwt.InvalidTokenError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from None
 
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

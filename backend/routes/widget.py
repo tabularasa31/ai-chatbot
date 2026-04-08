@@ -210,7 +210,7 @@ def widget_chat(
                     SESSION_INVALID_CODE,
                     "Invalid session_id",
                 ),
-            )
+            ) from None
         existing_chat = db.query(Chat).filter(Chat.session_id == sid).first()
         if existing_chat is None:
             raise HTTPException(
@@ -251,12 +251,12 @@ def widget_chat(
             clarification_option_id=option_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except APIError:
         raise HTTPException(
             status_code=503,
             detail="OpenAI service unavailable",
-        )
+        ) from None
 
     return {
         "text": outcome.text,
@@ -294,7 +294,7 @@ def widget_escalate(
     try:
         sid = uuid.UUID(session_id)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=422, detail="Invalid session_id")
+        raise HTTPException(status_code=422, detail="Invalid session_id") from None
     trig = (
         EscalationTrigger.user_request
         if body.trigger == "user_request"
@@ -310,7 +310,7 @@ def widget_escalate(
             trigger=trig,
         )
     except ValueError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found") from None
     except APIError:
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable")
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)

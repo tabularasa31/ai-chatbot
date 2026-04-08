@@ -1215,7 +1215,7 @@ def _upsert_structured_document(
             refreshed_doc.parsed_text = parsed_text
             db.add(refreshed_doc)
             db.commit()
-        raise HTTPException(status_code=500, detail="Structured source embedding failed")
+        raise HTTPException(status_code=500, detail="Structured source embedding failed") from None
 
 
 def list_knowledge_sources(client_id: uuid.UUID, db: Session) -> dict[str, Any]:
@@ -1447,7 +1447,7 @@ def _index_pages(
                 source.error_message = "Indexing paused — check your OpenAI key."
                 _mark_run_finished(run, status=SourceStatus.paused.value, error_message=source.error_message)
                 db.commit()
-                raise _CrawlAbortedError
+                raise _CrawlAbortedError from None
             raise
         indexed_urls.add(url)
         chunks_created += page_chunks

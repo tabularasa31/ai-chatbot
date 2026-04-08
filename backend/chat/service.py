@@ -2776,7 +2776,7 @@ def run_debug(
                 "preview": (text[:200] + "..." if len(text) > 200 else text),
             }
             for doc_id, score, text in zip(
-                retrieval.document_ids, retrieval.scores, retrieval.chunk_texts, strict=False
+                retrieval.document_ids, retrieval.scores, retrieval.chunk_texts, strict=True
             )
         ]
         reliability_projection = build_reliability_projection(retrieval.reliability)

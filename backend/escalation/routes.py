@@ -81,7 +81,7 @@ def list_escalations(
             st = EscalationStatus(status)
             q = q.filter(EscalationTicket.status == st)
         except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid status")
+            raise HTTPException(status_code=422, detail="Invalid status") from None
     tickets = q.order_by(EscalationTicket.created_at.desc()).all()
     if include_original:
         for ticket in tickets:
@@ -154,7 +154,7 @@ def resolve_escalation(
     try:
         t = resolve_ticket(ticket_id, client.id, body.resolution_text, db)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise HTTPException(status_code=404, detail="Ticket not found") from None
     return _serialize_ticket(t, include_original=False)
 
 

@@ -402,11 +402,20 @@ class GapAnalyzerOrchestrator:
                 encrypted_api_key=encrypted_api_key,
                 questions=questions,
             )
-            question_rows = (
-                db.query(GapQuestion)
-                .filter(GapQuestion.id.in_([question.question_id for question in questions]))
-                .order_by(GapQuestion.created_at.asc(), GapQuestion.id.asc())
-                .all()
+            reloaded_rows: list[GapQuestion] = []
+            for question_id_batch in _batched(
+                [question.question_id for question in questions],
+                _BULK_ID_BATCH_SIZE,
+            ):
+                reloaded_rows.extend(
+                    db.query(GapQuestion)
+                    .filter(GapQuestion.id.in_(question_id_batch))
+                    .order_by(GapQuestion.created_at.asc(), GapQuestion.id.asc())
+                    .all()
+                )
+            question_rows = sorted(
+                reloaded_rows,
+                key=lambda row: (row.created_at, row.id),
             )
             if not question_rows:
                 return ModeBResult(

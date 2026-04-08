@@ -24,7 +24,7 @@ from backend.eval.service import (
     get_session_for_tester,
     list_session_results,
 )
-from backend.eval.tokens import EvalJwtSecretMissing, create_eval_access_token
+from backend.eval.tokens import EvalJwtSecretMissingError, create_eval_access_token
 from backend.models import Tester
 
 eval_router = APIRouter(prefix="/eval", tags=["eval"])
@@ -45,7 +45,7 @@ def eval_login(
         )
     try:
         token = create_eval_access_token(tester.id)
-    except EvalJwtSecretMissing:
+    except EvalJwtSecretMissingError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Eval authentication is not configured (set EVAL_JWT_SECRET)",

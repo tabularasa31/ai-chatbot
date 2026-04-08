@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
-from backend.eval.tokens import EvalJwtSecretMissing, decode_eval_access_token
+from backend.eval.tokens import EvalJwtSecretMissingError, decode_eval_access_token
 from backend.models import Tester
 
 eval_security = HTTPBearer(auto_error=False)
@@ -24,7 +24,7 @@ async def get_current_tester(
         )
     try:
         tester_id: uuid.UUID | None = decode_eval_access_token(credentials.credentials)
-    except EvalJwtSecretMissing:
+    except EvalJwtSecretMissingError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Eval authentication is not configured (set EVAL_JWT_SECRET)",

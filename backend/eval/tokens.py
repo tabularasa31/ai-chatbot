@@ -17,7 +17,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 
-class EvalJwtSecretMissing(Exception):
+class EvalJwtSecretMissingError(Exception):
     """EVAL_JWT_SECRET is unset or blank (misconfiguration)."""
 
 
@@ -28,7 +28,7 @@ def _eval_secret() -> str:
             "eval_jwt_misconfigured: EVAL_JWT_SECRET is missing or blank; "
             "eval login and protected /eval routes cannot run (HTTP 503)"
         )
-        raise EvalJwtSecretMissing
+        raise EvalJwtSecretMissingError
     return s.strip()
 
 
@@ -48,7 +48,7 @@ def decode_eval_access_token(token: str) -> uuid.UUID | None:
     """Return tester id if token is a valid eval tester JWT; else None."""
     try:
         secret = _eval_secret()
-    except EvalJwtSecretMissing:
+    except EvalJwtSecretMissingError:
         raise
     try:
         payload = jwt.decode(token, secret, algorithms=[ALGORITHM])

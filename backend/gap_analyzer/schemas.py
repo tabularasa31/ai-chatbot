@@ -12,10 +12,10 @@ from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRu
 
 DismissReason = GapDismissReason
 
-GapItemStatus = Literal["active", "closed", "dismissed"]
+GapItemStatus = Literal["active", "closed", "dismissed", "inactive"]
 GapClassification = Literal["uncovered", "partial", "covered", "unknown"]
 ModeAStatusFilter = Literal["active", "dismissed", "archived", "all"]
-ModeBStatusFilter = Literal["active", "closed", "dismissed", "archived", "all"]
+ModeBStatusFilter = Literal["active", "closed", "dismissed", "inactive", "archived", "all"]
 ModeASort = Literal["coverage_asc", "newest"]
 ModeBSort = Literal["signal_desc", "coverage_asc", "newest"]
 
@@ -54,6 +54,8 @@ class GapItemResponse(BaseModel):
     aggregate_signal_weight: Optional[float] = None
     example_questions: list[str] = []
     linked_source: Optional[GapSource] = None
+    linked_label: Optional[str] = None
+    linked_example_questions: list[str] = []
     also_missing_in_docs: bool = False
     last_updated: Optional[datetime] = None
 
@@ -71,6 +73,10 @@ class GapAnalyzerResponse(BaseModel):
     summary: GapSummaryResponse
     mode_a_items: list[GapItemResponse]
     mode_b_items: list[GapItemResponse]
+
+
+class GapSummaryOnlyResponse(BaseModel):
+    summary: GapSummaryResponse
 
 
 class GapDismissRequest(BaseModel):

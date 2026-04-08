@@ -37,11 +37,35 @@ function StatusBadge({ status }: { status: GapItem["status"] }) {
     active: "bg-violet-100 text-violet-700",
     closed: "bg-emerald-100 text-emerald-700",
     dismissed: "bg-slate-200 text-slate-700",
+    inactive: "bg-slate-100 text-slate-500",
   };
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.dismissed}`}>
       {status}
     </span>
+  );
+}
+
+function LinkedContextPanel({ item }: { item: GapItem }) {
+  if (!item.linked_source || !item.linked_label) return null;
+  return (
+    <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/80 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-sky-700">
+          Linked docs gap
+        </span>
+        <span className="text-sm font-medium text-slate-900">{item.linked_label}</span>
+      </div>
+      {item.linked_example_questions.length > 0 && (
+        <ul className="mt-3 space-y-1 text-sm text-slate-700">
+          {item.linked_example_questions.slice(0, 3).map((question, index) => (
+            <li key={`${item.id}:linked:${index}:${question}`} className="rounded-lg bg-white/80 px-3 py-2">
+              {question}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -158,7 +182,7 @@ function GapCard({
           >
             Draft
           </button>
-          {item.status === "dismissed" ? (
+          {item.status === "dismissed" || item.status === "inactive" ? (
             <button
               type="button"
               onClick={() => onReactivate(item)}
@@ -180,9 +204,13 @@ function GapCard({
         </div>
       </div>
 
+      <LinkedContextPanel item={item} />
+
       {item.example_questions.length > 0 && (
         <div className="mt-4">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Example questions</p>
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+            {item.linked_source === "mode_a" ? "User signal questions" : "Example questions"}
+          </p>
           <ul className="space-y-1 text-sm text-slate-700">
             {item.example_questions.map((question, index) => (
               <li key={`${item.id}:${index}:${question}`} className="rounded-lg bg-slate-50 px-3 py-2">
@@ -372,6 +400,10 @@ export default function GapAnalyzerPage() {
     () => (data?.mode_b_items ?? []).filter((item) => item.status === "dismissed"),
     [data?.mode_b_items],
   );
+  const archiveModeBInactiveItems = useMemo(
+    () => (data?.mode_b_items ?? []).filter((item) => item.status === "inactive"),
+    [data?.mode_b_items],
+  );
   const archiveModeADismissedCount = archiveModeAItems.length;
   const archiveClosedCount = useMemo(
     () => archiveItems.filter((item) => item.status === "closed").length,
@@ -379,6 +411,10 @@ export default function GapAnalyzerPage() {
   );
   const archiveDismissedCount = useMemo(
     () => archiveItems.filter((item) => item.status === "dismissed").length,
+    [archiveItems],
+  );
+  const archiveInactiveCount = useMemo(
+    () => archiveItems.filter((item) => item.status === "inactive").length,
     [archiveItems],
   );
 
@@ -441,13 +477,14 @@ export default function GapAnalyzerPage() {
         </div>
       )}
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className={`grid gap-4 ${archiveModeSelected ? "md:grid-cols-5" : "md:grid-cols-4"}`}>
         {archiveModeSelected ? (
           <>
             <StatCard label="Archived total" value={archiveItems.length} note="Source-specific archive inventory." />
             <StatCard label="Mode A dismissed" value={archiveModeADismissedCount} />
             <StatCard label="Mode B closed" value={archiveClosedCount} />
             <StatCard label="Mode B dismissed" value={archiveDismissedCount} />
+            <StatCard label="Mode B inactive" value={archiveInactiveCount} />
           </>
         ) : (
           <>
@@ -524,6 +561,7 @@ export default function GapAnalyzerPage() {
               <option value="archived">Archived</option>
               <option value="closed">Closed</option>
               <option value="dismissed">Dismissed</option>
+              <option value="inactive">Inactive</option>
               <option value="all">All</option>
             </select>
           </div>
@@ -546,6 +584,16 @@ export default function GapAnalyzerPage() {
                 note="Clusters explicitly hidden from the active backlog by an operator action."
                 items={archiveModeBDismissedItems}
                 emptyMessage="No dismissed Mode B clusters in archive."
+                busyItemId={busyItemId}
+                onDismiss={handleDismiss}
+                onReactivate={handleReactivate}
+                onDraft={handleDraft}
+              />
+              <ArchiveGroup
+                title="Inactive Mode B clusters"
+                note="Older archived clusters that aged out of the main archive buckets but remain reviewable."
+                items={archiveModeBInactiveItems}
+                emptyMessage="No inactive Mode B clusters in archive."
                 busyItemId={busyItemId}
                 onDismiss={handleDismiss}
                 onReactivate={handleReactivate}

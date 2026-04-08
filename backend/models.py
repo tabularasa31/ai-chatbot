@@ -28,6 +28,8 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from backend.gap_analyzer.enums import (
     GapClusterStatus,
+    GapJobKind,
+    GapJobStatus,
     GapDismissReason,
     GapDocTopicStatus,
     GapSource,
@@ -939,6 +941,43 @@ class GapQuestionMessageLink(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
+class GapAnalyzerJob(Base):
+    __tablename__ = "gap_analyzer_jobs"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    job_kind = Column(
+        Enum(GapJobKind, native_enum=False),
+        nullable=False,
+    )
+    status = Column(
+        Enum(GapJobStatus, native_enum=False),
+        nullable=False,
+        default=GapJobStatus.queued,
+        server_default=GapJobStatus.queued.value,
+    )
+    trigger = Column(String(32), nullable=False, default="manual", server_default="manual")
+    attempt_count = Column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts = Column(Integer, nullable=False, default=3, server_default="3")
+    available_at = Column(DateTime, nullable=False, default=_utcnow)
+    leased_at = Column(DateTime, nullable=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 Index(
     "ix_gap_clusters_tenant_status",
     GapCluster.tenant_id,
@@ -986,6 +1025,21 @@ Index(
 Index(
     "ix_gap_question_links_session_id",
     GapQuestionMessageLink.session_id,
+)
+Index(
+    "ix_gap_jobs_status_available",
+    GapAnalyzerJob.status,
+    GapAnalyzerJob.available_at,
+)
+Index(
+    "ix_gap_jobs_tenant_kind_status",
+    GapAnalyzerJob.tenant_id,
+    GapAnalyzerJob.job_kind,
+    GapAnalyzerJob.status,
+)
+Index(
+    "ix_gap_jobs_lease_expires",
+    GapAnalyzerJob.lease_expires_at,
 )
 
 

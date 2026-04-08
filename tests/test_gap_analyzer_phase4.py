@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import threading
 import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat import service as chat_service_module
 from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
+from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import (
     GapAnalyzerOrchestrator,
     _ModeBClusterUpdateRejectedError,
@@ -557,35 +556,16 @@ def test_ensure_mode_b_question_embeddings_skips_blank_questions_without_misalig
     assert valid_question.embedding is not None
 
 
-def test_start_mode_b_followup_coalesces_same_tenant_threads(
+def test_start_mode_b_followup_enqueues_durable_mode_b_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tenant_id = uuid.uuid4()
-    started = threading.Event()
-    release = threading.Event()
-    call_count = 0
-
-    def _fake_run(_tenant_id: uuid.UUID) -> None:
-        nonlocal call_count
-        call_count += 1
-        started.set()
-        release.wait(timeout=2)
-
+    calls: list[tuple[uuid.UUID, GapJobKind, str]] = []
     monkeypatch.setattr(
-        "backend.chat.service.run_mode_b_for_tenant_best_effort",
-        _fake_run,
+        "backend.chat.service.enqueue_gap_job_for_tenant_best_effort",
+        lambda queued_tenant_id, *, job_kind, trigger: calls.append((queued_tenant_id, job_kind, trigger)),
     )
 
     _start_mode_b_followup(tenant_id)
-    assert started.wait(timeout=2)
-    _start_mode_b_followup(tenant_id)
-    release.set()
 
-    for _ in range(50):
-        with chat_service_module._mode_b_followup_guard:
-            inflight = set(chat_service_module._mode_b_followups_inflight)
-        if tenant_id not in inflight:
-            break
-        threading.Event().wait(0.01)
-
-    assert call_count == 1
+    assert calls == [(tenant_id, GapJobKind.mode_b, "chat_signal")]

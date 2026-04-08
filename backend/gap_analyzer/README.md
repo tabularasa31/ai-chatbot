@@ -117,9 +117,8 @@ This module is intentionally introduced in two thin layers:
   - starts best-effort background work
   - does not promise synchronous completion to the UI
 - The dashboard sidebar badge reads from `summary.new_badge_count`.
-  In this MVP the sidebar still calls the full `GET /gap-analyzer` payload to obtain that badge.
-  A lighter `GET /gap-analyzer/summary` style endpoint remains a follow-up once dataset size makes
-  the extra item payload materially expensive.
+  It now uses a lightweight `GET /gap-analyzer/summary` contract instead of paying for the full
+  dashboard payload shape on every navigation mount.
 
 ## Phase 6 Linking Notes
 
@@ -136,27 +135,21 @@ This module is intentionally introduced in two thin layers:
   - dismissed Mode A still appears in dismissed/archive views even when its linked Mode B stays active
 - Linked Mode B drafts append Mode A `example_questions` when present, keeping Mode B as the title/source of truth while preserving the docs-gap context.
 
-## Phase 6 Follow-up Plan
+## Phase 6C Hardening Notes
 
-- Weekly reclustering and archive UX hardening intentionally ship in a separate follow-up PR after
-  the current Phase 6 linking slice merges.
-- Recommended branch shape:
-  - cut a fresh branch from updated `main`
-  - suggested name: `codex/gap-analyzer-p6b-reclustering-archive`
-- Follow-up scope should include:
-  - weekly full reclustering over recent Mode B question history
-  - safe merge/rebuild of near-duplicate clusters under the existing lifecycle rules
-  - archive/dismissed/closed UX hardening so active-list and archive semantics stay consistent
-  - any supporting API shaping needed for archive views, without reopening the current linking PR
-- Follow-up scope should explicitly avoid mixing in unrelated work such as:
-  - new summary/badge endpoints
-  - durable queue infrastructure for Mode A/Mode B background execution
-  - cross-language grouping changes
-  - broader search/retrieval refactors
-- Acceptance for that follow-up should prove:
-  - reclustering does not regress active-list dedupe or linked draft behavior
-  - archive views preserve source-specific lifecycle truth
-  - closed/dismissed linked pairs behave consistently before and after reclustering
+- Gap Analyzer background execution is now persisted in `gap_analyzer_jobs` with:
+  - durable queued / retry / in-progress state
+  - lease-based claiming
+  - bounded retries for failed jobs
+- Chat-signal Mode B follow-ups and manual recalculation both enqueue durable jobs rather than
+  relying only on process-local threads.
+- Coverage scoring now goes through a narrow repository-owned retrieval seam:
+  - `vector_top_k_for_tenant(...)`
+  - `bm25_match_for_tenant(...)`
+- Mode A ↔ Mode B relinking now prefers a `pgvector` nearest-neighbor path on Postgres and keeps
+  the Python cosine pass only as the SQLite/test fallback.
+- Archive UX now exposes older archived Mode B clusters as `inactive`, and linked Mode B cards can
+  render related docs-gap context inline in the dashboard.
 
 ## Phase 6B Reclustering Notes
 
@@ -182,25 +175,12 @@ This module is intentionally introduced in two thin layers:
 
 - Mode B now filters blank question texts before batch embedding so vector writes stay aligned.
   Fully blank questions remain unembedded and unclustered until later sanitation or admin cleanup.
-- Phase 4 no longer blocks the chat response thread on Mode B work, but follow-ups still run via
-  in-process `threading.Thread(...)`.
-  This is an MVP compromise for latency, not a production-grade queueing model.
-- The same-tenant follow-up guard is process-local only.
-  Multiple app workers can still start concurrent Mode B runs for the same tenant until a durable
-  worker queue or database-level coordination primitive is introduced.
-- There is still no durable retry path for failed Mode B follow-ups.
-  A transient crash or worker restart can drop an in-flight follow-up until the next signal arrives.
 - Cluster loading for Mode B is not paginated yet.
   Tenants with very large numbers of active/closed clusters will still need batching or a narrower
   candidate-selection strategy in a later phase.
-- `_sync_mode_links(...)` still does a full topic × eligible-cluster similarity pass after each
-  Mode A or Mode B run.
-  That is acceptable for the current Phase 6 slice, but larger tenants will likely need a narrower
-  candidate-selection strategy, cached embeddings, batched relinking, or a pgvector-backed nearest-
-  neighbor path in the follow-up job work.
-- The sidebar badge still pays for the full dashboard payload shape.
-  A dedicated lightweight summary endpoint is a Phase 5 follow-up if this becomes a noticeable
-  source of extra DB load or response payload size.
+- The in-app runner is now durable at the job-state level, but fully automatic recovery after a
+  whole-app outage still depends on the next enqueue/manual trigger unless a dedicated external
+  scheduler or worker deployment is added.
 - The queue-empty gate is best-effort across short-lived sessions.
   A new indexing job could start between the queue check and the follow-up Mode A run, so the
   coalescing behavior is intentionally helpful rather than strictly serialized.

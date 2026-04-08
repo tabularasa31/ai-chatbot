@@ -33,12 +33,16 @@
 - **Multi-tenant** — one platform, many clients, full data isolation
 - **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML)
 - **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
+- **Structured OpenAPI ingestion** — operation-aware indexing for Swagger/OpenAPI files and structured URL sources instead of treating specs as raw text
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine candidate acquisition + BM25 (`rank-bm25`) + RRF + reranking; SQLite/tests: Python cosine candidate acquisition followed by the same downstream lexical/ranking orchestration
 - **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
+- **Controlled clarification** — chat/widget replies can return `answer`, `clarification`, or `partial_with_clarification` with structured clarification payloads
+- **Localized default greeting** — new empty chats can start with a product-aware greeting localized from locale hints before the first real question
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
+- **Gap Analyzer** — bounded docs-gap + user-signal backlog with Mode A/Mode B pipelines, linking/dedupe, archive lifecycle, draft generation, weekly reclustering, and lightweight badge summary endpoint
 - **Dashboard** — Next.js: API key + embed snippet, **Knowledge hub** (`/knowledge`) for files and URL sources, **Agents / Settings**, chat logs, feedback, escalations, admin metrics
 - **Chat logs** — inbox-style view of all conversations
 - **Feedback loop** — 👍/👎 on answers + ideal answer + review bad answers
@@ -188,13 +192,23 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ### Chat
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/chat` | RAG chat (X-API-Key header); response includes `chat_ended`; optional header `X-Browser-Locale` |
+| POST | `/chat` | RAG chat (X-API-Key header); returns canonical `text`, `message_type`, optional `clarification`, legacy `answer`, and `chat_ended`; optional header `X-Browser-Locale` |
 | POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
 | GET | `/chat/sessions` | List chat sessions (JWT) |
 | GET | `/chat/logs/session/{id}` | Full session log (JWT) |
 | GET | `/chat/bad-answers` | Answers marked 👎 (JWT) |
 | POST | `/chat/messages/{id}/feedback` | Set 👍/👎 + ideal answer (JWT) |
 | POST | `/chat/debug?bot_id=ch_...` | Debug retrieval for a specific bot (JWT) |
+
+### Gap Analyzer
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/gap-analyzer` | Full Gap Analyzer dashboard payload: `summary`, `mode_a_items`, `mode_b_items` (JWT, verified) |
+| GET | `/gap-analyzer/summary` | Lightweight summary payload for navigation badge reads (JWT, verified) |
+| POST | `/gap-analyzer/recalculate` | Enqueue Mode A / Mode B recalculation (`mode_a`, `mode_b`, `both`) and return orchestration status (`202`) |
+| POST | `/gap-analyzer/{source}/{gap_id}/dismiss` | Dismiss a Mode A topic or Mode B cluster (JWT, verified) |
+| POST | `/gap-analyzer/{source}/{gap_id}/reactivate` | Reactivate a dismissed or inactive gap item (JWT, verified) |
+| POST | `/gap-analyzer/{source}/{gap_id}/draft` | Generate transient draft markdown for a gap item (JWT, verified) |
 
 ### Escalations (FI-ESC)
 | Method | Path | Description |
@@ -216,7 +230,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | GET | `/health` | Health check |
 | GET | `/embed.js` | Widget script |
 | POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
-| POST | `/widget/chat` | Public widget chat by `clientId` |
+| POST | `/widget/chat` | Public widget chat by `clientId`; returns canonical `text`, `message_type`, optional `clarification`, legacy `response`, and `chat_ended` |
 | POST | `/widget/escalate` | Public widget manual escalation |
 
 ### Internal manual QA (Eval)
@@ -243,7 +257,19 @@ Frontend: **`/eval/login`**, **`/eval/chat?bot_id=ch_…`**. CLI: **`scripts/cre
 <script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; response includes `chat_ended`). Optional identified sessions: `POST /widget/session/init` with `locale`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
+Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; response includes `chat_ended`, structured `message_type`, and optional clarification payload). Optional identified sessions: `POST /widget/session/init` with `locale` and optional signed `identity_token`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
+
+---
+
+## Gap Analyzer at a glance
+
+Gap Analyzer is the operator-facing backlog for documentation gaps and repeated user pain.
+
+- **Mode A** scans the indexed tenant corpus for under-covered documentation topics with deterministic sampling, extraction hashing, and dismissal persistence
+- **Mode B** clusters low-confidence / fallback / rejected / escalated / thumbs-down user questions into reusable product gaps
+- linked active Mode A + Mode B pairs dedupe in the dashboard with Mode B as the primary item
+- archive views stay source-specific; older archived Mode B items can age into an explicit `inactive` bucket
+- manual recalc and chat-side follow-ups now run through a durable DB-backed Gap Analyzer job queue with retryable orchestration state
 
 ---
 

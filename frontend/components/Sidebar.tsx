@@ -136,7 +136,7 @@ export function Sidebar() {
 
   useEffect(() => {
     api.gapAnalyzer
-      .get()
+      .getSummary()
       .then((data) => setGapBadgeCount(data.summary.new_badge_count))
       .catch(() => {});
   }, []);

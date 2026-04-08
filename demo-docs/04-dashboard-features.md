@@ -24,6 +24,17 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
 - **Reliability visibility:** retrieval/debug flows keep overlap and contradiction evidence available for investigation without changing the visible dashboard contract shape.
 
+## Gap Analyzer (`/gap-analyzer`)
+
+Gap Analyzer is the operator backlog for things your documentation may be missing and questions your users keep asking.
+
+- **Mode A (docs-side):** looks at your indexed documentation and surfaces topics that appear under-covered.
+- **Mode B (user-side):** groups repeated low-confidence, fallback, rejected, escalated, or thumbs-down question signals into actionable clusters.
+- **Linked visibility:** when Chat9 sees the same issue from both directions, the active list keeps one primary card instead of showing obvious duplicates.
+- **Actions:** dismiss, reactivate, and generate a draft outline for a documentation update.
+- **Archive view:** review dismissed docs-side topics separately from closed or dismissed user-question clusters.
+- **Recalculate:** manually trigger a fresh analysis pass from the UI when you want to refresh the backlog after updating docs.
+
 ## Agents (`/settings`)
 
 - **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks.
@@ -47,6 +58,11 @@ A dedicated page showing answers marked with 👎.
 - See which document chunks were retrieved (retrieval debug).
 - Write or edit the ideal answer.
 - Use "Open in Logs" to see the full conversation context.
+
+This page and **Gap Analyzer** complement each other:
+
+- **Review Bad Answers** is best for inspecting a specific bad turn.
+- **Gap Analyzer** is best for spotting repeated patterns across many turns.
 
 ## Debug (`/debug`)
 

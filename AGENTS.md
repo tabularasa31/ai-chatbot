@@ -20,9 +20,9 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 Gap Analyzer is now implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
 
 - `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
-- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with exact feedback correlation, incremental clustering, periodic full reclustering, and Mode A ↔ Mode B linking/dedupe on the read side
+- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with exact feedback correlation, incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
 
-The dashboard/API surface currently includes `GET /gap-analyzer`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
+Gap Analyzer orchestration is now backed by durable `gap_analyzer_jobs` rows with claim/retry state in the backend module itself. The dashboard/API surface currently includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
 
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 

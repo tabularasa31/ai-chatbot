@@ -2,7 +2,7 @@
 
 A complete description of every implemented capability. Written for a technical reader who has no prior context on the codebase.
 
-**Last updated:** 2026-04-08 (Gap Analyzer Phase 6B reclustering + archive hardening)  
+**Last updated:** 2026-04-08 (Gap Analyzer queue + BM25 seam + linked-card follow-ups)  
 **Status:** Production (getchat9.live)
 
 ---
@@ -286,17 +286,22 @@ Mode B ingests signals from the chat pipeline after the final turn outcome is kn
 Current behavior:
 
 - new unclustered questions are matched into an existing cluster or create a new one
-- cluster coverage is re-evaluated against the current corpus
+- cluster coverage is re-evaluated against the current corpus through Gap Analyzer's own narrow retrieval seam:
+  - semantic vector top-k over the tenant corpus
+  - bounded BM25 lexical confirmation over the same tenant corpus
 - linked `Mode A` and `Mode B` items dedupe on the active list, with `Mode B` as the primary visible card
 - a periodic full reclustering pass now rebuilds recent active/closed cluster history to reduce duplicate or drifted clusters over time
+- chat-signal follow-up work and manual recalculation are persisted as durable Gap Analyzer jobs with retryable orchestration state
 
 ### Dashboard and API surface
 
 The app includes a dedicated `/gap-analyzer` dashboard page for verified users. It exposes:
 
 - summary stats and sidebar badge
+- a lightweight `GET /gap-analyzer/summary` badge contract for navigation reads
 - separate Mode A and Mode B sections
 - active vs archive views
+- linked Mode B cards that can show the related docs-gap context inline
 - dismiss / reactivate actions
 - draft generation for follow-up documentation work
 - orchestration-style recalculation requests via `POST /gap-analyzer/recalculate`
@@ -304,7 +309,7 @@ The app includes a dedicated `/gap-analyzer` dashboard page for verified users. 
 Archive semantics are intentionally source-specific:
 
 - archived Mode A means dismissed Mode A topics
-- archived Mode B means closed or dismissed Mode B clusters
+- archived Mode B means closed, dismissed, or older inactive Mode B clusters
 - an archived linked Mode B item does not hide an active Mode A item; suppression only happens when the linked Mode B item is active
 
 Clarification is intentionally narrow. The bot does not ask follow-up questions by default; it does so only when the current request is not sufficiently answerable under the existing pipeline signals and one of these deterministic trigger families is matched:

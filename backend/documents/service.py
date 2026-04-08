@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.core.openai_client import get_openai_client  # imported for shared test patching
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger

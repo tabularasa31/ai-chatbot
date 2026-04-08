@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from backend.core.db import SessionLocal
 from backend.models import PiiEvent
@@ -14,7 +14,7 @@ def run(retention_days: int) -> int:
         raise ValueError("retention_days must be >= 1")
     db = SessionLocal()
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        cutoff = datetime.now(UTC) - timedelta(days=retention_days)
         deleted_count = (
             db.query(PiiEvent)
             .filter(PiiEvent.created_at < cutoff)

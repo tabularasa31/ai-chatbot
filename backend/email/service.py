@@ -45,5 +45,5 @@ def send_email(to: str, subject: str, body: str) -> None:
                 resp.status_code,
                 resp.text,
             )
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("Failed to send email via Brevo: %s", e)

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel
-from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode, GapSource
 
+from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode, GapSource
 
 DismissReason = GapDismissReason
 
@@ -23,13 +23,13 @@ ModeBSort = Literal["signal_desc", "coverage_asc", "newest"]
 class ModeAResult(BaseModel):
     tenant_id: UUID
     status: GapCommandStatus
-    started_at: Optional[datetime] = None
+    started_at: datetime | None = None
 
 
 class ModeBResult(BaseModel):
     tenant_id: UUID
     status: GapCommandStatus
-    started_at: Optional[datetime] = None
+    started_at: datetime | None = None
 
 
 class RecalculateCommandResult(BaseModel):
@@ -38,26 +38,26 @@ class RecalculateCommandResult(BaseModel):
     status: GapCommandStatus
     command_kind: Literal["orchestration"] = "orchestration"
     http_status_code: Literal[202] = 202
-    accepted_at: Optional[datetime] = None
-    retry_after_seconds: Optional[int] = None
+    accepted_at: datetime | None = None
+    retry_after_seconds: int | None = None
 
 
 class GapItemResponse(BaseModel):
     id: UUID
     source: GapSource
     label: str
-    coverage_score: Optional[float] = None
+    coverage_score: float | None = None
     classification: GapClassification = "unknown"
     status: GapItemStatus
     is_new: bool = False
     question_count: int = 0
-    aggregate_signal_weight: Optional[float] = None
+    aggregate_signal_weight: float | None = None
     example_questions: list[str] = []
-    linked_source: Optional[GapSource] = None
-    linked_label: Optional[str] = None
+    linked_source: GapSource | None = None
+    linked_label: str | None = None
     linked_example_questions: list[str] = []
     also_missing_in_docs: bool = False
-    last_updated: Optional[datetime] = None
+    last_updated: datetime | None = None
 
 
 class GapSummaryResponse(BaseModel):
@@ -66,7 +66,7 @@ class GapSummaryResponse(BaseModel):
     partial_count: int = 0
     impact_statement: str
     new_badge_count: int = 0
-    last_updated: Optional[datetime] = None
+    last_updated: datetime | None = None
 
 
 class GapAnalyzerResponse(BaseModel):

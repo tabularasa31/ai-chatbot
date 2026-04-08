@@ -6,7 +6,6 @@ from typing import Any
 
 from backend.chat.pii import DEFAULT_OPTIONAL_ENTITY_TYPES, OPTIONAL_ENTITY_TYPES
 
-
 DEFAULT_REDACTION_CONFIG = {
     "optional_entity_types": sorted(DEFAULT_OPTIONAL_ENTITY_TYPES),
 }

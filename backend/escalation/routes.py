@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -66,7 +66,7 @@ def _serialize_ticket(ticket: EscalationTicket, *, include_original: bool) -> Es
 def list_escalations(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    status: Annotated[Optional[str], Query()] = None,
+    status: Annotated[str | None, Query()] = None,
     include_original: bool = Query(False),
 ) -> EscalationListResponse:
     client = get_client_by_user(current_user.id, db)
@@ -81,7 +81,7 @@ def list_escalations(
             st = EscalationStatus(status)
             q = q.filter(EscalationTicket.status == st)
         except ValueError:
-            raise HTTPException(status_code=422, detail="Invalid status")
+            raise HTTPException(status_code=422, detail="Invalid status") from None
     tickets = q.order_by(EscalationTicket.created_at.desc()).all()
     if include_original:
         for ticket in tickets:
@@ -154,7 +154,7 @@ def resolve_escalation(
     try:
         t = resolve_ticket(ticket_id, client.id, body.resolution_text, db)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise HTTPException(status_code=404, detail="Ticket not found") from None
     return _serialize_ticket(t, include_original=False)
 
 

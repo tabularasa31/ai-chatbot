@@ -3,8 +3,8 @@ from __future__ import annotations
 import datetime as dt
 import enum
 import uuid
-from typing import Optional
 
+from pgvector.sqlalchemy import Vector
 from pydantic import BaseModel, Field
 from sqlalchemy import (
     JSON,
@@ -21,20 +21,20 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from pgvector.sqlalchemy import Vector
-from sqlalchemy.dialects.postgresql import ARRAY, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import declarative_base, relationship
 
+from backend.core.utils import generate_public_id
 from backend.gap_analyzer.enums import (
     GapClusterStatus,
-    GapJobKind,
-    GapJobStatus,
     GapDismissReason,
     GapDocTopicStatus,
+    GapJobKind,
+    GapJobStatus,
     GapSource,
 )
-from backend.core.utils import generate_public_id
 
 Base = declarative_base()
 
@@ -57,7 +57,7 @@ def compile_vector_sqlite(type_, compiler, **kw) -> str:  # type: ignore[overrid
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 class DocumentType(str, enum.Enum):
@@ -144,15 +144,15 @@ class UserContext(BaseModel):
     model_config = {"extra": "ignore"}
 
     user_id: str = Field(..., min_length=1)
-    email: Optional[str] = None
-    name: Optional[str] = None
-    plan_tier: Optional[str] = Field(
+    email: str | None = None
+    name: str | None = None
+    plan_tier: str | None = Field(
         default=None,
         description='e.g. "free" | "starter" | "growth" | "pro" | "enterprise"',
     )
-    audience_tag: Optional[str] = None
-    company: Optional[str] = None
-    locale: Optional[str] = None
+    audience_tag: str | None = None
+    company: str | None = None
+    locale: str | None = None
 
 
 class User(Base):

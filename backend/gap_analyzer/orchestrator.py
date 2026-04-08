@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
 import math
 import re
-from typing import Iterable
+from collections import defaultdict
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -24,7 +24,14 @@ from backend.gap_analyzer.domain import (
     GapLifecyclePolicy,
     SignalWeightPolicy,
 )
-from backend.gap_analyzer.enums import GapClusterStatus, GapCommandStatus, GapDismissReason, GapDocTopicStatus, GapRunMode, GapSource
+from backend.gap_analyzer.enums import (
+    GapClusterStatus,
+    GapCommandStatus,
+    GapDismissReason,
+    GapDocTopicStatus,
+    GapRunMode,
+    GapSource,
+)
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
 from backend.gap_analyzer.repository import (
@@ -129,7 +136,7 @@ class GapAnalyzerOrchestrator:
 
     def run_mode_a(self, tenant_id: UUID) -> ModeAResult:
         repository = self._require_repository()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         corpus_chunks = repository.get_mode_a_corpus_chunks(
             tenant_id=tenant_id,
@@ -215,7 +222,7 @@ class GapAnalyzerOrchestrator:
 
     def run_mode_b(self, tenant_id: UUID) -> ModeBResult:
         repository = self._require_repository()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         questions = repository.list_unclustered_mode_b_questions(tenant_id)
         if not questions:
@@ -270,7 +277,7 @@ class GapAnalyzerOrchestrator:
     def run_mode_b_weekly_reclustering(self, tenant_id: UUID) -> ModeBResult:
         repository = self._require_repository()
         db = self._require_sqlalchemy_repository().db
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         recent_cutoff = (started_at - timedelta(days=_MODE_B_WEEKLY_RECLUSTER_DAYS)).replace(tzinfo=None)
 
         affected_cluster_ids = [
@@ -537,7 +544,7 @@ class GapAnalyzerOrchestrator:
             raise GapResourceNotFoundError("Gap cluster not found")
         cluster.status = GapClusterStatus.dismissed
         cluster.question_count_at_dismissal = cluster.question_count
-        cluster.last_computed_at = datetime.now(timezone.utc)
+        cluster.last_computed_at = datetime.now(UTC)
         existing = (
             db.query(GapDismissal)
             .filter(
@@ -600,7 +607,7 @@ class GapAnalyzerOrchestrator:
         )
         status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
         cluster.status = status
-        cluster.last_computed_at = datetime.now(timezone.utc)
+        cluster.last_computed_at = datetime.now(UTC)
         db.add(cluster)
         return GapActionResponse(source=source, gap_id=gap_id, status=status.value)
 
@@ -673,7 +680,7 @@ class GapAnalyzerOrchestrator:
                 tenant_id=tenant_id,
                 mode=mode,
                 status=GapCommandStatus.accepted,
-                accepted_at=datetime.now(timezone.utc),
+                accepted_at=datetime.now(UTC),
             )
             return enqueue_result
         enqueue_result = self._require_repository().enqueue_recalculation(tenant_id, mode)
@@ -681,7 +688,7 @@ class GapAnalyzerOrchestrator:
             tenant_id=tenant_id,
             mode=mode,
             status=enqueue_result.status,
-            accepted_at=datetime.now(timezone.utc),
+            accepted_at=datetime.now(UTC),
             retry_after_seconds=enqueue_result.retry_after_seconds,
         )
 
@@ -869,7 +876,7 @@ def _build_mode_a_items(
             )
 
     if sort == "newest":
-        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=UTC)), reverse=True)
     else:
         items.sort(key=lambda item: (_sort_float(item.coverage_score, default=999.0), item.label.casefold()))
     return items
@@ -928,7 +935,7 @@ def _build_mode_b_items(
     if sort == "coverage_asc":
         items.sort(key=lambda item: (_sort_float(item.coverage_score, default=999.0), item.label.casefold()))
     elif sort == "newest":
-        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+        items.sort(key=lambda item: (item.last_updated or datetime.min.replace(tzinfo=UTC)), reverse=True)
     else:
         items.sort(
             key=lambda item: (
@@ -978,7 +985,7 @@ def _load_mode_b_question_samples(db: Session, cluster_ids: Iterable[UUID]) -> d
 def _mode_b_question_record_from_row(row: GapQuestion) -> ModeBQuestionRecord:
     created_at = row.created_at
     if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=timezone.utc)
+        created_at = created_at.replace(tzinfo=UTC)
     return ModeBQuestionRecord(
         question_id=row.id,
         question_text=row.question_text,
@@ -1338,7 +1345,7 @@ def _effective_mode_b_status(cluster: GapCluster) -> GapClusterStatus:
     if status not in {GapClusterStatus.closed, GapClusterStatus.dismissed}:
         return status
     reference_time = _cluster_activity_at(cluster)
-    if reference_time <= datetime.now(timezone.utc) - timedelta(days=GapLifecyclePolicy().inactive_days):
+    if reference_time <= datetime.now(UTC) - timedelta(days=GapLifecyclePolicy().inactive_days):
         return GapClusterStatus.inactive
     return status
 
@@ -1367,9 +1374,9 @@ def _cluster_activity_at(cluster: GapCluster) -> datetime:
         if value is None:
             continue
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         return value
-    return datetime.min.replace(tzinfo=timezone.utc)
+    return datetime.min.replace(tzinfo=UTC)
 
 
 def _clean_questions(raw_questions: object) -> list[str]:
@@ -1625,7 +1632,7 @@ def _prepare_mode_b_clusters(clusters: list[ModeBClusterRecord]) -> list[_Mutabl
                 aggregate_signal_weight=cluster.aggregate_signal_weight,
                 coverage_score=cluster.coverage_score or 0.0,
                 status=status,
-                last_question_at=cluster.last_question_at or datetime.now(timezone.utc),
+                last_question_at=cluster.last_question_at or datetime.now(UTC),
             )
         )
     return prepared
@@ -1777,7 +1784,7 @@ def _cosine_similarity(
     if first_norm == 0.0 or second_norm == 0.0:
         return 0.0
     dot = 0.0
-    for left, right in zip(first, second):
+    for left, right in zip(first, second, strict=True):
         dot += left * right
     return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 

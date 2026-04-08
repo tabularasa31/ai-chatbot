@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Literal, Sequence
+from typing import Literal
 
 from backend.core.openai_client import get_openai_client
 

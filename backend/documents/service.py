@@ -11,9 +11,9 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
-from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 
 _HEALTH_WARNING_TYPES = frozenset(
     {
@@ -31,7 +31,7 @@ _PLACEHOLDER_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", flags=re.MULTILINE)
-_PUNCTUATION_ENDINGS = (":", ",", ";", "(", "[", "{", "-", "—", "–", "/", "\\")
+_PUNCTUATION_ENDINGS = (":", ",", ";", "(", "[", "{", "-", "—", "–", "/", "\\")  # noqa: RUF001
 _POOR_STRUCTURE_HIGH_SECTION_WORDS = 700
 _POOR_STRUCTURE_MEDIUM_SECTION_WORDS = 450
 _POOR_STRUCTURE_LONG_DOC_WORDS = 900
@@ -47,7 +47,7 @@ _LOW_INFORMATION_DENSITY_MAX_DUPLICATE_RATIO = 0.35
 
 def _iso_utc_z() -> str:
     return (
-        dt.datetime.now(dt.timezone.utc)
+        dt.datetime.now(dt.UTC)
         .replace(microsecond=0)
         .isoformat()
         .replace("+00:00", "Z")

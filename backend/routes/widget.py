@@ -2,7 +2,7 @@
 
 import logging
 import uuid
-from typing import Any, Annotated, Dict, Literal, Optional, Tuple
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from openai import APIError
@@ -10,13 +10,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
-from backend.clients.widget_chat_gate import WidgetChatClientGateError, get_client_eligible_for_widget_chat
 from backend.clients.service import get_kyc_decrypted_keys_for_validation
-from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
-from backend.escalation.service import perform_manual_escalation
+from backend.clients.widget_chat_gate import (
+    WidgetChatClientGateError,
+    get_client_eligible_for_widget_chat,
+)
 from backend.core.db import get_db
 from backend.core.limiter import limiter, widget_public_rate_limit_key
 from backend.core.security import validate_kyc_token_detail
+from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
+from backend.escalation.service import perform_manual_escalation
 from backend.models import Chat, Client, EscalationTrigger, UserContext
 from backend.user_sessions.service import start_user_session, touch_user_session
 from backend.widget.service import (
@@ -36,8 +39,8 @@ widget_router = APIRouter(prefix="/widget", tags=["widget"])
 
 class WidgetSessionInitRequest(BaseModel):
     api_key: str = Field(..., min_length=1)
-    identity_token: Optional[str] = None
-    locale: Optional[str] = Field(default=None, max_length=64)
+    identity_token: str | None = None
+    locale: str | None = Field(default=None, max_length=64)
 
 
 class WidgetSessionInitResponse(BaseModel):
@@ -53,8 +56,8 @@ def widget_health() -> dict[str, str]:
 
 def _resolve_widget_identity(
     client: Client,
-    identity_token: Optional[str],
-) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    identity_token: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Returns (stored_user_context dict, None) on success, or (None, failure_reason).
     Never logs PII.
@@ -173,10 +176,10 @@ def widget_chat(
     request: Request,
     message: Annotated[str, Query(description="User message")],
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
-    session_id: Annotated[Optional[str], Query(description="Optional session ID")] = None,
-    option_id: Annotated[Optional[str], Query(description="Optional structured clarification option ID")] = None,
+    session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
+    option_id: Annotated[str | None, Query(description="Optional structured clarification option ID")] = None,
     locale: Annotated[
-        Optional[str], Query(description="Browser locale hint (e.g. ru-RU)")
+        str | None, Query(description="Browser locale hint (e.g. ru-RU)")
     ] = None,
     db: Session = Depends(get_db),
 ) -> dict:
@@ -207,7 +210,7 @@ def widget_chat(
                     SESSION_INVALID_CODE,
                     "Invalid session_id",
                 ),
-            )
+            ) from None
         existing_chat = db.query(Chat).filter(Chat.session_id == sid).first()
         if existing_chat is None:
             raise HTTPException(
@@ -248,12 +251,12 @@ def widget_chat(
             clarification_option_id=option_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except APIError:
         raise HTTPException(
             status_code=503,
             detail="OpenAI service unavailable",
-        )
+        ) from None
 
     return {
         "text": outcome.text,
@@ -291,7 +294,7 @@ def widget_escalate(
     try:
         sid = uuid.UUID(session_id)
     except (ValueError, TypeError):
-        raise HTTPException(status_code=422, detail="Invalid session_id")
+        raise HTTPException(status_code=422, detail="Invalid session_id") from None
     trig = (
         EscalationTrigger.user_request
         if body.trigger == "user_request"
@@ -307,7 +310,7 @@ def widget_escalate(
             trigger=trig,
         )
     except ValueError:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found") from None
     except APIError:
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable")
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)

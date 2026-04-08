@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Annotated, Literal, Optional
+from typing import Annotated, Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
@@ -25,7 +25,7 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
-    health_status: Optional[dict[str, Any]] = None
+    health_status: dict[str, Any] | None = None
 
 
 class DocumentListResponse(BaseModel):
@@ -45,30 +45,30 @@ class DocumentDetailResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
-    parsed_text: Optional[str]
-    health_status: Optional[dict[str, Any]] = None
+    parsed_text: str | None
+    health_status: dict[str, Any] | None = None
 
 
 class DocumentHealthStatusResponse(BaseModel):
     """Stored document health check result (from DB)."""
 
-    score: Optional[int] = None
+    score: int | None = None
     checked_at: str
     warnings: list[dict[str, Any]]
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class UrlSourceCreateRequest(BaseModel):
     url: AnyHttpUrl
-    name: Optional[str] = None
+    name: str | None = None
     schedule: UrlSourceSchedule = "weekly"
     exclusions: list[ExclusionPattern] = Field(default_factory=list, max_length=50)
 
 
 class UrlSourceUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    schedule: Optional[UrlSourceSchedule] = None
-    exclusions: Optional[list[ExclusionPattern]] = Field(default=None, max_length=50)
+    name: str | None = None
+    schedule: UrlSourceSchedule | None = None
+    exclusions: list[ExclusionPattern] | None = Field(default=None, max_length=50)
 
 
 class UrlSourceFailureResponse(BaseModel):
@@ -81,13 +81,13 @@ class UrlSourceRunResponse(BaseModel):
 
     id: uuid.UUID
     status: str
-    pages_found: Optional[int] = None
+    pages_found: int | None = None
     pages_indexed: int
     failed_urls: list[UrlSourceFailureResponse]
-    duration_seconds: Optional[int] = None
-    error_message: Optional[str] = None
+    duration_seconds: int | None = None
+    error_message: str | None = None
     created_at: datetime
-    finished_at: Optional[datetime] = None
+    finished_at: datetime | None = None
 
 
 class SourcePageResponse(BaseModel):
@@ -107,15 +107,15 @@ class UrlSourceResponse(BaseModel):
     source_type: UrlSourceType = SOURCE_TYPE_URL
     status: str
     schedule: UrlSourceSchedule
-    pages_found: Optional[int] = None
+    pages_found: int | None = None
     pages_indexed: int
     chunks_created: int
-    last_crawled_at: Optional[datetime] = None
-    next_crawl_at: Optional[datetime] = None
+    last_crawled_at: datetime | None = None
+    next_crawl_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
-    warning_message: Optional[str] = None
-    error_message: Optional[str] = None
+    warning_message: str | None = None
+    error_message: str | None = None
     exclusion_patterns: list[str] = Field(default_factory=list)
 
 

@@ -14,9 +14,9 @@ from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
+from backend.models import Chat, Client, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
-from backend.models import Chat, Client, User
 
 DEFAULT_CLIENT_NAME = "My Workspace"
 
@@ -25,8 +25,8 @@ def _dt_utc_aware(d: dt.datetime | None) -> dt.datetime | None:
     if d is None:
         return None
     if d.tzinfo is None:
-        return d.replace(tzinfo=dt.timezone.utc)
-    return d.astimezone(dt.timezone.utc)
+        return d.replace(tzinfo=dt.UTC)
+    return d.astimezone(dt.UTC)
 
 
 def create_client(user_id: uuid.UUID, name: str, db: Session) -> Client:
@@ -264,7 +264,7 @@ def rotate_kyc_secret(user_id: uuid.UUID, db: Session) -> tuple[Client, str]:
             status_code=400,
             detail="No KYC signing secret configured; generate one first",
         )
-    overlap_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+    overlap_until = dt.datetime.now(dt.UTC) + dt.timedelta(hours=1)
     client.kyc_secret_key_previous = client.kyc_secret_key
     client.kyc_secret_previous_expires_at = overlap_until
     raw = secrets.token_hex(32)
@@ -280,7 +280,7 @@ def get_kyc_status(user_id: uuid.UUID, db: Session) -> dict[str, Any]:
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     week_ago = now - dt.timedelta(days=7)
 
     total_7d = (
@@ -331,7 +331,7 @@ def get_kyc_decrypted_keys_for_validation(client: Client) -> list[tuple[str, str
     cur = _decrypt_kyc_secret(client.kyc_secret_key)
     if cur:
         keys.append((cur, None))
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     prev_exp = _dt_utc_aware(client.kyc_secret_previous_expires_at)
     if client.kyc_secret_key_previous and prev_exp and prev_exp > now:
         prev = _decrypt_kyc_secret(client.kyc_secret_key_previous)

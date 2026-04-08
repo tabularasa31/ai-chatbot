@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
-
 from backend.chat.pii import redact
 from backend.core.crypto import encrypt_value
 from backend.core.db import SessionLocal
 from backend.models import EscalationTicket, Message
 from backend.privacy_config import public_redaction_config_dict
+from sqlalchemy.orm import Session
 
 
 def _message_optional_entity_types(message: Message) -> set[str] | None:

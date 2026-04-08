@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import logging
 import threading
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from backend.core import db as core_db
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import GapJobRecord, SqlAlchemyGapAnalyzerRepository
-from backend.models import Client, Document, DocumentStatus, UrlSource, SourceStatus
+from backend.models import Client, Document, DocumentStatus, SourceStatus, UrlSource
 
 logger = logging.getLogger(__name__)
 _GAP_JOB_HEARTBEAT_SECONDS = 300

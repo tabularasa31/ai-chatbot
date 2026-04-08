@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import math
 import logging
+import math
 import uuid
-from typing import Iterable
+from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -39,7 +39,7 @@ def _vector_from_unknown(raw: object) -> list[float] | None:
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     norm1 = math.sqrt(sum(x * x for x in a))
     norm2 = math.sqrt(sum(y * y for y in b))
     if norm1 == 0 or norm2 == 0:

@@ -1,7 +1,7 @@
 """FastAPI document management endpoints."""
 
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session, selectinload
@@ -54,7 +54,7 @@ EXT_TO_TYPE = {
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
-def _detect_file_type(filename: str) -> Optional[str]:
+def _detect_file_type(filename: str) -> str | None:
     """Detect file_type from extension. Returns None if unsupported."""
     ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return EXT_TO_TYPE.get(ext)

@@ -278,7 +278,7 @@ def create_embeddings_for_document(
     except Exception as e:
         raise HTTPException(
             status_code=503,
-            detail=f"OpenAI API unavailable: {str(e)}",
+            detail=f"OpenAI API unavailable: {e!s}",
         ) from e
 
     embeddings: list[Embedding] = []
@@ -309,7 +309,6 @@ def create_embeddings_for_document(
         db.add(emb)
         embeddings.append(emb)
     db.commit()
-    invalidate_bm25_cache_for_tenant(doc.client_id)
     for emb in embeddings:
         db.refresh(emb)
     try:

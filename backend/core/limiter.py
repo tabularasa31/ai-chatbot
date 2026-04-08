@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -12,7 +12,7 @@ from starlette.requests import Request
 from backend.core.config import settings
 
 # When set (by tests only), `/widget/chat` rate limiting uses this identity instead of IP.
-_widget_public_rate_limit_key_override: Optional[Callable[[Request], str]] = None
+_widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 
 
 def _key_func(request):
@@ -35,7 +35,7 @@ def widget_public_rate_limit_key(request: Request) -> str:
 
 
 def set_widget_public_rate_limit_key_override(
-    fn: Optional[Callable[[Request], str]],
+    fn: Callable[[Request], str] | None,
 ) -> None:
     """Tests: set to e.g. ``lambda r: 'fixed'`` to assert 429; pass ``None`` to restore."""
     global _widget_public_rate_limit_key_override

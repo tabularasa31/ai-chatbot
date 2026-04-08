@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import uuid
-from typing import Annotated, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import distinct, func
@@ -19,7 +19,17 @@ from backend.admin.schemas import (
 )
 from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.core.db import get_db
-from backend.models import Chat, Client, Document, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.models import (
+    Chat,
+    Client,
+    Document,
+    Embedding,
+    Message,
+    MessageRole,
+    PiiEvent,
+    PiiEventDirection,
+    User,
+)
 from backend.privacy_schemas import DeletedCountResponse
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -136,10 +146,10 @@ def list_pii_events(
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=0, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
-    direction: Optional[str] = None,
-    client_id: Optional[str] = None,
-    actor_user_id: Optional[str] = None,
-    since_days: Annotated[Optional[int], Query(ge=1)] = None,
+    direction: str | None = None,
+    client_id: str | None = None,
+    actor_user_id: str | None = None,
+    since_days: Annotated[int | None, Query(ge=1)] = None,
 ) -> AdminPiiEventList:
     q = db.query(PiiEvent).order_by(PiiEvent.created_at.desc())
     if direction:
@@ -158,7 +168,7 @@ def list_pii_events(
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid actor_user_id") from exc
     if since_days is not None:
-        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        since = datetime.now(UTC) - timedelta(days=since_days)
         q = q.filter(PiiEvent.created_at >= since)
     rows = q.offset(offset).limit(limit).all()
     return AdminPiiEventList(
@@ -186,7 +196,7 @@ def cleanup_pii_events(
     db: Annotated[Session, Depends(get_db)],
     retention_days: Annotated[int, Query(ge=1)] = 365,
 ) -> DeletedCountResponse:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     deleted_count = (
         db.query(PiiEvent)
         .filter(PiiEvent.created_at < cutoff)

@@ -161,7 +161,7 @@ def run_extract_client_knowledge_for_document(
             "Return JSON with this exact schema:\n"
             "{\n"
             '  "product_name": "string or null",\n'
-            '  "modules": ["string"],\n'
+            '  "topics": ["string"],\n'
             '  "glossary_terms": [{"term": "str", "definition": "str or null"}],\n'
             '  "support_contacts": ["email or URL"],\n'
             '  "faq_candidates": [{"question": "str", "answer": "str"}]\n'
@@ -195,14 +195,17 @@ def run_extract_client_knowledge_for_document(
         product_name_norm = product_name.strip() if isinstance(product_name, str) else None
 
         modules: list[str] = []
-        for m in extracted.get("modules") or []:
+        raw_topics = extracted.get("topics")
+        if not isinstance(raw_topics, list):
+            raw_topics = extracted.get("modules") or []
+        for m in raw_topics:
             if not isinstance(m, str):
                 continue
             value = m.strip()
             if not value:
                 continue
             modules.append(value)
-        # dedupe modules
+        # Dedupe extracted topics before merging into the legacy DB column.
         dedup_modules: list[str] = []
         seen_mods: set[str] = set()
         for m in modules:

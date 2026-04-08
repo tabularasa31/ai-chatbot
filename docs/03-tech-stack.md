@@ -1,6 +1,6 @@
 # Technical Stack & Architecture
 
-**Last updated:** 2026-04-06 (controlled clarification layer MVP)
+**Last updated:** 2026-04-08 (knowledge profile terminology: topics)
 
 ---
 
@@ -178,12 +178,20 @@
 │  Client dashboard:                                       │
 │  - Login/signup                                          │
 │  - OpenAI API key + widget/agents settings               │
-│  - Knowledge hub (files + URL sources)                   │
+│  - Knowledge hub (files + URL sources, extracted topics, FAQ) │
 │  - Chat logs / feedback / escalations                    │
 │  - Admin/privacy views                                   │
 │                                                           │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Knowledge profile terminology
+
+The Knowledge Hub profile view exposes **extracted topics** rather than strict product modules.
+
+- `topics` are lightweight documentation-derived themes surfaced for operator review/editing
+- they can represent feature areas, setup stages, dashboard pages, or other recurring doc concepts
+- the backend storage layer still uses the legacy `tenant_profiles.modules` column name for compatibility, but public docs and UI should refer to these values as `topics`
 
 ---
 

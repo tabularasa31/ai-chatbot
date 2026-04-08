@@ -1,6 +1,6 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-08 (UTC) — Gap Analyzer queue + BM25 seam + linked-card follow-ups
+**Last updated:** 2026-04-08 (UTC) — Gap Analyzer queue + BM25 seam + linked-card follow-ups + knowledge topics rename
 **Overall status:** ✅ MVP feature-complete, deployed to production
 
 ---
@@ -35,6 +35,25 @@
 - ⏳ dedicated external scheduler / worker deployment for automatically draining expired leased jobs after a full app outage, rather than depending on the in-app runner to restart on the next enqueue/manual trigger
 - ⏳ larger-tenant batching/candidate narrowing for Mode B cluster loading beyond the current active/closed history scope
 - ⏳ optional localization pass for Gap Analyzer dashboard copy such as linked-card labels and draft markdown headings
+
+---
+
+## ✅ COMPLETED (2026-04-08) — Knowledge profile terminology cleanup (`modules` → `topics`)
+
+### Product terminology
+
+- ✅ **Knowledge Hub wording updated:** dashboard profile UI now uses **Topics** instead of **Modules** for extracted documentation themes.
+- ✅ **Meaning clarified:** these items are documented as extracted doc themes, not guaranteed canonical product module names.
+
+### API and extraction compatibility
+
+- ✅ **Public profile contract updated:** `GET/PATCH /knowledge/profile` now uses `topics` as the canonical public field.
+- ✅ **Backward compatibility preserved:** `modules` remains accepted/emitted as a compatibility alias while the transition is in progress.
+- ✅ **Extractor prompt updated:** tenant knowledge extraction now asks the model for `topics`, with fallback support for legacy `modules` payloads.
+
+### Docs sync
+
+- ✅ Updated `AGENTS.md`, `docs/03-tech-stack.md`, `docs/04-features.md`, `docs/IMPLEMENTED_FEATURES.md`, and Russian dashboard docs to reflect the `topics` terminology and the compatibility note.
 
 ---
 

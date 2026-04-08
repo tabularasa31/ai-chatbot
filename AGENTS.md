@@ -91,6 +91,7 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 - REST-style paths: lowercase, hyphens or path segments consistent with existing routers.
 - Bodies and responses via Pydantic; FastAPI errors: `HTTPException`, consistent `detail` messages.
 - Chat endpoints may return structured clarification payloads. Keep `message_type` and `clarification` in sync across backend schemas, service-layer literals, and frontend transport/widget types.
+- Knowledge profile terminology: prefer **`topics`** for extracted documentation themes shown in the dashboard/API. The underlying DB/storage layer may still use the legacy `modules` field name for compatibility, but user-facing docs and contracts should call these extracted items `topics`, not product modules.
 
 ---
 

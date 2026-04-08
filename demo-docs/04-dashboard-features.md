@@ -14,6 +14,7 @@ The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **
 Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
 - **Supported formats:** PDF, Markdown, Swagger/OpenAPI (`.json`, `.yaml`, `.yml`).
+- **Profile tab:** review the extracted product profile, glossary, and editable **topics** derived from your docs. These topics are documentation themes, not necessarily strict product module names.
 - **OpenAPI ingestion:** API specs are split into operation-aware chunks, with extra request/response schema detail for larger endpoints.
 - **Limits:** e.g. max file size 50 MB (see product limits); embedding runs asynchronously after upload/trigger.
 - **Status:** Documents move through `ready` → `embedding` → `ready` or `error`; the UI polls the API until embedding finishes.

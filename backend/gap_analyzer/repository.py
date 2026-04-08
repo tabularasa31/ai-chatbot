@@ -165,9 +165,9 @@ class GapAnalyzerRepository(Protocol):
         aggregate_signal_weight: float,
         coverage_score: float,
         status: GapClusterStatus,
-        is_new: bool = True,
         last_question_at: datetime,
         last_computed_at: datetime,
+        is_new: bool = True,
     ) -> UUID:
         ...
 
@@ -501,9 +501,9 @@ class SqlAlchemyGapAnalyzerRepository:
         aggregate_signal_weight: float,
         coverage_score: float,
         status: GapClusterStatus,
-        is_new: bool = True,
         last_question_at: datetime,
         last_computed_at: datetime,
+        is_new: bool = True,
     ) -> UUID:
         capabilities = self._capabilities
         cluster = GapCluster(

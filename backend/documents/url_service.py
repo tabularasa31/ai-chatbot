@@ -5,21 +5,21 @@ from __future__ import annotations
 import datetime as dt
 import fnmatch
 import hashlib
-import os
 import ipaddress
 import logging
 import math
+import os
 import re
 import socket
 import time
 import uuid
-import defusedxml.ElementTree as ElementTree
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from urllib import robotparser
 from urllib.parse import urljoin, urlparse, urlunparse
 
+import defusedxml.ElementTree as ElementTree
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import HTTPException
@@ -34,8 +34,8 @@ from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.documents.parsers import (
     OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
-    looks_like_openapi,
     load_openapi_spec,
+    looks_like_openapi,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.models import (
@@ -109,7 +109,7 @@ class StructuredSource:
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def _normalize_source_url(raw_url: str) -> tuple[str, str]:
@@ -1077,7 +1077,7 @@ def _upsert_page_document(
     db.flush()
 
     vectors = _embed_chunks(page.chunks, api_key)
-    for chunk, vector in zip(page.chunks, vectors):
+    for chunk, vector in zip(page.chunks, vectors, strict=False):
         db.add(
             Embedding(
                 document_id=doc.id,
@@ -1166,7 +1166,7 @@ def _upsert_structured_document(
     )
     try:
         vectors = _embed_chunks(rendered_chunks, api_key)
-        for chunk, vector in zip(rendered_chunks, vectors):
+        for chunk, vector in zip(rendered_chunks, vectors, strict=False):
             db.add(
                 Embedding(
                     document_id=doc.id,
@@ -1307,7 +1307,7 @@ def trigger_refresh(
     now = _utcnow()
     last_refresh = source.last_refresh_requested_at
     if last_refresh is not None and last_refresh.tzinfo is None:
-        last_refresh = last_refresh.replace(tzinfo=dt.timezone.utc)
+        last_refresh = last_refresh.replace(tzinfo=dt.UTC)
     if last_refresh and now - last_refresh < dt.timedelta(hours=1):
         remaining = dt.timedelta(hours=1) - (now - last_refresh)
         minutes = max(1, int(remaining.total_seconds() // 60))
@@ -1334,7 +1334,7 @@ def _mark_run_finished(run: UrlSourceRun, *, status: str, error_message: str | N
     if run.created_at:
         started = run.created_at
         if started.tzinfo is None:
-            started = started.replace(tzinfo=dt.timezone.utc)
+            started = started.replace(tzinfo=dt.UTC)
         run.duration_seconds = max(0, int((run.finished_at - started).total_seconds()))
 
 
@@ -1358,7 +1358,7 @@ class _CrawlResult:
     chunks_created: int
 
 
-def _plan_crawl(source: UrlSource, db: "Session") -> _CrawlPlan:
+def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     """Discover URLs and compute which ones to crawl."""
     existing_docs = db.query(Document).filter(Document.source_id == source.id).all()
     existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
@@ -1383,7 +1383,7 @@ def _index_pages(
     run: UrlSourceRun,
     plan: _CrawlPlan,
     api_key: str,
-    db: "Session",
+    db: Session,
 ) -> _CrawlResult:
     """Fetch, extract, and index each URL.
 
@@ -1460,7 +1460,7 @@ def _finalize_crawl(
     plan: _CrawlPlan,
     result: _CrawlResult,
     started: float,
-    db: "Session",
+    db: Session,
 ) -> None:
     """Remove stale documents, update source/run status, and commit."""
     stale_docs = (

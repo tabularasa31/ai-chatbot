@@ -3,32 +3,30 @@
 import logging
 import uuid
 from collections import defaultdict
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.core.limiter import limiter
+from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
-    ChatMessageType,
     ChatHistoryResponse,
     ChatMessageLogItem,
     ChatMessageLogResponse,
+    ChatMessageType,
     ChatRequest,
     ChatResponse,
-    ClarificationPayloadResponse,
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
+    ClarificationPayloadResponse,
     MessageFeedbackRequest,
     MessageFeedbackResponse,
     MessageResponse,
 )
-from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
-from backend.escalation.service import perform_manual_escalation
 from backend.chat.service import (
     delete_session_original_content,
     get_chat_history,
@@ -40,9 +38,20 @@ from backend.chat.service import (
 )
 from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
-from backend.auth.middleware import require_admin_user, require_verified_user
-from backend.models import Chat, Client, EscalationTrigger, Message, MessageFeedback, MessageRole, User
-from backend.models import PiiEvent, PiiEventDirection
+from backend.core.limiter import limiter
+from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
+from backend.escalation.service import perform_manual_escalation
+from backend.models import (
+    Chat,
+    Client,
+    EscalationTrigger,
+    Message,
+    MessageFeedback,
+    MessageRole,
+    PiiEvent,
+    PiiEventDirection,
+    User,
+)
 from backend.privacy_schemas import OriginalContentDeleteResponse
 
 logger = logging.getLogger(__name__)
@@ -66,9 +75,9 @@ class DebugInfoResponse(BaseModel):
     """Debug info for RAG retrieval."""
 
     mode: Literal["vector", "keyword", "hybrid", "none"]
-    best_rank_score: Optional[float] = None
-    best_confidence_score: Optional[float] = None
-    confidence_source: Optional[Literal["vector_similarity", "rank_score", "none"]] = None
+    best_rank_score: float | None = None
+    best_confidence_score: float | None = None
+    confidence_source: Literal["vector_similarity", "rank_score", "none"] | None = None
     contradiction_detected: bool = False
     contradiction_count: int = 0
     contradiction_pair_count: int = 0
@@ -83,29 +92,29 @@ class DebugInfoResponse(BaseModel):
     contradiction_adjudication_rejected_count: int = 0
     contradiction_adjudication_inconclusive_count: int = 0
     contradiction_adjudication_error_count: int = 0
-    reliability: Optional[dict] = None
+    reliability: dict | None = None
     chunks: list[DebugChunkResponse]
-    validation: Optional[dict] = None
+    validation: dict | None = None
     # Pipeline decision fields (added alongside retrieval info)
-    strategy: Optional[Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]] = None
-    reject_reason: Optional[Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"]] = None
+    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] | None = None
+    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None = None
     is_reject: bool = False
     is_faq_direct: bool = False
     validation_applied: bool = False
-    validation_outcome: Optional[Literal["valid", "fallback", "skipped"]] = None
+    validation_outcome: Literal["valid", "fallback", "skipped"] | None = None
     clarification_considered: bool = False
     message_type: ChatMessageType = ChatMessageType.answer
-    clarification_reason: Optional[str] = None
-    clarification_type: Optional[str] = None
-    clarification: Optional[ClarificationPayloadResponse] = None
-    safe_partial_source_type: Optional[str] = None
+    clarification_reason: str | None = None
+    clarification_type: str | None = None
+    clarification: ClarificationPayloadResponse | None = None
+    safe_partial_source_type: str | None = None
 
 
 class ChatDebugResponse(BaseModel):
     """Response from chat debug endpoint."""
 
     answer: str
-    raw_answer: Optional[str] = None
+    raw_answer: str | None = None
     tokens_used: int
     debug: DebugInfoResponse
 
@@ -139,8 +148,8 @@ def chat(
     request: Request,
     body: ChatRequest,
     db: Annotated[Session, Depends(get_db)],
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
-    x_browser_locale: Annotated[Optional[str], Header(alias="X-Browser-Locale")] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    x_browser_locale: Annotated[str | None, Header(alias="X-Browser-Locale")] = None,
 ) -> ChatResponse:
     """
     Chat endpoint (PUBLIC — no JWT, uses X-API-Key).
@@ -304,7 +313,7 @@ def chat_escalate(
     session_id: uuid.UUID,
     body: ManualEscalateRequest,
     db: Annotated[Session, Depends(get_db)],
-    x_api_key: Annotated[Optional[str], Header(alias="X-API-Key")] = None,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> ManualEscalateResponse:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -544,7 +553,7 @@ def list_bad_answers(
         messages_by_chat[msg.chat_id].append(msg)
 
     bad_answers: list[BadAnswerItem] = []
-    for chat_id, messages in messages_by_chat.items():
+    for _, messages in messages_by_chat.items():
         for i, msg in enumerate(messages):
             if msg.role == MessageRole.assistant and msg.feedback == MessageFeedback.down:
                 prev_user = None

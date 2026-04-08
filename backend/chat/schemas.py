@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -39,7 +39,7 @@ class ClarificationPayloadResponse(BaseModel):
     type: ClarificationType
     options: list[ClarificationOptionResponse] = Field(default_factory=list)
     requested_fields: list[str] = Field(default_factory=list)
-    original_user_message: Optional[str] = None
+    original_user_message: str | None = None
     turn_index: int = 1
 
 
@@ -51,21 +51,21 @@ class MessageFeedbackValue(str, Enum):
 
 class MessageFeedbackRequest(BaseModel):
     feedback: MessageFeedbackValue
-    ideal_answer: Optional[str] = None
+    ideal_answer: str | None = None
 
 
 class MessageFeedbackResponse(BaseModel):
     id: UUID
     feedback: MessageFeedbackValue
-    ideal_answer: Optional[str]
+    ideal_answer: str | None
 
 
 class BadAnswerItem(BaseModel):
     message_id: UUID
     session_id: UUID
-    question: Optional[str]
+    question: str | None
     answer: str
-    ideal_answer: Optional[str]
+    ideal_answer: str | None
     created_at: datetime
 
 
@@ -81,11 +81,11 @@ class ChatRequest(BaseModel):
         max_length=1000,
         description="User question",
     )
-    session_id: Optional[UUID] = Field(
+    session_id: UUID | None = Field(
         default=None,
         description="Optional session ID; auto-generated if not provided",
     )
-    clarification_option_id: Optional[str] = Field(
+    clarification_option_id: str | None = Field(
         default=None,
         max_length=64,
         description="Optional structured quick-reply option ID for clarification flows",
@@ -98,15 +98,15 @@ class ChatResponse(BaseModel):
     text: str
     answer: str
     message_type: ChatMessageType = ChatMessageType.answer
-    clarification: Optional[ClarificationPayloadResponse] = None
+    clarification: ClarificationPayloadResponse | None = None
     session_id: UUID
     source_documents: list[UUID]
     tokens_used: int
-    validation: Optional[dict] = None
+    validation: dict | None = None
     chat_ended: bool = False
 
     @model_validator(mode="after")
-    def validate_clarification_payload(self) -> "ChatResponse":
+    def validate_clarification_payload(self) -> ChatResponse:
         if self.message_type != ChatMessageType.answer and self.clarification is None:
             raise ValueError("clarification payload is required when message_type is not answer")
         return self
@@ -136,8 +136,8 @@ class ChatSessionSummaryResponse(BaseModel):
 
     session_id: UUID
     message_count: int
-    last_question: Optional[str] = None
-    last_answer_preview: Optional[str] = None
+    last_question: str | None = None
+    last_answer_preview: str | None = None
     last_activity: datetime
 
 
@@ -154,10 +154,10 @@ class ChatMessageLogItem(BaseModel):
     session_id: UUID
     role: Literal["user", "assistant"]
     content: str
-    content_original: Optional[str] = None
+    content_original: str | None = None
     content_original_available: bool = False
     feedback: Literal["none", "up", "down"]
-    ideal_answer: Optional[str]
+    ideal_answer: str | None
     created_at: datetime
 
 

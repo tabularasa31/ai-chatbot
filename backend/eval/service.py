@@ -4,7 +4,10 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.clients.widget_chat_gate import WidgetChatClientGateError, get_client_eligible_for_widget_chat
+from backend.clients.widget_chat_gate import (
+    WidgetChatClientGateError,
+    get_client_eligible_for_widget_chat,
+)
 from backend.eval.schemas import EvalResultCreateRequest
 from backend.models import EvalResult, EvalSession, Tester
 

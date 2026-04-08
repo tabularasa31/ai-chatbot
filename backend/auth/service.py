@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from sqlalchemy.orm import Session
 
-from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
 from backend.core.config import settings
+from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
 from backend.models import User
-
 
 ACCESS_TOKEN_EXPIRE_SECONDS = 24 * 60 * 60  # 24 hours
 
@@ -103,7 +102,7 @@ def create_reset_token(email: str, db: Session) -> str | None:
 
     token = uuid.uuid4().hex
     user.reset_password_token = token
-    user.reset_password_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    user.reset_password_expires_at = datetime.now(UTC) + timedelta(hours=1)
     db.commit()
     return token
 
@@ -114,7 +113,7 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
 
     Returns True if successful, False if token invalid/expired.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     user = (
         db.query(User)
         .filter(

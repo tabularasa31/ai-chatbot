@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import uuid
-from typing import Any, Dict
+from typing import Any
 
 import jwt
 
@@ -33,9 +33,9 @@ def _eval_secret() -> str:
 
 
 def create_eval_access_token(tester_id: uuid.UUID) -> str:
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     expire = now + dt.timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-    to_encode: Dict[str, Any] = {
+    to_encode: dict[str, Any] = {
         "sub": str(tester_id),
         "typ": EVAL_JWT_TYP,
         "exp": expire,

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import math
+import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-import json
-import math
-import logging
-import re
+from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
 from uuid import UUID
 
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer.domain import CoveragePolicy
 from backend.gap_analyzer.enums import (
     GapClusterStatus,
     GapCommandStatus,
@@ -23,7 +24,6 @@ from backend.gap_analyzer.enums import (
     GapJobStatus,
     GapSource,
 )
-from backend.gap_analyzer.domain import CoveragePolicy
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate
 from backend.gap_analyzer.schemas import GapRunMode, GapSummaryResponse
@@ -31,8 +31,8 @@ from backend.models import (
     Client,
     Document,
     Embedding,
-    GapCluster,
     GapAnalyzerJob,
+    GapCluster,
     GapDismissal,
     GapDocTopic,
     GapQuestion,
@@ -464,7 +464,7 @@ class SqlAlchemyGapAnalyzerRepository:
         topic_embeddings: dict[str, list[float]],
         extraction_chunk_hash: str,
     ) -> None:
-        extracted_at = datetime.now(timezone.utc)
+        extracted_at = datetime.now(UTC)
         capabilities = self._capabilities
         self.db.query(GapDocTopic).filter(GapDocTopic.tenant_id == tenant_id).delete()
         if not candidates:
@@ -841,7 +841,7 @@ class SqlAlchemyGapAnalyzerRepository:
                 job_kind=job_kind,
                 status=_enum_value(GapJobStatus.queued, capabilities=self._capabilities),
                 trigger=trigger,
-                available_at=datetime.now(timezone.utc),
+                available_at=datetime.now(UTC),
             )
         )
         self.db.flush()
@@ -849,7 +849,7 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def claim_next_gap_job(self) -> GapJobRecord | None:
         for _ in range(_GAP_JOB_CLAIM_MAX_ATTEMPTS):
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
             candidate = (
                 self.db.query(GapAnalyzerJob.id)
@@ -922,7 +922,7 @@ class SqlAlchemyGapAnalyzerRepository:
         return None
 
     def refresh_gap_job_lease(self, *, job_id: UUID) -> bool:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
         updated_rows = (
             self.db.query(GapAnalyzerJob)
@@ -941,7 +941,7 @@ class SqlAlchemyGapAnalyzerRepository:
         return updated_rows > 0
 
     def complete_gap_job(self, *, job_id: UUID) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         (
             self.db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
@@ -963,7 +963,7 @@ class SqlAlchemyGapAnalyzerRepository:
         job = self.db.get(GapAnalyzerJob, job_id)
         if job is None:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         attempt_count = int(job.attempt_count or 0)
         max_attempts = int(job.max_attempts or 0)
         if attempt_count >= max_attempts:
@@ -1144,7 +1144,7 @@ def _string_or_none(value: object) -> str | None:
 
 def _aware_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
+        return value.replace(tzinfo=UTC)
     return value
 
 
@@ -1254,7 +1254,7 @@ def _cosine_similarity(
     if first_norm == 0.0 or second_norm == 0.0:
         return 0.0
     dot = 0.0
-    for left, right in zip(first, second):
+    for left, right in zip(first, second, strict=False):
         dot += left * right
     return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 
@@ -1280,7 +1280,7 @@ def _remaining_lease_seconds(lease_expires_at: datetime | None) -> int | None:
     if lease_expires_at is None:
         return None
     aware_lease_expires_at = _aware_datetime(lease_expires_at)
-    remaining = int((aware_lease_expires_at - datetime.now(timezone.utc)).total_seconds())
+    remaining = int((aware_lease_expires_at - datetime.now(UTC)).total_seconds())
     return max(1, remaining) if remaining > 0 else None
 
 

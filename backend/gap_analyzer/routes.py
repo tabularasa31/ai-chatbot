@@ -20,11 +20,11 @@ from backend.gap_analyzer.schemas import (
     GapAnalyzerResponse,
     GapDismissRequest,
     GapDraftResponse,
+    GapSummaryOnlyResponse,
     ModeASort,
     ModeAStatusFilter,
     ModeBSort,
     ModeBStatusFilter,
-    GapSummaryOnlyResponse,
     RecalculateCommandResult,
 )
 from backend.models import User

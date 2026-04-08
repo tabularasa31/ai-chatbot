@@ -12,7 +12,6 @@ from backend.core.openai_client import get_openai_client
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle
 
-
 LLM_MODEL = "gpt-4o-mini"
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60

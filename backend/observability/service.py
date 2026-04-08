@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 import logging
-from dataclasses import dataclass
 import random
 import time
+from abc import ABC, abstractmethod
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from backend.core.config import settings
@@ -309,7 +309,7 @@ class _LangfuseTrace(TraceHandle):
 
 
 class _DeferredSpan(SpanHandle):
-    def __init__(self, trace: "_DeferredTrace", *, kind: str, kwargs: dict[str, Any]) -> None:
+    def __init__(self, trace: _DeferredTrace, *, kind: str, kwargs: dict[str, Any]) -> None:
         self._trace = trace
         self._kind = kind
         self._kwargs = kwargs
@@ -337,7 +337,7 @@ class _DeferredSpan(SpanHandle):
 
 
 class _DeferredGeneration(GenerationHandle):
-    def __init__(self, trace: "_DeferredTrace", *, kwargs: dict[str, Any]) -> None:
+    def __init__(self, trace: _DeferredTrace, *, kwargs: dict[str, Any]) -> None:
         self._trace = trace
         self._kwargs = kwargs
 
@@ -368,7 +368,7 @@ class _DeferredGeneration(GenerationHandle):
 class _DeferredTrace(TraceHandle):
     def __init__(
         self,
-        service: "ObservabilityService",
+        service: ObservabilityService,
         *,
         init_kwargs: dict[str, Any],
         sampled: bool,

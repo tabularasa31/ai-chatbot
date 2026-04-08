@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -29,7 +28,7 @@ class AdminClientMetricsItem(BaseModel):
 
     client_id: UUID
     public_id: str
-    owner_email: Optional[str]
+    owner_email: str | None
     users_count: int
     documents_count: int
     embedded_documents_count: int
@@ -49,13 +48,13 @@ class AdminClientMetricsList(BaseModel):
 class AdminPiiEventItem(BaseModel):
     id: UUID
     client_id: UUID
-    chat_id: Optional[UUID] = None
-    message_id: Optional[UUID] = None
-    actor_user_id: Optional[UUID] = None
+    chat_id: UUID | None = None
+    message_id: UUID | None = None
+    actor_user_id: UUID | None = None
     direction: PiiEventDirection
     entity_type: str
     count: int
-    action_path: Optional[str] = None
+    action_path: str | None = None
     created_at: datetime
 
 

@@ -9,7 +9,7 @@ must work with a not-yet-verified principal (rare; login/register stay public).
 import uuid
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db

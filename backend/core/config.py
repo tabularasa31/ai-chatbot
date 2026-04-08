@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -13,11 +13,11 @@ class Settings(BaseSettings):
     environment: str = Field("development", alias="ENVIRONMENT")
     jwt_secret: str = Field(..., alias="JWT_SECRET")
     eval_jwt_secret: str = Field(..., alias="EVAL_JWT_SECRET")
-    openai_api_key: Optional[str] = Field(None, alias="OPENAI_API_KEY")
-    encryption_key: Optional[str] = Field(None, alias="ENCRYPTION_KEY")
-    langfuse_host: Optional[str] = Field(None, alias="LANGFUSE_HOST")
-    langfuse_public_key: Optional[str] = Field(None, alias="LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key: Optional[str] = Field(None, alias="LANGFUSE_SECRET_KEY")
+    openai_api_key: str | None = Field(None, alias="OPENAI_API_KEY")
+    encryption_key: str | None = Field(None, alias="ENCRYPTION_KEY")
+    langfuse_host: str | None = Field(None, alias="LANGFUSE_HOST")
+    langfuse_public_key: str | None = Field(None, alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str | None = Field(None, alias="LANGFUSE_SECRET_KEY")
     observability_capture_full_prompts: bool = Field(
         False,
         alias="OBSERVABILITY_CAPTURE_FULL_PROMPTS",
@@ -56,13 +56,13 @@ class Settings(BaseSettings):
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
 
     # Email verification
-    EMAIL_FROM: Optional[str] = Field(None, alias="EMAIL_FROM")
-    SMTP_HOST: Optional[str] = Field(None, alias="SMTP_HOST")  # kept for backwards compat, not used by Brevo HTTP
-    SMTP_PORT: Optional[int] = Field(None, alias="SMTP_PORT")
-    SMTP_USER: Optional[str] = Field(None, alias="SMTP_USER")
-    SMTP_PASSWORD: Optional[str] = Field(None, alias="SMTP_PASSWORD")
+    EMAIL_FROM: str | None = Field(None, alias="EMAIL_FROM")
+    SMTP_HOST: str | None = Field(None, alias="SMTP_HOST")  # kept for backwards compat, not used by Brevo HTTP
+    SMTP_PORT: int | None = Field(None, alias="SMTP_PORT")
+    SMTP_USER: str | None = Field(None, alias="SMTP_USER")
+    SMTP_PASSWORD: str | None = Field(None, alias="SMTP_PASSWORD")
     FRONTEND_URL: str = Field("http://localhost:3000", alias="FRONTEND_URL")
-    BREVO_API_KEY: Optional[str] = Field(None, alias="BREVO_API_KEY")
+    BREVO_API_KEY: str | None = Field(None, alias="BREVO_API_KEY")
 
     # Transport-level request timeout for OpenAI HTTP calls.
     # Helps avoid tail latency accumulation on logical (application-level) timeouts.

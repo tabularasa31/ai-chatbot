@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import HTTPException
 from openai import OpenAI
 
-from backend.core.crypto import decrypt_value
 from backend.core.config import settings
+from backend.core.crypto import decrypt_value
 
 
-def get_openai_client(encrypted_key: Optional[str], *, timeout: Optional[float] = None) -> OpenAI:
+def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None) -> OpenAI:
     """
     Create OpenAI client with decrypted API key.
 

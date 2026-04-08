@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -66,7 +66,7 @@ def _serialize_ticket(ticket: EscalationTicket, *, include_original: bool) -> Es
 def list_escalations(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    status: Annotated[Optional[str], Query()] = None,
+    status: Annotated[str | None, Query()] = None,
     include_original: bool = Query(False),
 ) -> EscalationListResponse:
     client = get_client_by_user(current_user.id, db)

@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any, Dict
+from typing import Any
 
 import bcrypt
 import jwt
@@ -19,7 +19,7 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 
 def hash_password(password: str) -> str:
-    """Хеширует пароль с помощью bcrypt."""
+    """Хеширует пароль с помощью bcrypt."""  # noqa: RUF002
     if not isinstance(password, str):
         raise TypeError("password must be a string")
 
@@ -30,7 +30,7 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Проверяет пароль по его bcrypt-хешу."""
+    """Проверяет пароль по его bcrypt-хешу."""  # noqa: RUF002
     if not (isinstance(password, str) and isinstance(hashed, str)):
         return False
 
@@ -57,11 +57,11 @@ def decode_access_token(token: str) -> str | None:
     return payload.get("sub")
 
 
-def create_access_token(data: Dict[str, Any]) -> str:
-    """Создаёт JWT-токен с payload и сроком жизни 24 часа."""
+def create_access_token(data: dict[str, Any]) -> str:
+    """Создаёт JWT-токен с payload и сроком жизни 24 часа."""  # noqa: RUF002
     to_encode = data.copy()
     to_encode.setdefault("typ", USER_ACCESS_JWT_TYP)
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     expire = now + dt.timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     to_encode.update({"exp": expire, "iat": now})
 

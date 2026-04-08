@@ -12,21 +12,21 @@ from slowapi.errors import RateLimitExceeded
 
 logger = logging.getLogger(__name__)
 
-from backend.core.limiter import limiter
-from backend.observability import init_observability, shutdown_observability
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
 from backend.clients.routes import clients_router
+from backend.core.limiter import limiter
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
-from backend.routes.public import public_router
-from backend.routes.widget import widget_router
-from backend.eval.routes import eval_router
-from backend.search.routes import search_router
 from backend.escalation.routes import escalation_router
+from backend.eval.routes import eval_router
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.knowledge.routes import knowledge_router
+from backend.observability import init_observability, shutdown_observability
+from backend.routes.public import public_router
+from backend.routes.widget import widget_router
+from backend.search.routes import search_router
 
 
 @asynccontextmanager

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from datetime import UTC
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -97,9 +98,9 @@ def detect_human_request(message: str) -> bool:
         "real person",
         "human agent",
         "human support",
-        "поговорить с",
-        "соедини с",
-        "хочу с человеком",
+        "поговорить с",  # noqa: RUF001
+        "соедини с",  # noqa: RUF001
+        "хочу с человеком",  # noqa: RUF001
         "оператор",
         "живой человек",
     )
@@ -196,7 +197,7 @@ def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Sess
     subject = f"[Chat9] New support ticket #{ticket.ticket_number} — {_safe_ticket_question(ticket)[:60]}"
     try:
         send_email(recipient, subject, body)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("Escalation email failed: %s", e)
 
 
@@ -289,7 +290,7 @@ def create_escalation_ticket(
 
     try:
         _notify_client_new_ticket(client, ticket, db)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         logger.warning("notify client owner failed (ticket still created): %s", e)
 
     return ticket
@@ -346,11 +347,11 @@ def resolve_ticket(
     )
     if not ticket:
         raise ValueError("ticket not found")
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     ticket.status = EscalationStatus.resolved
     ticket.resolution_text = resolution_text
-    ticket.resolved_at = datetime.now(timezone.utc)
+    ticket.resolved_at = datetime.now(UTC)
     db.add(ticket)
     db.commit()
     db.refresh(ticket)

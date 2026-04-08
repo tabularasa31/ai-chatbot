@@ -7,8 +7,13 @@ extend-exclude = ["migrations"]
 [lint]
 # E/F/W + naming (N): keeps backend style checks broad without requiring import reordering.
 # Run `ruff check backend --select I --fix` when you want to normalize imports.
-select = ["E", "F", "W", "N"]
-ignore = ["E501"]
+select = ["E", "F", "W", "N", "I", "B", "UP", "RUF"]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "B008",   # function-call-in-default-argument — standard FastAPI Depends() pattern
+    "B904",   # raise-without-from-inside-except — converting to HTTPException is intentional
+    "UP042",  # replace-str-enum — behavioural change, requires dedicated migration
+]
 
 [lint.per-file-ignores]
 # Imports after module-level setup (logging / constants) are intentional.

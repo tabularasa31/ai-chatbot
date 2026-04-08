@@ -15,8 +15,8 @@ from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.models import User
-from backend.search.schemas import SearchRequest, SearchResponse, SearchResultItem
 from backend.observability import begin_trace
+from backend.search.schemas import SearchRequest, SearchResponse, SearchResultItem
 from backend.search.service import (
     build_reliability_projection,
     build_variant_trace_metadata,

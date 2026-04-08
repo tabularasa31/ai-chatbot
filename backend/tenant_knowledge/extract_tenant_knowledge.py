@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -14,7 +14,6 @@ from backend.tenant_knowledge.faq_service import upsert_faq_candidates
 from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
-
 
 EXTRACTION_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -333,7 +332,7 @@ def run_extract_client_knowledge_for_document(
             else 0.0
         )
 
-        updated_at = datetime.now(timezone.utc)
+        updated_at = datetime.now(UTC)
         merge_into_profile(
             db,
             client_id=client_id,

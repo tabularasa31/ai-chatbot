@@ -8,16 +8,16 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from time import perf_counter
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session, joinedload
 
 PREVIEW_MAX_LEN = 120
 
-from backend.chat.pii import redact
 from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
+from backend.chat.pii import redact
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
@@ -25,6 +25,9 @@ from backend.core.openai_client import get_openai_client
 from backend.disclosure_config import resolve_level
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
 from backend.escalation.service import (
+    _clear_escalation_clarify_flag,
+    _escalation_clarify_already_asked,
+    _set_escalation_clarify_flag,
     apply_collected_contact_email,
     build_chat_messages_for_openai,
     chunks_preview_from_results,
@@ -34,10 +37,19 @@ from backend.escalation.service import (
     get_latest_escalation_ticket_for_chat,
     parse_contact_email,
     should_escalate,
-    _clear_escalation_clarify_flag,
-    _set_escalation_clarify_flag,
-    _escalation_clarify_already_asked,
 )
+from backend.faq.faq_matcher import FAQMatchResult, FAQRow, match_faq
+from backend.gap_analyzer.enums import GapJobKind
+from backend.gap_analyzer.events import GapSignal
+from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
+from backend.guards.injection_detector import detect_injection
+from backend.guards.reject_response import (
+    RejectReason,
+    build_reject_response_result,
+)
+from backend.guards.relevance_checker import check_relevance_precheck
 from backend.models import (
     Chat,
     Client,
@@ -54,7 +66,6 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.privacy_config import public_redaction_config_dict
-from backend.user_sessions.service import record_user_session_turn, touch_user_session
 from backend.search.service import (
     RetrievalReliability,
     build_reliability_projection,
@@ -65,18 +76,7 @@ from backend.search.service import (
     expand_query,
     search_similar_chunks_detailed,
 )
-from backend.faq.faq_matcher import FAQRow, FAQMatchResult, match_faq
-from backend.gap_analyzer.enums import GapJobKind
-from backend.gap_analyzer.events import GapSignal
-from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
-from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import detect_injection
-from backend.guards.relevance_checker import check_relevance_precheck
-from backend.guards.reject_response import (
-    RejectReason,
-    build_reject_response_result,
-)
+from backend.user_sessions.service import record_user_session_turn, touch_user_session
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ def retrieve_context(
     precomputed_query_variants: list[str] | None = None,
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
-) -> "RetrievalContext":
+) -> RetrievalContext:
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
 
@@ -308,15 +308,15 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Optional[Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"]]
+    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None
     is_reject: bool
     is_faq_direct: bool
     validation_applied: bool
-    validation_outcome: Optional[Literal["valid", "fallback", "skipped"]]
+    validation_outcome: Literal["valid", "fallback", "skipped"] | None
     # retrieval
-    retrieval: Optional[RetrievalContext]
+    retrieval: RetrievalContext | None
     # validation
-    validation: Optional[dict]
+    validation: dict | None
     # escalation (pure computation, no side effects)
     escalation_recommended: bool
     escalation_trigger: Any  # EscalationTrigger | None
@@ -680,7 +680,7 @@ def _build_domain_clarification(
         options=list(_DOMAIN_OPTIONS),
         requested_fields=[],
         turn_count=turn_index,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     return ClarificationDecision(
         message_type=message_type,
@@ -725,7 +725,7 @@ def _build_api_slot_clarification(
         options=[],
         requested_fields=["endpoint", "error_message"],
         turn_count=turn_index,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     return ClarificationDecision(
         message_type="clarification",
@@ -769,7 +769,7 @@ def _build_context_clarification(
         options=[],
         requested_fields=["feature_or_setup_step"],
         turn_count=turn_index,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
     )
     return ClarificationDecision(
         message_type="clarification",
@@ -923,7 +923,7 @@ def run_chat_pipeline(
     user_context_line: str | None = None,
     fallback_locale: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
-    trace: "TraceHandle | None" = None,
+    trace: TraceHandle | None = None,
     precomputed_injection: Any | None = None,
 ) -> ChatPipelineResult:
     """
@@ -1063,7 +1063,7 @@ def run_chat_pipeline(
         )
 
     # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
-    relevant, relevance_reason, profile = check_relevance_precheck(
+    relevant, _, profile = check_relevance_precheck(
         client_id=client_id,
         user_question=question,
         db=db,
@@ -2259,7 +2259,7 @@ def process_chat_message(
             if decision == "no":
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
-                chat.ended_at = datetime.now(timezone.utc)
+                chat.ended_at = datetime.now(UTC)
                 db.add(chat)
                 _persist_turn(
                     db,
@@ -2382,7 +2382,7 @@ def process_chat_message(
                 tokens_used=out.tokens_used,
                 chat_ended=False,
             )
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
 
     # --- Normal RAG pipeline ---
@@ -2643,7 +2643,7 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
             db.add(chat)
             db.commit()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
     user_message, assistant_message = _persist_turn(
@@ -2776,7 +2776,7 @@ def run_debug(
                 "preview": (text[:200] + "..." if len(text) > 200 else text),
             }
             for doc_id, score, text in zip(
-                retrieval.document_ids, retrieval.scores, retrieval.chunk_texts
+                retrieval.document_ids, retrieval.scores, retrieval.chunk_texts, strict=False
             )
         ]
         reliability_projection = build_reliability_projection(retrieval.reliability)
@@ -2870,8 +2870,8 @@ class SessionSummary:
 
     session_id: uuid.UUID
     message_count: int
-    last_question: Optional[str]
-    last_answer_preview: Optional[str]
+    last_question: str | None
+    last_answer_preview: str | None
     last_activity: datetime
 
 
@@ -2943,7 +2943,7 @@ def get_session_logs(
     db: Session,
     *,
     include_original: bool = False,
-) -> Optional[list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime]]]:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime]] | None:
     """
     Get all messages for a session (ownership enforced).
 

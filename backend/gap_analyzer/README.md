@@ -175,6 +175,8 @@ This module is intentionally introduced in two thin layers:
 - Archive presentation remains source-specific:
   - linked archived Mode B items do not suppress active Mode A topics
   - active-list suppression still applies only when linked Mode B is active
+  - the dashboard archive view now renders Mode B `closed` and `dismissed` buckets separately so
+    operators can review resolved vs manually hidden clusters without mixing them together
 
 ## Residual Trade-Offs
 

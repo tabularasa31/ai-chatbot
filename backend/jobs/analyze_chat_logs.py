@@ -75,7 +75,7 @@ class ClusterMember:
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     n1 = math.sqrt(sum(x * x for x in a))
     n2 = math.sqrt(sum(y * y for y in b))
     if n1 == 0 or n2 == 0:
@@ -212,7 +212,7 @@ def _save_embeddings(
     batch: list[MessageRow],
     vectors: list[list[float]],
 ) -> None:
-    for msg, vec in zip(batch, vectors, strict=False):
+    for msg, vec in zip(batch, vectors, strict=True):
         existing = db.query(MessageEmbedding).filter_by(message_id=msg.id).first()
         if existing:
             existing.last_used_at = datetime.now(UTC)
@@ -274,7 +274,7 @@ async def _generate_embeddings(
             input=[m.content for m in batch],
         )
         vectors = [item.embedding for item in resp.data]
-        for msg, vec in zip(batch, vectors, strict=False):
+        for msg, vec in zip(batch, vectors, strict=True):
             msg.embedding = vec
         _save_embeddings(db, client_id, batch, vectors)
         if i + batch_size < len(missing):

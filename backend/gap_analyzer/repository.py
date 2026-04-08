@@ -1369,7 +1369,7 @@ def _cosine_similarity(
     if first_norm == 0.0 or second_norm == 0.0:
         return 0.0
     dot = 0.0
-    for left, right in zip(first, second, strict=False):
+    for left, right in zip(first, second, strict=True):
         dot += left * right
     return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 

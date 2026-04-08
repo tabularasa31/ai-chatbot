@@ -9,6 +9,8 @@ import json
 import math
 import logging
 import re
+import threading
+import time
 from typing import Literal, Protocol
 from uuid import UUID
 
@@ -49,6 +51,24 @@ _BM25_K1 = 1.5
 _BM25_B = 0.75
 _BM25_SMOOTHING = 0.5
 _BM25_MIN_MATCHED_QUERY_TERMS = 2
+_BM25_CORPUS_CACHE_TTL_SECONDS = 300
+_BM25_CORPUS_CACHE_MAX_ENTRIES = 128
+
+
+@dataclass(frozen=True)
+class _CachedBm25Document:
+    exact_match_candidates: tuple[str, ...]
+    tokens: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class _CachedBm25Corpus:
+    documents: tuple[_CachedBm25Document, ...]
+    cached_at_monotonic: float
+
+
+_BM25_CORPUS_CACHE: dict[tuple[UUID, tuple[str, ...]], _CachedBm25Corpus] = {}
+_BM25_CORPUS_CACHE_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -136,6 +156,38 @@ class GapJobRecord:
 class _RepositoryCapabilities:
     enum_values_as_strings: bool
     supports_array_values: bool
+
+
+def _normalize_bm25_excluded_file_types(
+    excluded_file_types: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(sorted(value.casefold() for value in excluded_file_types))
+
+
+def _bm25_cache_key(
+    tenant_id: UUID,
+    excluded_file_types: tuple[str, ...],
+) -> tuple[UUID, tuple[str, ...]]:
+    return (tenant_id, _normalize_bm25_excluded_file_types(excluded_file_types))
+
+
+def _evict_expired_bm25_cache_entries(now_monotonic: float) -> None:
+    expired_keys = [
+        key
+        for key, corpus in _BM25_CORPUS_CACHE.items()
+        if now_monotonic - corpus.cached_at_monotonic >= _BM25_CORPUS_CACHE_TTL_SECONDS
+    ]
+    for key in expired_keys:
+        _BM25_CORPUS_CACHE.pop(key, None)
+
+
+def invalidate_bm25_cache_for_tenant(tenant_id: UUID | None) -> None:
+    if tenant_id is None:
+        return
+    with _BM25_CORPUS_CACHE_LOCK:
+        matching_keys = [key for key in _BM25_CORPUS_CACHE if key[0] == tenant_id]
+        for key in matching_keys:
+            _BM25_CORPUS_CACHE.pop(key, None)
 
 
 class GapAnalyzerRepository(Protocol):
@@ -296,6 +348,78 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def _load_bm25_corpus(
+        self,
+        *,
+        tenant_id: UUID,
+        excluded_file_types: tuple[str, ...],
+    ) -> _CachedBm25Corpus:
+        cache_key = _bm25_cache_key(tenant_id, excluded_file_types)
+        now_monotonic = time.monotonic()
+        with _BM25_CORPUS_CACHE_LOCK:
+            cached = _BM25_CORPUS_CACHE.get(cache_key)
+            if (
+                cached is not None
+                and now_monotonic - cached.cached_at_monotonic
+                < _BM25_CORPUS_CACHE_TTL_SECONDS
+            ):
+                return cached
+            _evict_expired_bm25_cache_entries(now_monotonic)
+
+        excluded = set(cache_key[1])
+        documents: list[_CachedBm25Document] = []
+        rows = (
+            self.db.query(
+                Embedding.chunk_text,
+                Embedding.metadata_json,
+                Document.filename,
+                Document.file_type,
+            )
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.client_id == tenant_id)
+            .filter(Document.status == "ready")
+            .filter(Embedding.chunk_text.isnot(None))
+            .order_by(Document.id.asc(), Embedding.id.asc())
+            .yield_per(500)
+        )
+        for chunk_text, metadata_json, filename, file_type in rows:
+            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
+            if file_type_value in excluded:
+                continue
+            metadata = metadata_json if isinstance(metadata_json, dict) else {}
+            exact_match_candidates = tuple(
+                candidate.casefold()
+                for candidate in (
+                    _string_or_none(metadata.get("section_title")),
+                    _string_or_none(metadata.get("page_title")),
+                    _string_or_none(filename),
+                )
+                if candidate
+            )
+            tokens = tuple(_tokenize(chunk_text or ""))
+            if not exact_match_candidates and not tokens:
+                continue
+            documents.append(
+                _CachedBm25Document(
+                    exact_match_candidates=exact_match_candidates,
+                    tokens=tokens,
+                )
+            )
+
+        cached = _CachedBm25Corpus(
+            documents=tuple(documents),
+            cached_at_monotonic=now_monotonic,
+        )
+        with _BM25_CORPUS_CACHE_LOCK:
+            _BM25_CORPUS_CACHE[cache_key] = cached
+            if len(_BM25_CORPUS_CACHE) > _BM25_CORPUS_CACHE_MAX_ENTRIES:
+                oldest_key = min(
+                    _BM25_CORPUS_CACHE,
+                    key=lambda key: _BM25_CORPUS_CACHE[key].cached_at_monotonic,
+                )
+                _BM25_CORPUS_CACHE.pop(oldest_key, None)
+        return cached
 
     @property
     def _capabilities(self) -> _RepositoryCapabilities:
@@ -622,45 +746,24 @@ class SqlAlchemyGapAnalyzerRepository:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         query_tokens = _tokenize(query_text)
         query_token_counts = Counter(query_tokens)
+        if not query_token_counts:
+            return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         query_terms = set(query_token_counts)
-        excluded = {value.casefold() for value in excluded_file_types}
+        corpus = self._load_bm25_corpus(
+            tenant_id=tenant_id,
+            excluded_file_types=excluded_file_types,
+        )
 
         total_docs = 0
         total_doc_length = 0
         doc_frequencies = {token: 0 for token in query_terms}
         matching_docs: list[tuple[int, dict[str, int]]] = []
-        rows = (
-            self.db.query(
-                Embedding.chunk_text,
-                Embedding.metadata_json,
-                Document.filename,
-                Document.file_type,
-            )
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.client_id == tenant_id)
-            .filter(Document.status == "ready")
-            .filter(Embedding.chunk_text.isnot(None))
-            .order_by(Document.id.asc(), Embedding.id.asc())
-            .yield_per(500)
-        )
-        for chunk_text, metadata_json, filename, file_type in rows:
-            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
-            if file_type_value in excluded:
-                continue
-
-            metadata = metadata_json if isinstance(metadata_json, dict) else {}
-            for candidate in (
-                _string_or_none(metadata.get("section_title")),
-                _string_or_none(metadata.get("page_title")),
-                _string_or_none(filename),
-            ):
-                if candidate and candidate.casefold() == normalized_query:
+        for document in corpus.documents:
+            for candidate in document.exact_match_candidates:
+                if candidate == normalized_query:
                     return TenantBm25Match(hit=True, score=1.0, match_kind="exact_title")
 
-            if not query_terms:
-                continue
-
-            tokens = _tokenize(chunk_text or "")
+            tokens = document.tokens
             if not tokens:
                 continue
 
@@ -685,13 +788,25 @@ class SqlAlchemyGapAnalyzerRepository:
 
         average_doc_length = total_doc_length / total_docs if total_docs > 0 else 0.0
         idfs = {
-            token: math.log1p((total_docs - doc_frequency + _BM25_SMOOTHING) / (doc_frequency + _BM25_SMOOTHING))
+            # Use a smoothed positive IDF so streamed BM25 keeps ranking
+            # single-term tenant queries instead of collapsing to <= 0 when a
+            # term appears in every matching chunk of a very small corpus.
+            token: math.log1p(
+                (total_docs - doc_frequency + _BM25_SMOOTHING)
+                / (doc_frequency + _BM25_SMOOTHING)
+            )
             for token, doc_frequency in doc_frequencies.items()
             if doc_frequency > 0
         }
-        max_matched_query_terms = max(len(term_frequencies) for _, term_frequencies in matching_docs)
-        required_matched_query_terms = min(len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS)
-        if max_matched_query_terms < required_matched_query_terms:
+        # Require at least one document to match enough distinct query terms so
+        # broad lexical overlap cannot win on a single frequent token alone.
+        best_doc_match_count = max(
+            len(term_frequencies) for _, term_frequencies in matching_docs
+        )
+        min_required_match_count = min(
+            len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS
+        )
+        if best_doc_match_count < min_required_match_count:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         best_score = max(
             _bm25_streamed_score(

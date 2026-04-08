@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
 from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
 
@@ -31,6 +32,17 @@ _PLACEHOLDER_RE = re.compile(
 )
 _MARKDOWN_HEADING_RE = re.compile(r"^\s*#{1,6}\s+", flags=re.MULTILINE)
 _PUNCTUATION_ENDINGS = (":", ",", ";", "(", "[", "{", "-", "—", "–", "/", "\\")
+_POOR_STRUCTURE_HIGH_SECTION_WORDS = 700
+_POOR_STRUCTURE_MEDIUM_SECTION_WORDS = 450
+_POOR_STRUCTURE_LONG_DOC_WORDS = 900
+_POOR_STRUCTURE_MIN_HEADINGS_FOR_LONG_DOC = 1
+_LOW_INFORMATION_DENSITY_MIN_TOKENS = 120
+_LOW_INFORMATION_DENSITY_MIN_UNIQUE_RATIO = 0.22
+_LOW_INFORMATION_DENSITY_MIN_NON_EMPTY_LINES = 8
+_LOW_INFORMATION_DENSITY_MAX_DUPLICATE_RATIO = 0.35
+# These thresholds are intentionally conservative heuristics tuned for retrieval
+# quality smoke checks: flag only clearly long, repetitive, or weakly structured
+# content while avoiding noisy warnings on small documents.
 
 
 def _iso_utc_z() -> str:
@@ -163,19 +175,22 @@ def _detect_poor_structure(text: str, file_type: DocumentType) -> dict[str, str]
     heading_count = len(_MARKDOWN_HEADING_RE.findall(text))
     total_words = _word_count(text)
 
-    if max_section_words >= 700:
+    if max_section_words >= _POOR_STRUCTURE_HIGH_SECTION_WORDS:
         return _make_warning(
             "poor_structure",
             "high",
             "At least one markdown section is very long without enough subheadings, which can hurt chunking and retrieval quality.",
         )
-    if max_section_words >= 450:
+    if max_section_words >= _POOR_STRUCTURE_MEDIUM_SECTION_WORDS:
         return _make_warning(
             "poor_structure",
             "medium",
             "At least one markdown section is long without enough subheadings, which can make retrieval less precise.",
         )
-    if total_words >= 900 and heading_count <= 1:
+    if (
+        total_words >= _POOR_STRUCTURE_LONG_DOC_WORDS
+        and heading_count <= _POOR_STRUCTURE_MIN_HEADINGS_FOR_LONG_DOC
+    ):
         return _make_warning(
             "poor_structure",
             "medium",
@@ -240,11 +255,11 @@ def _detect_incomplete_section(text: str) -> dict[str, str] | None:
 
 def _detect_low_information_density(text: str) -> dict[str, str] | None:
     tokens = [token.lower() for token in _WORD_RE.findall(text) if len(token) >= 4]
-    if len(tokens) < 120:
+    if len(tokens) < _LOW_INFORMATION_DENSITY_MIN_TOKENS:
         return None
 
     unique_ratio = len(set(tokens)) / len(tokens)
-    if unique_ratio < 0.22:
+    if unique_ratio < _LOW_INFORMATION_DENSITY_MIN_UNIQUE_RATIO:
         return _make_warning(
             "low_information_density",
             "medium",
@@ -252,9 +267,9 @@ def _detect_low_information_density(text: str) -> dict[str, str] | None:
         )
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) >= 8:
+    if len(lines) >= _LOW_INFORMATION_DENSITY_MIN_NON_EMPTY_LINES:
         duplicate_ratio = 1 - (len(set(lines)) / len(lines))
-        if duplicate_ratio >= 0.35:
+        if duplicate_ratio >= _LOW_INFORMATION_DENSITY_MAX_DUPLICATE_RATIO:
             return _make_warning(
                 "low_information_density",
                 "low",
@@ -300,16 +315,13 @@ def run_document_health_check(
     parsed_text = doc.parsed_text or ""
     if not parsed_text.strip():
         checked = _iso_utc_z()
+        warnings = _normalize_warnings(
+            _build_rule_based_warnings(parsed_text, doc.file_type)
+        )
         result: dict[str, Any] = {
-            "score": 80,
+            "score": _compute_health_score(warnings),
             "checked_at": checked,
-            "warnings": [
-                _make_warning(
-                    "empty_or_too_short",
-                    "high",
-                    "The document has no readable text after parsing.",
-                )
-            ],
+            "warnings": warnings,
         }
         doc.health_status = result
         db.commit()
@@ -448,3 +460,4 @@ def delete_document(
     doc = get_document(document_id, client_id, db)
     db.delete(doc)
     db.commit()
+    invalidate_bm25_cache_for_tenant(client_id)

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 DEDUP_SIMILARITY_THRESHOLD = 0.92
+FAQ_MIN_CONFIDENCE_THRESHOLD = 0.5
 
 
 def _vector_from_unknown(raw: object) -> list[float] | None:
@@ -87,15 +88,18 @@ def _dedupe_existing_faq_by_similarity(
         return best >= DEDUP_SIMILARITY_THRESHOLD
 
 
-def upsert_faq_candidates(
+def insert_new_faq_candidates(
     *,
     db: Session,
     client_id: uuid.UUID,
     faq_candidates: Iterable[FaqCandidate],
     api_key: str,
+    document_id: uuid.UUID | None = None,
+    batch_id: uuid.UUID | None = None,
 ) -> None:
     """Insert medium/high confidence FAQ candidates; skip low and duplicates."""
     openai_client = get_openai_client(api_key)
+    correlation_batch_id = batch_id or uuid.uuid4()
     total_candidates = 0
     skipped_low_confidence = 0
     skipped_empty = 0
@@ -107,11 +111,16 @@ def upsert_faq_candidates(
     for candidate in faq_candidates:
         total_candidates += 1
         try:
-            if candidate.confidence is None or candidate.confidence < 0.5:
+            if (
+                candidate.confidence is None
+                or candidate.confidence < FAQ_MIN_CONFIDENCE_THRESHOLD
+            ):
                 skipped_low_confidence += 1
                 logger.info(
                     "FAQ candidate skipped: low confidence "
-                    "(client_id=%s question=%r confidence=%s source=%s)",
+                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%s source=%s)",
+                    correlation_batch_id,
+                    document_id,
                     client_id,
                     candidate.question,
                     candidate.confidence,
@@ -125,7 +134,9 @@ def upsert_faq_candidates(
                 skipped_empty += 1
                 logger.info(
                     "FAQ candidate skipped: empty normalized question/answer "
-                    "(client_id=%s question=%r source=%s)",
+                    "(batch_id=%s document_id=%s client_id=%s question=%r source=%s)",
+                    correlation_batch_id,
+                    document_id,
                     client_id,
                     candidate.question,
                     candidate.source,
@@ -138,16 +149,20 @@ def upsert_faq_candidates(
             )
             question_embedding = embedding_resp.data[0].embedding  # 1536 floats
             approved = candidate.confidence >= 0.85
-            should_insert = False
+            inserted_candidate = False
+            skipped_as_duplicate = False
 
             # Isolate DB-side failures per candidate so one bad insert/query
             # does not roll back earlier candidates in the same batch.
             with db.begin_nested():
-                if not _dedupe_existing_faq_by_similarity(
+                if _dedupe_existing_faq_by_similarity(
                     db=db,
                     client_id=client_id,
                     question_embedding=question_embedding,
                 ):
+                    skipped_duplicate += 1
+                    skipped_as_duplicate = True
+                else:
                     db.add(
                         TenantFaqModel(
                             tenant_id=client_id,
@@ -160,26 +175,29 @@ def upsert_faq_candidates(
                         )
                     )
                     db.flush()
-                    should_insert = True
+                    inserted += 1
+                    if approved:
+                        auto_approved += 1
+                    inserted_candidate = True
 
-            if should_insert:
-                inserted += 1
-                if approved:
-                    auto_approved += 1
+            if inserted_candidate:
                 logger.info(
                     "FAQ candidate queued for insert "
-                    "(client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
+                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
+                    correlation_batch_id,
+                    document_id,
                     client_id,
                     question,
                     float(candidate.confidence),
                     candidate.source,
                     approved,
                 )
-            else:
-                skipped_duplicate += 1
+            elif skipped_as_duplicate:
                 logger.info(
                     "FAQ candidate skipped: semantic duplicate "
-                    "(client_id=%s question=%r confidence=%.3f source=%s)",
+                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                    correlation_batch_id,
+                    document_id,
                     client_id,
                     question,
                     float(candidate.confidence),
@@ -188,14 +206,22 @@ def upsert_faq_candidates(
         except Exception:
             # Best-effort: don't let one bad candidate break the whole batch.
             candidate_errors += 1
-            logger.exception("Failed to upsert FAQ candidate (client_id=%s)", client_id)
+            logger.exception(
+                "Failed to insert FAQ candidate "
+                "(batch_id=%s document_id=%s client_id=%s)",
+                correlation_batch_id,
+                document_id,
+                client_id,
+            )
             continue
 
     db.commit()
     logger.info(
-        "FAQ upsert summary "
-        "(client_id=%s total=%s inserted=%s auto_approved=%s skipped_low_confidence=%s "
+        "FAQ insert summary "
+        "(batch_id=%s document_id=%s client_id=%s total=%s inserted=%s auto_approved=%s skipped_low_confidence=%s "
         "skipped_empty=%s skipped_duplicate=%s candidate_errors=%s)",
+        correlation_batch_id,
+        document_id,
         client_id,
         total_candidates,
         inserted,

@@ -137,24 +137,32 @@ def upsert_faq_candidates(
                 input=question,
             )
             question_embedding = embedding_resp.data[0].embedding  # 1536 floats
+            approved = candidate.confidence >= 0.85
+            should_insert = False
 
-            if not _dedupe_existing_faq_by_similarity(
-                db=db,
-                client_id=client_id,
-                question_embedding=question_embedding,
-            ):
-                approved = candidate.confidence >= 0.85
-                db.add(
-                    TenantFaqModel(
-                        tenant_id=client_id,
-                        question=question,
-                        answer=answer,
-                        question_embedding=question_embedding,
-                        confidence=float(candidate.confidence),
-                        source=candidate.source,
-                        approved=approved,
+            # Isolate DB-side failures per candidate so one bad insert/query
+            # does not roll back earlier candidates in the same batch.
+            with db.begin_nested():
+                if not _dedupe_existing_faq_by_similarity(
+                    db=db,
+                    client_id=client_id,
+                    question_embedding=question_embedding,
+                ):
+                    db.add(
+                        TenantFaqModel(
+                            tenant_id=client_id,
+                            question=question,
+                            answer=answer,
+                            question_embedding=question_embedding,
+                            confidence=float(candidate.confidence),
+                            source=candidate.source,
+                            approved=approved,
+                        )
                     )
-                )
+                    db.flush()
+                    should_insert = True
+
+            if should_insert:
                 inserted += 1
                 if approved:
                     auto_approved += 1
@@ -181,7 +189,6 @@ def upsert_faq_candidates(
             # Best-effort: don't let one bad candidate break the whole batch.
             candidate_errors += 1
             logger.exception("Failed to upsert FAQ candidate (client_id=%s)", client_id)
-            db.rollback()
             continue
 
     db.commit()

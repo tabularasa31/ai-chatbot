@@ -264,9 +264,9 @@ export default function KnowledgePage() {
   const [profileDraft, setProfileDraft] = useState<KnowledgeProfile | null>(null);
   const [profileSaved, setProfileSaved] = useState(false);
   const [profileError, setProfileError] = useState("");
-  const [newModule, setNewModule] = useState("");
+  const [newTopic, setNewTopic] = useState("");
   const [newSupportUrl, setNewSupportUrl] = useState("");
-  const [profileEditingField, setProfileEditingField] = useState<"product_name" | "modules" | "support_email" | "support_urls" | null>(null);
+  const [profileEditingField, setProfileEditingField] = useState<"product_name" | "topics" | "support_email" | "support_urls" | null>(null);
   const [faqItems, setFaqItems] = useState<KnowledgeFaqItem[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [faqFilter, setFaqFilter] = useState<"all" | "pending" | "approved" | "docs" | "logs">("all");
@@ -295,12 +295,12 @@ export default function KnowledgePage() {
     if (!profile || !profileDraft) return false;
     return JSON.stringify({
       product_name: profile.product_name,
-      modules: profile.modules,
+      topics: profile.topics,
       support_email: profile.support_email,
       support_urls: profile.support_urls,
     }) !== JSON.stringify({
       product_name: profileDraft.product_name,
-      modules: profileDraft.modules,
+      topics: profileDraft.topics,
       support_email: profileDraft.support_email,
       support_urls: profileDraft.support_urls,
     });
@@ -655,15 +655,15 @@ export default function KnowledgePage() {
                 )}
               </label>
               <div>
-                <span className="mb-1 block text-xs text-slate-500">Modules</span>
+                <span className="mb-1 block text-xs text-slate-500">Topics</span>
                 <div className="flex flex-wrap gap-2">
-                  {profileDraft.modules.map((module) => (
-                    <span key={module} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
-                      {module}
-                      {profileEditingField === "modules" && (
+                  {profileDraft.topics.map((topic) => (
+                    <span key={topic} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-700">
+                      {topic}
+                      {profileEditingField === "topics" && (
                         <button
                           type="button"
-                          onClick={() => setProfileDraft({ ...profileDraft, modules: profileDraft.modules.filter((m) => m !== module) })}
+                          onClick={() => setProfileDraft({ ...profileDraft, topics: profileDraft.topics.filter((item) => item !== topic) })}
                           className="text-slate-400 hover:text-slate-600"
                         >
                           ×
@@ -672,16 +672,16 @@ export default function KnowledgePage() {
                     </span>
                   ))}
                 </div>
-                {profileEditingField === "modules" ? (
+                {profileEditingField === "topics" ? (
                   <div className="mt-2 flex gap-2">
-                    <input value={newModule} onChange={(e) => setNewModule(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="Add module" />
+                    <input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="Add topic" />
                     <button
                       type="button"
                       onClick={() => {
-                        const value = newModule.trim();
-                        if (!value || profileDraft.modules.includes(value)) return;
-                        setProfileDraft({ ...profileDraft, modules: [...profileDraft.modules, value] });
-                        setNewModule("");
+                        const value = newTopic.trim();
+                        if (!value || profileDraft.topics.includes(value)) return;
+                        setProfileDraft({ ...profileDraft, topics: [...profileDraft.topics, value] });
+                        setNewTopic("");
                       }}
                       className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                     >
@@ -691,10 +691,10 @@ export default function KnowledgePage() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setProfileEditingField("modules")}
+                    onClick={() => setProfileEditingField("topics")}
                     className="mt-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
                   >
-                    Edit modules
+                    Edit topics
                   </button>
                 )}
               </div>
@@ -769,7 +769,7 @@ export default function KnowledgePage() {
                       if (!profileDraft) return;
                       const updated = await api.knowledge.patchProfile({
                         product_name: profileDraft.product_name,
-                        modules: profileDraft.modules,
+                        topics: profileDraft.topics,
                         support_email: profileDraft.support_email,
                         support_urls: profileDraft.support_urls,
                       }, botId);

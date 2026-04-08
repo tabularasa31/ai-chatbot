@@ -237,7 +237,7 @@ export type KnowledgeExtractionStatus = "pending" | "done" | "failed";
 
 export type KnowledgeProfile = {
   product_name: string | null;
-  modules: string[];
+  topics: string[];
   glossary: Array<{
     term?: string;
     definition?: string | null;
@@ -699,10 +699,17 @@ export const api = {
       const res = await authFetch(`${base}/profile`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
-      return data as KnowledgeProfile;
+      return {
+        ...data,
+        topics: Array.isArray(data.topics)
+          ? data.topics
+          : Array.isArray(data.modules)
+            ? data.modules
+            : [],
+      } as KnowledgeProfile;
     },
     async patchProfile(
-      payload: Partial<Pick<KnowledgeProfile, "product_name" | "modules" | "support_email" | "support_urls">>,
+      payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>,
       botId?: string
     ): Promise<KnowledgeProfile> {
       const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;

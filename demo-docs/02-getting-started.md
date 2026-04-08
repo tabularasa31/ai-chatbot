@@ -48,7 +48,7 @@ What to expect:
 - if one critical detail is missing, the bot may ask one short, specific follow-up question
 - when there are clear options, the widget can show them as quick-reply buttons
 
-## Step 6: Review improvement opportunities
+## Step 6: Review gaps and recurring questions
 
 Once you have a few real or test conversations, open **Dashboard -> Gap Analyzer**.
 

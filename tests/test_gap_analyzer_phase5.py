@@ -13,7 +13,6 @@ from backend.gap_analyzer.enums import GapSource
 from backend.gap_analyzer.jobs import _GapJobRunnerState, start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import (
-    _BM25_CACHE_MAX_ENTRIES,
     _GAP_JOB_LAST_ERROR_MAX_CHARS,
     SqlAlchemyGapAnalyzerRepository,
 )
@@ -837,44 +836,75 @@ def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown
     assert calls == ["run", "run"]
 
 
-def test_gap_analyzer_repository_bm25_cache_is_lru_bounded(
+def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
     client: TestClient,
     db_session: Session,
 ) -> None:
     _, client_id = _create_client_and_token(
         client,
         db_session,
-        email="gap-phase5-bm25-cache@example.com",
-        name="Gap Phase 5 BM25 Cache Client",
+        email="gap-phase5-bm25-stream@example.com",
+        name="Gap Phase 5 BM25 Stream Client",
     )
-    document = Document(
+    title_document = Document(
+        client_id=client_id,
+        filename="Invoice Exports",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    body_document = Document(
         client_id=client_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
     )
-    db_session.add(document)
+    filler_document = Document(
+        client_id=client_id,
+        filename="faq.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    db_session.add_all([title_document, body_document, filler_document])
     db_session.flush()
-    db_session.add(
-        Embedding(
-            document_id=document.id,
-            chunk_text="invoice exports and billing workflows",
-            vector=[0.1] * 1536,
-        )
+    db_session.add_all(
+        [
+            Embedding(
+                document_id=title_document.id,
+                chunk_text="overview only",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=body_document.id,
+                chunk_text="invoice exports and billing workflows",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=filler_document.id,
+                chunk_text="account profile settings and notifications",
+                vector=[0.1] * 1536,
+            ),
+        ]
     )
     db_session.commit()
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    first_key = (client_id, ("type-0",))
-    for index in range(_BM25_CACHE_MAX_ENTRIES + 5):
-        repository.bm25_match_for_tenant(
-            tenant_id=client_id,
-            query_text="invoice exports",
-            excluded_file_types=(f"type-{index}",),
-        )
+    title_match = repository.bm25_match_for_tenant(
+        tenant_id=client_id,
+        query_text="invoice exports",
+        excluded_file_types=(),
+    )
+    body_match = repository.bm25_match_for_tenant(
+        tenant_id=client_id,
+        query_text="billing workflows",
+        excluded_file_types=(),
+    )
 
-    assert len(repository._bm25_cache) == _BM25_CACHE_MAX_ENTRIES
-    assert first_key not in repository._bm25_cache
+    assert title_match.hit is True
+    assert title_match.match_kind == "exact_title"
+    assert title_match.score == 1.0
+    assert body_match.hit is True
+    assert body_match.match_kind == "body"
+    assert 0.0 < body_match.score < 1.0
 
 
 def test_gap_analyzer_fail_gap_job_truncates_to_tail(

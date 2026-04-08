@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
@@ -12,7 +12,6 @@ import re
 from typing import Literal, Protocol
 from uuid import UUID
 
-from rank_bm25 import BM25Okapi
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
@@ -46,7 +45,6 @@ _GAP_JOB_LEASE_SECONDS = 1800
 _GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
 _GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
 _GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
-_BM25_CACHE_MAX_ENTRIES = 32
 
 
 @dataclass(frozen=True)
@@ -128,12 +126,6 @@ class GapJobRecord:
     trigger: str
     attempt_count: int
     max_attempts: int
-
-
-@dataclass(frozen=True)
-class _TenantBm25Corpus:
-    normalized_titles: tuple[str, ...]
-    bm25: BM25Okapi | None
 
 
 @dataclass(frozen=True)
@@ -300,7 +292,6 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def __init__(self, db: Session):
         self.db = db
-        self._bm25_cache: OrderedDict[tuple[UUID, tuple[str, ...]], _TenantBm25Corpus] = OrderedDict()
 
     @property
     def _capabilities(self) -> _RepositoryCapabilities:
@@ -625,23 +616,81 @@ class SqlAlchemyGapAnalyzerRepository:
         normalized_query = query_text.strip().casefold()
         if not normalized_query:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
-
-        corpus = self._bm25_corpus_for_tenant(
-            tenant_id=tenant_id,
-            excluded_file_types=excluded_file_types,
-        )
-        if not corpus.normalized_titles and corpus.bm25 is None:
-            return TenantBm25Match(hit=False, score=0.0, match_kind="none")
-
-        if any(title == normalized_query for title in corpus.normalized_titles):
-            return TenantBm25Match(hit=True, score=1.0, match_kind="exact_title")
-
         query_tokens = _tokenize(query_text)
-        if not query_tokens or corpus.bm25 is None:
+        query_token_counts = Counter(query_tokens)
+        query_terms = set(query_token_counts)
+        excluded = {value.casefold() for value in excluded_file_types}
+
+        total_docs = 0
+        total_doc_length = 0
+        doc_frequencies = {token: 0 for token in query_terms}
+        matching_docs: list[tuple[int, dict[str, int]]] = []
+        rows = (
+            self.db.query(
+                Embedding.chunk_text,
+                Embedding.metadata_json,
+                Document.filename,
+                Document.file_type,
+            )
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.client_id == tenant_id)
+            .filter(Document.status == "ready")
+            .filter(Embedding.chunk_text.isnot(None))
+            .order_by(Document.id.asc(), Embedding.id.asc())
+            .yield_per(500)
+        )
+        for chunk_text, metadata_json, filename, file_type in rows:
+            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
+            if file_type_value in excluded:
+                continue
+
+            metadata = metadata_json if isinstance(metadata_json, dict) else {}
+            for candidate in (
+                _string_or_none(metadata.get("section_title")),
+                _string_or_none(metadata.get("page_title")),
+                _string_or_none(filename),
+            ):
+                if candidate and candidate.casefold() == normalized_query:
+                    return TenantBm25Match(hit=True, score=1.0, match_kind="exact_title")
+
+            if not query_terms:
+                continue
+
+            tokens = _tokenize(chunk_text or "")
+            if not tokens:
+                continue
+
+            total_docs += 1
+            doc_length = len(tokens)
+            total_doc_length += doc_length
+
+            term_frequencies: dict[str, int] = {}
+            seen_terms: set[str] = set()
+            for token in tokens:
+                if token not in query_terms:
+                    continue
+                term_frequencies[token] = term_frequencies.get(token, 0) + 1
+                if token not in seen_terms:
+                    doc_frequencies[token] += 1
+                    seen_terms.add(token)
+            if term_frequencies:
+                matching_docs.append((doc_length, term_frequencies))
+
+        if total_docs == 0 or not matching_docs:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
 
-        scores = corpus.bm25.get_scores(query_tokens)
-        best_score = max((float(score) for score in scores), default=0.0)
+        average_doc_length = total_doc_length / total_docs if total_docs > 0 else 0.0
+        best_score = max(
+            _bm25_streamed_score(
+                doc_length=doc_length,
+                term_frequencies=term_frequencies,
+                query_token_counts=query_token_counts,
+                doc_frequencies=doc_frequencies,
+                total_docs=total_docs,
+                average_doc_length=average_doc_length,
+            )
+            for doc_length, term_frequencies in matching_docs
+        )
         if best_score <= 0.0:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         return TenantBm25Match(
@@ -1075,62 +1124,6 @@ class SqlAlchemyGapAnalyzerRepository:
             if str(getattr(document.file_type, "value", document.file_type)).casefold() not in excluded
         ]
 
-    def _bm25_corpus_for_tenant(
-        self,
-        *,
-        tenant_id: UUID,
-        excluded_file_types: tuple[str, ...],
-    ) -> _TenantBm25Corpus:
-        cache_key = (tenant_id, tuple(sorted(excluded_file_types)))
-        cached = self._bm25_cache.get(cache_key)
-        if cached is not None:
-            self._bm25_cache.move_to_end(cache_key)
-            return cached
-
-        excluded = {value.casefold() for value in excluded_file_types}
-        tokenized_corpus: list[list[str]] = []
-        normalized_titles: list[str] = []
-        rows = (
-            self.db.query(
-                Embedding.chunk_text,
-                Embedding.metadata_json,
-                Document.filename,
-                Document.file_type,
-            )
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.client_id == tenant_id)
-            .filter(Document.status == "ready")
-            .filter(Embedding.chunk_text.isnot(None))
-            .order_by(Document.id.asc(), Embedding.id.asc())
-            .yield_per(500)
-        )
-        for chunk_text, metadata_json, filename, file_type in rows:
-            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
-            if file_type_value in excluded:
-                continue
-            metadata = metadata_json if isinstance(metadata_json, dict) else {}
-            for candidate in (
-                _string_or_none(metadata.get("section_title")),
-                _string_or_none(metadata.get("page_title")),
-                _string_or_none(filename),
-            ):
-                if candidate:
-                    normalized_titles.append(candidate.casefold())
-            tokens = _tokenize(chunk_text or "")
-            if tokens:
-                tokenized_corpus.append(tokens)
-
-        corpus = _TenantBm25Corpus(
-            normalized_titles=tuple(normalized_titles),
-            bm25=BM25Okapi(tokenized_corpus) if tokenized_corpus else None,
-        )
-        self._bm25_cache[cache_key] = corpus
-        self._bm25_cache.move_to_end(cache_key)
-        while len(self._bm25_cache) > _BM25_CACHE_MAX_ENTRIES:
-            self._bm25_cache.popitem(last=False)
-        return corpus
-
-
 def _string_or_none(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
@@ -1152,6 +1145,37 @@ def _truncate_gap_job_error(error_message: str) -> str:
         return error_message[-_GAP_JOB_LAST_ERROR_MAX_CHARS :]
     # Keep the traceback tail because the final frames and exception text are usually the most actionable.
     return truncated_prefix + error_message[-tail_size:]
+
+
+def _bm25_streamed_score(
+    *,
+    doc_length: int,
+    term_frequencies: dict[str, int],
+    query_token_counts: Counter[str],
+    doc_frequencies: dict[str, int],
+    total_docs: int,
+    average_doc_length: float,
+) -> float:
+    if doc_length <= 0 or total_docs <= 0 or average_doc_length <= 0:
+        return 0.0
+    k1 = 1.5
+    b = 0.75
+    score = 0.0
+    length_norm = k1 * (1.0 - b + b * (doc_length / average_doc_length))
+    for token, query_count in query_token_counts.items():
+        term_frequency = term_frequencies.get(token, 0)
+        if term_frequency <= 0:
+            continue
+        doc_frequency = doc_frequencies.get(token, 0)
+        if doc_frequency <= 0:
+            continue
+        idf = math.log((total_docs - doc_frequency + 0.5) / (doc_frequency + 0.5))
+        if idf <= 0.0:
+            continue
+        score += query_count * idf * (
+            (term_frequency * (k1 + 1.0)) / (term_frequency + length_norm)
+        )
+    return score
 
 
 def _repository_capabilities(db: Session) -> _RepositoryCapabilities:

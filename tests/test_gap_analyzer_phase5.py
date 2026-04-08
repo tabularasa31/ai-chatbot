@@ -907,6 +907,45 @@ def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
     assert 0.0 < body_match.score < 1.0
 
 
+def test_gap_analyzer_repository_bm25_match_allows_single_term_queries(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-bm25-single-term@example.com",
+        name="Gap Phase 5 BM25 Single Term Client",
+    )
+    document = Document(
+        client_id=client_id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+    )
+    db_session.add(document)
+    db_session.flush()
+    db_session.add(
+        Embedding(
+            document_id=document.id,
+            chunk_text="billing exports workflow",
+            vector=[0.1] * 1536,
+        )
+    )
+    db_session.commit()
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    match = repository.bm25_match_for_tenant(
+        tenant_id=client_id,
+        query_text="billing",
+        excluded_file_types=(),
+    )
+
+    assert match.hit is True
+    assert match.match_kind == "body"
+    assert 0.0 < match.score < 1.0
+
+
 def test_gap_analyzer_fail_gap_job_truncates_to_tail(
     client: TestClient,
     db_session: Session,

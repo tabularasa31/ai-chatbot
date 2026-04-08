@@ -105,6 +105,62 @@ function HealthCell({
   );
 }
 
+function summarizeSourceIssue({
+  status,
+  warning,
+  error,
+}: {
+  status: string;
+  warning?: string | null;
+  error?: string | null;
+}) {
+  if (error) {
+    return {
+      label: "Needs attention",
+      dotClass: "bg-red-500",
+      note: error,
+    };
+  }
+  if (warning) {
+    return {
+      label: "Warning",
+      dotClass: "bg-amber-400",
+      note: warning,
+    };
+  }
+  if (status === "ready") {
+    return {
+      label: "Good",
+      dotClass: "bg-emerald-500",
+      note: "No active warnings.",
+    };
+  }
+  if (status === "paused" || status === "error") {
+    return {
+      label: "Needs attention",
+      dotClass: "bg-red-500",
+      note: "Source requires action before indexing can continue.",
+    };
+  }
+  return {
+    label: "Pending",
+    dotClass: "bg-slate-300",
+    note: "Source processing is still in progress.",
+  };
+}
+
+function formatFailedUrlPreview(failedUrls: Array<{ url: string; reason: string }>): string {
+  const preview = failedUrls
+    .slice(0, 2)
+    .map((item) => `${item.url} (${item.reason})`)
+    .join(", ");
+
+  if (failedUrls.length <= 2) {
+    return preview;
+  }
+  return `${preview} +${failedUrls.length - 2} more`;
+}
+
 function SourceHealthCell({
   status,
   warning,
@@ -114,33 +170,13 @@ function SourceHealthCell({
   warning?: string | null;
   error?: string | null;
 }) {
-  let label = "Pending";
-  let dotClass = "bg-slate-300";
-  let note = "Source processing is still in progress.";
-
-  if (error) {
-    label = "Needs attention";
-    dotClass = "bg-red-500";
-    note = error;
-  } else if (warning) {
-    label = "Warning";
-    dotClass = "bg-amber-400";
-    note = warning;
-  } else if (status === "ready") {
-    label = "Good";
-    dotClass = "bg-emerald-500";
-    note = "No active warnings.";
-  } else if (status === "paused" || status === "error") {
-    label = "Needs attention";
-    dotClass = "bg-red-500";
-    note = "Source requires action before indexing can continue.";
-  }
+  const { label, dotClass, note } = summarizeSourceIssue({ status, warning, error });
 
   return (
     <Tooltip className="z-10 max-w-[240px] text-xs text-slate-600" content={note}>
       <span className={`h-2 w-2 rounded-full ${dotClass}`} />
       <span className="font-medium">{label}</span>
-      {(warning || error) && <span className="truncate text-slate-400">{warning || error}</span>}
+      {(warning || error) && <span className="max-w-[220px] truncate text-slate-400">{note}</span>}
     </Tooltip>
   );
 }
@@ -1309,7 +1345,7 @@ export default function KnowledgePage() {
                                             </div>
                                             {run.failed_urls.length > 0 && (
                                               <div className="mt-2 text-xs text-slate-500">
-                                                Failed: {run.failed_urls.slice(0, 2).map((item) => item.url).join(", ")}
+                                                Failed: {formatFailedUrlPreview(run.failed_urls)}
                                               </div>
                                             )}
                                           </div>

@@ -946,6 +946,28 @@ def test_gap_analyzer_repository_bm25_match_allows_single_term_queries(
     assert 0.0 < match.score < 1.0
 
 
+def test_gap_analyzer_repository_bm25_match_skips_db_for_empty_token_query(
+    db_session: Session,
+    monkeypatch,
+) -> None:
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+
+    def _fail_query(*args, **kwargs):
+        raise AssertionError("DB query should not run for an empty tokenized query")
+
+    monkeypatch.setattr(repository.db, "query", _fail_query)
+
+    match = repository.bm25_match_for_tenant(
+        tenant_id=uuid.uuid4(),
+        query_text="!!!",
+        excluded_file_types=(),
+    )
+
+    assert match.hit is False
+    assert match.score == 0.0
+    assert match.match_kind == "none"
+
+
 def test_gap_analyzer_fail_gap_job_truncates_to_tail(
     client: TestClient,
     db_session: Session,

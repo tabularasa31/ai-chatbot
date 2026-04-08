@@ -1003,7 +1003,7 @@ def _run_tenant_knowledge_extraction_best_effort(
     URLs index for RAG but never populate ``tenant_faq`` / profile extraction.
 
     Uses a **fresh** DB session from ``backend.core.db`` so ``db.rollback()`` inside
-    ``upsert_faq_candidates`` / extraction error paths cannot undo the crawler session.
+    ``insert_new_faq_candidates`` / extraction error paths cannot undo the crawler session.
     """
     if not api_key:
         return

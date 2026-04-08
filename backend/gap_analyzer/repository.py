@@ -622,6 +622,8 @@ class SqlAlchemyGapAnalyzerRepository:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         query_tokens = _tokenize(query_text)
         query_token_counts = Counter(query_tokens)
+        if not query_token_counts:
+            return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         query_terms = set(query_token_counts)
         excluded = {value.casefold() for value in excluded_file_types}
 
@@ -657,9 +659,6 @@ class SqlAlchemyGapAnalyzerRepository:
                 if candidate and candidate.casefold() == normalized_query:
                     return TenantBm25Match(hit=True, score=1.0, match_kind="exact_title")
 
-            if not query_terms:
-                continue
-
             tokens = _tokenize(chunk_text or "")
             if not tokens:
                 continue
@@ -685,13 +684,25 @@ class SqlAlchemyGapAnalyzerRepository:
 
         average_doc_length = total_doc_length / total_docs if total_docs > 0 else 0.0
         idfs = {
-            token: math.log1p((total_docs - doc_frequency + _BM25_SMOOTHING) / (doc_frequency + _BM25_SMOOTHING))
+            # Use a smoothed positive IDF so streamed BM25 keeps ranking
+            # single-term tenant queries instead of collapsing to <= 0 when a
+            # term appears in every matching chunk of a very small corpus.
+            token: math.log1p(
+                (total_docs - doc_frequency + _BM25_SMOOTHING)
+                / (doc_frequency + _BM25_SMOOTHING)
+            )
             for token, doc_frequency in doc_frequencies.items()
             if doc_frequency > 0
         }
-        max_matched_query_terms = max(len(term_frequencies) for _, term_frequencies in matching_docs)
-        required_matched_query_terms = min(len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS)
-        if max_matched_query_terms < required_matched_query_terms:
+        # Require at least one document to match enough distinct query terms so
+        # broad lexical overlap cannot win on a single frequent token alone.
+        best_doc_match_count = max(
+            len(term_frequencies) for _, term_frequencies in matching_docs
+        )
+        min_required_match_count = min(
+            len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS
+        )
+        if best_doc_match_count < min_required_match_count:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         best_score = max(
             _bm25_streamed_score(

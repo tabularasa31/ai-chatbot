@@ -213,6 +213,21 @@ def test_run_document_health_check_flags_incomplete_section(db_session: Session)
     assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
 
 
+def test_run_document_health_check_allows_nested_subsections(db_session: Session) -> None:
+    doc = _create_ready_document(
+        db_session,
+        email="nested-sections@example.com",
+        filename="nested.md",
+        parsed_text="# Guide\n\n## Setup\n\n### Step 1\n\nFollow the setup instructions here.",
+    )
+
+    result = run_document_health_check(doc.id, db_session)
+
+    assert "incomplete_section" not in [
+        warning["type"] for warning in result["warnings"]
+    ]
+
+
 def test_run_document_health_check_flags_parse_issue(db_session: Session) -> None:
     doc = _create_ready_document(
         db_session,

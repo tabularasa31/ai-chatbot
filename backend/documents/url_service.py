@@ -451,10 +451,10 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
 
             root_name = local_name(root.tag)
             if root_name == "sitemapindex":
-                for sitemap in root.findall("{*}sitemap/{*}loc"):
-                    if not sitemap.text:
+                for sitemap_loc in root.findall("{*}sitemap/{*}loc"):
+                    if not sitemap_loc.text:
                         continue
-                    normalized_sitemap = _normalize_page_url(sitemap.text.strip(), domain)
+                    normalized_sitemap = _normalize_page_url(sitemap_loc.text.strip(), domain)
                     if normalized_sitemap and normalized_sitemap not in seen_sitemaps:
                         queued.append(normalized_sitemap)
                 continue

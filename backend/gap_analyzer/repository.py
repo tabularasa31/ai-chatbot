@@ -45,6 +45,10 @@ _GAP_JOB_LEASE_SECONDS = 1800
 _GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
 _GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
 _GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
+_BM25_K1 = 1.5
+_BM25_B = 0.75
+_BM25_SMOOTHING = 0.5
+_BM25_MIN_MATCHED_QUERY_TERMS = 2
 
 
 @dataclass(frozen=True)
@@ -680,13 +684,21 @@ class SqlAlchemyGapAnalyzerRepository:
             return TenantBm25Match(hit=False, score=0.0, match_kind="none")
 
         average_doc_length = total_doc_length / total_docs if total_docs > 0 else 0.0
+        idfs = {
+            token: math.log1p((total_docs - doc_frequency + _BM25_SMOOTHING) / (doc_frequency + _BM25_SMOOTHING))
+            for token, doc_frequency in doc_frequencies.items()
+            if doc_frequency > 0
+        }
+        max_matched_query_terms = max(len(term_frequencies) for _, term_frequencies in matching_docs)
+        required_matched_query_terms = min(len(query_terms), _BM25_MIN_MATCHED_QUERY_TERMS)
+        if max_matched_query_terms < required_matched_query_terms:
+            return TenantBm25Match(hit=False, score=0.0, match_kind="none")
         best_score = max(
             _bm25_streamed_score(
                 doc_length=doc_length,
                 term_frequencies=term_frequencies,
                 query_token_counts=query_token_counts,
-                doc_frequencies=doc_frequencies,
-                total_docs=total_docs,
+                idfs=idfs,
                 average_doc_length=average_doc_length,
             )
             for doc_length, term_frequencies in matching_docs
@@ -1152,28 +1164,22 @@ def _bm25_streamed_score(
     doc_length: int,
     term_frequencies: dict[str, int],
     query_token_counts: Counter[str],
-    doc_frequencies: dict[str, int],
-    total_docs: int,
+    idfs: dict[str, float],
     average_doc_length: float,
 ) -> float:
-    if doc_length <= 0 or total_docs <= 0 or average_doc_length <= 0:
+    if doc_length <= 0 or average_doc_length <= 0:
         return 0.0
-    k1 = 1.5
-    b = 0.75
     score = 0.0
-    length_norm = k1 * (1.0 - b + b * (doc_length / average_doc_length))
+    length_norm = _BM25_K1 * (1.0 - _BM25_B + _BM25_B * (doc_length / average_doc_length))
     for token, query_count in query_token_counts.items():
         term_frequency = term_frequencies.get(token, 0)
         if term_frequency <= 0:
             continue
-        doc_frequency = doc_frequencies.get(token, 0)
-        if doc_frequency <= 0:
-            continue
-        idf = math.log((total_docs - doc_frequency + 0.5) / (doc_frequency + 0.5))
+        idf = idfs.get(token, 0.0)
         if idf <= 0.0:
             continue
         score += query_count * idf * (
-            (term_frequency * (k1 + 1.0)) / (term_frequency + length_norm)
+            (term_frequency * (_BM25_K1 + 1.0)) / (term_frequency + length_norm)
         )
     return score
 

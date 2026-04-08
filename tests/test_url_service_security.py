@@ -226,6 +226,158 @@ def test_discover_urls_respects_page_cap(monkeypatch: pytest.MonkeyPatch) -> Non
     ]
 
 
+def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = {
+        "https://docs.example.com/sitemap.xml": """<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>https://docs.example.com/sitemap-pages.xml</loc>
+  </sitemap>
+</sitemapindex>
+""",
+        "https://docs.example.com/sitemap_index.xml": """<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>https://docs.example.com/sitemap-pages.xml</loc>
+  </sitemap>
+</sitemapindex>
+""",
+        "https://docs.example.com/sitemap-pages.xml": """<?xml version="1.0" encoding="utf-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://docs.example.com/guide</loc></url>
+  <url><loc>https://docs.example.com/reference</loc></url>
+</urlset>
+""",
+    }
+
+    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+
+    def fake_request(client, method: str, url: str, context):
+        assert method == "GET"
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            text=responses[url],
+        )
+
+    class DummyClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+
+    urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
+
+    assert urls == [
+        "https://docs.example.com/guide",
+        "https://docs.example.com/reference",
+    ]
+
+
+def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested_urls: list[str] = []
+    chain_length = url_service.MAX_SITEMAPS_PER_SOURCE + 5
+
+    def sitemap_index(next_url: str) -> str:
+        return f"""<?xml version="1.0" encoding="utf-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap>
+    <loc>{next_url}</loc>
+  </sitemap>
+</sitemapindex>
+"""
+
+    responses = {
+        "https://docs.example.com/sitemap.xml": sitemap_index("https://docs.example.com/sitemap-chain-0.xml"),
+        "https://docs.example.com/sitemap_index.xml": sitemap_index("https://docs.example.com/sitemap-chain-0.xml"),
+    }
+    for index in range(chain_length):
+        current = f"https://docs.example.com/sitemap-chain-{index}.xml"
+        next_url = f"https://docs.example.com/sitemap-chain-{index + 1}.xml"
+        responses[current] = sitemap_index(next_url)
+
+    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+
+    def fake_request(client, method: str, url: str, context):
+        requested_urls.append(url)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            text=responses[url],
+        )
+
+    class DummyClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+
+    urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
+
+    assert urls == []
+    assert len(requested_urls) == url_service.MAX_SITEMAPS_PER_SOURCE
+    assert "https://docs.example.com/sitemap-chain-19.xml" not in requested_urls
+
+
+def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = "# Docs\n\nThis page is served as markdown."
+    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+
+    def fake_request(client, method: str, url: str, context):
+        assert method == "GET"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/markdown; charset=utf-8"},
+            text=markdown,
+        )
+
+    class DummyClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+
+    assert url_service._fetch_page_html("https://docs.example.com/guide") == markdown
+
+
+def test_summarize_crawl_failure_prefers_fetch_and_format_message() -> None:
+    assert (
+        url_service._summarize_crawl_failure(
+            [
+                {"url": "https://docs.example.com/a", "reason": "Could not fetch HTML"},
+                {"url": "https://docs.example.com/b", "reason": "Could not fetch HTML"},
+                {"url": "https://docs.example.com/c", "reason": "No readable content extracted"},
+            ]
+        )
+        == "Indexing failed — most pages could not be fetched or returned an unsupported format."
+    )
+
+
+def test_summarize_crawl_failure_prefers_readable_content_message() -> None:
+    assert (
+        url_service._summarize_crawl_failure(
+            [
+                {"url": "https://docs.example.com/a", "reason": "No readable content extracted"},
+                {"url": "https://docs.example.com/b", "reason": "No readable content extracted"},
+                {"url": "https://docs.example.com/c", "reason": "Could not fetch HTML"},
+            ]
+        )
+        == "Indexing failed — most pages did not contain readable content."
+    )
+
+
 def test_upsert_page_document_skips_reembedding_when_hash_matches(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -430,7 +582,10 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
 
     assert refreshed_source is not None
     assert refreshed_source.status == SourceStatus.error
-    assert refreshed_source.error_message == "Indexing failed — most pages were unreachable."
+    assert (
+        refreshed_source.error_message
+        == "Indexing failed — most pages could not be fetched or returned an unsupported format."
+    )
     assert run is not None
     assert run.status == SourceStatus.error.value
     assert len(run.failed_urls) == 3

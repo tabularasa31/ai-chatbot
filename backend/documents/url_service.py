@@ -451,7 +451,7 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
 
             root_name = local_name(root.tag)
             if root_name == "sitemapindex":
-                for sitemap in root.findall(".//{*}sitemap/{*}loc"):
+                for sitemap in root.findall("{*}sitemap/{*}loc"):
                     if not sitemap.text:
                         continue
                     normalized_sitemap = _normalize_page_url(sitemap.text.strip(), domain)
@@ -463,7 +463,7 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
                 _log_fetch(logging.INFO, "Skipping unsupported sitemap root", context, root_tag=root.tag)
                 continue
 
-            for loc in root.findall(".//{*}url/{*}loc"):
+            for loc in root.findall("{*}url/{*}loc"):
                 if not loc.text:
                     continue
                 normalized = _normalize_page_url(loc.text.strip(), domain)

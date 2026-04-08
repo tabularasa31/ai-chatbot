@@ -981,6 +981,7 @@ def _apply_mode_b_questions_to_clusters(
     started_at: datetime,
     new_cluster_is_new: bool,
 ) -> None:
+    dirty_clusters: dict[UUID, _MutableModeBCluster] = {}
     for question in questions:
         question_embedding = _vector_from_unknown(question.embedding)
         if question_embedding is None:
@@ -1015,7 +1016,6 @@ def _apply_mode_b_questions_to_clusters(
                 cluster=target_cluster,
                 question=question,
                 question_embedding=question_embedding,
-                corpus_chunks=prepared_corpus,
             )
         except _ModeBClusterUpdateRejectedError:
             new_cluster = _build_new_mode_b_cluster(
@@ -1039,14 +1039,21 @@ def _apply_mode_b_questions_to_clusters(
             question_id=question.question_id,
             cluster_id=target_cluster.cluster_id,
         )
+        dirty_clusters[target_cluster.cluster_id] = target_cluster
+
+    for cluster in dirty_clusters.values():
+        _finalize_mode_b_cluster(
+            cluster=cluster,
+            corpus_chunks=prepared_corpus,
+        )
         repository.update_mode_b_cluster(
-            cluster_id=target_cluster.cluster_id,
-            centroid=target_cluster.centroid,
-            question_count=target_cluster.question_count,
-            aggregate_signal_weight=target_cluster.aggregate_signal_weight,
-            coverage_score=target_cluster.coverage_score,
-            status=target_cluster.status,
-            last_question_at=target_cluster.last_question_at,
+            cluster_id=cluster.cluster_id,
+            centroid=cluster.centroid,
+            question_count=cluster.question_count,
+            aggregate_signal_weight=cluster.aggregate_signal_weight,
+            coverage_score=cluster.coverage_score,
+            status=cluster.status,
+            last_question_at=cluster.last_question_at,
             last_computed_at=started_at,
         )
 
@@ -1534,7 +1541,6 @@ def _update_mode_b_cluster(
     cluster: _MutableModeBCluster,
     question: ModeBQuestionRecord,
     question_embedding: list[float],
-    corpus_chunks: list[_PreparedCorpusChunk],
 ) -> None:
     if len(cluster.centroid) != len(question_embedding):
         logger.warning(
@@ -1559,6 +1565,13 @@ def _update_mode_b_cluster(
         for index in range(len(cluster.centroid))
     ]
     cluster.centroid_norm = _vector_norm(cluster.centroid)
+
+
+def _finalize_mode_b_cluster(
+    *,
+    cluster: _MutableModeBCluster,
+    corpus_chunks: list[_PreparedCorpusChunk],
+) -> None:
     cluster.coverage_score = _compute_mode_a_coverage(
         query_text=cluster.label,
         query_embedding=cluster.centroid,

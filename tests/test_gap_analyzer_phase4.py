@@ -487,7 +487,6 @@ def test_update_mode_b_cluster_refuses_mismatched_vector_lengths() -> None:
             cluster=cluster,
             question=question,
             question_embedding=[1.0, 0.0],
-            corpus_chunks=[],
         )
     assert cluster.question_count == 1
 

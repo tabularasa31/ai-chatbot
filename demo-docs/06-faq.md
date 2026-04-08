@@ -69,10 +69,17 @@ If the answer is not in your documentation, the bot will either say it doesn't h
 - Add or refresh URL sources if your docs live on a website.
 - Use the 👍/👎 feedback in Chat Logs to identify weak answers.
 - Use the "Review bad answers" page to write ideal answers for training.
+- Use Gap Analyzer to find repeated missing topics and recurring question clusters.
 - Use the Debug page to see which document chunks are being retrieved.
 
 **Can the bot answer questions outside my documentation?**
 No. The bot only answers based on the documents you upload. It will not use general AI knowledge.
+
+**What is Gap Analyzer?**
+Gap Analyzer is a dashboard page that helps your team spot where your docs are weak or where users keep getting stuck. It combines docs-side analysis with real-user question patterns, so you can prioritize documentation updates with evidence instead of guesswork.
+
+**Does Gap Analyzer change customer-facing answers automatically?**
+No. It is an internal operator tool. It helps your team review gaps, dismiss noise, and generate draft content ideas, but it does not silently rewrite your docs or widget answers by itself.
 
 ---
 

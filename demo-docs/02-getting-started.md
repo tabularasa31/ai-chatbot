@@ -47,3 +47,13 @@ What to expect:
 - if the answer is clear from your docs, the bot replies immediately
 - if one critical detail is missing, the bot may ask one short, specific follow-up question
 - when there are clear options, the widget can show them as quick-reply buttons
+
+## Step 6: Review improvement opportunities
+
+Once you have a few real or test conversations, open **Dashboard -> Gap Analyzer**.
+
+There you can review:
+
+- docs-side topics that look under-covered in your knowledge base
+- repeated real-user question clusters that suggest missing documentation or confusing product areas
+- draft content ideas your team can turn into docs, help-center pages, or FAQ updates

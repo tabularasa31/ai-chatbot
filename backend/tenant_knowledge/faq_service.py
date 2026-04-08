@@ -137,6 +137,8 @@ def upsert_faq_candidates(
                 input=question,
             )
             question_embedding = embedding_resp.data[0].embedding  # 1536 floats
+            approved = candidate.confidence >= 0.85
+            should_insert = False
 
             # Isolate DB-side failures per candidate so one bad insert/query
             # does not roll back earlier candidates in the same batch.
@@ -146,7 +148,6 @@ def upsert_faq_candidates(
                     client_id=client_id,
                     question_embedding=question_embedding,
                 ):
-                    approved = candidate.confidence >= 0.85
                     db.add(
                         TenantFaqModel(
                             tenant_id=client_id,
@@ -159,28 +160,31 @@ def upsert_faq_candidates(
                         )
                     )
                     db.flush()
-                    inserted += 1
-                    if approved:
-                        auto_approved += 1
-                    logger.info(
-                        "FAQ candidate queued for insert "
-                        "(client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
-                        client_id,
-                        question,
-                        float(candidate.confidence),
-                        candidate.source,
-                        approved,
-                    )
-                else:
-                    skipped_duplicate += 1
-                    logger.info(
-                        "FAQ candidate skipped: semantic duplicate "
-                        "(client_id=%s question=%r confidence=%.3f source=%s)",
-                        client_id,
-                        question,
-                        float(candidate.confidence),
-                        candidate.source,
-                    )
+                    should_insert = True
+
+            if should_insert:
+                inserted += 1
+                if approved:
+                    auto_approved += 1
+                logger.info(
+                    "FAQ candidate queued for insert "
+                    "(client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
+                    client_id,
+                    question,
+                    float(candidate.confidence),
+                    candidate.source,
+                    approved,
+                )
+            else:
+                skipped_duplicate += 1
+                logger.info(
+                    "FAQ candidate skipped: semantic duplicate "
+                    "(client_id=%s question=%r confidence=%.3f source=%s)",
+                    client_id,
+                    question,
+                    float(candidate.confidence),
+                    candidate.source,
+                )
         except Exception:
             # Best-effort: don't let one bad candidate break the whole batch.
             candidate_errors += 1

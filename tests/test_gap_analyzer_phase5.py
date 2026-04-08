@@ -11,6 +11,7 @@ from backend.gap_analyzer.enums import GapSource
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.models import (
+    GapAnalyzerJob,
     GapDismissal,
     GapCluster,
     GapClusterStatus,
@@ -168,6 +169,7 @@ def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
     assert data["mode_a_items"] == []
     assert len(data["mode_b_items"]) == 1
     assert data["mode_b_items"][0]["linked_source"] == "mode_a"
+    assert data["mode_b_items"][0]["linked_label"] == "Billing exports"
     assert data["mode_b_items"][0]["also_missing_in_docs"] is True
 
 
@@ -404,9 +406,10 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
         email="gap-phase5-modeb-filters@example.com",
         name="Gap Phase 5 Mode B Filters Client",
     )
-    oldest = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    middle = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    newest = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    oldest = now.replace(microsecond=1)
+    middle = now.replace(microsecond=2)
+    newest = now.replace(microsecond=3)
     db_session.add_all(
         [
             GapCluster(
@@ -634,6 +637,86 @@ def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
     assert "Can I disable webhook retries per endpoint?" not in draft.markdown
 
 
+def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-summary@example.com",
+        name="Gap Phase 5 Summary Client",
+    )
+    db_session.add(
+        GapDocTopic(
+            tenant_id=client_id,
+            topic_label="SAML setup",
+            coverage_score=0.2,
+            status=GapDocTopicStatus.active,
+            is_new=True,
+            extracted_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/gap-analyzer/summary",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert set(data.keys()) == {"summary"}
+    assert data["summary"]["new_badge_count"] == 1
+    assert "mode_a_items" not in data
+    assert "mode_b_items" not in data
+
+
+def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-inactive@example.com",
+        name="Gap Phase 5 Inactive Client",
+    )
+    db_session.add_all(
+        [
+            GapCluster(
+                tenant_id=client_id,
+                label="Legacy exports",
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.9,
+                status=GapClusterStatus.closed,
+                last_computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ),
+            GapCluster(
+                tenant_id=client_id,
+                label="Fresh dismissed cluster",
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.2,
+                status=GapClusterStatus.dismissed,
+                last_computed_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.get(
+        "/gap-analyzer?mode_b_status=inactive",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [item["label"] for item in data["mode_b_items"]] == ["Legacy exports"]
+    assert data["mode_b_items"][0]["status"] == "inactive"
+
+
 def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
     client: TestClient,
     db_session: Session,
@@ -645,14 +728,10 @@ def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
         email="gap-phase5-recalc@example.com",
         name="Gap Phase 5 Recalc Client",
     )
-    calls: list[str] = []
+    runner_calls: list[str] = []
     monkeypatch.setattr(
-        "backend.gap_analyzer.routes.run_mode_a_for_tenant_best_effort",
-        lambda tenant_id: calls.append(f"mode_a:{tenant_id}"),
-    )
-    monkeypatch.setattr(
-        "backend.gap_analyzer.routes.run_mode_b_for_tenant_best_effort",
-        lambda tenant_id: calls.append(f"mode_b:{tenant_id}"),
+        "backend.gap_analyzer.routes.start_gap_analyzer_job_runner",
+        lambda: runner_calls.append("started"),
     )
 
     response = client.post(
@@ -665,4 +744,10 @@ def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
     assert data["status"] == "accepted"
     assert data["command_kind"] == "orchestration"
     assert data["mode"] == "both"
-    assert len(calls) == 2
+    assert runner_calls == ["started"]
+    queued_jobs = (
+        db_session.query(GapAnalyzerJob)
+        .filter(GapAnalyzerJob.tenant_id == _client_id)
+        .all()
+    )
+    assert len(queued_jobs) == 2

@@ -22,6 +22,20 @@ class GapCommandStatus(str, Enum):
     rate_limited = "rate_limited"
 
 
+class GapJobKind(str, Enum):
+    mode_a = "mode_a"
+    mode_b = "mode_b"
+    mode_b_weekly_reclustering = "mode_b_weekly_reclustering"
+
+
+class GapJobStatus(str, Enum):
+    queued = "queued"
+    in_progress = "in_progress"
+    retry = "retry"
+    completed = "completed"
+    failed = "failed"
+
+
 class GapClusterStatus(str, Enum):
     active = "active"
     dismissed = "dismissed"

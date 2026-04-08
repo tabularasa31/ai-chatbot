@@ -5,17 +5,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
-from backend.gap_analyzer.jobs import (
-    run_mode_a_for_tenant_best_effort,
-    run_mode_b_for_tenant_best_effort,
-)
+from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator, GapResourceNotFoundError
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.gap_analyzer.schemas import (
@@ -27,6 +24,7 @@ from backend.gap_analyzer.schemas import (
     ModeAStatusFilter,
     ModeBSort,
     ModeBStatusFilter,
+    GapSummaryOnlyResponse,
     RecalculateCommandResult,
 )
 from backend.models import User
@@ -65,20 +63,35 @@ def get_gap_analyzer(
     )
 
 
+@gap_analyzer_router.get("/summary", response_model=GapSummaryOnlyResponse)
+def get_gap_analyzer_summary(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> GapSummaryOnlyResponse:
+    tenant_id = _resolve_client_id(db=db, current_user=current_user)
+    orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
+    response = orchestrator.list_gaps(
+        tenant_id=tenant_id,
+        mode_a_status="active",
+        mode_b_status="active",
+        mode_a_sort="coverage_asc",
+        mode_b_sort="signal_desc",
+    )
+    return GapSummaryOnlyResponse(summary=response.summary)
+
+
 @gap_analyzer_router.post("/recalculate", response_model=RecalculateCommandResult, status_code=202)
 async def recalculate_gap_analyzer(
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
     mode: GapRunMode = Query(...),
 ) -> RecalculateCommandResult:
     tenant_id = _resolve_client_id(db=db, current_user=current_user)
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
-    if mode in {GapRunMode.mode_a, GapRunMode.both}:
-        background_tasks.add_task(run_mode_a_for_tenant_best_effort, tenant_id)
-    if mode in {GapRunMode.mode_b, GapRunMode.both}:
-        background_tasks.add_task(run_mode_b_for_tenant_best_effort, tenant_id)
-    return await orchestrator.request_recalculation(tenant_id=tenant_id, mode=mode)
+    response = await orchestrator.request_recalculation(tenant_id=tenant_id, mode=mode)
+    db.commit()
+    start_gap_analyzer_job_runner()
+    return response
 
 
 @gap_analyzer_router.post("/{source}/{gap_id}/dismiss", response_model=GapActionResponse)

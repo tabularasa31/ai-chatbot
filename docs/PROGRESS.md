@@ -1,7 +1,40 @@
 # Chat9 Development Progress
 
-**Last updated:** 2026-04-08 (UTC) — Gap Analyzer Phase 6B reclustering + archive hardening
+**Last updated:** 2026-04-08 (UTC) — Gap Analyzer queue + BM25 seam + linked-card follow-ups
 **Overall status:** ✅ MVP feature-complete, deployed to production
+
+---
+
+## ✅ COMPLETED (2026-04-08) — Gap Analyzer hardening follow-ups
+
+### Durable job orchestration
+
+- ✅ **DB-backed Gap Analyzer jobs** (`backend/models.py`, migration `gap_jobs_v1`): Gap Analyzer now persists queued/in-progress/retry/completed/failed work in `gap_analyzer_jobs` instead of relying on process-local follow-up state only.
+- ✅ **Retry + claim flow** (`backend/gap_analyzer/repository.py`, `backend/gap_analyzer/jobs.py`): Mode A, Mode B, and weekly reclustering jobs now use durable enqueue, lease-based claiming, and bounded retries.
+- ✅ **Cross-process-safe enqueue semantics:** `POST /gap-analyzer/recalculate` now enqueues orchestration work and starts the local runner, while chat-signal Mode B follow-ups also enqueue durable work instead of using per-process coalescing.
+
+### Retrieval + linking hardening
+
+- ✅ **Narrow retrieval seam inside Gap Analyzer** (`backend/gap_analyzer/repository.py`): coverage now uses repository-owned `vector_top_k_for_tenant(...)` and `bm25_match_for_tenant(...)` seams rather than ad hoc token-overlap logic in the orchestrator.
+- ✅ **BM25-backed lexical boost:** Gap Analyzer coverage scoring now combines semantic vector matches with a bounded BM25 lexical signal while staying inside the module boundary.
+- ✅ **`pgvector`-backed relinking path:** Mode A ↔ Mode B relinking now uses a Postgres nearest-neighbor path when available, with the previous Python similarity pass retained as the SQLite/test fallback.
+
+### API and UI follow-ups
+
+- ✅ **Summary-only badge endpoint:** added `GET /gap-analyzer/summary`, and the sidebar badge now reads from that lighter contract instead of the full dashboard payload.
+- ✅ **Linked-card rendering:** linked Mode B items now render docs-gap context inline in the dashboard instead of showing only a badge on the generic card shell.
+- ✅ **Inactive lifecycle exposure:** archived Mode B clusters can now surface as `inactive` in the API/UI once they age past the lifecycle window, and archive UI includes a dedicated inactive bucket.
+
+### Validation
+
+- ✅ **Regression coverage:** the Gap Analyzer phase suite now covers the durable recalc path, summary endpoint, inactive filter behavior, and durable chat follow-up enqueue behavior.
+- ✅ **Targeted backend validation:** `venv/bin/python -m pytest -q tests/test_gap_analyzer_foundation.py tests/test_gap_analyzer_phase2.py tests/test_gap_analyzer_phase3.py tests/test_gap_analyzer_phase4.py tests/test_gap_analyzer_phase5.py tests/test_gap_analyzer_phase6b.py`
+
+### Remaining follow-up after this pass
+
+- ⏳ dedicated external scheduler / worker deployment for automatically draining expired leased jobs after a full app outage, rather than depending on the in-app runner to restart on the next enqueue/manual trigger
+- ⏳ larger-tenant batching/candidate narrowing for Mode B cluster loading beyond the current active/closed history scope
+- ⏳ optional localization pass for Gap Analyzer dashboard copy such as linked-card labels and draft markdown headings
 
 ---
 
@@ -28,14 +61,6 @@
 - ✅ **Archive UX grouping:** the archive view now keeps `Mode A dismissed`, `Mode B closed`, and `Mode B dismissed` visibly separate in the dashboard instead of collapsing them into one undifferentiated archive list.
 - ✅ **Unembedded-question protection:** weekly reclustering now skips destructive rebuild for touched active/closed clusters that still contain questions without valid embeddings after the embed attempt, preventing historical questions from silently losing cluster membership.
 - ✅ **Regression coverage:** added Phase 6B tests for duplicate-cluster merge behavior, archive truth-table behavior, and the blank/unembedded-question protection path.
-
-### Remaining follow-up after Phase 6B
-
-- ⏳ durable queue / retry / cross-process coordination for background Gap Analyzer jobs
-- ⏳ `pgvector`-backed relinking optimization path instead of full Python-side `O(N×M)` similarity pass
-- ⏳ lighter summary-only endpoint for sidebar badge reads
-
----
 
 ## ✅ COMPLETED (2026-04-06) — question-language localization + localized default greeting
 

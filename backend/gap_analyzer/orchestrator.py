@@ -164,7 +164,6 @@ class GapAnalyzerOrchestrator:
             candidates=candidates,
         )
         dismissals = repository.list_mode_a_dismissals(tenant_id)
-        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
         prepared_dismissals = _prepare_dismissals(dismissals)
 
         coverage_policy = CoveragePolicy()
@@ -186,10 +185,11 @@ class GapAnalyzerOrchestrator:
                 continue
 
             coverage_query = _build_coverage_query(candidate)
-            coverage_score = _compute_mode_a_coverage(
+            coverage_score = _compute_gap_coverage(
+                repository=repository,
+                tenant_id=tenant_id,
                 query_text=coverage_query,
                 query_embedding=coverage_embeddings.get(candidate.topic_label),
-                corpus_chunks=prepared_corpus,
             )
             if coverage_score >= coverage_policy.mode_a_gate:
                 continue
@@ -250,17 +250,11 @@ class GapAnalyzerOrchestrator:
         else:
             refreshed_questions = questions
 
-        corpus_chunks = repository.get_mode_a_corpus_chunks(
-            tenant_id=tenant_id,
-            excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
-        )
-        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
         clusters = _prepare_mode_b_clusters(repository.list_mode_b_clusters(tenant_id))
         _apply_mode_b_questions_to_clusters(
             repository=repository,
             tenant_id=tenant_id,
             questions=refreshed_questions,
-            prepared_corpus=prepared_corpus,
             clusters=clusters,
             started_at=started_at,
             new_cluster_is_new=True,
@@ -369,11 +363,6 @@ class GapAnalyzerOrchestrator:
                 len(protected_cluster_ids),
             )
 
-        corpus_chunks = repository.get_mode_a_corpus_chunks(
-            tenant_id=tenant_id,
-            excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
-        )
-        prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
         rebuild_cluster_ids = [cluster_id for cluster_id in affected_cluster_ids if cluster_id not in protected_cluster_ids]
         questions = [
             question
@@ -421,7 +410,6 @@ class GapAnalyzerOrchestrator:
             repository=repository,
             tenant_id=tenant_id,
             questions=questions,
-            prepared_corpus=prepared_corpus,
             clusters=clusters,
             started_at=started_at,
             new_cluster_is_new=False,
@@ -549,6 +537,7 @@ class GapAnalyzerOrchestrator:
             raise GapResourceNotFoundError("Gap cluster not found")
         cluster.status = GapClusterStatus.dismissed
         cluster.question_count_at_dismissal = cluster.question_count
+        cluster.last_computed_at = datetime.now(timezone.utc)
         existing = (
             db.query(GapDismissal)
             .filter(
@@ -611,6 +600,7 @@ class GapAnalyzerOrchestrator:
         )
         status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
         cluster.status = status
+        cluster.last_computed_at = datetime.now(timezone.utc)
         db.add(cluster)
         return GapActionResponse(source=source, gap_id=gap_id, status=status.value)
 
@@ -676,11 +666,21 @@ class GapAnalyzerOrchestrator:
         tenant_id: UUID,
         mode: GapRunMode,
     ) -> RecalculateCommandResult:
+        if self.repository is None:
+            enqueue_result = RecalculateCommandResult(
+                tenant_id=tenant_id,
+                mode=mode,
+                status=GapCommandStatus.accepted,
+                accepted_at=datetime.now(timezone.utc),
+            )
+            return enqueue_result
+        enqueue_result = self._require_repository().enqueue_recalculation(tenant_id, mode)
         return RecalculateCommandResult(
             tenant_id=tenant_id,
             mode=mode,
-            status=GapCommandStatus.accepted,
+            status=enqueue_result.status,
             accepted_at=datetime.now(timezone.utc),
+            retry_after_seconds=enqueue_result.retry_after_seconds,
         )
 
     def _embed_mode_a_candidates(
@@ -802,6 +802,15 @@ def _build_mode_a_items(
         .filter(GapDocTopic.topic_label.isnot(None))
         .all()
     )
+    linked_cluster_ids = [topic.linked_cluster_id for topic in topics if topic.linked_cluster_id is not None]
+    linked_clusters = (
+        db.query(GapCluster)
+        .filter(GapCluster.id.in_(linked_cluster_ids))
+        .all()
+        if linked_cluster_ids
+        else []
+    )
+    linked_clusters_by_id = {cluster.id: cluster for cluster in linked_clusters}
 
     items: list[GapItemResponse] = []
     if status_filter in {"active", "all"}:
@@ -813,6 +822,7 @@ def _build_mode_a_items(
             if topic.id in suppressed_ids:
                 continue
             cleaned_questions = _clean_questions(topic.example_questions)
+            linked_cluster = linked_clusters_by_id.get(topic.linked_cluster_id) if topic.linked_cluster_id is not None else None
             items.append(
                 GapItemResponse(
                     id=topic.id,
@@ -825,7 +835,8 @@ def _build_mode_a_items(
                     question_count=len(cleaned_questions),
                     aggregate_signal_weight=None,
                     example_questions=cleaned_questions,
-                    linked_source=None,
+                    linked_source=GapSource.mode_b if linked_cluster is not None else None,
+                    linked_label=(linked_cluster.label or "").strip() if linked_cluster is not None and linked_cluster.label else None,
                     also_missing_in_docs=False,
                     last_updated=topic.extracted_at,
                 )
@@ -835,6 +846,7 @@ def _build_mode_a_items(
         for dismissal in dismissed_rows:
             topic = topics_by_id.get(dismissal.gap_id)
             cleaned_questions = _clean_questions(topic.example_questions if topic is not None else None)
+            linked_cluster = linked_clusters_by_id.get(topic.linked_cluster_id) if topic is not None and topic.linked_cluster_id is not None else None
             items.append(
                 GapItemResponse(
                     id=dismissal.gap_id,
@@ -847,7 +859,8 @@ def _build_mode_a_items(
                     question_count=len(cleaned_questions),
                     aggregate_signal_weight=None,
                     example_questions=cleaned_questions,
-                    linked_source=None,
+                    linked_source=GapSource.mode_b if linked_cluster is not None else None,
+                    linked_label=(linked_cluster.label or "").strip() if linked_cluster is not None and linked_cluster.label else None,
                     also_missing_in_docs=False,
                     last_updated=dismissal.dismissed_at,
                 )
@@ -867,45 +880,48 @@ def _build_mode_b_items(
     status_filter: ModeBStatusFilter,
     sort: ModeBSort,
 ) -> list[GapItemResponse]:
-    allowed_statuses: tuple[GapClusterStatus, ...]
-    if status_filter == "active":
-        allowed_statuses = (GapClusterStatus.active,)
-    elif status_filter == "archived":
-        allowed_statuses = (GapClusterStatus.closed, GapClusterStatus.dismissed)
-    elif status_filter == "closed":
-        allowed_statuses = (GapClusterStatus.closed,)
-    elif status_filter == "dismissed":
-        allowed_statuses = (GapClusterStatus.dismissed,)
-    else:
-        allowed_statuses = (GapClusterStatus.active, GapClusterStatus.closed, GapClusterStatus.dismissed)
-
     clusters = (
         db.query(GapCluster)
         .filter(GapCluster.tenant_id == tenant_id)
-        .filter(GapCluster.status.in_([status.value for status in allowed_statuses]))
         .filter(GapCluster.label.isnot(None))
         .all()
     )
     sample_questions = _load_mode_b_question_samples(db, [cluster.id for cluster in clusters])
+    linked_topic_ids = [cluster.linked_doc_topic_id for cluster in clusters if cluster.linked_doc_topic_id is not None]
+    linked_topics = (
+        db.query(GapDocTopic)
+        .filter(GapDocTopic.id.in_(linked_topic_ids))
+        .all()
+        if linked_topic_ids
+        else []
+    )
+    linked_topics_by_id = {topic.id: topic for topic in linked_topics}
 
-    items = [
-        GapItemResponse(
-            id=cluster.id,
-            source=GapSource.mode_b,
-            label=(cluster.label or "Untitled gap").strip(),
-            coverage_score=cluster.coverage_score,
-            classification=_classify_gap(cluster.coverage_score),
-            status=_cluster_status_value(cluster.status),
-            is_new=bool(cluster.is_new),
-            question_count=int(cluster.question_count or 0),
-            aggregate_signal_weight=float(cluster.aggregate_signal_weight or 0.0),
-            example_questions=sample_questions.get(cluster.id, []),
-            linked_source=GapSource.mode_a if cluster.linked_doc_topic_id is not None else None,
-            also_missing_in_docs=cluster.linked_doc_topic_id is not None,
-            last_updated=cluster.last_computed_at or cluster.last_question_at or cluster.created_at,
+    items: list[GapItemResponse] = []
+    for cluster in clusters:
+        effective_status = _effective_mode_b_status(cluster)
+        if not _mode_b_status_matches_filter(status_filter, effective_status):
+            continue
+        linked_topic = linked_topics_by_id.get(cluster.linked_doc_topic_id) if cluster.linked_doc_topic_id is not None else None
+        items.append(
+            GapItemResponse(
+                id=cluster.id,
+                source=GapSource.mode_b,
+                label=(cluster.label or "Untitled gap").strip(),
+                coverage_score=cluster.coverage_score,
+                classification=_classify_gap(cluster.coverage_score),
+                status=effective_status.value,
+                is_new=bool(cluster.is_new),
+                question_count=int(cluster.question_count or 0),
+                aggregate_signal_weight=float(cluster.aggregate_signal_weight or 0.0),
+                example_questions=sample_questions.get(cluster.id, []),
+                linked_source=GapSource.mode_a if linked_topic is not None else None,
+                linked_label=(linked_topic.topic_label or "").strip() if linked_topic is not None and linked_topic.topic_label else None,
+                linked_example_questions=_clean_questions(linked_topic.example_questions if linked_topic is not None else None),
+                also_missing_in_docs=linked_topic is not None,
+                last_updated=cluster.last_computed_at or cluster.last_question_at or cluster.created_at,
+            )
         )
-        for cluster in clusters
-    ]
 
     if sort == "coverage_asc":
         items.sort(key=lambda item: (_sort_float(item.coverage_score, default=999.0), item.label.casefold()))
@@ -976,7 +992,6 @@ def _apply_mode_b_questions_to_clusters(
     repository: GapAnalyzerRepository,
     tenant_id: UUID,
     questions: Iterable[ModeBQuestionRecord],
-    prepared_corpus: list[_PreparedCorpusChunk],
     clusters: list[_MutableModeBCluster],
     started_at: datetime,
     new_cluster_is_new: bool,
@@ -995,10 +1010,11 @@ def _apply_mode_b_questions_to_clusters(
         )
         if target_cluster is None:
             new_cluster = _build_new_mode_b_cluster(
+                repository=repository,
+                tenant_id=tenant_id,
                 question=question,
                 question_embedding=question_embedding,
                 question_norm=question_norm,
-                corpus_chunks=prepared_corpus,
             )
             _persist_new_mode_b_cluster(
                 repository=repository,
@@ -1019,10 +1035,11 @@ def _apply_mode_b_questions_to_clusters(
             )
         except _ModeBClusterUpdateRejectedError:
             new_cluster = _build_new_mode_b_cluster(
+                repository=repository,
+                tenant_id=tenant_id,
                 question=question,
                 question_embedding=question_embedding,
                 question_norm=question_norm,
-                corpus_chunks=prepared_corpus,
             )
             _persist_new_mode_b_cluster(
                 repository=repository,
@@ -1043,8 +1060,9 @@ def _apply_mode_b_questions_to_clusters(
 
     for cluster in dirty_clusters.values():
         _finalize_mode_b_cluster(
+            repository=repository,
+            tenant_id=tenant_id,
             cluster=cluster,
-            corpus_chunks=prepared_corpus,
         )
         repository.update_mode_b_cluster(
             cluster_id=cluster.cluster_id,
@@ -1133,13 +1151,16 @@ def _active_mode_a_ids_suppressed_by_mode_b(
     if mode_b_status not in {"active", "all"}:
         return set()
     rows = (
-        db.query(GapCluster.linked_doc_topic_id)
+        db.query(GapCluster)
         .filter(GapCluster.tenant_id == tenant_id)
-        .filter(GapCluster.status == GapClusterStatus.active)
         .filter(GapCluster.linked_doc_topic_id.isnot(None))
         .all()
     )
-    return {linked_topic_id for (linked_topic_id,) in rows if linked_topic_id is not None}
+    return {
+        cluster.linked_doc_topic_id
+        for cluster in rows
+        if cluster.linked_doc_topic_id is not None and _effective_mode_b_status(cluster) == GapClusterStatus.active
+    }
 
 
 def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
@@ -1167,6 +1188,86 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
         if cluster.status in {GapClusterStatus.active, GapClusterStatus.closed, GapClusterStatus.dismissed}
     ]
 
+    scored_pairs = _score_mode_link_pairs(
+        db=db,
+        topics=topics,
+        clusters=clusters,
+    )
+
+    linked_topic_ids: set[UUID] = set()
+    linked_cluster_ids: set[UUID] = set()
+    for _, topic, cluster in sorted(scored_pairs, key=lambda item: item[0], reverse=True):
+        if topic.id in linked_topic_ids or cluster.id in linked_cluster_ids:
+            continue
+        topic.linked_cluster_id = cluster.id
+        cluster.linked_doc_topic_id = topic.id
+        linked_topic_ids.add(topic.id)
+        linked_cluster_ids.add(cluster.id)
+    db.flush()
+
+
+def _score_mode_link_pairs(
+    *,
+    db: Session,
+    topics: list[GapDocTopic],
+    clusters: list[GapCluster],
+) -> list[tuple[float, GapDocTopic, GapCluster]]:
+    if not topics or not clusters:
+        return []
+    if getattr(db.bind.dialect, "name", "") == "postgresql":
+        scored_pairs = _score_mode_link_pairs_pgvector(
+            db=db,
+            topics=topics,
+            clusters=clusters,
+        )
+        if scored_pairs:
+            return scored_pairs
+    return _score_mode_link_pairs_python(
+        topics=topics,
+        clusters=clusters,
+    )
+
+
+def _score_mode_link_pairs_pgvector(
+    *,
+    db: Session,
+    topics: list[GapDocTopic],
+    clusters: list[GapCluster],
+) -> list[tuple[float, GapDocTopic, GapCluster]]:
+    cluster_by_id = {cluster.id: cluster for cluster in clusters if cluster.centroid is not None}
+    if not cluster_by_id:
+        return []
+    scored_pairs: list[tuple[float, GapDocTopic, GapCluster]] = []
+    distance_cutoff = 1.0 - ClusteringPolicy().link_threshold
+    for topic in topics:
+        topic_vector = _vector_from_unknown(topic.topic_embedding)
+        if topic_vector is None:
+            continue
+        distance_expr = GapCluster.centroid.cosine_distance(topic_vector)
+        rows = (
+            db.query(GapCluster.id, distance_expr.label("distance"))
+            .filter(GapCluster.id.in_(cluster_by_id.keys()))
+            .filter(GapCluster.centroid.isnot(None))
+            .order_by(distance_expr.asc(), GapCluster.id.asc())
+            .limit(10)
+            .all()
+        )
+        for cluster_id, distance in rows:
+            distance_value = float(distance)
+            if distance_value > distance_cutoff:
+                break
+            cluster = cluster_by_id.get(cluster_id)
+            if cluster is None:
+                continue
+            scored_pairs.append((max(0.0, min(1.0, 1.0 - distance_value)), topic, cluster))
+    return scored_pairs
+
+
+def _score_mode_link_pairs_python(
+    *,
+    topics: list[GapDocTopic],
+    clusters: list[GapCluster],
+) -> list[tuple[float, GapDocTopic, GapCluster]]:
     prepared_clusters: list[tuple[list[float], float, GapCluster]] = []
     for cluster in clusters:
         cluster_vector = _vector_from_unknown(cluster.centroid)
@@ -1192,17 +1293,7 @@ def _sync_mode_links(db: Session, *, tenant_id: UUID) -> None:
             )
             if similarity >= link_threshold:
                 scored_pairs.append((similarity, topic, cluster))
-
-    linked_topic_ids: set[UUID] = set()
-    linked_cluster_ids: set[UUID] = set()
-    for _, topic, cluster in sorted(scored_pairs, key=lambda item: item[0], reverse=True):
-        if topic.id in linked_topic_ids or cluster.id in linked_cluster_ids:
-            continue
-        topic.linked_cluster_id = cluster.id
-        cluster.linked_doc_topic_id = topic.id
-        linked_topic_ids.add(topic.id)
-        linked_cluster_ids.add(cluster.id)
-    db.flush()
+    return scored_pairs
 
 
 def _impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
@@ -1233,6 +1324,47 @@ def _cluster_status_value(status: GapClusterStatus | str) -> str:
     if isinstance(status, GapClusterStatus):
         return status.value
     return str(status)
+
+
+def _effective_mode_b_status(cluster: GapCluster) -> GapClusterStatus:
+    status = cluster.status if isinstance(cluster.status, GapClusterStatus) else GapClusterStatus(str(cluster.status))
+    if status == GapClusterStatus.inactive:
+        return GapClusterStatus.inactive
+    if status not in {GapClusterStatus.closed, GapClusterStatus.dismissed}:
+        return status
+    reference_time = _cluster_activity_at(cluster)
+    if reference_time <= datetime.now(timezone.utc) - timedelta(days=GapLifecyclePolicy().inactive_days):
+        return GapClusterStatus.inactive
+    return status
+
+
+def _mode_b_status_matches_filter(status_filter: ModeBStatusFilter, status: GapClusterStatus) -> bool:
+    if status_filter == "active":
+        return status == GapClusterStatus.active
+    if status_filter == "archived":
+        return status in {GapClusterStatus.closed, GapClusterStatus.dismissed, GapClusterStatus.inactive}
+    if status_filter == "closed":
+        return status == GapClusterStatus.closed
+    if status_filter == "dismissed":
+        return status == GapClusterStatus.dismissed
+    if status_filter == "inactive":
+        return status == GapClusterStatus.inactive
+    return status in {
+        GapClusterStatus.active,
+        GapClusterStatus.closed,
+        GapClusterStatus.dismissed,
+        GapClusterStatus.inactive,
+    }
+
+
+def _cluster_activity_at(cluster: GapCluster) -> datetime:
+    for value in (cluster.last_computed_at, cluster.last_question_at, cluster.created_at):
+        if value is None:
+            continue
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _clean_questions(raw_questions: object) -> list[str]:
@@ -1377,30 +1509,38 @@ def _build_coverage_query(candidate: ModeATopicCandidate) -> str:
     return "\n".join(parts)
 
 
-def _compute_mode_a_coverage(
+def _compute_gap_coverage(
     *,
+    repository: GapAnalyzerRepository,
+    tenant_id: UUID,
     query_text: str,
     query_embedding: list[float] | None,
-    corpus_chunks: list[_PreparedCorpusChunk],
 ) -> float:
-    query_tokens = _tokenize(query_text)
-    query_embedding_norm = _vector_norm(query_embedding)
     best_semantic = 0.0
-    best_lexical = 0.0
-    for chunk in corpus_chunks:
-        if query_embedding is not None:
-            best_semantic = max(
-                best_semantic,
-                _cosine_similarity(
-                    query_embedding,
-                    chunk.vector,
-                    first_norm=query_embedding_norm,
-                    second_norm=chunk.vector_norm,
-                ),
-            )
-        if query_tokens:
-            best_lexical = max(best_lexical, _token_overlap(query_tokens, chunk.tokens))
-    return max(best_semantic, best_lexical)
+    if query_embedding is not None:
+        semantic_matches = repository.vector_top_k_for_tenant(
+            tenant_id=tenant_id,
+            query_embedding=query_embedding,
+            top_k=3,
+            excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
+        )
+        if semantic_matches:
+            best_semantic = semantic_matches[0].score
+
+    lexical_match = repository.bm25_match_for_tenant(
+        tenant_id=tenant_id,
+        query_text=query_text,
+        excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
+    )
+    return max(best_semantic, _bm25_coverage_score(lexical_match.score, lexical_match.match_kind))
+
+
+def _bm25_coverage_score(score: float, match_kind: str) -> float:
+    if match_kind == "exact_title":
+        return 1.0
+    if match_kind == "body":
+        return 0.5 + (min(max(score, 0.0), 1.0) * 0.25)
+    return 0.0
 
 
 def _is_dismissed_candidate(
@@ -1512,15 +1652,17 @@ def _match_mode_b_cluster(
 
 def _build_new_mode_b_cluster(
     *,
+    repository: GapAnalyzerRepository,
+    tenant_id: UUID,
     question: ModeBQuestionRecord,
     question_embedding: list[float],
     question_norm: float,
-    corpus_chunks: list[_PreparedCorpusChunk],
 ) -> _MutableModeBCluster:
-    coverage_score = _compute_mode_a_coverage(
+    coverage_score = _compute_gap_coverage(
+        repository=repository,
+        tenant_id=tenant_id,
         query_text=question.question_text,
         query_embedding=question_embedding,
-        corpus_chunks=corpus_chunks,
     )
     status = _mode_b_status_from_coverage(coverage_score)
     return _MutableModeBCluster(
@@ -1569,13 +1711,15 @@ def _update_mode_b_cluster(
 
 def _finalize_mode_b_cluster(
     *,
+    repository: GapAnalyzerRepository,
+    tenant_id: UUID,
     cluster: _MutableModeBCluster,
-    corpus_chunks: list[_PreparedCorpusChunk],
 ) -> None:
-    cluster.coverage_score = _compute_mode_a_coverage(
+    cluster.coverage_score = _compute_gap_coverage(
+        repository=repository,
+        tenant_id=tenant_id,
         query_text=cluster.label,
         query_embedding=cluster.centroid,
-        corpus_chunks=corpus_chunks,
     )
     cluster.status = _mode_b_status_from_coverage(cluster.coverage_score)
 

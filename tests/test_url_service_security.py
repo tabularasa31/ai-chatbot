@@ -277,7 +277,6 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
         "https://docs.example.com/reference",
     ]
 
-
 def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
     requested_urls: list[str] = []
     chain_length = url_service.MAX_SITEMAPS_PER_SOURCE + 5

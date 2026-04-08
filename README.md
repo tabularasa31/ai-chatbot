@@ -106,6 +106,7 @@ For grouped developer-focused test commands (P0 smoke, auth reset, escalation, R
 
 ```bash
 ruff check backend
+ruff check backend/documents/url_service.py backend/documents/parsers.py --select N
 make smoke
 make test-sqlite
 

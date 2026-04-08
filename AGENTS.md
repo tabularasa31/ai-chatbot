@@ -17,6 +17,13 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |
 | Widget | Dedicated Next.js routes (`/widget`), API calls; some public endpoints in `backend/routes/widget.py` and `backend/widget/` |
 
+Gap Analyzer is now implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
+
+- `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
+- `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with exact feedback correlation, incremental clustering, periodic full reclustering, and Mode A ↔ Mode B linking/dedupe on the read side
+
+The dashboard/API surface currently includes `GET /gap-analyzer`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
+
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 
 - `answer`

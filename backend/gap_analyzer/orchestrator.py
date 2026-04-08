@@ -416,12 +416,42 @@ class GapAnalyzerOrchestrator:
                 )
             questions = [_mode_b_question_record_from_row(row) for row in question_rows]
 
+        protected_cluster_ids = {
+            row.cluster_id
+            for row in question_rows
+            if row.cluster_id is not None and _vector_from_unknown(row.embedding) is None
+        }
+        question_cluster_ids = {row.id: row.cluster_id for row in question_rows}
+        if protected_cluster_ids:
+            logger.warning(
+                "gap_analyzer_mode_b_weekly_recluster_skipping_clusters_without_embeddings tenant_id=%s cluster_count=%s",
+                tenant_id,
+                len(protected_cluster_ids),
+            )
+
         corpus_chunks = repository.get_mode_a_corpus_chunks(
             tenant_id=tenant_id,
             excluded_file_types=DocumentScopePolicy().excluded_mode_a_file_types,
         )
         prepared_corpus = _prepare_corpus_chunks(corpus_chunks)
+        rebuild_cluster_ids = [cluster_id for cluster_id in affected_cluster_ids if cluster_id not in protected_cluster_ids]
+        questions = [
+            question
+            for question in questions
+            if _vector_from_unknown(question.embedding) is not None
+            and (
+                question_cluster_ids.get(question.question_id) is None
+                or question_cluster_ids.get(question.question_id) in rebuild_cluster_ids
+            )
+        ]
         scoped_question_ids = [question.question_id for question in questions]
+
+        if not scoped_question_ids and not rebuild_cluster_ids:
+            return ModeBResult(
+                tenant_id=tenant_id,
+                status=GapCommandStatus.accepted,
+                started_at=started_at,
+            )
 
         if scoped_question_ids:
             for question_id_batch in _batched(scoped_question_ids, _BULK_ID_BATCH_SIZE):
@@ -432,15 +462,15 @@ class GapAnalyzerOrchestrator:
                 )
             db.flush()
 
-        if affected_cluster_ids:
+        if rebuild_cluster_ids:
             (
                 db.query(GapDocTopic)
-                .filter(GapDocTopic.linked_cluster_id.in_(affected_cluster_ids))
+                .filter(GapDocTopic.linked_cluster_id.in_(rebuild_cluster_ids))
                 .update({GapDocTopic.linked_cluster_id: None}, synchronize_session=False)
             )
             (
                 db.query(GapCluster)
-                .filter(GapCluster.id.in_(affected_cluster_ids))
+                .filter(GapCluster.id.in_(rebuild_cluster_ids))
                 .delete(synchronize_session=False)
             )
             db.flush()

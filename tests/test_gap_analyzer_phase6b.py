@@ -245,3 +245,61 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
         "Legacy billing exports",
     }
     assert {item["status"] for item in mixed_data["mode_b_items"]} == {"closed", "dismissed"}
+
+
+def test_run_mode_b_weekly_reclustering_preserves_clusters_with_blank_unembedded_questions(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase6b-blank@example.com",
+        name="Gap Phase 6B Blank Question Client",
+    )
+    now = datetime.now(timezone.utc)
+    protected_cluster = GapCluster(
+        tenant_id=client_id,
+        label="Invoice exports",
+        centroid=_vector(1.0, 0.0, 0.0),
+        question_count=2,
+        aggregate_signal_weight=3.0,
+        coverage_score=0.25,
+        status=GapClusterStatus.active,
+        is_new=False,
+        last_question_at=now - timedelta(days=2),
+        last_computed_at=now - timedelta(days=2),
+    )
+    db_session.add(protected_cluster)
+    db_session.flush()
+    protected_cluster_id = protected_cluster.id
+
+    blank_question = GapQuestion(
+        tenant_id=client_id,
+        question_text="",
+        embedding=None,
+        cluster_id=protected_cluster_id,
+        gap_signal_weight=1.0,
+        created_at=now - timedelta(days=1),
+    )
+    valid_question = GapQuestion(
+        tenant_id=client_id,
+        question_text="How do invoice exports work?",
+        embedding=_vector(1.0, 0.0, 0.0),
+        cluster_id=protected_cluster_id,
+        gap_signal_weight=2.0,
+        created_at=now - timedelta(days=1),
+    )
+    db_session.add_all([blank_question, valid_question])
+    db_session.commit()
+
+    orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
+    result = orchestrator.run_mode_b_weekly_reclustering(client_id)
+
+    assert result.tenant_id == client_id
+    assert db_session.get(GapCluster, protected_cluster_id) is not None
+
+    db_session.refresh(blank_question)
+    db_session.refresh(valid_question)
+    assert blank_question.cluster_id == protected_cluster_id
+    assert valid_question.cluster_id == protected_cluster_id

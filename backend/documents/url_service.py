@@ -1168,7 +1168,7 @@ def _upsert_structured_document(
     )
     try:
         vectors = _embed_chunks(rendered_chunks, api_key)
-        for chunk, vector in zip(rendered_chunks, vectors, strict=False):
+        for chunk, vector in zip(rendered_chunks, vectors, strict=True):
             db.add(
                 Embedding(
                     document_id=doc.id,

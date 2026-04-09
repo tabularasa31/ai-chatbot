@@ -273,10 +273,6 @@ def test_process_chat_message_persists_gap_signal_for_fallback_turn(
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        "backend.chat.service._build_clarification_decision",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
         "backend.chat.service.run_chat_pipeline",
         lambda *args, **kwargs: ChatPipelineResult(
             raw_answer="I am not sure.",

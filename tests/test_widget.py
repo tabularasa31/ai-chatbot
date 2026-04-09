@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.chat.service import ChatTurnOutcome, ClarificationPayload, ClarificationOption
+from backend.chat.service import ChatTurnOutcome
 from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -350,7 +350,7 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert row.conversation_turns == 1
 
 
-def test_widget_chat_returns_structured_clarification_payload(
+def test_widget_chat_returns_plain_answer_payload(
     client: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -368,32 +368,17 @@ def test_widget_chat_returns_structured_clarification_payload(
     monkeypatch.setattr(
         "backend.routes.widget.process_chat_message",
         lambda *args, **kwargs: ChatTurnOutcome(
-            text="Do you want to connect the domain to DNS, CDN, or SSL?",
+            text="Which provider are you trying to configure?",
             document_ids=[],
             tokens_used=0,
             chat_ended=False,
-            message_type="clarification",
-            clarification_reason="ambiguous_intent",
-            clarification_type="disambiguation",
-            clarification=ClarificationPayload(
-                reason="ambiguous_intent",
-                type="disambiguation",
-                options=[
-                    ClarificationOption(id="dns", label="DNS"),
-                    ClarificationOption(id="cdn", label="CDN"),
-                ],
-                requested_fields=[],
-                original_user_message="How to connect domain?",
-                turn_index=1,
-            ),
         ),
     )
 
     r = client.post(_widget_url(public_id, message="How to connect domain?"))
     assert r.status_code == 200
     data = r.json()
-    assert data["text"] == "Do you want to connect the domain to DNS, CDN, or SSL?"
+    assert data["text"] == "Which provider are you trying to configure?"
     assert data["response"] == data["text"]
-    assert data["message_type"] == "clarification"
-    assert data["clarification"]["reason"] == "ambiguous_intent"
-    assert data["clarification"]["options"][0]["id"] == "dns"
+    assert "message_type" not in data
+    assert "clarification" not in data

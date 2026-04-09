@@ -11,7 +11,6 @@ import {
   appendSystemMarker,
   createTextMessage,
   getLastEndedMarkerIndex,
-  type ChatWidgetClarification,
   type ChatWidgetMessage,
 } from "@/lib/widget-conversation";
 
@@ -187,8 +186,6 @@ export function ChatWidget({
     payload: {
       text?: string;
       response?: string;
-      message_type?: "answer" | "clarification" | "partial_with_clarification";
-      clarification?: ChatWidgetClarification | null;
       chat_ended?: boolean;
     },
   ) => {
@@ -198,10 +195,7 @@ export function ChatWidget({
     const display = stripEscalationToken(raw) || raw;
     setMessages((prev) => [
       ...prev,
-      createTextMessage("assistant", display, {
-        messageType: payload.message_type ?? "answer",
-        clarification: payload.clarification ?? null,
-      }),
+      createTextMessage("assistant", display),
     ]);
     if (payload.chat_ended === true) {
       handleChatEnded();
@@ -211,11 +205,9 @@ export function ChatWidget({
   const requestWidgetTurn = useCallback(async ({
     message,
     attemptSessionId,
-    optionId,
   }: {
     message: string;
     attemptSessionId: string | null;
-    optionId?: string | null;
   }) => {
     const params = new URLSearchParams({
       botId,
@@ -223,15 +215,12 @@ export function ChatWidget({
     });
     if (attemptSessionId) params.set("session_id", attemptSessionId);
     if (localeParam) params.set("locale", localeParam);
-    if (optionId) params.set("option_id", optionId);
 
     const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
     const payload = (await res.json().catch(() => ({}))) as {
       detail?: unknown;
       text?: string;
       response?: string;
-      message_type?: "answer" | "clarification" | "partial_with_clarification";
-      clarification?: ChatWidgetClarification | null;
       session_id?: string;
       chat_ended?: boolean;
     };
@@ -249,8 +238,6 @@ export function ChatWidget({
     const data = payload as {
       text?: string;
       response?: string;
-      message_type?: "answer" | "clarification" | "partial_with_clarification";
-      clarification?: ChatWidgetClarification | null;
       session_id: string;
       chat_ended?: boolean;
     };
@@ -312,11 +299,10 @@ export function ChatWidget({
     () => getLastEndedMarkerIndex(messages),
     [messages],
   );
-  const lastMessageId = messages[messages.length - 1]?.id;
 
-  const handleSend = async (override?: { text: string; optionId?: string | null }) => {
-    const userMessage = override?.text?.trim() ?? trimmedInput;
-    if (!userMessage || (!override && !canSend) || chatClosed) return;
+  const handleSend = async () => {
+    const userMessage = trimmedInput;
+    if (!userMessage || !canSend || chatClosed) return;
 
     setLoading(true);
     setInput("");
@@ -326,7 +312,6 @@ export function ChatWidget({
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
         attemptSessionId: sessionId,
-        optionId: override?.optionId,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
@@ -336,7 +321,6 @@ export function ChatWidget({
         ({ res, payload } = await requestWidgetTurn({
           message: userMessage,
           attemptSessionId: null,
-          optionId: override?.optionId,
         }));
         detail = payload.detail;
         code = apiErrorCode(detail);
@@ -349,8 +333,6 @@ export function ChatWidget({
       const data = payload as {
         text?: string;
         response?: string;
-        message_type?: "answer" | "clarification" | "partial_with_clarification";
-        clarification?: ChatWidgetClarification | null;
         session_id: string;
         chat_ended?: boolean;
       };
@@ -457,22 +439,6 @@ export function ChatWidget({
                         <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
                       </div>
                     </div>
-
-                    {msg.type === "assistant" && msg.clarification?.options?.length && msg.id === lastMessageId ? (
-                      <div className="ml-0 mt-3 flex flex-wrap gap-2 sm:ml-12">
-                        {msg.clarification.options.map((option) => (
-                          <button
-                            key={`${msg.id}-${option.id}`}
-                            type="button"
-                            onClick={() => void handleSend({ text: option.label, optionId: option.id })}
-                            disabled={loading || chatClosed}
-                            className="rounded-full border border-[#D8B4FE] bg-[#FAF5FF] px-3 py-1.5 text-sm font-medium text-[#7E22CE] transition hover:bg-[#F3E8FF] disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {option.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
 
                     {msg.type === "assistant" && renderBelowAssistant ? (
                       <div className="ml-12 mt-3 max-w-[85%]">

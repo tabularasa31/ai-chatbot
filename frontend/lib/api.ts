@@ -10,25 +10,6 @@ export type ChatSessionSummary = {
 };
 
 export type MessageFeedbackValue = "up" | "down" | "none";
-export type ChatMessageType = "answer" | "clarification" | "partial_with_clarification";
-export type ClarificationReason =
-  | "ambiguous_intent"
-  | "missing_critical_slot"
-  | "low_retrieval_confidence";
-export type ClarificationType =
-  | "disambiguation"
-  | "slot_request"
-  | "context_request"
-  | "partial_plus_question";
-
-export type ClarificationPayload = {
-  reason: ClarificationReason;
-  type: ClarificationType;
-  options: Array<{ id: string; label: string }>;
-  requested_fields: string[];
-  original_user_message: string | null;
-  turn_index: number;
-};
 
 export type ChatSessionLogs = {
   session_id: string;
@@ -907,7 +888,7 @@ export const api = {
       question: string,
       apiKey: string,
       sessionId?: string,
-      options?: { browserLocale?: string | null; clarificationOptionId?: string | null }
+      options?: { browserLocale?: string | null }
     ) {
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
@@ -916,11 +897,8 @@ export const api = {
       if (options?.browserLocale) {
         headers["X-Browser-Locale"] = options.browserLocale;
       }
-      const body: { question: string; session_id?: string; clarification_option_id?: string } = { question };
+      const body: { question: string; session_id?: string } = { question };
       if (sessionId) body.session_id = sessionId;
-      if (options?.clarificationOptionId) {
-        body.clarification_option_id = options.clarificationOptionId;
-      }
       const res = await fetch(`${BASE_URL}/chat`, {
         method: "POST",
         headers,
@@ -931,8 +909,6 @@ export const api = {
       return data as {
         text: string;
         answer: string;
-        message_type: ChatMessageType;
-        clarification?: ClarificationPayload | null;
         session_id: string;
         source_documents?: string[];
         tokens_used?: number;

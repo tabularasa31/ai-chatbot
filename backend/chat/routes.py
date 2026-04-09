@@ -17,12 +17,10 @@ from backend.chat.schemas import (
     ChatHistoryResponse,
     ChatMessageLogItem,
     ChatMessageLogResponse,
-    ChatMessageType,
     ChatRequest,
     ChatResponse,
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
-    ClarificationPayloadResponse,
     MessageFeedbackRequest,
     MessageFeedbackResponse,
     MessageResponse,
@@ -102,12 +100,6 @@ class DebugInfoResponse(BaseModel):
     is_faq_direct: bool = False
     validation_applied: bool = False
     validation_outcome: Literal["valid", "fallback", "skipped"] | None = None
-    clarification_considered: bool = False
-    message_type: ChatMessageType = ChatMessageType.answer
-    clarification_reason: str | None = None
-    clarification_type: str | None = None
-    clarification: ClarificationPayloadResponse | None = None
-    safe_partial_source_type: str | None = None
 
 
 class ChatDebugResponse(BaseModel):
@@ -179,7 +171,6 @@ def chat(
             db=db,
             api_key=client.openai_api_key,
             browser_locale=x_browser_locale,
-            clarification_option_id=body.clarification_option_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -192,10 +183,6 @@ def chat(
     return ChatResponse(
         text=outcome.text,
         answer=outcome.text,
-        message_type=outcome.message_type,
-        clarification=(
-            outcome.clarification.to_dict() if outcome.clarification is not None else None
-        ),
         session_id=session_id,
         source_documents=outcome.document_ids,
         tokens_used=outcome.tokens_used,
@@ -291,12 +278,6 @@ def chat_debug(
         is_faq_direct=bool(debug_dict.get("is_faq_direct", False)),
         validation_applied=bool(debug_dict.get("validation_applied", False)),
         validation_outcome=debug_dict.get("validation_outcome"),
-        clarification_considered=bool(debug_dict.get("clarification_considered", False)),
-        message_type=debug_dict.get("message_type", "answer"),
-        clarification_reason=debug_dict.get("clarification_reason"),
-        clarification_type=debug_dict.get("clarification_type"),
-        clarification=debug_dict.get("clarification"),
-        safe_partial_source_type=debug_dict.get("safe_partial_source_type"),
     )
     return ChatDebugResponse(
         answer=answer,

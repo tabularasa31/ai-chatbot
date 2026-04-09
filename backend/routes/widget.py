@@ -177,7 +177,6 @@ def widget_chat(
     message: Annotated[str, Query(description="User message")],
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
     session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
-    option_id: Annotated[str | None, Query(description="Optional structured clarification option ID")] = None,
     locale: Annotated[
         str | None, Query(description="Browser locale hint (e.g. ru-RU)")
     ] = None,
@@ -248,7 +247,6 @@ def widget_chat(
             api_key=client.openai_api_key,
             user_context=None,
             browser_locale=locale.strip() if locale and locale.strip() else None,
-            clarification_option_id=option_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
@@ -261,10 +259,6 @@ def widget_chat(
     return {
         "text": outcome.text,
         "response": outcome.text,
-        "message_type": outcome.message_type,
-        "clarification": (
-            outcome.clarification.to_dict() if outcome.clarification is not None else None
-        ),
         "session_id": str(sid),
         "chat_ended": outcome.chat_ended,
     }

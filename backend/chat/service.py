@@ -1370,21 +1370,6 @@ def process_chat_message(
     user_context_line = _user_context_prompt_line(effective_user_ctx)
     question_for_pipeline = redacted_question
 
-    if (chat.user_context or {}).get("clarification_state") is not None:
-        ctx = dict(chat.user_context or {})
-        ctx.pop("clarification_state", None)
-        chat.user_context = ctx or None
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
-        _trace_event(
-            trace,
-            "clarification_state_cleared",
-            {
-                "cleanup_reason": "structured_clarification_disabled",
-            },
-        )
-
     explicit_human_request = detect_human_request(question_for_pipeline)
 
     disclosure_cfg: dict[str, Any] | None = None

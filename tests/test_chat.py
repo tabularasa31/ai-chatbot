@@ -4018,18 +4018,17 @@ def test_process_chat_message_clears_legacy_clarification_state(
     assert "clarification_state" not in (chat.user_context or {})
 
 
-def test_process_chat_message_persists_legacy_clarification_cleanup_on_failure(
+def test_process_chat_message_clears_legacy_clarification_state_before_greeting(
     client: TestClient,
     db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat
 
-    token = register_and_verify_user(client, db_session, email="clarify-cleanup-failure@example.com")
+    token = register_and_verify_user(client, db_session, email="clarify-greeting-cleanup@example.com")
     cl_resp = client.post(
         "/clients",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Clarify Cleanup Failure Client"},
+        json={"name": "Clarify Greeting Cleanup Client"},
     )
     set_client_openai_key(client, token)
     client_id = uuid.UUID(cl_resp.json()["id"])
@@ -4057,20 +4056,15 @@ def test_process_chat_message_persists_legacy_clarification_cleanup_on_failure(
     db_session.add(chat)
     db_session.commit()
 
-    monkeypatch.setattr(
-        "backend.chat.service.run_chat_pipeline",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pipeline boom")),
+    outcome = process_chat_message(
+        client_id,
+        "",
+        session_id,
+        db_session,
+        api_key=api_key,
     )
 
-    with pytest.raises(RuntimeError, match="pipeline boom"):
-        process_chat_message(
-            client_id,
-            "CDN",
-            session_id,
-            db_session,
-            api_key=api_key,
-        )
-
+    assert "assistant" in outcome.text.lower()
     db_session.refresh(chat)
     assert "clarification_state" not in (chat.user_context or {})
 

@@ -1310,6 +1310,15 @@ def process_chat_message(
         db.commit()
         db.refresh(chat)
 
+    legacy_clarification_state_cleared = False
+    if (chat.user_context or {}).get("clarification_state") is not None:
+        ctx = dict(chat.user_context or {})
+        ctx.pop("clarification_state", None)
+        chat.user_context = ctx or None
+        db.add(chat)
+        db.flush()
+        legacy_clarification_state_cleared = True
+
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
     fallback_locale = _resolve_fallback_locale(effective_user_ctx, browser_locale)
@@ -1332,6 +1341,15 @@ def process_chat_message(
         tags=[f"tenant:{client_id}"],
         force_trace=explicit_human_request_raw,
     )
+
+    if legacy_clarification_state_cleared:
+        _trace_event(
+            trace,
+            "clarification_state_cleared",
+            {
+                "cleanup_reason": "structured_clarification_disabled",
+            },
+        )
 
     question_text = question.strip()
     has_existing_messages = bool(chat.messages)
@@ -1369,21 +1387,6 @@ def process_chat_message(
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
     question_for_pipeline = redacted_question
-
-    if (chat.user_context or {}).get("clarification_state") is not None:
-        ctx = dict(chat.user_context or {})
-        ctx.pop("clarification_state", None)
-        chat.user_context = ctx or None
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
-        _trace_event(
-            trace,
-            "clarification_state_cleared",
-            {
-                "cleanup_reason": "structured_clarification_disabled",
-            },
-        )
 
     explicit_human_request = detect_human_request(question_for_pipeline)
 

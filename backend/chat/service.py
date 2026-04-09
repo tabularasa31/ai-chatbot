@@ -1375,6 +1375,8 @@ def process_chat_message(
         ctx.pop("clarification_state", None)
         chat.user_context = ctx or None
         db.add(chat)
+        db.commit()
+        db.refresh(chat)
         _trace_event(
             trace,
             "clarification_state_cleared",

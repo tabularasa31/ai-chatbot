@@ -4018,6 +4018,63 @@ def test_process_chat_message_clears_legacy_clarification_state(
     assert "clarification_state" not in (chat.user_context or {})
 
 
+def test_process_chat_message_persists_legacy_clarification_cleanup_on_failure(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.models import Chat
+
+    token = register_and_verify_user(client, db_session, email="clarify-cleanup-failure@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Clarify Cleanup Failure Client"},
+    )
+    set_client_openai_key(client, token)
+    client_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+    session_id = uuid.uuid4()
+
+    chat = Chat(
+        client_id=client_id,
+        session_id=session_id,
+        user_context={
+            "clarification_state": {
+                "version": 1,
+                "status": "awaiting_reply",
+                "original_user_message": "How to connect domain?",
+                "clarification_prompt": "Do you want DNS, CDN, or SSL?",
+                "reason": "ambiguous_intent",
+                "type": "disambiguation",
+                "options": [],
+                "requested_fields": [],
+                "turn_count": 1,
+                "created_at": "2026-04-06T00:00:00Z",
+            }
+        },
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.run_chat_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("pipeline boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="pipeline boom"):
+        process_chat_message(
+            client_id,
+            "CDN",
+            session_id,
+            db_session,
+            api_key=api_key,
+        )
+
+    db_session.refresh(chat)
+    assert "clarification_state" not in (chat.user_context or {})
+
+
 def test_run_debug_reports_plain_answer_metadata_when_model_asks_to_clarify(
     client: TestClient,
     db_session: Session,

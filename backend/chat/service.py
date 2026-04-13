@@ -180,6 +180,7 @@ def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> 
         db.query(QuickAnswer)
         .filter(QuickAnswer.tenant_id == client_id, QuickAnswer.key.in_(selected_keys))
         .options(selectinload(QuickAnswer.source))
+        .order_by(QuickAnswer.key.asc(), QuickAnswer.detected_at.desc())
         .all()
     )
     lines_by_key: dict[str, str] = {}

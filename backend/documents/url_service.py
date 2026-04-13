@@ -38,6 +38,7 @@ from backend.documents.parsers import (
     looks_like_openapi,
 )
 from backend.documents.quick_answers import (
+    SUPPORTED_QUICK_ANSWER_KEYS,
     QuickAnswerCandidate,
     merge_quick_answer_candidates,
     scan_html_for_quick_answers,
@@ -1514,6 +1515,11 @@ def _replace_quick_answers_for_source(
 ) -> None:
     db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete(synchronize_session=False)
     for candidate in quick_answers.values():
+        if candidate.key not in SUPPORTED_QUICK_ANSWER_KEYS:
+            continue
+        # Skip very low-confidence fallbacks (e.g. root_fallback for documentation_url)
+        if candidate.score <= 10:
+            continue
         db.add(
             QuickAnswer(
                 tenant_id=source.client_id,

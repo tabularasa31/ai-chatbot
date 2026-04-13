@@ -30,7 +30,7 @@ _STATUS_URL_RE = re.compile(r"(?:^|\.)status\.|statuspage\.io|instatus\.com|/sta
 _SUPPORT_EMAIL_CONTEXT_RE = re.compile(r"\b(support|help|customer care|customer success)\b", re.IGNORECASE)
 _SUPPORT_CHAT_PATTERNS: dict[str, re.Pattern[str]] = {
     "Intercom": re.compile(r"intercom", re.IGNORECASE),
-    "Crisp": re.compile(r"crisp", re.IGNORECASE),
+    "Crisp": re.compile(r"\$crisp|crisp\.chat|crisp-client", re.IGNORECASE),
     "Drift": re.compile(r"drift", re.IGNORECASE),
 }
 
@@ -93,7 +93,7 @@ def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> Qui
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href") or ""
         if href.lower().startswith("mailto:"):
-            value = href.split(":", 1)[1].strip()
+            value = href.split(":", 1)[1].split("?", 1)[0].strip()
             if value:
                 local_part = value.split("@", 1)[0]
                 context_parts = [

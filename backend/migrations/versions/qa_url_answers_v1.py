@@ -30,11 +30,19 @@ def _has_table(name: str) -> bool:
 def upgrade() -> None:
     is_postgres = _is_postgres()
     uuid_type = postgresql.UUID(as_uuid=True) if is_postgres else sa.String(length=36)
+    if is_postgres:
+        op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
     if not _has_table("quick_answers"):
         op.create_table(
             "quick_answers",
-            sa.Column("id", uuid_type, primary_key=True, nullable=False),
+            sa.Column(
+                "id",
+                uuid_type,
+                primary_key=True,
+                nullable=False,
+                server_default=sa.text("gen_random_uuid()") if is_postgres else None,
+            ),
             sa.Column("tenant_id", uuid_type, nullable=False),
             sa.Column("source_id", uuid_type, nullable=False),
             sa.Column("key", sa.String(length=64), nullable=False),
@@ -58,8 +66,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_quick_answers_source_key", "quick_answers", type_="unique")
-    op.drop_index("ix_quick_answers_tenant_key", table_name="quick_answers")
-    op.drop_index("ix_quick_answers_source_id", table_name="quick_answers")
-    op.drop_index("ix_quick_answers_tenant_id", table_name="quick_answers")
-    op.drop_table("quick_answers")
+    """Intentionally empty: upgrade is conditional and must not drop pre-existing tables."""

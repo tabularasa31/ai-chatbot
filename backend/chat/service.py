@@ -126,6 +126,16 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
+_PRICING_QUESTION_RE = re.compile(
+    r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
+)
+_STATUS_QUESTION_RE = re.compile(r"\b(status|incident|outage|downtime|uptime)\b")
+_SUPPORT_QUESTION_RE = re.compile(r"\b(support|contact|email|chat|live chat)\b")
+_DOCS_QUESTION_RE = re.compile(
+    r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b"
+)
+
+
 def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
     metadata = answer.metadata_json if isinstance(answer.metadata_json, dict) else {}
     method = str(metadata.get("method") or "").strip().lower()
@@ -156,13 +166,13 @@ def _quick_answer_keys_for_question(question: str) -> list[str]:
     lowered = question.casefold()
     selected: list[str] = []
 
-    if re.search(r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b", lowered):
+    if _PRICING_QUESTION_RE.search(lowered):
         selected.extend(["pricing_url", "trial_info"])
-    if re.search(r"\b(status|incident|outage|downtime|uptime)\b", lowered):
+    if _STATUS_QUESTION_RE.search(lowered):
         selected.append("status_page_url")
-    if re.search(r"\b(support|contact|email|chat|live chat)\b", lowered):
+    if _SUPPORT_QUESTION_RE.search(lowered):
         selected.extend(["support_email", "support_chat", "status_page_url"])
-    if re.search(r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b", lowered):
+    if _DOCS_QUESTION_RE.search(lowered):
         selected.append("documentation_url")
 
     return list(dict.fromkeys(selected))
@@ -180,7 +190,6 @@ def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> 
         db.query(QuickAnswer)
         .filter(QuickAnswer.tenant_id == client_id, QuickAnswer.key.in_(selected_keys))
         .options(selectinload(QuickAnswer.source))
-        .order_by(QuickAnswer.key.asc(), QuickAnswer.detected_at.desc())
         .all()
     )
     lines_by_key: dict[str, str] = {}
@@ -1471,14 +1480,6 @@ def process_chat_message(
         disclosure_cfg = client_row.disclosure_config
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
-    quick_answers_span = trace.span(
-        name="quick-answers-context",
-        input={"query": redacted_question},
-    )
-    quick_answer_items = _quick_answers_context(client_id, redacted_question, db)
-    quick_answers_span.end(
-        output={"count": len(quick_answer_items)}
-    )
 
     injection_start = perf_counter()
     injection_span = trace.span(

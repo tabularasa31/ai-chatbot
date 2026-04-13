@@ -61,6 +61,27 @@ def test_scan_html_for_quick_answers_detects_expected_fields() -> None:
     assert answers["support_chat"].value == "Intercom"
 
 
+def test_scan_html_for_quick_answers_prefers_support_mailto_when_multiple_exist() -> None:
+    html = """
+    <html>
+      <body>
+        <footer>
+          <a href="mailto:sales@example.com">Talk to sales</a>
+          <a href="mailto:help@example.com">Email support</a>
+        </footer>
+      </body>
+    </html>
+    """
+
+    answers = url_service.scan_html_for_quick_answers(
+        html=html,
+        page_url="https://docs.example.com/contact",
+        root_url="https://docs.example.com/",
+    )
+
+    assert answers["support_email"].value == "help@example.com"
+
+
 def test_validate_public_hostname_rejects_private_ip() -> None:
     with pytest.raises(HTTPException) as exc_info:
         url_service._validate_public_hostname("127.0.0.1")
@@ -607,19 +628,19 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
 
     url_service.crawl_url_source(source_id, "sk-test")
 
-    verify_session = Session(bind=engine)
-    refreshed_source = verify_session.query(UrlSource).filter(UrlSource.id == source_id).first()
-    run = verify_session.query(url_service.UrlSourceRun).filter_by(source_id=source_id).first()
+    with Session(bind=engine) as verify_session:
+        refreshed_source = verify_session.query(UrlSource).filter(UrlSource.id == source_id).first()
+        run = verify_session.query(url_service.UrlSourceRun).filter_by(source_id=source_id).first()
 
-    assert refreshed_source is not None
-    assert refreshed_source.status == SourceStatus.error
-    assert (
-        refreshed_source.error_message
-        == "Indexing failed — most pages could not be fetched or returned an unsupported format."
-    )
-    assert run is not None
-    assert run.status == SourceStatus.error.value
-    assert len(run.failed_urls) == 3
+        assert refreshed_source is not None
+        assert refreshed_source.status == SourceStatus.error
+        assert (
+            refreshed_source.error_message
+            == "Indexing failed — most pages could not be fetched or returned an unsupported format."
+        )
+        assert run is not None
+        assert run.status == SourceStatus.error.value
+        assert len(run.failed_urls) == 3
 
 
 def test_crawl_url_source_persists_quick_answers(

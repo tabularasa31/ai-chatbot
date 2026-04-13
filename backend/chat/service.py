@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 PREVIEW_MAX_LEN = 120
 
@@ -126,6 +126,32 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
 )
 
 
+def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
+    metadata = answer.metadata_json if isinstance(answer.metadata_json, dict) else {}
+    method = str(metadata.get("method") or "").strip().lower()
+
+    method_rank = {
+        "mailto": 5,
+        "anchor": 4,
+        "script": 4,
+        "regex": 3,
+        "source_url": 2,
+        "root_fallback": 1,
+    }.get(method, 0)
+    source_name = ((getattr(answer.source, "name", None) or "") if getattr(answer, "source", None) else "").lower()
+    source_url = ((getattr(answer.source, "url", None) or "") if getattr(answer, "source", None) else "").lower()
+    source_intent_rank = 0
+    if answer.key == "documentation_url":
+        if "doc" in source_name or "help" in source_name or "knowledge" in source_name:
+            source_intent_rank = 2
+        elif "/docs" in source_url or "docs." in source_url:
+            source_intent_rank = 1
+
+    detected_at = getattr(answer, "detected_at", None)
+    detected_ts = int(detected_at.timestamp()) if isinstance(detected_at, datetime) else 0
+    return (method_rank, source_intent_rank, detected_ts)
+
+
 def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
     """Return tenant quick answers as canonical structured context lines."""
     from backend.models import QuickAnswer
@@ -133,7 +159,7 @@ def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
     answers = (
         db.query(QuickAnswer)
         .filter(QuickAnswer.tenant_id == client_id)
-        .order_by(QuickAnswer.key.asc(), QuickAnswer.detected_at.desc())
+        .options(selectinload(QuickAnswer.source))
         .all()
     )
     lines_by_key: dict[str, str] = {}
@@ -145,7 +171,10 @@ def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
         "status_page_url": "Status page",
         "support_chat": "Support chat",
     }
-    for answer in answers:
+    for answer in sorted(
+        answers,
+        key=lambda item: (item.key, tuple(-value for value in _quick_answer_quality_score(item))),
+    ):
         if answer.key in lines_by_key:
             continue
         label = labels.get(answer.key, answer.key)
@@ -641,10 +670,11 @@ def run_chat_pipeline(
     )
 
     # --- 8. Validate answer ---
+    validation_context = retrieval.chunk_texts + quick_answer_items
     validation = validate_answer(
         question,
         raw_answer,
-        retrieval.chunk_texts,
+        validation_context,
         api_key=api_key,
         trace=trace,
     )
@@ -743,7 +773,8 @@ def build_rag_prompt(
         "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer structured quick answers when relevant.\n"
         "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
         "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
-        "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
+        "- Do not invent facts, settings, steps, page names, field names, or URLs unless they are supported by the provided context.\n"
+        "- Do not invent multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- Answer in the same language as the question.\n"

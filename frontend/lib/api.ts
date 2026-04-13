@@ -190,6 +190,13 @@ export type UrlSourcePage = {
   updated_at: string;
 };
 
+export type SourceQuickAnswer = {
+  key: string;
+  value: string;
+  source_url: string;
+  detected_at: string;
+};
+
 export type UrlSource = {
   id: string;
   name: string;
@@ -212,6 +219,7 @@ export type UrlSource = {
 export type UrlSourceDetail = UrlSource & {
   recent_runs: UrlSourceRun[];
   pages: UrlSourcePage[];
+  quick_answers: SourceQuickAnswer[];
 };
 
 export type KnowledgeExtractionStatus = "pending" | "done" | "failed";

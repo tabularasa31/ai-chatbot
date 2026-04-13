@@ -98,6 +98,15 @@ class SourcePageResponse(BaseModel):
     updated_at: datetime
 
 
+class QuickAnswerResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    key: str
+    value: str
+    source_url: str
+    detected_at: datetime
+
+
 class UrlSourceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -122,6 +131,7 @@ class UrlSourceResponse(BaseModel):
 class UrlSourceDetailResponse(UrlSourceResponse):
     recent_runs: list[UrlSourceRunResponse]
     pages: list[SourcePageResponse]
+    quick_answers: list[QuickAnswerResponse] = Field(default_factory=list)
 
 
 class KnowledgeSourcesResponse(BaseModel):

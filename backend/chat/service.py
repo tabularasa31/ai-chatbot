@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 PREVIEW_MAX_LEN = 120
 
@@ -116,6 +117,7 @@ Check if the answer is:
 1. Grounded in the provided context (not hallucinated)
 2. Actually answers the question, OR explicitly asks exactly one short clarifying question when one missing detail materially blocks a correct answer
 3. If it asks a clarifying question, it should still be helpful and not invent facts beyond the context
+4. It does not introduce unsupported concrete facts such as setting names, field names, URLs, workflow steps, or product limits that are not present in the provided context
 
 Respond ONLY with JSON (no markdown, no explanation):
 {{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
@@ -124,10 +126,90 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
+_PRICING_QUESTION_RE = re.compile(
+    r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
+)
+_STATUS_QUESTION_RE = re.compile(r"\b(status|incident|outage|downtime|uptime)\b")
+_SUPPORT_QUESTION_RE = re.compile(r"\b(support|contact|email|chat|live chat)\b")
+_DOCS_QUESTION_RE = re.compile(
+    r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b"
+)
 
-def match_quick_answer(question: str, client: Client | None = None) -> str | None:
-    """Placeholder for a future quick-answers layer from the observability spec."""
-    return None
+
+def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
+    metadata = answer.metadata_json if isinstance(answer.metadata_json, dict) else {}
+    method = str(metadata.get("method") or "").strip().lower()
+
+    method_rank = {
+        "mailto": 5,
+        "anchor": 4,
+        "script": 4,
+        "regex": 3,
+        "source_url": 2,
+        "root_fallback": 1,
+    }.get(method, 0)
+    source_name = ((getattr(answer.source, "name", None) or "") if getattr(answer, "source", None) else "").lower()
+    source_url = ((getattr(answer.source, "url", None) or "") if getattr(answer, "source", None) else "").lower()
+    source_intent_rank = 0
+    if answer.key == "documentation_url":
+        if "doc" in source_name or "help" in source_name or "knowledge" in source_name:
+            source_intent_rank = 2
+        elif "/docs" in source_url or "docs." in source_url:
+            source_intent_rank = 1
+
+    detected_at = getattr(answer, "detected_at", None)
+    detected_ts = int(detected_at.timestamp()) if isinstance(detected_at, datetime) else 0
+    return (method_rank, source_intent_rank, detected_ts)
+
+
+def _quick_answer_keys_for_question(question: str) -> list[str]:
+    lowered = question.casefold()
+    selected: list[str] = []
+
+    if _PRICING_QUESTION_RE.search(lowered):
+        selected.extend(["pricing_url", "trial_info"])
+    if _STATUS_QUESTION_RE.search(lowered):
+        selected.append("status_page_url")
+    if _SUPPORT_QUESTION_RE.search(lowered):
+        selected.extend(["support_email", "support_chat", "status_page_url"])
+    if _DOCS_QUESTION_RE.search(lowered):
+        selected.append("documentation_url")
+
+    return list(dict.fromkeys(selected))
+
+
+def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> list[str]:
+    """Return only the structured quick answers relevant to this question."""
+    from backend.models import QuickAnswer
+
+    selected_keys = _quick_answer_keys_for_question(question)
+    if not selected_keys:
+        return []
+
+    answers = (
+        db.query(QuickAnswer)
+        .filter(QuickAnswer.tenant_id == client_id, QuickAnswer.key.in_(selected_keys))
+        .options(selectinload(QuickAnswer.source))
+        .all()
+    )
+    lines_by_key: dict[str, str] = {}
+    labels = {
+        "support_email": "Support email",
+        "documentation_url": "Documentation",
+        "pricing_url": "Pricing",
+        "trial_info": "Trial info",
+        "status_page_url": "Status page",
+        "support_chat": "Support chat",
+    }
+    for answer in sorted(
+        answers,
+        key=lambda item: (item.key, tuple(-value for value in _quick_answer_quality_score(item))),
+    ):
+        if answer.key in lines_by_key:
+            continue
+        label = labels.get(answer.key, answer.key)
+        lines_by_key[answer.key] = f"{label}: {answer.value}"
+    return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
 
 
 def _safe_int(value: Any) -> int:
@@ -549,6 +631,7 @@ def run_chat_pipeline(
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
+    quick_answer_items = _quick_answers_context(client_id, question, db)
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
         "faq_context" if faq_context_items else "rag_only"
     )
@@ -612,14 +695,16 @@ def run_chat_pipeline(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
         trace=trace,
     )
 
     # --- 8. Validate answer ---
+    validation_context = retrieval.chunk_texts + quick_answer_items
     validation = validate_answer(
         question,
         raw_answer,
-        retrieval.chunk_texts,
+        validation_context,
         api_key=api_key,
         trace=trace,
     )
@@ -689,6 +774,7 @@ def build_rag_prompt(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -708,17 +794,19 @@ def build_rag_prompt(
 
     system_rules = (
         f"{DISCLOSURE_HARD_LIMITS}\n"
-        "You are a technical support agent for the client's product (SaaS, API, docs).\n"
+        "You are a technical support agent for the client's product.\n"
         "Rules:\n"
-        "- Answer based ONLY on the provided context. If context mentions the topic, you MUST answer from it.\n"
-        "- Do NOT claim you don't know when the context contains relevant info.\n"
-        "- If uncertain, say so but still answer from the context.\n"
+        "- Answer using ONLY the provided context, verified FAQ candidates, and structured quick answers.\n"
+        "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
+        "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
+        "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
+        "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer STRUCTURED QUICK ANSWERS when relevant.\n"
         "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
-        "- If you can safely answer part of the question from the context, do so briefly first and then ask one short clarifying question.\n"
-        "- Do NOT invent multiple-choice options unless the provided context explicitly supports them.\n"
-        "- Do NOT ask a clarifying question if the provided context already supports a clear answer.\n"
-        "- For \"which setting\" / \"какая настройка\" or similar: name the exact setting/field as in docs; cite where it is (section/page/menu) if the context contains it.\n"
-        "- Answer in the SAME LANGUAGE as the question (e.g. Russian if asked in Russian).\n"
+        "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
+        "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
+        "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
+        "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
+        "- Answer in the same language as the question.\n"
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
@@ -755,6 +843,15 @@ Do not treat them as exclusive truth when retrieved documents provide more speci
 
 {faq_block}
 """
+    if quick_answer_items:
+        quick_answers_block = "\n".join(f"- {item}" for item in quick_answer_items)
+        system_rules += f"""
+STRUCTURED QUICK ANSWERS
+Treat these as canonical tenant facts when they are relevant to the user question.
+Use them directly for links, contact details, pricing/status URLs, and other short factual answers.
+
+{quick_answers_block}
+"""
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -780,6 +877,7 @@ def build_rag_messages(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -790,6 +888,7 @@ def build_rag_messages(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -808,6 +907,7 @@ def generate_answer(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
     trace: TraceHandle | None = None,
 ) -> tuple[str, int]:
     """
@@ -823,7 +923,7 @@ def generate_answer(
     """
     # For faq_context strategy we may intentionally have no retrieval chunks,
     # but still want generation to use VERIFIED FAQ CANDIDATES hints.
-    if not context_chunks and not faq_context_items:
+    if not context_chunks and not faq_context_items and not quick_answer_items:
         return ("I don't have information about this.", 0)
 
     system_prompt, user_message = build_rag_messages(
@@ -834,6 +934,7 @@ def generate_answer(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -849,6 +950,7 @@ def generate_answer(
             generation_input = {
                 "question_preview": truncate_text(question),
                 "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
             }
         generation = trace.generation(
             name="llm-generation",
@@ -858,6 +960,7 @@ def generate_answer(
                 "temperature": 0.2,
                 "max_tokens": 500,
                 "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
                 "captures_full_prompt": settings.observability_capture_full_prompts,
                 "finish_reason_expected": "stop_or_length",
                 "system_prompt": (
@@ -1377,49 +1480,6 @@ def process_chat_message(
         disclosure_cfg = client_row.disclosure_config
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
-
-    quick_answer_span = trace.span(
-        name="quick-answers-check",
-        input={"query": redacted_question},
-    )
-    quick_answer = match_quick_answer(redacted_question, client_row)
-    quick_answer_span.end(
-        output={"matched": bool(quick_answer), "answer": quick_answer}
-    )
-    if quick_answer:
-        user_message, assistant_message = _persist_turn(
-            db,
-            chat,
-            client_id,
-            question,
-            quick_answer,
-            [],
-            0,
-            optional_entity_types=optional_entity_types,
-        )
-        _try_ingest_gap_signal(
-            chat=chat,
-            client_id=client_id,
-            session_id=session_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            question_text=redacted_question,
-            answer_confidence=None,
-            was_rejected=False,
-            had_fallback=False,
-            was_escalated=False,
-            language=fallback_locale,
-        )
-        trace.update(
-            output={"answer": quick_answer, "source": "quick_answers"},
-            metadata={"chat_ended": False, "escalated": False, "quick_answer": True},
-        )
-        return ChatTurnOutcome(
-            text=quick_answer,
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        )
 
     injection_start = perf_counter()
     injection_span = trace.span(

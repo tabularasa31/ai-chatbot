@@ -1,14 +1,42 @@
 name: CI
 
 on:
-  push:
-    branches: [main, deploy]
   pull_request:
     branches: [main, deploy]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'tests/**'
+              - 'requirements.txt'
+              - 'alembic/**'
+            frontend:
+              - 'frontend/**'
+
   backend:
     name: Backend (pytest + ruff)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true' || github.base_ref == 'deploy'
     runs-on: ubuntu-latest
 
     services:
@@ -66,6 +94,8 @@ jobs:
 
   frontend:
     name: Frontend (eslint + build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true' || github.base_ref == 'deploy'
     runs-on: ubuntu-latest
 
     steps:

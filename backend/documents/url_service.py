@@ -14,7 +14,7 @@ import socket
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib import robotparser
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -37,6 +37,11 @@ from backend.documents.parsers import (
     load_openapi_spec,
     looks_like_openapi,
 )
+from backend.documents.quick_answers import (
+    QuickAnswerCandidate,
+    merge_quick_answer_candidates,
+    scan_html_for_quick_answers,
+)
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
@@ -45,6 +50,7 @@ from backend.models import (
     DocumentStatus,
     DocumentType,
     Embedding,
+    QuickAnswer,
     SourceSchedule,
     SourceStatus,
     UrlSource,
@@ -1238,7 +1244,11 @@ def list_knowledge_sources(client_id: uuid.UUID, db: Session) -> dict[str, Any]:
 def get_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -> UrlSource:
     source = (
         db.query(UrlSource)
-        .options(selectinload(UrlSource.runs), selectinload(UrlSource.documents))
+        .options(
+            selectinload(UrlSource.runs),
+            selectinload(UrlSource.documents),
+            selectinload(UrlSource.quick_answers),
+        )
         .filter(UrlSource.id == source_id)
         .filter(UrlSource.client_id == client_id)
         .first()
@@ -1361,6 +1371,7 @@ class _CrawlResult:
     indexed_urls: set[str]
     failures: list[dict[str, str]]
     chunks_created: int
+    quick_answers: dict[str, QuickAnswerCandidate] = field(default_factory=dict)
 
 
 def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
@@ -1401,6 +1412,15 @@ def _index_pages(
     """
     structured_source = _fetch_openapi_source(source.url)
     if structured_source is not None:
+        quick_answers = {
+            "documentation_url": QuickAnswerCandidate(
+                key="documentation_url",
+                value=source.url,
+                source_url=source.url,
+                score=100,
+                metadata={"method": "source_url"},
+            )
+        }
         _, chunk_count = _upsert_structured_document(
             source=source,
             url=source.url,
@@ -1417,7 +1437,12 @@ def _index_pages(
             "source_kind": "url",
             "source_format": _normalize_source_format(structured_source.source_format, from_url=True),
         }
-        return _CrawlResult(indexed_urls={source.url}, failures=[], chunks_created=chunk_count)
+        return _CrawlResult(
+            indexed_urls={source.url},
+            failures=[],
+            chunks_created=chunk_count,
+            quick_answers=quick_answers,
+        )
 
     root_html = _fetch_page_html(source.url) or ""
     source.metadata_json = {
@@ -1429,12 +1454,29 @@ def _index_pages(
     indexed_urls: set[str] = set()
     failures: list[dict[str, str]] = []
     chunks_created = 0
+    quick_answers = {
+        "documentation_url": QuickAnswerCandidate(
+            key="documentation_url",
+            value=source.url,
+            source_url=source.url,
+            score=10,
+            metadata={"method": "source_url"},
+        )
+    }
 
     for url in plan.urls:
         html = _fetch_page_html(url)
         if not html:
             failures.append({"url": url, "reason": "Could not fetch HTML"})
             continue
+        quick_answers = merge_quick_answer_candidates(
+            quick_answers,
+            scan_html_for_quick_answers(
+                html=html,
+                page_url=url,
+                root_url=source.url,
+            ),
+        )
         page = _extract_page(url, html)
         if not page:
             failures.append({"url": url, "reason": "No readable content extracted"})
@@ -1456,7 +1498,33 @@ def _index_pages(
         if source.pages_indexed and source.pages_indexed % 5 == 0:
             db.commit()
 
-    return _CrawlResult(indexed_urls=indexed_urls, failures=failures, chunks_created=chunks_created)
+    return _CrawlResult(
+        indexed_urls=indexed_urls,
+        failures=failures,
+        chunks_created=chunks_created,
+        quick_answers=quick_answers,
+    )
+
+
+def _replace_quick_answers_for_source(
+    *,
+    source: UrlSource,
+    quick_answers: dict[str, QuickAnswerCandidate],
+    db: Session,
+) -> None:
+    db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete(synchronize_session=False)
+    for candidate in quick_answers.values():
+        db.add(
+            QuickAnswer(
+                tenant_id=source.client_id,
+                source_id=source.id,
+                key=candidate.key,
+                value=candidate.value,
+                source_url=candidate.source_url,
+                metadata_json=candidate.metadata,
+                detected_at=_utcnow(),
+            )
+        )
 
 
 def _finalize_crawl(
@@ -1509,6 +1577,7 @@ def _finalize_crawl(
         source.error_message = _summarize_crawl_failure(result.failures)
         _mark_run_finished(run, status=SourceStatus.error.value, error_message=source.error_message)
     else:
+        _replace_quick_answers_for_source(source=source, quick_answers=result.quick_answers, db=db)
         source.status = SourceStatus.ready
         _mark_run_finished(run, status=SourceStatus.ready.value)
 

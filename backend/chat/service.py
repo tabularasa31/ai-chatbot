@@ -126,9 +126,31 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
 )
 
 
-def match_quick_answer(question: str, client: Client | None = None) -> str | None:
-    """Placeholder for a future quick-answers layer from the observability spec."""
-    return None
+def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
+    """Return tenant quick answers as canonical structured context lines."""
+    from backend.models import QuickAnswer
+
+    answers = (
+        db.query(QuickAnswer)
+        .filter(QuickAnswer.tenant_id == client_id)
+        .order_by(QuickAnswer.key.asc(), QuickAnswer.detected_at.desc())
+        .all()
+    )
+    lines_by_key: dict[str, str] = {}
+    labels = {
+        "support_email": "Support email",
+        "documentation_url": "Documentation",
+        "pricing_url": "Pricing",
+        "trial_info": "Trial info",
+        "status_page_url": "Status page",
+        "support_chat": "Support chat",
+    }
+    for answer in answers:
+        if answer.key in lines_by_key:
+            continue
+        label = labels.get(answer.key, answer.key)
+        lines_by_key[answer.key] = f"{label}: {answer.value}"
+    return list(lines_by_key.values())
 
 
 def _safe_int(value: Any) -> int:
@@ -550,6 +572,7 @@ def run_chat_pipeline(
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
+    quick_answer_items = _quick_answers_context(client_id, db)
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
         "faq_context" if faq_context_items else "rag_only"
     )
@@ -613,6 +636,7 @@ def run_chat_pipeline(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
         trace=trace,
     )
 
@@ -690,6 +714,7 @@ def build_rag_prompt(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -758,6 +783,15 @@ Do not treat them as exclusive truth when retrieved documents provide more speci
 
 {faq_block}
 """
+    if quick_answer_items:
+        quick_answers_block = "\n".join(f"- {item}" for item in quick_answer_items)
+        system_rules += f"""
+STRUCTURED QUICK ANSWERS
+Treat these as canonical tenant facts when they are relevant to the user question.
+Use them directly for links, contact details, pricing/status URLs, and other short factual answers.
+
+{quick_answers_block}
+"""
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -783,6 +817,7 @@ def build_rag_messages(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -793,6 +828,7 @@ def build_rag_messages(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -811,6 +847,7 @@ def generate_answer(
     client_product_name: str | None = None,
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
     trace: TraceHandle | None = None,
 ) -> tuple[str, int]:
     """
@@ -826,7 +863,7 @@ def generate_answer(
     """
     # For faq_context strategy we may intentionally have no retrieval chunks,
     # but still want generation to use VERIFIED FAQ CANDIDATES hints.
-    if not context_chunks and not faq_context_items:
+    if not context_chunks and not faq_context_items and not quick_answer_items:
         return ("I don't have information about this.", 0)
 
     system_prompt, user_message = build_rag_messages(
@@ -837,6 +874,7 @@ def generate_answer(
         client_product_name=client_product_name,
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -852,6 +890,7 @@ def generate_answer(
             generation_input = {
                 "question_preview": truncate_text(question),
                 "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
             }
         generation = trace.generation(
             name="llm-generation",
@@ -861,6 +900,7 @@ def generate_answer(
                 "temperature": 0.2,
                 "max_tokens": 500,
                 "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
                 "captures_full_prompt": settings.observability_capture_full_prompts,
                 "finish_reason_expected": "stop_or_length",
                 "system_prompt": (
@@ -1380,49 +1420,14 @@ def process_chat_message(
         disclosure_cfg = client_row.disclosure_config
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
-
-    quick_answer_span = trace.span(
-        name="quick-answers-check",
+    quick_answers_span = trace.span(
+        name="quick-answers-context",
         input={"query": redacted_question},
     )
-    quick_answer = match_quick_answer(redacted_question, client_row)
-    quick_answer_span.end(
-        output={"matched": bool(quick_answer), "answer": quick_answer}
+    quick_answer_items = _quick_answers_context(client_id, db)
+    quick_answers_span.end(
+        output={"count": len(quick_answer_items)}
     )
-    if quick_answer:
-        user_message, assistant_message = _persist_turn(
-            db,
-            chat,
-            client_id,
-            question,
-            quick_answer,
-            [],
-            0,
-            optional_entity_types=optional_entity_types,
-        )
-        _try_ingest_gap_signal(
-            chat=chat,
-            client_id=client_id,
-            session_id=session_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            question_text=redacted_question,
-            answer_confidence=None,
-            was_rejected=False,
-            had_fallback=False,
-            was_escalated=False,
-            language=fallback_locale,
-        )
-        trace.update(
-            output={"answer": quick_answer, "source": "quick_answers"},
-            metadata={"chat_ended": False, "escalated": False, "quick_answer": True},
-        )
-        return ChatTurnOutcome(
-            text=quick_answer,
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        )
 
     injection_start = perf_counter()
     injection_span = trace.span(

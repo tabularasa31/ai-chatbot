@@ -23,11 +23,42 @@ from backend.models import (
     DocumentStatus,
     DocumentType,
     Embedding,
+    QuickAnswer,
     SourceSchedule,
     SourceStatus,
     User,
     UrlSource,
 )
+
+
+def test_scan_html_for_quick_answers_detects_expected_fields() -> None:
+    html = """
+    <html>
+      <body>
+        <footer>
+          <a href="mailto:help@example.com">Email support</a>
+          <a href="/docs">Documentation</a>
+          <a href="/pricing">Pricing</a>
+          <a href="https://status.example.com">Status page</a>
+        </footer>
+        <p>Start your free trial for 14 days today.</p>
+        <script src="https://widget.intercom.io/widget/abc123.js"></script>
+      </body>
+    </html>
+    """
+
+    answers = url_service.scan_html_for_quick_answers(
+        html=html,
+        page_url="https://docs.example.com/start",
+        root_url="https://docs.example.com/",
+    )
+
+    assert answers["support_email"].value == "help@example.com"
+    assert answers["documentation_url"].value == "https://docs.example.com/docs"
+    assert answers["pricing_url"].value == "https://docs.example.com/pricing"
+    assert answers["status_page_url"].value == "https://status.example.com/"
+    assert "free trial" in answers["trial_info"].value.lower()
+    assert answers["support_chat"].value == "Intercom"
 
 
 def test_validate_public_hostname_rejects_private_ip() -> None:
@@ -589,7 +620,93 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     assert run is not None
     assert run.status == SourceStatus.error.value
     assert len(run.failed_urls) == 3
-    verify_session.close()
+
+
+def test_crawl_url_source_persists_quick_answers(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = User(
+        email="quickanswers@example.com",
+        password_hash=hash_password("SecurePass1!"),
+        is_verified=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    client = create_client(user.id, "Quick Answers Client", db_session)
+
+    source = UrlSource(
+        client_id=client.id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.queued,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        url_service,
+        "_plan_crawl",
+        lambda source, db: url_service._CrawlPlan(
+            urls=["https://docs.example.com/"],
+            discovered_urls=["https://docs.example.com/"],
+            remaining_capacity=100,
+        ),
+    )
+    monkeypatch.setattr(
+        url_service,
+        "_fetch_openapi_source",
+        lambda url: None,
+    )
+    monkeypatch.setattr(
+        url_service,
+        "_fetch_page_html",
+        lambda url: """
+        <html>
+          <body>
+            <main><h1>Docs</h1><p>Use our free trial for 14 days.</p></main>
+            <a href=\"mailto:help@example.com\">Support</a>
+            <a href=\"/pricing\">Pricing</a>
+            <a href=\"https://status.example.com\">Status</a>
+          </body>
+        </html>
+        """,
+    )
+    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1] * 1536 for _ in chunks])
+    monkeypatch.setattr(
+        url_service,
+        "_run_tenant_knowledge_extraction_best_effort",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        url_service,
+        "run_mode_a_for_tenant_when_queue_empty_best_effort",
+        lambda tenant_id: None,
+    )
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
+
+    url_service.crawl_url_source(source.id, "sk-test")
+
+    stored = (
+        db_session.query(QuickAnswer)
+        .filter(QuickAnswer.source_id == source.id)
+        .order_by(QuickAnswer.key.asc())
+        .all()
+    )
+    by_key = {item.key: item.value for item in stored}
+    assert by_key["documentation_url"] == "https://docs.example.com/"
+    assert by_key["support_email"] == "help@example.com"
+    assert by_key["pricing_url"] == "https://docs.example.com/pricing"
+    assert by_key["status_page_url"] == "https://status.example.com/"
+    assert "free trial" in by_key["trial_info"].lower()
 
 
 def test_url_source_response_constant_exposed() -> None:

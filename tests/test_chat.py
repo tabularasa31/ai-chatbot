@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import UserSession
+from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource, UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
@@ -19,6 +19,7 @@ from backend.chat.service import (
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
+    _quick_answers_context,
     retrieve_context,
     run_chat_pipeline,
     run_debug,
@@ -77,11 +78,84 @@ def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
     mock_openai_client.chat.completions.create.assert_not_called()
 
 
+def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Documentation: https://docs.example.com/"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=42)
+
+    answer, tokens = generate_answer(
+        "Where is the documentation?",
+        [],
+        api_key="sk-test",
+        quick_answer_items=["Documentation: https://docs.example.com/"],
+    )
+
+    assert answer == "Documentation: https://docs.example.com/"
+    assert tokens == 42
+    mock_openai_client.chat.completions.create.assert_called_once()
+
+
 def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
     """Empty context → invalid + no_context; no OpenAI call."""
     result = validate_answer("q", "a", [], api_key="sk-test")
     assert result == {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
     mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_quick_answers_context_returns_structured_lines(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="quick-answer-docs@example.com")
+    create_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Quick Answer Docs"},
+    )
+    client_id = uuid.UUID(create_resp.json()["id"])
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    answer = _quick_answers_context(client_id, db_session)
+
+    assert answer == ["Documentation: https://docs.example.com/"]
+
+
+def test_build_rag_prompt_includes_structured_quick_answers() -> None:
+    prompt = build_rag_prompt(
+        "Where is the documentation?",
+        ["Chunk about setup."],
+        quick_answer_items=["Documentation: https://docs.example.com/"],
+    )
+
+    assert "STRUCTURED QUICK ANSWERS" in prompt
+    assert "Documentation: https://docs.example.com/" in prompt
 
 
 def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
@@ -128,9 +202,11 @@ def test_build_rag_prompt_prefers_structured_quick_answers_for_short_facts() -> 
     prompt = build_rag_prompt(
         "Where can I find pricing?",
         ["Pricing details are available in the docs."],
+        quick_answer_items=["Pricing: https://example.com/pricing"],
     )
 
     assert "prefer structured quick answers when relevant" in prompt
+    assert "Pricing: https://example.com/pricing" in prompt
 
 
 def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
@@ -202,6 +278,7 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
     assert trace.generation_input == {
         "question_preview": "What?",
         "context_chunk_count": 1,
+        "quick_answer_count": 0,
     }
 
 
@@ -249,6 +326,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         "temperature": 0.2,
         "max_tokens": 500,
         "context_chunk_count": 1,
+        "quick_answer_count": 0,
         "captures_full_prompt": True,
         "finish_reason_expected": "stop_or_length",
         "system_prompt": system_prompt,

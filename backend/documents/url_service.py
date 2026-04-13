@@ -31,16 +31,16 @@ from backend.core import db as core_db
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-from backend.documents.quick_answers import (
-    QuickAnswerCandidate,
-    merge_quick_answer_candidates,
-    scan_html_for_quick_answers,
-)
 from backend.documents.parsers import (
     OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
     load_openapi_spec,
     looks_like_openapi,
+)
+from backend.documents.quick_answers import (
+    QuickAnswerCandidate,
+    merge_quick_answer_candidates,
+    scan_html_for_quick_answers,
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant

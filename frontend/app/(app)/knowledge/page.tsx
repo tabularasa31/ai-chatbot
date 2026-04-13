@@ -1378,7 +1378,7 @@ export default function KnowledgePage() {
 
                                 <div>
                                   <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Quick answers</div>
-                                  {!currentDetail || currentDetail.quick_answers.length === 0 ? (
+                                  {!currentDetail || !currentDetail.quick_answers || currentDetail.quick_answers.length === 0 ? (
                                     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
                                       No structured quick answers detected yet.
                                     </div>

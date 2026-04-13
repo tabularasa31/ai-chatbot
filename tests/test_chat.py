@@ -284,6 +284,8 @@ def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
 
     assert "If sources in the provided context appear inconsistent" in prompt
     assert "answer conservatively from the clearest supported part only" in prompt
+
+
 def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
     """OpenAI/JSON errors → validation_skipped, does not raise."""
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")

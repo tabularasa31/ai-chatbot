@@ -196,7 +196,7 @@ def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> 
         answers,
         key=lambda item: (item.key, tuple(-value for value in _quick_answer_quality_score(item))),
     ):
-        if answer.key not in selected_keys or answer.key in lines_by_key:
+        if answer.key in lines_by_key:
             continue
         label = labels.get(answer.key, answer.key)
         lines_by_key[answer.key] = f"{label}: {answer.value}"

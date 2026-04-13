@@ -192,6 +192,18 @@ function formatSchedule(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function quickAnswerLabel(key: string) {
+  const labels: Record<string, string> = {
+    support_email: "Support email",
+    documentation_url: "Documentation",
+    pricing_url: "Pricing",
+    trial_info: "Trial info",
+    status_page_url: "Status page",
+    support_chat: "Support chat",
+  };
+  return labels[key] ?? key;
+}
+
 function stopRowClick(event: React.MouseEvent<HTMLElement>) {
   event.stopPropagation();
 }
@@ -1362,6 +1374,27 @@ export default function KnowledgePage() {
                                         : "No exclusions"}
                                     </div>
                                   </div>
+                                </div>
+
+                                <div>
+                                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Quick answers</div>
+                                  {!currentDetail || currentDetail.quick_answers.length === 0 ? (
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                                      No structured quick answers detected yet.
+                                    </div>
+                                  ) : (
+                                    <div className="grid gap-3 xl:grid-cols-2">
+                                      {currentDetail.quick_answers.map((item) => (
+                                        <div key={item.key} className="rounded-lg border border-slate-200 p-3">
+                                          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                                            {quickAnswerLabel(item.key)}
+                                          </div>
+                                          <div className="mt-1 break-all text-sm text-slate-700">{item.value}</div>
+                                          <div className="mt-2 text-xs text-slate-400">{item.source_url}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
 
                                 <div>

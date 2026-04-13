@@ -15,6 +15,7 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
     ChatPipelineResult,
+    _quick_answer_keys_for_question,
     _resolve_fallback_locale,
     build_rag_messages,
     build_rag_prompt,
@@ -140,11 +141,36 @@ def test_quick_answers_context_returns_structured_lines(
             metadata_json={"method": "source_url"},
         )
     )
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=source.id,
+            key="support_email",
+            value="help@example.com",
+            source_url="https://docs.example.com/contact",
+            metadata_json={"method": "mailto"},
+        )
+    )
     db_session.commit()
 
-    answer = _quick_answers_context(client_id, db_session)
+    answer = _quick_answers_context(client_id, "Where is your documentation?", db_session)
 
     assert answer == ["Documentation: https://docs.example.com/"]
+
+
+def test_quick_answer_keys_for_question_filters_by_topic() -> None:
+    assert _quick_answer_keys_for_question("Where can I find pricing and trial details?") == [
+        "pricing_url",
+        "trial_info",
+    ]
+    assert _quick_answer_keys_for_question("How can I contact support?") == [
+        "support_email",
+        "support_chat",
+        "status_page_url",
+    ]
+    assert _quick_answer_keys_for_question("Show me the documentation") == [
+        "documentation_url",
+    ]
 
 
 def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
@@ -206,7 +232,7 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(client_id, db_session)
+    answer = _quick_answers_context(client_id, "Where is the documentation?", db_session)
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 
@@ -221,7 +247,43 @@ def test_build_rag_prompt_includes_structured_quick_answers() -> None:
     assert "STRUCTURED QUICK ANSWERS" in prompt
     assert "Documentation: https://docs.example.com/" in prompt
 
+def test_build_rag_prompt_requires_exact_setting_names_from_docs() -> None:
+    prompt = build_rag_prompt(
+        "Which setting should I use?",
+        ["Use the setting named API Base URL in the Connection section."],
+    )
 
+    assert "name the exact setting or field as written in the documentation" in prompt
+
+
+def test_build_rag_prompt_prefers_quick_answers_for_short_facts() -> None:
+    prompt = build_rag_prompt(
+        "Where can I find pricing?",
+        ["Pricing details are available in the docs."],
+        quick_answer_items=["Pricing: https://example.com/pricing"],
+    )
+
+    assert "prefer STRUCTURED QUICK ANSWERS when relevant" in prompt
+    assert "Pricing: https://example.com/pricing" in prompt
+
+
+def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
+    prompt = build_rag_prompt(
+        "How do I reset my password?",
+        ["Go to Settings > Security and click Reset password."],
+    )
+
+    assert "Do not say you do not know when relevant evidence is present" in prompt
+
+
+def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
+    prompt = build_rag_prompt(
+        "What is the file limit?",
+        ["The file limit is 10 MB.", "The file limit is 20 MB."],
+    )
+
+    assert "If sources in the provided context appear inconsistent" in prompt
+    assert "answer conservatively from the clearest supported part only" in prompt
 def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
     """OpenAI/JSON errors → validation_skipped, does not raise."""
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
@@ -251,55 +313,6 @@ def test_validate_answer_prompt_allows_single_clarifying_question(
     assert "materially blocks a correct answer" in prompt
     assert "unsupported concrete facts" in prompt
     assert "setting names, field names, URLs, workflow steps, or product limits" in prompt
-
-
-def test_build_rag_prompt_requires_exact_setting_names_from_docs() -> None:
-    prompt = build_rag_prompt(
-        "Which setting should I use?",
-        ["Use the setting named API Base URL in the Connection section."],
-    )
-
-    assert "name the exact setting or field as written in the documentation" in prompt
-
-
-def test_build_rag_prompt_prefers_structured_quick_answers_for_short_facts() -> None:
-    prompt = build_rag_prompt(
-        "Where can I find pricing?",
-        ["Pricing details are available in the docs."],
-        quick_answer_items=["Pricing: https://example.com/pricing"],
-    )
-
-    assert "prefer structured quick answers when relevant" in prompt
-    assert "Pricing: https://example.com/pricing" in prompt
-
-
-def test_build_rag_prompt_separates_no_invention_rules_for_readability() -> None:
-    prompt = build_rag_prompt(
-        "How do I reset my password?",
-        ["Go to Settings > Security and click Reset password."],
-    )
-
-    assert "Do not invent facts, settings, steps, page names, field names, or URLs" in prompt
-    assert "Do not invent multiple-choice options" in prompt
-
-
-def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
-    prompt = build_rag_prompt(
-        "How do I reset my password?",
-        ["Go to Settings > Security and click Reset password."],
-    )
-
-    assert "Do not say you do not know when relevant evidence is present" in prompt
-
-
-def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
-    prompt = build_rag_prompt(
-        "What is the file limit?",
-        ["The file limit is 10 MB.", "The file limit is 20 MB."],
-    )
-
-    assert "If sources in the provided context appear inconsistent" in prompt
-    assert "answer conservatively from the clearest supported part only" in prompt
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:

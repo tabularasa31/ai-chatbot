@@ -31,6 +31,11 @@ from backend.core import db as core_db
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.documents.quick_answers import (
+    QuickAnswerCandidate,
+    merge_quick_answer_candidates,
+    scan_html_for_quick_answers,
+)
 from backend.documents.parsers import (
     OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
@@ -1512,7 +1517,7 @@ def _replace_quick_answers_for_source(
     quick_answers: dict[str, QuickAnswerCandidate],
     db: Session,
 ) -> None:
-    db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete()
+    db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete(synchronize_session=False)
     for candidate in quick_answers.values():
         db.add(
             QuickAnswer(

@@ -93,8 +93,7 @@ def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> Qui
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href") or ""
         if href.lower().startswith("mailto:"):
-            raw_value = href.split(":", 1)[1].split("?", 1)[0].strip()
-            email_match = _EMAIL_RE.search(raw_value)
+            email_match = _EMAIL_RE.search(href)
             if email_match:
                 value = email_match.group(0)
                 local_part = value.split("@", 1)[0]

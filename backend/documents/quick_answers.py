@@ -27,6 +27,7 @@ _DOCS_TEXT_RE = re.compile(
 )
 _STATUS_TEXT_RE = re.compile(r"\b(status|status page|system status)\b", re.IGNORECASE)
 _STATUS_URL_RE = re.compile(r"(?:^|\.)status\.|statuspage\.io|instatus\.com|/status(?:/|$)", re.IGNORECASE)
+_SUPPORT_EMAIL_CONTEXT_RE = re.compile(r"\b(support|help|customer care|customer success)\b", re.IGNORECASE)
 _SUPPORT_CHAT_PATTERNS: dict[str, re.Pattern[str]] = {
     "Intercom": re.compile(r"intercom", re.IGNORECASE),
     "Crisp": re.compile(r"crisp", re.IGNORECASE),
@@ -88,12 +89,32 @@ def _pick_better(
 
 
 def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> QuickAnswerCandidate | None:
+    best_mailto: QuickAnswerCandidate | None = None
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href") or ""
         if href.lower().startswith("mailto:"):
             value = href.split(":", 1)[1].strip()
             if value:
-                return _candidate("support_email", value, page_url, 100, method="mailto")
+                local_part = value.split("@", 1)[0]
+                context_parts = [
+                    anchor.get_text(" ", strip=True),
+                    anchor.get("title") or "",
+                    anchor.get("aria-label") or "",
+                ]
+                parent = anchor.parent
+                if parent is not None:
+                    context_parts.append(parent.get_text(" ", strip=True))
+                context = " ".join(part for part in context_parts if part)
+                score = 100
+                if _SUPPORT_EMAIL_CONTEXT_RE.search(local_part):
+                    score += 15
+                if _SUPPORT_EMAIL_CONTEXT_RE.search(context):
+                    score += 20
+                candidate = _candidate("support_email", value, page_url, score, method="mailto")
+                if best_mailto is None or candidate.score > best_mailto.score:
+                    best_mailto = candidate
+    if best_mailto is not None:
+        return best_mailto
     match = _EMAIL_RE.search(text)
     if match:
         return _candidate("support_email", match.group(0), page_url, 70, method="regex")

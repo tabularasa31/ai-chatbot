@@ -628,20 +628,19 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
 
     url_service.crawl_url_source(source_id, "sk-test")
 
-    verify_session = Session(bind=engine)
-    refreshed_source = verify_session.query(UrlSource).filter(UrlSource.id == source_id).first()
-    run = verify_session.query(url_service.UrlSourceRun).filter_by(source_id=source_id).first()
+    with Session(bind=engine) as verify_session:
+        refreshed_source = verify_session.query(UrlSource).filter(UrlSource.id == source_id).first()
+        run = verify_session.query(url_service.UrlSourceRun).filter_by(source_id=source_id).first()
 
-    assert refreshed_source is not None
-    assert refreshed_source.status == SourceStatus.error
-    assert (
-        refreshed_source.error_message
-        == "Indexing failed — most pages could not be fetched or returned an unsupported format."
-    )
-    assert run is not None
-    assert run.status == SourceStatus.error.value
-    assert len(run.failed_urls) == 3
-    verify_session.close()
+        assert refreshed_source is not None
+        assert refreshed_source.status == SourceStatus.error
+        assert (
+            refreshed_source.error_message
+            == "Indexing failed — most pages could not be fetched or returned an unsupported format."
+        )
+        assert run is not None
+        assert run.status == SourceStatus.error.value
+        assert len(run.failed_urls) == 3
 
 
 def test_crawl_url_source_persists_quick_answers(

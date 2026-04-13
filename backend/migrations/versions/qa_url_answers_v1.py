@@ -58,6 +58,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint("uq_quick_answers_source_key", "quick_answers", type_="unique")
     op.drop_index("ix_quick_answers_tenant_key", table_name="quick_answers")
     op.drop_index("ix_quick_answers_source_id", table_name="quick_answers")
     op.drop_index("ix_quick_answers_tenant_id", table_name="quick_answers")

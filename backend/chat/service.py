@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -125,7 +126,6 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
-
 def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
     metadata = answer.metadata_json if isinstance(answer.metadata_json, dict) else {}
     method = str(metadata.get("method") or "").strip().lower()
@@ -152,14 +152,35 @@ def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
     return (method_rank, source_intent_rank, detected_ts)
 
 
-def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
-    """Return tenant quick answers as canonical structured context lines."""
+def _quick_answer_keys_for_question(question: str) -> list[str]:
+    lowered = question.casefold()
+    selected: list[str] = []
+
+    if re.search(r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b", lowered):
+        selected.extend(["pricing_url", "trial_info"])
+    if re.search(r"\b(status|incident|outage|downtime|uptime)\b", lowered):
+        selected.append("status_page_url")
+    if re.search(r"\b(support|contact|email|chat|live chat)\b", lowered):
+        selected.extend(["support_email", "support_chat", "status_page_url"])
+    if re.search(r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b", lowered):
+        selected.append("documentation_url")
+
+    return list(dict.fromkeys(selected))
+
+
+def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> list[str]:
+    """Return only the structured quick answers relevant to this question."""
     from backend.models import QuickAnswer
+
+    selected_keys = _quick_answer_keys_for_question(question)
+    if not selected_keys:
+        return []
 
     answers = (
         db.query(QuickAnswer)
-        .filter(QuickAnswer.tenant_id == client_id)
+        .filter(QuickAnswer.tenant_id == client_id, QuickAnswer.key.in_(selected_keys))
         .options(selectinload(QuickAnswer.source))
+        .order_by(QuickAnswer.key.asc(), QuickAnswer.detected_at.desc())
         .all()
     )
     lines_by_key: dict[str, str] = {}
@@ -179,7 +200,7 @@ def _quick_answers_context(client_id: uuid.UUID, db: Session) -> list[str]:
             continue
         label = labels.get(answer.key, answer.key)
         lines_by_key[answer.key] = f"{label}: {answer.value}"
-    return list(lines_by_key.values())
+    return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
 
 
 def _safe_int(value: Any) -> int:
@@ -601,7 +622,7 @@ def run_chat_pipeline(
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    quick_answer_items = _quick_answers_context(client_id, db)
+    quick_answer_items = _quick_answers_context(client_id, question, db)
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
         "faq_context" if faq_context_items else "rag_only"
     )
@@ -770,11 +791,10 @@ def build_rag_prompt(
         "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
         "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
         "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
-        "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer structured quick answers when relevant.\n"
+        "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer STRUCTURED QUICK ANSWERS when relevant.\n"
         "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
         "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
-        "- Do not invent facts, settings, steps, page names, field names, or URLs unless they are supported by the provided context.\n"
-        "- Do not invent multiple-choice options unless they are supported by the provided context.\n"
+        "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- Answer in the same language as the question.\n"
@@ -1455,7 +1475,7 @@ def process_chat_message(
         name="quick-answers-context",
         input={"query": redacted_question},
     )
-    quick_answer_items = _quick_answers_context(client_id, db)
+    quick_answer_items = _quick_answers_context(client_id, redacted_question, db)
     quick_answers_span.end(
         output={"count": len(quick_answer_items)}
     )

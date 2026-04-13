@@ -1512,7 +1512,7 @@ def _replace_quick_answers_for_source(
     quick_answers: dict[str, QuickAnswerCandidate],
     db: Session,
 ) -> None:
-    db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete()
+    db.query(QuickAnswer).filter(QuickAnswer.source_id == source.id).delete(synchronize_session=False)
     for candidate in quick_answers.values():
         db.add(
             QuickAnswer(

@@ -116,6 +116,7 @@ Check if the answer is:
 1. Grounded in the provided context (not hallucinated)
 2. Actually answers the question, OR explicitly asks exactly one short clarifying question when one missing detail materially blocks a correct answer
 3. If it asks a clarifying question, it should still be helpful and not invent facts beyond the context
+4. It does not introduce unsupported concrete facts such as setting names, field names, URLs, workflow steps, or product limits that are not present in the provided context
 
 Respond ONLY with JSON (no markdown, no explanation):
 {{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
@@ -708,17 +709,19 @@ def build_rag_prompt(
 
     system_rules = (
         f"{DISCLOSURE_HARD_LIMITS}\n"
-        "You are a technical support agent for the client's product (SaaS, API, docs).\n"
+        "You are a technical support agent for the client's product.\n"
         "Rules:\n"
-        "- Answer based ONLY on the provided context. If context mentions the topic, you MUST answer from it.\n"
-        "- Do NOT claim you don't know when the context contains relevant info.\n"
-        "- If uncertain, say so but still answer from the context.\n"
+        "- Answer using ONLY the provided context, verified FAQ candidates, and structured quick answers.\n"
+        "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
+        "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
+        "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
+        "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer structured quick answers when relevant.\n"
         "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
-        "- If you can safely answer part of the question from the context, do so briefly first and then ask one short clarifying question.\n"
-        "- Do NOT invent multiple-choice options unless the provided context explicitly supports them.\n"
-        "- Do NOT ask a clarifying question if the provided context already supports a clear answer.\n"
-        "- For \"which setting\" / \"какая настройка\" or similar: name the exact setting/field as in docs; cite where it is (section/page/menu) if the context contains it.\n"
-        "- Answer in the SAME LANGUAGE as the question (e.g. Russian if asked in Russian).\n"
+        "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
+        "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
+        "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
+        "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
+        "- Answer in the same language as the question.\n"
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"

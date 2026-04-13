@@ -41,7 +41,8 @@ def test_build_rag_prompt() -> None:
     assert "Hard limits" in result
     assert "[Response level: standard]" in result
     assert "technical support agent" in result
-    assert "Answer based ONLY on the provided context" in result
+    assert "Answer using ONLY the provided context" in result
+    assert "Treat the provided context as the source of truth" in result
     assert "ask exactly one short clarifying question instead of guessing" in result
     assert "chunk1" in result
     assert "chunk2" in result
@@ -110,6 +111,45 @@ def test_validate_answer_prompt_allows_single_clarifying_question(
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert "asks exactly one short clarifying question" in prompt
     assert "materially blocks a correct answer" in prompt
+    assert "unsupported concrete facts" in prompt
+    assert "setting names, field names, URLs, workflow steps, or product limits" in prompt
+
+
+def test_build_rag_prompt_requires_exact_setting_names_from_docs() -> None:
+    prompt = build_rag_prompt(
+        "Which setting should I use?",
+        ["Use the setting named API Base URL in the Connection section."],
+    )
+
+    assert "name the exact setting or field as written in the documentation" in prompt
+
+
+def test_build_rag_prompt_prefers_structured_quick_answers_for_short_facts() -> None:
+    prompt = build_rag_prompt(
+        "Where can I find pricing?",
+        ["Pricing details are available in the docs."],
+    )
+
+    assert "prefer structured quick answers when relevant" in prompt
+
+
+def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
+    prompt = build_rag_prompt(
+        "How do I reset my password?",
+        ["Go to Settings > Security and click Reset password."],
+    )
+
+    assert "Do not say you do not know when relevant evidence is present" in prompt
+
+
+def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
+    prompt = build_rag_prompt(
+        "What is the file limit?",
+        ["The file limit is 10 MB.", "The file limit is 20 MB."],
+    )
+
+    assert "If sources in the provided context appear inconsistent" in prompt
+    assert "answer conservatively from the clearest supported part only" in prompt
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:

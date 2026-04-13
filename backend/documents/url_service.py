@@ -14,7 +14,7 @@ import socket
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib import robotparser
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -1371,7 +1371,7 @@ class _CrawlResult:
     indexed_urls: set[str]
     failures: list[dict[str, str]]
     chunks_created: int
-    quick_answers: dict[str, QuickAnswerCandidate]
+    quick_answers: dict[str, QuickAnswerCandidate] = field(default_factory=dict)
 
 
 def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:

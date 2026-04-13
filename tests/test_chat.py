@@ -4178,8 +4178,6 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Chat
-
     token = register_and_verify_user(client, db_session, email="clarify-domain@example.com")
     cl_resp = client.post(
         "/clients",

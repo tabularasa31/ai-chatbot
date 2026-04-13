@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import UserSession
+from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource, UserSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
@@ -19,6 +19,7 @@ from backend.chat.service import (
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
+    _quick_answers_context,
     retrieve_context,
     run_chat_pipeline,
     run_debug,
@@ -41,7 +42,8 @@ def test_build_rag_prompt() -> None:
     assert "Hard limits" in result
     assert "[Response level: standard]" in result
     assert "technical support agent" in result
-    assert "Answer based ONLY on the provided context" in result
+    assert "Answer using ONLY the provided context" in result
+    assert "Treat the provided context as the source of truth" in result
     assert "ask exactly one short clarifying question instead of guessing" in result
     assert "chunk1" in result
     assert "chunk2" in result
@@ -76,11 +78,148 @@ def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
     mock_openai_client.chat.completions.create.assert_not_called()
 
 
+def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Documentation: https://docs.example.com/"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=42)
+
+    answer, tokens = generate_answer(
+        "Where is the documentation?",
+        [],
+        api_key="sk-test",
+        quick_answer_items=["Documentation: https://docs.example.com/"],
+    )
+
+    assert answer == "Documentation: https://docs.example.com/"
+    assert tokens == 42
+    mock_openai_client.chat.completions.create.assert_called_once()
+
+
 def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
     """Empty context → invalid + no_context; no OpenAI call."""
     result = validate_answer("q", "a", [], api_key="sk-test")
     assert result == {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
     mock_openai_client.chat.completions.create.assert_not_called()
+
+
+def test_quick_answers_context_returns_structured_lines(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="quick-answer-docs@example.com")
+    create_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Quick Answer Docs"},
+    )
+    client_id = uuid.UUID(create_resp.json()["id"])
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    answer = _quick_answers_context(client_id, db_session)
+
+    assert answer == ["Documentation: https://docs.example.com/"]
+
+
+def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(client, db_session, email="quick-answer-quality@example.com")
+    create_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Quick Answer Quality"},
+    )
+    client_id = uuid.UUID(create_resp.json()["id"])
+    docs_source = UrlSource(
+        client_id=client_id,
+        name="Documentation",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    blog_source = UrlSource(
+        client_id=client_id,
+        name="Blog",
+        url="https://example.com/blog/start",
+        normalized_domain="example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add_all([docs_source, blog_source])
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=docs_source.id,
+            key="documentation_url",
+            value="https://docs.example.com/guide",
+            source_url="https://docs.example.com/guide",
+            metadata_json={"method": "anchor"},
+        )
+    )
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=blog_source.id,
+            key="documentation_url",
+            value="https://example.com/blog/start",
+            source_url="https://example.com/blog/start",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    answer = _quick_answers_context(client_id, db_session)
+
+    assert answer == ["Documentation: https://docs.example.com/guide"]
+
+
+def test_build_rag_prompt_includes_structured_quick_answers() -> None:
+    prompt = build_rag_prompt(
+        "Where is the documentation?",
+        ["Chunk about setup."],
+        quick_answer_items=["Documentation: https://docs.example.com/"],
+    )
+
+    assert "STRUCTURED QUICK ANSWERS" in prompt
+    assert "Documentation: https://docs.example.com/" in prompt
 
 
 def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
@@ -110,6 +249,57 @@ def test_validate_answer_prompt_allows_single_clarifying_question(
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert "asks exactly one short clarifying question" in prompt
     assert "materially blocks a correct answer" in prompt
+    assert "unsupported concrete facts" in prompt
+    assert "setting names, field names, URLs, workflow steps, or product limits" in prompt
+
+
+def test_build_rag_prompt_requires_exact_setting_names_from_docs() -> None:
+    prompt = build_rag_prompt(
+        "Which setting should I use?",
+        ["Use the setting named API Base URL in the Connection section."],
+    )
+
+    assert "name the exact setting or field as written in the documentation" in prompt
+
+
+def test_build_rag_prompt_prefers_structured_quick_answers_for_short_facts() -> None:
+    prompt = build_rag_prompt(
+        "Where can I find pricing?",
+        ["Pricing details are available in the docs."],
+        quick_answer_items=["Pricing: https://example.com/pricing"],
+    )
+
+    assert "prefer structured quick answers when relevant" in prompt
+    assert "Pricing: https://example.com/pricing" in prompt
+
+
+def test_build_rag_prompt_separates_no_invention_rules_for_readability() -> None:
+    prompt = build_rag_prompt(
+        "How do I reset my password?",
+        ["Go to Settings > Security and click Reset password."],
+    )
+
+    assert "Do not invent facts, settings, steps, page names, field names, or URLs" in prompt
+    assert "Do not invent multiple-choice options" in prompt
+
+
+def test_build_rag_prompt_disallows_saying_unknown_when_context_has_answer() -> None:
+    prompt = build_rag_prompt(
+        "How do I reset my password?",
+        ["Go to Settings > Security and click Reset password."],
+    )
+
+    assert "Do not say you do not know when relevant evidence is present" in prompt
+
+
+def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
+    prompt = build_rag_prompt(
+        "What is the file limit?",
+        ["The file limit is 10 MB.", "The file limit is 20 MB."],
+    )
+
+    assert "If sources in the provided context appear inconsistent" in prompt
+    assert "answer conservatively from the clearest supported part only" in prompt
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
@@ -162,6 +352,7 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
     assert trace.generation_input == {
         "question_preview": "What?",
         "context_chunk_count": 1,
+        "quick_answer_count": 0,
     }
 
 
@@ -209,6 +400,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         "temperature": 0.2,
         "max_tokens": 500,
         "context_chunk_count": 1,
+        "quick_answer_count": 0,
         "captures_full_prompt": True,
         "finish_reason_expected": "stop_or_length",
         "system_prompt": system_prompt,
@@ -3569,6 +3761,120 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     assert result.final_answer == "Je n'ai pas assez d'informations pour repondre de maniere fiable."
     assert result.tokens_used == 23
     assert result.is_reject is False  # validation fallback is not a guard_reject
+
+
+def test_run_chat_pipeline_validates_quick_answers_as_supporting_context(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
+    client: TestClient,
+) -> None:
+    from backend.guards.injection_detector import InjectionDetectionResult
+    from backend.models import Client
+    from backend.search.service import default_retrieval_reliability
+
+    token = register_and_verify_user(client, db_session, email="pipe-quick-validate@example.com")
+    cl_resp = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Pipeline Quick Validate Client"},
+    )
+    set_client_openai_key(client, token)
+    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    source = UrlSource(
+        client_id=client_row.id,
+        name="Documentation",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_row.id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.chat.service.detect_injection",
+        lambda *args, **kwargs: InjectionDetectionResult(detected=False, normalized_input="q"),
+    )
+    monkeypatch.setattr("backend.chat.service.expand_query", lambda q: [q])
+    monkeypatch.setattr(
+        "backend.chat.service.embed_queries",
+        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.match_faq",
+        lambda **kwargs: __import__(
+            "backend.faq.faq_matcher", fromlist=["FAQMatchResult"]
+        ).FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="no_faq",
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.check_relevance_precheck",
+        lambda **kwargs: (True, "relevant", None),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+            reliability=default_retrieval_reliability(),
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: ("Documentation: https://docs.example.com/", 7),
+    )
+
+    captured_contexts: list[list[str]] = []
+
+    def _validate(question: str, answer: str, context_chunks: list[str], **kwargs: object) -> dict[str, object]:
+        captured_contexts.append(list(context_chunks))
+        return {"is_valid": True, "confidence": 0.95, "reason": "grounded"}
+
+    monkeypatch.setattr("backend.chat.service.validate_answer", _validate)
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    result = run_chat_pipeline(
+        client_row.id,
+        "Where is the documentation?",
+        db_session,
+        api_key=cl_resp.json()["api_key"],
+    )
+
+    assert result.final_answer == "Documentation: https://docs.example.com/"
+    assert captured_contexts == [["Documentation: https://docs.example.com/"]]
 
 
 def test_run_debug_does_not_create_db_records(

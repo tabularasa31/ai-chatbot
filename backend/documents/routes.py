@@ -16,6 +16,7 @@ from backend.documents.schemas import (
     DocumentListResponse,
     DocumentResponse,
     KnowledgeSourcesResponse,
+    QuickAnswerResponse,
     SourcePageResponse,
     UrlSourceCreateRequest,
     UrlSourceDetailResponse,
@@ -40,7 +41,7 @@ from backend.documents.url_service import (
     trigger_refresh,
     update_url_source,
 )
-from backend.models import Document, UrlSource, UrlSourceRun, User
+from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
 
 documents_router = APIRouter(tags=["documents"])
 
@@ -103,6 +104,15 @@ def _url_source_run_response(run: UrlSourceRun) -> UrlSourceRunResponse:
         error_message=run.error_message,
         created_at=run.created_at,
         finished_at=run.finished_at,
+    )
+
+
+def _quick_answer_response(answer: QuickAnswer) -> QuickAnswerResponse:
+    return QuickAnswerResponse(
+        key=answer.key,
+        value=answer.value,
+        source_url=answer.source_url,
+        detected_at=answer.detected_at,
     )
 
 
@@ -244,6 +254,10 @@ def get_url_source_route(
                 updated_at=doc.updated_at,
             )
             for doc in docs
+        ],
+        quick_answers=[
+            _quick_answer_response(answer)
+            for answer in sorted(source.quick_answers, key=lambda item: (item.key, item.detected_at))
         ],
     )
 

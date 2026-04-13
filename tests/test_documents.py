@@ -17,7 +17,17 @@ from backend.auth.service import create_token_for_user
 from backend.clients.service import create_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.core.security import hash_password
-from backend.models import Document, DocumentStatus, DocumentType, Embedding, SourceSchedule, SourceStatus, UrlSource, UrlSourceRun
+from backend.models import (
+    Document,
+    DocumentStatus,
+    DocumentType,
+    Embedding,
+    QuickAnswer,
+    SourceSchedule,
+    SourceStatus,
+    UrlSource,
+    UrlSourceRun,
+)
 from tests.conftest import register_and_verify_user
 
 
@@ -440,6 +450,60 @@ def test_delete_url_source_requires_verified_user(
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Email not verified."
+
+
+def test_get_url_source_detail_includes_quick_answers(
+    client: TestClient, db_session: Session
+) -> None:
+    token = register_and_verify_user(client, db_session, email="source-qa@example.com")
+    create_client_response = client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Source QA Client"},
+    )
+    client_id = uuid.UUID(create_client_response.json()["id"])
+
+    source = UrlSource(
+        client_id=client_id,
+        name="Docs",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.weekly,
+        pages_indexed=1,
+        chunks_created=2,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    response = client.get(
+        f"/documents/sources/{source.id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["quick_answers"] == [
+        {
+            "key": "documentation_url",
+            "value": "https://docs.example.com/",
+            "source_url": "https://docs.example.com/",
+            "detected_at": payload["quick_answers"][0]["detected_at"],
+        }
+    ]
 
 
 def test_create_url_source_rejects_duplicate_normalized_domain(

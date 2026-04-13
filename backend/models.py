@@ -251,6 +251,12 @@ class Client(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    quick_answers = relationship(
+        "QuickAnswer",
+        back_populates="client",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     chats = relationship(
         "Chat",
         back_populates="client",
@@ -383,6 +389,12 @@ class UrlSource(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    quick_answers = relationship(
+        "QuickAnswer",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class UrlSourceRun(Base):
@@ -415,6 +427,46 @@ class UrlSourceRun(Base):
     finished_at = Column(DateTime, nullable=True)
 
     source = relationship("UrlSource", back_populates="runs")
+
+
+class QuickAnswer(Base):
+    __tablename__ = "quick_answers"
+
+    id = Column(
+        PG_UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("url_sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    key = Column(String(64), nullable=False)
+    value = Column(Text, nullable=False)
+    source_url = Column(Text, nullable=False)
+    metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    detected_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=_utcnow,
+        onupdate=_utcnow,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("source_id", "key", name="uq_quick_answers_source_key"),
+    )
+
+    client = relationship("Client", back_populates="quick_answers")
+    source = relationship("UrlSource", back_populates="quick_answers")
 
 
 class Embedding(Base):

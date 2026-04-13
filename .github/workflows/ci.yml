@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main, deploy]
   pull_request:
     branches: [main, deploy]
 
@@ -38,7 +36,7 @@ jobs:
   backend:
     name: Backend (pytest + ruff)
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.backend == 'true' || github.base_ref == 'deploy'
+    if: needs.changes.outputs.backend == 'true' || github.base_ref == 'deploy'
     runs-on: ubuntu-latest
 
     services:
@@ -97,7 +95,7 @@ jobs:
   frontend:
     name: Frontend (eslint + build)
     needs: changes
-    if: github.event_name == 'push' || needs.changes.outputs.frontend == 'true' || github.base_ref == 'deploy'
+    if: needs.changes.outputs.frontend == 'true' || github.base_ref == 'deploy'
     runs-on: ubuntu-latest
 
     steps:

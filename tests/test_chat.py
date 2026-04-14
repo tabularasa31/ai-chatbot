@@ -29,6 +29,7 @@ from backend.chat.service import (
 )
 from backend.chat.language import (
     LanguageDetectionResult,
+    LangDetectException,
     LocalizationResult,
     localize_text_to_question_language_result,
     render_direct_faq_answer_result,
@@ -3609,10 +3610,10 @@ def test_render_direct_faq_answer_result_translates_when_detected_differs_from_t
 def test_resolve_language_context_detector_failure_returns_english(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When detect_language raises, resolver falls back to English with detector_failure reason."""
+    """When detect_language raises LangDetectException, resolver falls back to English."""
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
-        lambda _text: (_ for _ in ()).throw(RuntimeError("detector unavailable")),
+        lambda _text: (_ for _ in ()).throw(LangDetectException(0, "detector unavailable")),
     )
 
     ctx = resolve_language_context(

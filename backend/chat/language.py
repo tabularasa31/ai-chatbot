@@ -19,7 +19,12 @@ try:
     DetectorFactory.seed = 0
 except ImportError:  # pragma: no cover - optional runtime dependency
     DetectorFactory = None
-    LangDetectException = Exception
+
+    class LangDetectException(Exception):  # type: ignore[no-redef]
+        """Sentinel raised only by the langdetect library; defined here so that
+        ``except LangDetectException`` works even when langdetect is not installed
+        without accidentally swallowing unrelated exceptions (as ``Exception`` would)."""
+
     detect_langs = None
 
 
@@ -266,7 +271,7 @@ def resolve_language_context(
 
     try:
         detection = detect_language(current_turn_text)
-    except Exception:
+    except LangDetectException:
         return ResolvedLanguageContext(
             detected_language="unknown",
             confidence=0.0,

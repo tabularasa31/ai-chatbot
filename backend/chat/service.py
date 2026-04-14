@@ -455,6 +455,16 @@ def _build_greeting_result(
     )
 
 
+def _is_bootstrap_question(text: str) -> bool:
+    """Return True when *text* is empty/whitespace-only — the canonical test for a bootstrap turn.
+
+    Centralised here so that ``run_chat_pipeline``'s fallback resolver and any
+    other standalone caller share the same definition instead of inlining
+    ``not text.strip()`` in multiple places.
+    """
+    return not text.strip()
+
+
 def _resolve_chat_language_context(
     *,
     current_turn_text: str,
@@ -517,7 +527,7 @@ def run_chat_pipeline(
             current_turn_text=question,
             client_row=None,
             tenant_profile=None,
-            is_bootstrap_turn=not question.strip(),
+            is_bootstrap_turn=_is_bootstrap_question(question),
             bootstrap_user_locale=None,
             browser_locale=None,
         )
@@ -1490,7 +1500,7 @@ def process_chat_message(
         current_turn_text=question_text,
         client_row=client_row,
         tenant_profile=tenant_profile,
-        is_bootstrap_turn=not question_text and is_new_session,
+        is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
         browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
     )
@@ -2236,7 +2246,7 @@ def run_debug(
         current_turn_text=redacted_question,
         client_row=client_row,
         tenant_profile=tenant_profile,
-        is_bootstrap_turn=not redacted_question.strip(),
+        is_bootstrap_turn=_is_bootstrap_question(redacted_question),
         bootstrap_user_locale=None,
         browser_locale=None,
     )

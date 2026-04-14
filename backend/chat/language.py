@@ -173,6 +173,18 @@ def _heuristic_language_detection(text: str) -> LanguageDetectionResult:
 
 def detect_language(text: str | None) -> LanguageDetectionResult:
     stripped = (text or "").strip()
+    heuristic = _heuristic_language_detection(stripped) if stripped else LanguageDetectionResult("unknown", 0.0, False)
+    if heuristic.detected_language != "en" and heuristic.is_reliable:
+        return heuristic
+
+    ascii_tokens = _TOKEN_RE.findall(stripped)
+    if ascii_tokens and all(token.isascii() for token in ascii_tokens) and len(ascii_tokens) == 1:
+        return LanguageDetectionResult(
+            detected_language="unknown",
+            confidence=0.0,
+            is_reliable=False,
+        )
+
     if _looks_undetectable(stripped):
         return LanguageDetectionResult(
             detected_language="unknown",
@@ -384,12 +396,20 @@ def render_direct_faq_answer_result(
     response_language: str,
     api_key: str | None,
 ) -> LocalizationResult:
+    normalized_target = _normalize_language_tag(response_language) or "en"
+    answer_tokens = _TOKEN_RE.findall(answer_text)
+    if (
+        _language_matches(normalized_target, "en")
+        and answer_tokens
+        and all(token.isascii() for token in answer_tokens)
+    ):
+        return LocalizationResult(text=answer_text, tokens_used=0)
+
     try:
         detected = detect_language(answer_text)
     except Exception:
         detected = LanguageDetectionResult("unknown", 0.0, False)
 
-    normalized_target = _normalize_language_tag(response_language) or "en"
     if (
         detected.detected_language != "unknown"
         and detected.is_reliable

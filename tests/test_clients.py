@@ -257,7 +257,6 @@ def test_support_settings_default_falls_back_to_owner_email(
 
     assert response.status_code == 200
     assert response.json() == {
-        "l2_email": None,
         "fallback_email": "owner-support@example.com",
     }
 

@@ -4,6 +4,7 @@ import enum
 
 from backend.chat.language import (
     LocalizationResult,
+    localize_text_result,
     localize_text_to_question_language,
     localize_text_to_question_language_result,
 )
@@ -66,37 +67,51 @@ def build_reject_response(
     *,
     reason: RejectReason,
     profile: TenantProfileModel | None,
-    question: str | None = None,
+    response_language: str | None = None,
     api_key: str | None = None,
+    question: str | None = None,
     fallback_locale: str | None = None,
 ) -> str:
     canonical_text = _build_canonical_reject_response(
         reason=reason,
         profile=profile,
     )
-    return localize_text_to_question_language(
+    if response_language is None:
+        return localize_text_to_question_language(
+            canonical_text=canonical_text,
+            question=question,
+            api_key=api_key,
+            fallback_locale=fallback_locale,
+        )
+    return localize_text_result(
         canonical_text=canonical_text,
-        question=question,
+        response_language=response_language,
         api_key=api_key,
-        fallback_locale=fallback_locale,
-    )
+    ).text
 
 
 def build_reject_response_result(
     *,
     reason: RejectReason,
     profile: TenantProfileModel | None,
-    question: str | None = None,
+    response_language: str | None = None,
     api_key: str | None = None,
+    question: str | None = None,
     fallback_locale: str | None = None,
 ) -> LocalizationResult:
     canonical_text = _build_canonical_reject_response(
         reason=reason,
         profile=profile,
     )
-    return localize_text_to_question_language_result(
+    if response_language is None:
+        return localize_text_to_question_language_result(
+            canonical_text=canonical_text,
+            question=question,
+            api_key=api_key,
+            fallback_locale=fallback_locale,
+        )
+    return localize_text_result(
         canonical_text=canonical_text,
-        question=question,
+        response_language=response_language,
         api_key=api_key,
-        fallback_locale=fallback_locale,
     )

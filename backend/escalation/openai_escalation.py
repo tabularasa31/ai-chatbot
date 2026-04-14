@@ -8,7 +8,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from backend.chat.language import localize_text_to_question_language_result
+from backend.chat.language import (
+    localize_text_result,
+    localize_text_to_question_language_result,
+)
 from backend.core.openai_client import get_openai_client
 from backend.models import EscalationPhase
 
@@ -33,10 +36,8 @@ You must output a single JSON object with keys:
   Set to "yes", "no", or "unclear" based on the latest user message.
 
 Rules:
-- Write message_to_user ONLY in the same language the user has been using in the chat; match formality (e.g. Russian вы/ты as they used).
-- When LATEST_USER_MESSAGE is present, prefer its language over older context and keep message_to_user in that same language.
-- If the conversation is too short to tell the language, use the "locale" field from facts if present; otherwise use English.
-- Use only facts from the JSON block: ticket_number, sla_hours, user_email, trigger, phase, clarify_round, locale. Never invent ticket numbers, emails, or SLA.
+- Write message_to_user ONLY in the requested ESCALATION_LANGUAGE tag.
+- Use only facts from the JSON block: ticket_number, sla_hours, user_email, trigger, phase, clarify_round. Never invent ticket numbers, emails, or SLA.
 - Explain that the request was passed to human support; they will reply by email at the given email when user_email is present; otherwise politely ask for an email address.
 - Do not promise exact response times; you may mention approximate SLA hours from facts.
 - When phase requires it, end by asking if you can help with anything else in chat.
@@ -71,12 +72,14 @@ def complete_escalation_openai_turn(
     fact_json: dict[str, Any],
     latest_user_text: str | None,
     api_key: str,
+    escalation_language: str = "en",
     model: str | None = None,
 ) -> EscalationLlmResult:
     """One OpenAI JSON-object completion; never raises on API errors."""
     model_name = model or "gpt-4o-mini"
     facts = {**fact_json, "phase": phase.value}
     user_block = (
+        f"ESCALATION_LANGUAGE:\n{escalation_language}\n\n"
         "ESCALATION_FACTS_JSON:\n"
         + json.dumps(facts, ensure_ascii=False)
         + "\n\nCHAT_TRANSCRIPT:\n"
@@ -106,9 +109,9 @@ def complete_escalation_openai_turn(
         if not msg:
             localization = localize_text_to_question_language_result(
                 canonical_text=FALLBACK_EN_GENERIC,
-                question=latest_user_text,
+                question=None,
+                fallback_locale=escalation_language,
                 api_key=api_key,
-                fallback_locale=fact_json.get("locale"),
             )
             msg = localization.text
             tokens += localization.tokens_used
@@ -129,9 +132,9 @@ def complete_escalation_openai_turn(
         tn = fact_json.get("ticket_number")
         localization = localize_text_to_question_language_result(
             canonical_text=FALLBACK_EN_GENERIC,
-            question=latest_user_text,
+            question=None,
+            fallback_locale=escalation_language,
             api_key=api_key,
-            fallback_locale=fact_json.get("locale"),
         )
         fb = localization.text
         if isinstance(tn, str):

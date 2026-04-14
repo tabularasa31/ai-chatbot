@@ -27,7 +27,13 @@ from backend.chat.service import (
     process_chat_message,
     validate_answer,
 )
-from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
+from backend.chat.language import (
+    LanguageDetectionResult,
+    LocalizationResult,
+    localize_text_to_question_language_result,
+    render_direct_faq_answer_result,
+    resolve_language_context,
+)
 from backend.guards.reject_response import RejectReason, build_reject_response
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
 from backend.search.service import build_reliability_assessment
@@ -414,6 +420,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     assert trace.generation_metadata == {
         "temperature": 0.2,
         "max_tokens": 500,
+        "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,
         "captures_full_prompt": True,
@@ -969,8 +976,9 @@ def test_chat_no_embeddings(
     assert data["answer"].startswith(expected_prefix)
     assert "A support ticket was created for you." in data["answer"]
     assert "[[escalation_ticket:ESC-0001]]" in data["answer"]
-    # 20 tokens for localization fallback + 15 for escalation handoff mock.
-    assert data["tokens_used"] == 35
+    # English response_language keeps the canonical fallback text, so only the
+    # mocked escalation handoff contributes tokens.
+    assert data["tokens_used"] == 15
     assert data.get("chat_ended") is False
 
 
@@ -2444,8 +2452,9 @@ def test_debug_no_embeddings(
     # No embeddings → validation fallback → INSUFFICIENT_CONFIDENCE text
     expected = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None)
     assert data["answer"] == expected
-    # Debug now includes localization tokens for the insufficient-confidence fallback.
-    assert data["tokens_used"] == 20
+    # English response_language keeps the canonical fallback text, so no extra
+    # localization tokens are counted.
+    assert data["tokens_used"] == 0
     assert data["debug"]["mode"] == "none"
     assert data["debug"]["chunks"] == []
     assert data["debug"]["validation_outcome"] == "fallback"
@@ -3507,6 +3516,95 @@ def test_resolve_fallback_locale_prefers_kyc_then_browser_locale() -> None:
     assert _resolve_fallback_locale({}, None) is None
 
 
+def test_resolve_language_context_bootstrap_sets_unknown_detection() -> None:
+    context = resolve_language_context(
+        current_turn_text="",
+        is_bootstrap_turn=True,
+        bootstrap_user_locale="fr-FR",
+        browser_locale="de-DE",
+        tenant_escalation_language="es",
+    )
+
+    assert context.detected_language == "unknown"
+    assert context.confidence == 0.0
+    assert context.is_reliable is False
+    assert context.response_language == "fr-FR"
+    assert context.response_language_resolution_reason == "bootstrap_user_locale"
+    assert context.escalation_language == "es"
+    assert context.escalation_language_source == "tenant"
+
+
+def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: LanguageDetectionResult(
+            detected_language="en",
+            confidence=0.4,
+            is_reliable=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.language.translate_text_result",
+        lambda **kwargs: LocalizationResult(text="Bonjour", tokens_used=8),
+    )
+
+    result = render_direct_faq_answer_result(
+        answer_text="Direct FAQ answer",
+        response_language="fr",
+        api_key="sk-test",
+    )
+
+    assert result == LocalizationResult(text="Bonjour", tokens_used=8)
+
+
+def test_render_direct_faq_answer_result_translates_when_detection_throws(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    monkeypatch.setattr(
+        "backend.chat.language.translate_text_result",
+        lambda **kwargs: LocalizationResult(text="Bonjour", tokens_used=5),
+    )
+
+    result = render_direct_faq_answer_result(
+        answer_text="Direct FAQ answer",
+        response_language="fr",
+        api_key="sk-test",
+    )
+
+    assert result == LocalizationResult(text="Bonjour", tokens_used=5)
+
+
+def test_render_direct_faq_answer_result_returns_raw_when_translation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: LanguageDetectionResult(
+            detected_language="en",
+            confidence=0.99,
+            is_reliable=True,
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.language.translate_text_result",
+        lambda **kwargs: LocalizationResult(text="Direct FAQ answer", tokens_used=0),
+    )
+
+    result = render_direct_faq_answer_result(
+        answer_text="Direct FAQ answer",
+        response_language="fr",
+        api_key="sk-test",
+    )
+
+    assert result == LocalizationResult(text="Direct FAQ answer", tokens_used=0)
+
+
 # ---------------------------------------------------------------------------
 # run_chat_pipeline — guard / FAQ / RAG scenarios
 # ---------------------------------------------------------------------------
@@ -3538,7 +3636,7 @@ def test_run_chat_pipeline_injection_detected(
         ),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language_result",
+        "backend.guards.reject_response.localize_text_result",
         lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
             text="I cannot help with that request.",
             tokens_used=7,
@@ -3614,7 +3712,7 @@ def test_run_chat_pipeline_not_relevant(
         lambda **kwargs: (False, "off_topic", None),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language_result",
+        "backend.guards.reject_response.localize_text_result",
         lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
             text="Je ne peux pas aider avec cette question.",
             tokens_used=9,
@@ -3661,7 +3759,7 @@ def test_run_chat_pipeline_injection_detected_french_question(
         ),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language_result",
+        "backend.guards.reject_response.localize_text_result",
         lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
             text="Je ne peux pas aider avec cette demande.",
             tokens_used=11,
@@ -3757,7 +3855,7 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
         lambda *args, **kwargs: (False, None),
     )
     monkeypatch.setattr(
-        "backend.guards.reject_response.localize_text_to_question_language_result",
+        "backend.guards.reject_response.localize_text_result",
         lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
             text="Je n'ai pas assez d'informations pour repondre de maniere fiable.",
             tokens_used=13,

@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
@@ -25,6 +26,7 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    TenantProfile,
     User,
 )
 from backend.privacy_config import public_redaction_config_dict
@@ -481,12 +483,23 @@ def perform_manual_escalation(
         else EscalationPhase.handoff_email_known
     )
     msgs = transcript_messages_for_openai(chat)
+    tenant_profile = (
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+    )
+    language_context = resolve_language_context(
+        current_turn_text=user_note or "[User requested support via the Talk to support action.]",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=(effective or {}).get("browser_locale"),
+        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+    )
     out = complete_escalation_openai_turn(
         phase=phase,
         chat_messages=msgs,
         fact_json=fact_from_ticket(ticket, chat=chat),
         latest_user_text="[User requested support via the Talk to support action.]",
         api_key=api_key,
+        escalation_language=language_context.escalation_language,
     )
     if not ticket.user_email:
         chat.escalation_awaiting_ticket_id = ticket.id

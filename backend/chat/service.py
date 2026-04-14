@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 PREVIEW_MAX_LEN = 120
 
-from backend.chat.language import LocalizationResult, localize_text_to_question_language_result
+from backend.chat.language import (
+    LocalizationResult,
+    ResolvedLanguageContext,
+    localize_text_result,
+    localize_text_to_question_language_result,
+    render_direct_faq_answer_result,
+    resolve_language_context,
+)
 from backend.chat.pii import redact
 from backend.core import db as core_db
 from backend.core.config import settings
@@ -379,6 +386,7 @@ class ChatPipelineResult:
     escalation_trigger: Any  # EscalationTrigger | None
     # debug extras
     faq_match: Any = None  # FAQMatchResult | None
+    language_context: ResolvedLanguageContext | None = None
 
 
 @dataclass(frozen=True)
@@ -399,6 +407,18 @@ def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any])
     trace.span(name=name, metadata=metadata).end(output=metadata)
 
 
+def _resolve_product_name(
+    *,
+    client: Client | None,
+    db: Session,
+) -> str:
+    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first() if client else None
+    product_name = (profile.product_name if profile and profile.product_name else None) or (
+        client.name if client and client.name else None
+    )
+    return product_name or "this product"
+
+
 def _resolve_fallback_locale(
     user_context: dict[str, Any] | None,
     browser_locale: str | None = None,
@@ -415,23 +435,10 @@ def _resolve_fallback_locale(
     return None
 
 
-def _resolve_product_name(
-    *,
-    client: Client | None,
-    db: Session,
-) -> str:
-    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first() if client else None
-    product_name = (profile.product_name if profile and profile.product_name else None) or (
-        client.name if client and client.name else None
-    )
-    return product_name or "this product"
-
-
 def _build_greeting_result(
     *,
     product_name: str,
-    question: str | None,
-    fallback_locale: str | None,
+    response_language: str,
     api_key: str,
 ) -> LocalizationResult:
     canonical_text = (
@@ -440,9 +447,9 @@ def _build_greeting_result(
     )
     return localize_text_to_question_language_result(
         canonical_text=canonical_text,
-        question=question,
+        question=None,
+        fallback_locale=response_language,
         api_key=api_key,
-        fallback_locale=fallback_locale,
     )
 def run_chat_pipeline(
     client_id: uuid.UUID,
@@ -450,8 +457,8 @@ def run_chat_pipeline(
     db: Session,
     *,
     api_key: str,
+    language_context: ResolvedLanguageContext | None = None,
     user_context_line: str | None = None,
-    fallback_locale: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     trace: TraceHandle | None = None,
     precomputed_injection: Any | None = None,
@@ -474,6 +481,15 @@ def run_chat_pipeline(
     never triggers escalation actions, never increments metrics,
     never pushes events to queues, never warms caches, never writes audit/observability.
     """
+    if language_context is None:
+        language_context = resolve_language_context(
+            current_turn_text=question,
+            is_bootstrap_turn=not question.strip(),
+            bootstrap_user_locale=None,
+            browser_locale=None,
+            tenant_escalation_language=None,
+        )
+
     # --- 1. Injection detection ---
     injection_result = (
         precomputed_injection
@@ -484,9 +500,8 @@ def run_chat_pipeline(
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
-            question=question,
+            response_language=language_context.response_language,
             api_key=api_key,
-            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -502,6 +517,7 @@ def run_chat_pipeline(
             validation=None,
             escalation_recommended=False,
             escalation_trigger=None,
+            language_context=language_context,
         )
 
     # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
@@ -574,11 +590,15 @@ def run_chat_pipeline(
         )
 
     if faq_match.strategy == "faq_direct":
-        direct_answer = faq_match.faq_items[0].answer if faq_match.faq_items else ""
+        direct_answer_result = render_direct_faq_answer_result(
+            answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
+            response_language=language_context.response_language,
+            api_key=api_key,
+        )
         return ChatPipelineResult(
-            raw_answer=direct_answer,
-            final_answer=direct_answer,
-            tokens_used=0,
+            raw_answer=direct_answer_result.text,
+            final_answer=direct_answer_result.text,
+            tokens_used=direct_answer_result.tokens_used,
             strategy="faq_direct",
             reject_reason=None,
             is_reject=False,
@@ -590,6 +610,7 @@ def run_chat_pipeline(
             escalation_recommended=False,
             escalation_trigger=None,
             faq_match=faq_match,
+            language_context=language_context,
         )
 
     # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
@@ -604,9 +625,8 @@ def run_chat_pipeline(
         reject_result = build_reject_response_result(
             reason=RejectReason.NOT_RELEVANT,
             profile=profile,
-            question=question,
+            response_language=language_context.response_language,
             api_key=api_key,
-            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -623,6 +643,7 @@ def run_chat_pipeline(
             escalation_recommended=False,
             escalation_trigger=None,
             faq_match=faq_match,
+            language_context=language_context,
         )
 
     client_product_name: str | None = profile.product_name if profile else None
@@ -664,9 +685,8 @@ def run_chat_pipeline(
         reject_result = build_reject_response_result(
             reason=RejectReason.LOW_RETRIEVAL_SCORE,
             profile=profile,
-            question=question,
+            response_language=language_context.response_language,
             api_key=api_key,
-            fallback_locale=fallback_locale,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -683,6 +703,7 @@ def run_chat_pipeline(
             escalation_recommended=False,
             escalation_trigger=None,
             faq_match=faq_match,
+            language_context=language_context,
         )
 
     # --- 7. Generate answer ---
@@ -690,6 +711,7 @@ def run_chat_pipeline(
         question,
         retrieval.chunk_texts,
         api_key=api_key,
+        response_language=language_context.response_language,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
         client_product_name=client_product_name,
@@ -718,9 +740,8 @@ def run_chat_pipeline(
         reject_result = build_reject_response_result(
             reason=RejectReason.INSUFFICIENT_CONFIDENCE,
             profile=profile,
-            question=question,
+            response_language=language_context.response_language,
             api_key=api_key,
-            fallback_locale=fallback_locale,
         )
         final_answer = reject_result.text
         tokens_used += reject_result.tokens_used
@@ -748,6 +769,7 @@ def run_chat_pipeline(
         escalation_recommended=escalate,
         escalation_trigger=esc_trigger,
         faq_match=faq_match,
+        language_context=language_context,
     )
 
 
@@ -769,6 +791,7 @@ def build_rag_prompt(
     question: str,
     context_chunks: list[str],
     *,
+    response_language: str = "en",
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     client_product_name: str | None = None,
@@ -806,7 +829,7 @@ def build_rag_prompt(
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
-        "- Answer in the same language as the question.\n"
+        f"- Respond strictly in {response_language}. Do not switch languages unless quoting user input or proper nouns.\n"
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
@@ -872,6 +895,7 @@ def build_rag_messages(
     question: str,
     context_chunks: list[str],
     *,
+    response_language: str = "en",
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     client_product_name: str | None = None,
@@ -883,6 +907,7 @@ def build_rag_messages(
     prompt = build_rag_prompt(
         question,
         context_chunks,
+        response_language=response_language,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
         client_product_name=client_product_name,
@@ -902,6 +927,7 @@ def generate_answer(
     context_chunks: list[str],
     *,
     api_key: str,
+    response_language: str = "en",
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     client_product_name: str | None = None,
@@ -929,6 +955,7 @@ def generate_answer(
     system_prompt, user_message = build_rag_messages(
         question,
         context_chunks,
+        response_language=response_language,
         user_context_line=user_context_line,
         disclosure_config=disclosure_config,
         client_product_name=client_product_name,
@@ -959,6 +986,7 @@ def generate_answer(
             metadata={
                 "temperature": 0.2,
                 "max_tokens": 500,
+                "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
                 "captures_full_prompt": settings.observability_capture_full_prompts,
@@ -1415,7 +1443,20 @@ def process_chat_message(
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
-    fallback_locale = _resolve_fallback_locale(effective_user_ctx, browser_locale)
+    tenant_profile = (
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        if client_row is not None
+        else None
+    )
+    question_text = question.strip()
+    has_prior_user_content_turns = any(message.role == MessageRole.user for message in chat.messages)
+    language_context = resolve_language_context(
+        current_turn_text=question_text,
+        is_bootstrap_turn=not question_text and not has_prior_user_content_turns,
+        bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
+        browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
+        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+    )
 
     explicit_human_request_raw = detect_human_request(redacted_question)
 
@@ -1431,27 +1472,33 @@ def process_chat_message(
             "browser_locale": browser_locale,
             "question": redacted_question,
             "has_user_context": bool(effective_user_ctx),
+            "detected_language": language_context.detected_language,
+            "confidence": language_context.confidence,
+            "is_reliable": language_context.is_reliable,
+            "response_language": language_context.response_language,
+            "response_language_resolution_reason": language_context.response_language_resolution_reason,
+            "escalation_language": language_context.escalation_language,
+            "escalation_language_source": language_context.escalation_language_source,
         },
         tags=[f"tenant:{client_id}"],
         force_trace=explicit_human_request_raw,
     )
 
-    question_text = question.strip()
-    has_existing_messages = bool(chat.messages)
     if not question_text:
-        if has_existing_messages:
+        if has_prior_user_content_turns:
             raise ValueError("Question is required")
         greeting = _build_greeting_result(
             product_name=_resolve_product_name(client=client_row, db=db),
-            question=None,
-            fallback_locale=fallback_locale,
+            response_language=language_context.response_language,
             api_key=api_key,
         )
-        _persist_assistant_message(
+        _persist_turn(
             db,
             chat,
             client_id,
+            "",
             greeting.text,
+            [],
             greeting.tokens_used,
             optional_entity_types=optional_entity_types,
         )
@@ -1461,6 +1508,7 @@ def process_chat_message(
                 "chat_ended": False,
                 "escalated": False,
                 "greeting": True,
+                "response_language": language_context.response_language,
             },
         )
         return ChatTurnOutcome(
@@ -1504,9 +1552,8 @@ def process_chat_message(
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
-            question=redacted_question,
+            response_language=language_context.response_language,
             api_key=api_key,
-            fallback_locale=fallback_locale,
         )
         user_message, assistant_message = _persist_turn(
             db,
@@ -1529,11 +1576,16 @@ def process_chat_message(
             was_rejected=True,
             had_fallback=False,
             was_escalated=False,
-            language=fallback_locale,
+            language=language_context.response_language,
         )
         trace.update(
             output={"answer": reject_result.text, "source": "guard_reject_injection"},
-            metadata={"chat_ended": False, "escalated": False, "reject_reason": "injection"},
+            metadata={
+                "chat_ended": False,
+                "escalated": False,
+                "reject_reason": "injection",
+                "response_language": language_context.response_language,
+            },
         )
         return ChatTurnOutcome(
             text=reject_result.text,
@@ -1556,6 +1608,7 @@ def process_chat_message(
             fact_json={},
             latest_user_text=redacted_question,
             api_key=api_key,
+            escalation_language=language_context.escalation_language,
         )
         _persist_turn(
             db,
@@ -1569,7 +1622,11 @@ def process_chat_message(
         )
         trace.update(
             output={"answer": out.message_to_user, "source": "chat_closed"},
-            metadata={"chat_ended": True, "escalated": False},
+            metadata={
+                "chat_ended": True,
+                "escalated": False,
+                "escalation_language": language_context.escalation_language,
+            },
         )
         return ChatTurnOutcome(
             text=out.message_to_user,
@@ -1607,6 +1664,7 @@ def process_chat_message(
                         fact_json=fact_from_ticket(ticket, chat=chat),
                         latest_user_text=redacted_question,
                         api_key=api_key,
+                        escalation_language=language_context.escalation_language,
                     )
                     chat.escalation_followup_pending = True
                     db.add(chat)
@@ -1626,7 +1684,11 @@ def process_chat_message(
                     )
                     trace.update(
                         output={"answer": out.message_to_user, "source": "escalation_email_capture"},
-                        metadata={"chat_ended": False, "escalated": True},
+                        metadata={
+                            "chat_ended": False,
+                            "escalated": True,
+                            "escalation_language": language_context.escalation_language,
+                        },
                     )
                     return ChatTurnOutcome(
                         text=out.message_to_user,
@@ -1640,6 +1702,7 @@ def process_chat_message(
                     fact_json=fact_from_ticket(ticket, chat=chat),
                     latest_user_text=redacted_question,
                     api_key=api_key,
+                    escalation_language=language_context.escalation_language,
                 )
                 _persist_turn(
                     db,
@@ -1656,7 +1719,11 @@ def process_chat_message(
                 )
                 trace.update(
                     output={"answer": out.message_to_user, "source": "escalation_email_retry"},
-                    metadata={"chat_ended": False, "escalated": True},
+                    metadata={
+                        "chat_ended": False,
+                        "escalated": True,
+                        "escalation_language": language_context.escalation_language,
+                    },
                 )
                 return ChatTurnOutcome(
                     text=out.message_to_user,
@@ -1689,6 +1756,7 @@ def process_chat_message(
                 },
                 latest_user_text=redacted_question,
                 api_key=api_key,
+                escalation_language=language_context.escalation_language,
             )
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
@@ -1710,7 +1778,11 @@ def process_chat_message(
                 followup_span.end(output={"decision": decision, "chat_ended": False})
                 trace.update(
                     output={"answer": out.message_to_user, "source": "escalation_followup"},
-                    metadata={"chat_ended": False, "escalated": True},
+                    metadata={
+                        "chat_ended": False,
+                        "escalated": True,
+                        "escalation_language": language_context.escalation_language,
+                    },
                 )
                 return ChatTurnOutcome(
                     text=out.message_to_user,
@@ -1736,7 +1808,11 @@ def process_chat_message(
                 followup_span.end(output={"decision": decision, "chat_ended": True})
                 trace.update(
                     output={"answer": out.message_to_user, "source": "escalation_followup"},
-                    metadata={"chat_ended": True, "escalated": True},
+                    metadata={
+                        "chat_ended": True,
+                        "escalated": True,
+                        "escalation_language": language_context.escalation_language,
+                    },
                 )
                 return ChatTurnOutcome(
                     text=out.message_to_user,
@@ -1759,7 +1835,11 @@ def process_chat_message(
             followup_span.end(output={"decision": decision, "chat_ended": False})
             trace.update(
                 output={"answer": out.message_to_user, "source": "escalation_followup"},
-                metadata={"chat_ended": False, "escalated": True},
+                metadata={
+                    "chat_ended": False,
+                    "escalated": True,
+                    "escalation_language": language_context.escalation_language,
+                },
             )
             return ChatTurnOutcome(
                 text=out.message_to_user,
@@ -1804,6 +1884,7 @@ def process_chat_message(
                 fact_json=fact_from_ticket(ticket, chat=chat),
                 latest_user_text=redacted_question,
                 api_key=api_key,
+                escalation_language=language_context.escalation_language,
             )
             if not ticket.user_email:
                 chat.escalation_awaiting_ticket_id = ticket.id
@@ -1832,11 +1913,15 @@ def process_chat_message(
                 was_rejected=False,
                 had_fallback=False,
                 was_escalated=True,
-                language=fallback_locale,
+                language=language_context.escalation_language,
             )
             trace.update(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
-                metadata={"chat_ended": False, "escalated": True},
+                metadata={
+                    "chat_ended": False,
+                    "escalated": True,
+                    "escalation_language": language_context.escalation_language,
+                },
             )
             return ChatTurnOutcome(
                 text=out.message_to_user,
@@ -1857,8 +1942,8 @@ def process_chat_message(
         question_for_pipeline,
         db,
         api_key=api_key,
+        language_context=language_context,
         user_context_line=user_context_line,
-        fallback_locale=fallback_locale,
         disclosure_config=disclosure_cfg,
         trace=trace,
         precomputed_injection=injection_result,
@@ -1889,7 +1974,7 @@ def process_chat_message(
             was_rejected=result.is_reject,
             had_fallback=result.validation_outcome == "fallback",
             was_escalated=False,
-            language=fallback_locale,
+            language=language_context.response_language,
         )
         source_map = {
             "injection": "guard_reject_injection",
@@ -1909,6 +1994,7 @@ def process_chat_message(
                 "strategy": result.strategy,
                 "reject_reason": result.reject_reason,
                 "retrieval_skipped": result.is_faq_direct,
+                "response_language": language_context.response_language,
             },
         )
         return ChatTurnOutcome(
@@ -1983,6 +2069,7 @@ def process_chat_message(
                 fact_json=fact_from_ticket(ticket, chat=chat),
                 latest_user_text=redacted_question,
                 api_key=api_key,
+                escalation_language=language_context.escalation_language,
             )
             answer = answer + "\n\n" + esc.message_to_user
             tokens_used = tokens_used + esc.tokens_used
@@ -2016,7 +2103,9 @@ def process_chat_message(
         was_rejected=False,
         had_fallback=result.validation_outcome == "fallback",
         was_escalated=bool(escalate),
-        language=fallback_locale,
+        language=(
+            language_context.escalation_language if escalate else language_context.response_language
+        ),
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.
@@ -2029,6 +2118,10 @@ def process_chat_message(
             "chat_ended": bool(chat.ended_at),
             "escalated": bool(escalate),
             "escalation_trigger": esc_trigger.value if esc_trigger else None,
+            "response_language": language_context.response_language,
+            "response_language_resolution_reason": language_context.response_language_resolution_reason,
+            "escalation_language": language_context.escalation_language,
+            "escalation_language_source": language_context.escalation_language_source,
             "strategy": result.strategy,
             "validation_outcome": result.validation_outcome,
             "retrieval_mode": retrieval.mode,
@@ -2094,11 +2187,25 @@ def run_debug(
     if client_row and isinstance(client_row.disclosure_config, dict):
         disclosure_cfg = client_row.disclosure_config
 
+    tenant_profile = (
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        if client_row is not None
+        else None
+    )
+    language_context = resolve_language_context(
+        current_turn_text=redacted_question,
+        is_bootstrap_turn=not redacted_question.strip(),
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+    )
+
     result = run_chat_pipeline(
         client_id,
         redacted_question,
         db,
         api_key=api_key,
+        language_context=language_context,
         disclosure_config=disclosure_cfg,
     )
     retrieval = result.retrieval
@@ -2140,6 +2247,15 @@ def run_debug(
     debug["validation_applied"] = result.validation_applied
     debug["validation_outcome"] = result.validation_outcome
     debug["raw_answer"] = result.raw_answer
+    debug["detected_language"] = language_context.detected_language
+    debug["confidence"] = language_context.confidence
+    debug["is_reliable"] = language_context.is_reliable
+    debug["response_language"] = language_context.response_language
+    debug["response_language_resolution_reason"] = (
+        language_context.response_language_resolution_reason
+    )
+    debug["escalation_language"] = language_context.escalation_language
+    debug["escalation_language_source"] = language_context.escalation_language_source
 
     final_text = result.final_answer
     total_tokens_used = result.tokens_used

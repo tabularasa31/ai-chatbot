@@ -96,6 +96,7 @@ export type DisclosureConfigResponse = {
 
 export type SupportSettingsResponse = {
   l2_email: string | null;
+  escalation_language: string | null;
   fallback_email: string | null;
 };
 
@@ -534,7 +535,7 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
       return data as SupportSettingsResponse;
     },
-    async update(config: { l2_email: string | null }): Promise<SupportSettingsResponse> {
+    async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
       const res = await authFetch(`${BASE_URL}/clients/me/support-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

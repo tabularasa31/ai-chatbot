@@ -181,6 +181,30 @@ def test_fail_other_requires_comment(client: TestClient, db_session: Session) ->
     assert r.status_code == 422
 
 
+def test_fail_verdict_allows_empty_bot_answer(client: TestClient, db_session: Session) -> None:
+    public_id = _eligible_bot_client(client, db_session, email_suffix="empty-answer")
+    _eval_tester(db_session)
+    h = _eval_auth(client, "eval-tester-1", "secret123")
+    sid = client.post("/eval/sessions", headers=h, json={"bot_id": public_id}).json()["id"]
+    r = client.post(
+        f"/eval/sessions/{sid}/results",
+        headers=h,
+        json={
+            "question": "Q?",
+            "bot_answer": "   ",
+            "verdict": "fail",
+            "error_category": "no_answer",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    results = client.get(f"/eval/sessions/{sid}/results", headers=h)
+    assert results.status_code == 200, results.text
+    items = results.json()["items"]
+    assert len(items) == 1
+    assert items[0]["bot_answer"] == ""
+
+
 def test_decode_access_token_rejects_eval_typ() -> None:
     now = dt.datetime.now(dt.timezone.utc)
     exp = now + dt.timedelta(hours=1)

@@ -451,6 +451,32 @@ def _build_greeting_result(
         fallback_locale=response_language,
         api_key=api_key,
     )
+
+
+def _resolve_chat_language_context(
+    *,
+    current_turn_text: str,
+    client_row: Client | None,
+    tenant_profile: TenantProfile | None,
+    bootstrap_user_locale: str | None,
+    browser_locale: str | None,
+    is_bootstrap_turn: bool,
+) -> ResolvedLanguageContext:
+    support_config = public_support_config_dict(
+        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
+    )
+    return resolve_language_context(
+        current_turn_text=current_turn_text,
+        is_bootstrap_turn=is_bootstrap_turn,
+        bootstrap_user_locale=bootstrap_user_locale,
+        browser_locale=browser_locale,
+        tenant_escalation_language=(
+            support_config.get("escalation_language")
+            or getattr(tenant_profile, "escalation_language", None)
+        ),
+    )
+
+
 def run_chat_pipeline(
     client_id: uuid.UUID,
     question: str,
@@ -482,12 +508,13 @@ def run_chat_pipeline(
     never pushes events to queues, never warms caches, never writes audit/observability.
     """
     if language_context is None:
-        language_context = resolve_language_context(
+        language_context = _resolve_chat_language_context(
             current_turn_text=question,
+            client_row=None,
+            tenant_profile=None,
             is_bootstrap_turn=not question.strip(),
             bootstrap_user_locale=None,
             browser_locale=None,
-            tenant_escalation_language=None,
         )
 
     # --- 1. Injection detection ---
@@ -1448,20 +1475,15 @@ def process_chat_message(
         if client_row is not None
         else None
     )
-    support_config = public_support_config_dict(
-        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
-    )
     question_text = question.strip()
     has_prior_user_content_turns = any(message.role == MessageRole.user for message in chat.messages)
-    language_context = resolve_language_context(
+    language_context = _resolve_chat_language_context(
         current_turn_text=question_text,
+        client_row=client_row,
+        tenant_profile=tenant_profile,
         is_bootstrap_turn=not question_text and not has_prior_user_content_turns,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
         browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
-        tenant_escalation_language=(
-            support_config.get("escalation_language")
-            or getattr(tenant_profile, "escalation_language", None)
-        ),
     )
 
     explicit_human_request_raw = detect_human_request(redacted_question)
@@ -2198,18 +2220,13 @@ def run_debug(
         if client_row is not None
         else None
     )
-    support_config = public_support_config_dict(
-        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
-    )
-    language_context = resolve_language_context(
+    language_context = _resolve_chat_language_context(
         current_turn_text=redacted_question,
+        client_row=client_row,
+        tenant_profile=tenant_profile,
         is_bootstrap_turn=not redacted_question.strip(),
         bootstrap_user_locale=None,
         browser_locale=None,
-        tenant_escalation_language=(
-            support_config.get("escalation_language")
-            or getattr(tenant_profile, "escalation_language", None)
-        ),
     )
 
     result = run_chat_pipeline(

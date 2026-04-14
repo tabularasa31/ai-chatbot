@@ -199,10 +199,8 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
                     is_reliable=confidence >= _threshold(),
                 )
         except LangDetectException:
-            logger.info("language_detection_failed_for_text", exc_info=True)
             raise
         except Exception:
-            logger.info("language_detection_failed_for_text", exc_info=True)
             raise
 
     return _heuristic_language_detection(stripped)

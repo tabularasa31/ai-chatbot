@@ -173,6 +173,7 @@ def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, 
     config = public_support_config_dict(raw)
     return {
         "l2_email": config["l2_email"],
+        "escalation_language": config["escalation_language"],
         "fallback_email": owner.email if owner and owner.email else None,
     }
 
@@ -180,6 +181,7 @@ def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, 
 def update_support_settings_for_user(
     user_id: uuid.UUID,
     l2_email: str | None,
+    escalation_language: str | None,
     db: Session,
 ) -> dict[str, str | None]:
     client = get_client_by_user(user_id, db)
@@ -187,7 +189,7 @@ def update_support_settings_for_user(
         raise HTTPException(status_code=404, detail="Client not found")
     client.settings = with_support_config(
         client.settings if isinstance(client.settings, dict) else None,
-        {"l2_email": l2_email},
+        {"l2_email": l2_email, "escalation_language": escalation_language},
     )
     db.commit()
     db.refresh(client)

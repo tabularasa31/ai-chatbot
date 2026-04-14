@@ -486,12 +486,18 @@ def perform_manual_escalation(
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first()
     )
+    support_config = public_support_config_dict(
+        client.settings if isinstance(client.settings, dict) else None
+    )
     language_context = resolve_language_context(
         current_turn_text=user_note or "[User requested support via the Talk to support action.]",
         is_bootstrap_turn=False,
         bootstrap_user_locale=None,
         browser_locale=(effective or {}).get("browser_locale"),
-        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+        tenant_escalation_language=(
+            support_config.get("escalation_language")
+            or getattr(tenant_profile, "escalation_language", None)
+        ),
     )
     out = complete_escalation_openai_turn(
         phase=phase,

@@ -179,7 +179,12 @@ def put_support_settings_route(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SupportSettingsResponse:
-    data = update_support_settings_for_user(current_user.id, body.l2_email, db)
+    data = update_support_settings_for_user(
+        current_user.id,
+        body.l2_email,
+        body.escalation_language,
+        db,
+    )
     return SupportSettingsResponse(**data)
 
 

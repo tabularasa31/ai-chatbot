@@ -96,6 +96,7 @@ export type DisclosureConfigResponse = {
 
 export type SupportSettingsResponse = {
   l2_email: string | null;
+  escalation_language: string | null;
   fallback_email: string | null;
 };
 
@@ -226,7 +227,6 @@ export type KnowledgeExtractionStatus = "pending" | "done" | "failed";
 
 export type KnowledgeProfile = {
   product_name: string | null;
-  escalation_language: string | null;
   topics: string[];
   glossary: Array<{
     term?: string;
@@ -535,7 +535,7 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
       return data as SupportSettingsResponse;
     },
-    async update(config: { l2_email: string | null }): Promise<SupportSettingsResponse> {
+    async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
       const res = await authFetch(`${BASE_URL}/clients/me/support-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -699,7 +699,7 @@ export const api = {
       } as KnowledgeProfile;
     },
     async patchProfile(
-      payload: Partial<Pick<KnowledgeProfile, "product_name" | "escalation_language" | "topics" | "support_email" | "support_urls">>,
+      payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>,
       botId?: string
     ): Promise<KnowledgeProfile> {
       const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;

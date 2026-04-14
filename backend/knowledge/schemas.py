@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field, model_validator
 
 class KnowledgeProfileResponse(BaseModel):
     product_name: str | None
-    escalation_language: str | None = None
     topics: list[str] = Field(default_factory=list)
     modules: list[str] = Field(default_factory=list)
     glossary: list[dict] = Field(default_factory=list)
@@ -22,7 +21,6 @@ class KnowledgeProfileResponse(BaseModel):
 
 class KnowledgeProfilePatchRequest(BaseModel):
     product_name: str | None = None
-    escalation_language: str | None = None
     topics: list[str] | None = None
     modules: list[str] | None = None
     glossary: list[dict] | None = None

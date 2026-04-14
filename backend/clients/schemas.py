@@ -114,6 +114,7 @@ class SupportSettingsResponse(BaseModel):
     """Client-wide support inbox settings."""
 
     l2_email: str | None = None
+    escalation_language: str | None = None
     fallback_email: str | None = None
 
 
@@ -121,6 +122,7 @@ class UpdateSupportSettingsRequest(BaseModel):
     """PUT body for /clients/me/support-settings."""
 
     l2_email: str | None = None
+    escalation_language: str | None = None
 
     @field_validator("l2_email")
     @classmethod

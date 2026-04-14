@@ -82,6 +82,7 @@ from backend.search.service import (
     expand_query,
     search_similar_chunks_detailed,
 )
+from backend.support_config import public_support_config_dict
 from backend.user_sessions.service import record_user_session_turn, touch_user_session
 
 logger = logging.getLogger(__name__)
@@ -1447,6 +1448,9 @@ def process_chat_message(
         if client_row is not None
         else None
     )
+    support_config = public_support_config_dict(
+        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
+    )
     question_text = question.strip()
     has_prior_user_content_turns = any(message.role == MessageRole.user for message in chat.messages)
     language_context = resolve_language_context(
@@ -1454,7 +1458,10 @@ def process_chat_message(
         is_bootstrap_turn=not question_text and not has_prior_user_content_turns,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
         browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
-        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+        tenant_escalation_language=(
+            support_config.get("escalation_language")
+            or getattr(tenant_profile, "escalation_language", None)
+        ),
     )
 
     explicit_human_request_raw = detect_human_request(redacted_question)
@@ -2191,12 +2198,18 @@ def run_debug(
         if client_row is not None
         else None
     )
+    support_config = public_support_config_dict(
+        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
+    )
     language_context = resolve_language_context(
         current_turn_text=redacted_question,
         is_bootstrap_turn=not redacted_question.strip(),
         bootstrap_user_locale=None,
         browser_locale=None,
-        tenant_escalation_language=getattr(tenant_profile, "escalation_language", None),
+        tenant_escalation_language=(
+            support_config.get("escalation_language")
+            or getattr(tenant_profile, "escalation_language", None)
+        ),
     )
 
     result = run_chat_pipeline(

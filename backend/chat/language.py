@@ -189,6 +189,19 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
     if ascii_tokens and all(token.isascii() for token in ascii_tokens) and len(ascii_tokens) == 1:
         return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
 
+    # Trust the heuristic for pure-ASCII text that it assessed as English.
+    # langdetect can badly misclassify short ASCII phrases at low token counts —
+    # e.g. "Reset password" → af (Afrikaans), "question about product" → fr (French) —
+    # because it lacks sufficient signal at that length.  Non-ASCII text is still
+    # passed to langdetect since the extended character set gives it a reliable signal.
+    if (
+        heuristic.detected_language == "en"
+        and heuristic.is_reliable
+        and ascii_tokens
+        and all(token.isascii() for token in ascii_tokens)
+    ):
+        return heuristic
+
     if detect_langs is not None:
         detections = detect_langs(stripped)
         if detections:

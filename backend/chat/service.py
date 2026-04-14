@@ -19,7 +19,6 @@ PREVIEW_MAX_LEN = 120
 from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
-    localize_text_result,
     localize_text_to_question_language_result,
     render_direct_faq_answer_result,
     resolve_language_context,

@@ -226,6 +226,7 @@ export type KnowledgeExtractionStatus = "pending" | "done" | "failed";
 
 export type KnowledgeProfile = {
   product_name: string | null;
+  escalation_language: string | null;
   topics: string[];
   glossary: Array<{
     term?: string;
@@ -698,7 +699,7 @@ export const api = {
       } as KnowledgeProfile;
     },
     async patchProfile(
-      payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>,
+      payload: Partial<Pick<KnowledgeProfile, "product_name" | "escalation_language" | "topics" | "support_email" | "support_urls">>,
       botId?: string
     ): Promise<KnowledgeProfile> {
       const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;

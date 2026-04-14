@@ -9,7 +9,6 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from backend.chat.language import (
-    localize_text_result,
     localize_text_to_question_language_result,
 )
 from backend.core.openai_client import get_openai_client

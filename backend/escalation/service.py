@@ -484,7 +484,7 @@ def perform_manual_escalation(
     )
     msgs = transcript_messages_for_openai(chat)
     tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first()
     )
     language_context = resolve_language_context(
         current_turn_text=user_note or "[User requested support via the Talk to support action.]",

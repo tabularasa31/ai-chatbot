@@ -278,7 +278,7 @@ export default function KnowledgePage() {
   const [profileError, setProfileError] = useState("");
   const [newTopic, setNewTopic] = useState("");
   const [newSupportUrl, setNewSupportUrl] = useState("");
-  const [profileEditingField, setProfileEditingField] = useState<"product_name" | "topics" | "support_email" | "support_urls" | null>(null);
+  const [profileEditingField, setProfileEditingField] = useState<"product_name" | "escalation_language" | "topics" | "support_email" | "support_urls" | null>(null);
   const [faqItems, setFaqItems] = useState<KnowledgeFaqItem[]>([]);
   const [pendingCount, setPendingCount] = useState(0);
   const [faqFilter, setFaqFilter] = useState<"all" | "pending" | "approved" | "docs" | "logs">("all");
@@ -307,11 +307,13 @@ export default function KnowledgePage() {
     if (!profile || !profileDraft) return false;
     return JSON.stringify({
       product_name: profile.product_name,
+      escalation_language: profile.escalation_language,
       topics: profile.topics,
       support_email: profile.support_email,
       support_urls: profile.support_urls,
     }) !== JSON.stringify({
       product_name: profileDraft.product_name,
+      escalation_language: profileDraft.escalation_language,
       topics: profileDraft.topics,
       support_email: profileDraft.support_email,
       support_urls: profileDraft.support_urls,
@@ -666,6 +668,30 @@ export default function KnowledgePage() {
                   </button>
                 )}
               </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-slate-500">Tenant escalation language</span>
+                {profileEditingField === "escalation_language" ? (
+                  <input
+                    value={profileDraft.escalation_language ?? ""}
+                    onChange={(e) =>
+                      setProfileDraft({
+                        ...profileDraft,
+                        escalation_language: e.target.value || null,
+                      })
+                    }
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700"
+                    placeholder="e.g. en, ru, fr, pt-BR"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setProfileEditingField("escalation_language")}
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    {profileDraft.escalation_language ?? "English default"}
+                  </button>
+                )}
+              </label>
               <div>
                 <span className="mb-1 block text-xs text-slate-500">Topics</span>
                 <div className="flex flex-wrap gap-2">
@@ -781,6 +807,7 @@ export default function KnowledgePage() {
                       if (!profileDraft) return;
                       const updated = await api.knowledge.patchProfile({
                         product_name: profileDraft.product_name,
+                        escalation_language: profileDraft.escalation_language,
                         topics: profileDraft.topics,
                         support_email: profileDraft.support_email,
                         support_urls: profileDraft.support_urls,

@@ -83,12 +83,6 @@ function EvalLoginForm() {
                     Быстрый доступ к eval-сессиям без лишних экранов и с оценкой каждого ответа в один клик.
                   </p>
                 </div>
-                <div className="rounded-[24px] border border-white/10 bg-white/8 px-4 py-4">
-                  <p className="text-xs uppercase tracking-[0.22em] text-[#F5D0FE]">Светлый диалог</p>
-                  <p className="mt-2 text-sm leading-6 text-[#E2E8F0]">
-                    Бот остаётся на светлом фоне, но получает более выразительные акценты, контраст и иерархию.
-                  </p>
-                </div>
               </div>
             </div>
           </section>

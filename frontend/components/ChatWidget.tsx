@@ -425,6 +425,7 @@ export function ChatWidget({
                 }
 
                 const isError = msg.type === "error";
+                const userQuestion = msg.type === "assistant" ? precedingUserQuestion(messages, i) : "";
                 return (
                   <div key={msg.id}>
                     <div className="flex items-end gap-3">
@@ -440,11 +441,11 @@ export function ChatWidget({
                       </div>
                     </div>
 
-                    {msg.type === "assistant" && renderBelowAssistant ? (
+                    {msg.type === "assistant" && renderBelowAssistant && userQuestion.trim() ? (
                       <div className="ml-12 mt-3 max-w-[85%]">
                         {renderBelowAssistant({
                           messageIndex: i,
-                          userQuestion: precedingUserQuestion(messages, i),
+                          userQuestion,
                           assistantContent: msg.text,
                         })}
                       </div>

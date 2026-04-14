@@ -50,6 +50,7 @@ export function EvalRatingPanel({
   getToken,
   onAuthFailed,
 }: Props) {
+  const [expanded, setExpanded] = useState(false);
   const [verdict, setVerdict] = useState<Verdict>(null);
   const [errorCategory, setErrorCategory] = useState("");
   const [comment, setComment] = useState("");
@@ -60,6 +61,12 @@ export function EvalRatingPanel({
     error_category: string | null;
     comment: string | null;
   } | null>(null);
+  const normalizedQuestion = userQuestion.trim();
+  const normalizedBotAnswer = botAnswer.trim();
+
+  if (!normalizedQuestion) {
+    return null;
+  }
 
   if (saved && frozen) {
     return (
@@ -85,6 +92,23 @@ export function EvalRatingPanel({
     return null;
   }
 
+  if (!expanded) {
+    return (
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-600">Оценка ответа необязательна. Можно сразу продолжать диалог.</p>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900"
+          >
+            Оценить ответ
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const canSavePass = verdict === "pass";
   const canSaveFail = verdict === "fail" && errorCategory.trim().length > 0 && comment.trim().length > 0;
 
@@ -100,8 +124,8 @@ export function EvalRatingPanel({
     setSaving(true);
     try {
       const body: Record<string, unknown> = {
-        question: userQuestion,
-        bot_answer: botAnswer,
+        question: normalizedQuestion,
+        bot_answer: normalizedBotAnswer,
         verdict,
       };
       if (verdict === "fail") {
@@ -151,8 +175,24 @@ export function EvalRatingPanel({
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
       {/* Header row */}
       <div className="flex items-center justify-between mb-3">
-        <h4 className="text-sm font-medium text-gray-900">Оцените ответ ассистента</h4>
+        <div>
+          <h4 className="text-sm font-medium text-gray-900">Оцените ответ ассистента</h4>
+          <p className="mt-1 text-xs text-slate-500">Это необязательный шаг. Следующий вопрос можно задать в любой момент.</p>
+        </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setExpanded(false);
+              setVerdict(null);
+              setErrorCategory("");
+              setComment("");
+              setSaveError("");
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-all hover:border-slate-300 hover:text-slate-800"
+          >
+            Позже
+          </button>
           <button
             type="button"
             onClick={() => {

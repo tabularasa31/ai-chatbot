@@ -54,15 +54,22 @@ class EvalResultCreateRequest(BaseModel):
     error_category: EvalErrorCategory | None = None
     comment: str | None = None
 
-    @field_validator("question", "bot_answer")
+    @field_validator("question")
     @classmethod
-    def strip_required(cls, v: str) -> str:
+    def question_required(cls, v: str) -> str:
         if not isinstance(v, str):
             raise ValueError("must be a string")
         t = v.strip()
         if not t:
             raise ValueError("must not be empty")
         return t
+
+    @field_validator("bot_answer")
+    @classmethod
+    def normalize_bot_answer(cls, v: str) -> str:
+        if not isinstance(v, str):
+            raise ValueError("must be a string")
+        return v.strip()
 
     @model_validator(mode="after")
     def verdict_rules(self) -> EvalResultCreateRequest:

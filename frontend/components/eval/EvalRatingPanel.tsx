@@ -64,7 +64,7 @@ export function EvalRatingPanel({
   const normalizedQuestion = userQuestion.trim();
   const normalizedBotAnswer = botAnswer.trim();
 
-  if (!normalizedQuestion || !normalizedBotAnswer) {
+  if (!normalizedQuestion) {
     return null;
   }
 

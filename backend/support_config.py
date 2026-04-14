@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+# Minimal BCP-47 validator: primary subtag (2-3 alpha) optionally followed by
+# script/region/variant subtags separated by hyphens.  This rejects freeform
+# words like "english" or "not-a-tag" before they reach LLM prompts.
+_BCP47_RE = re.compile(r"^[a-z]{2,3}(-[a-zA-Z0-9]{2,8})*$", re.IGNORECASE)
 
 
 def _normalize_email(value: Any) -> str | None:
@@ -15,10 +21,13 @@ def _normalize_email(value: Any) -> str | None:
 
 
 def _normalize_language(value: Any) -> str | None:
+    """Return *value* if it looks like a valid BCP-47 language tag, else None."""
     if not isinstance(value, str):
         return None
     text = value.strip()
-    return text or None
+    if not text or not _BCP47_RE.match(text):
+        return None
+    return text
 
 
 def public_support_config_dict(settings_value: dict[str, Any] | None) -> dict[str, str | None]:

@@ -3580,9 +3580,10 @@ def test_render_direct_faq_answer_result_translates_when_detection_throws(
     assert result == LocalizationResult(text="Bonjour", tokens_used=5)
 
 
-def test_render_direct_faq_answer_result_returns_raw_when_translation_fails(
+def test_render_direct_faq_answer_result_translates_when_detected_differs_from_target(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Detection returns English reliably, but target is French → translate is called."""
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
         lambda _text: LanguageDetectionResult(
@@ -3603,6 +3604,30 @@ def test_render_direct_faq_answer_result_returns_raw_when_translation_fails(
     )
 
     assert result == LocalizationResult(text="Direct FAQ answer", tokens_used=0)
+
+
+def test_resolve_language_context_detector_failure_returns_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When detect_language raises, resolver falls back to English with detector_failure reason."""
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: (_ for _ in ()).throw(RuntimeError("detector unavailable")),
+    )
+
+    ctx = resolve_language_context(
+        current_turn_text="bonjour",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=None,
+    )
+
+    assert ctx.response_language == "en"
+    assert ctx.response_language_resolution_reason == "detector_failure"
+    assert ctx.detected_language == "unknown"
+    assert ctx.confidence == 0.0
+    assert ctx.is_reliable is False
 
 
 # ---------------------------------------------------------------------------

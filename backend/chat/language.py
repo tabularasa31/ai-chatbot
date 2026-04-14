@@ -17,7 +17,7 @@ try:
     from langdetect import DetectorFactory, LangDetectException, detect_langs
 
     DetectorFactory.seed = 0
-except Exception:  # pragma: no cover - optional runtime dependency
+except ImportError:  # pragma: no cover - optional runtime dependency
     DetectorFactory = None
     LangDetectException = Exception
     detect_langs = None
@@ -107,12 +107,7 @@ def _language_matches(left: str, right: str) -> bool:
 
 
 def _normalize_config_language(raw: str | None) -> str | None:
-    normalized = _normalize_language_tag(raw)
-    if normalized is None:
-        return None
-    if normalized.lower().startswith("zh-") and len(normalized.split("-")) >= 2:
-        return normalized
-    return normalized
+    return _normalize_language_tag(raw)
 
 
 def _looks_undetectable(text: str) -> bool:
@@ -142,9 +137,11 @@ def _looks_undetectable(text: str) -> bool:
 
 def _heuristic_language_detection(text: str) -> LanguageDetectionResult:
     tokens = _TOKEN_RE.findall(text)
-    lowered = text.casefold()
-    for token, (language, confidence) in _LATIN_WORD_HINTS.items():
-        if token in lowered:
+    # Use the token set for word-boundary matching so that "hallo" does not
+    # spuriously match inside "halloway" and "pricing" does not match "pricingpage".
+    token_set = {t.casefold() for t in tokens}
+    for hint, (language, confidence) in _LATIN_WORD_HINTS.items():
+        if hint in token_set:
             return LanguageDetectionResult(
                 detected_language=language,
                 confidence=confidence,
@@ -173,24 +170,24 @@ def _heuristic_language_detection(text: str) -> LanguageDetectionResult:
 
 def detect_language(text: str | None) -> LanguageDetectionResult:
     stripped = (text or "").strip()
-    heuristic = _heuristic_language_detection(stripped) if stripped else LanguageDetectionResult("unknown", 0.0, False)
+
+    # Guard: reject empty or structurally undetectable input before any heuristic
+    # work.  Doing this first avoids running the heuristic on URLs, pure punctuation,
+    # log snippets, etc. and prevents those inputs from reaching langdetect.
+    if not stripped or _looks_undetectable(stripped):
+        return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
+
+    heuristic = _heuristic_language_detection(stripped)
+
+    # Fast path: a clearly non-English signal (Cyrillic, CJK, Arabic, known hint words).
     if heuristic.detected_language != "en" and heuristic.is_reliable:
         return heuristic
 
+    # A single ASCII token is too short for langdetect to be reliable; return unknown
+    # so the caller falls back to English rather than guessing.
     ascii_tokens = _TOKEN_RE.findall(stripped)
     if ascii_tokens and all(token.isascii() for token in ascii_tokens) and len(ascii_tokens) == 1:
-        return LanguageDetectionResult(
-            detected_language="unknown",
-            confidence=0.0,
-            is_reliable=False,
-        )
-
-    if _looks_undetectable(stripped):
-        return LanguageDetectionResult(
-            detected_language="unknown",
-            confidence=0.0,
-            is_reliable=False,
-        )
+        return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
 
     if detect_langs is not None:
         detections = detect_langs(stripped)
@@ -198,11 +195,7 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
             top = detections[0]
             normalized = _normalize_language_tag(getattr(top, "lang", None))
             if normalized is None:
-                return LanguageDetectionResult(
-                    detected_language="unknown",
-                    confidence=0.0,
-                    is_reliable=False,
-                )
+                return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
             confidence = float(getattr(top, "prob", 0.0) or 0.0)
             return LanguageDetectionResult(
                 detected_language=normalized,
@@ -210,7 +203,8 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
                 is_reliable=confidence >= _threshold(),
             )
 
-    return _heuristic_language_detection(stripped)
+    # langdetect not installed — reuse the already-computed heuristic result.
+    return heuristic
 
 
 def resolve_language_context(

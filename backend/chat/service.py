@@ -386,6 +386,8 @@ class ChatPipelineResult:
     escalation_trigger: Any  # EscalationTrigger | None
     # debug extras
     faq_match: Any = None  # FAQMatchResult | None
+    # language_context is always populated by run_chat_pipeline; None only for
+    # callers that construct ChatPipelineResult directly without this field.
     language_context: ResolvedLanguageContext | None = None
 
 
@@ -1479,12 +1481,16 @@ def process_chat_message(
         else None
     )
     question_text = question.strip()
-    has_prior_user_content_turns = any(message.role == MessageRole.user for message in chat.messages)
+    # A session is "new" when it has no messages at all (neither user nor assistant).
+    # Using bool(chat.messages) rather than checking for a prior user message avoids
+    # creating a phantom empty user-message row during bootstrap persistence — the
+    # assistant greeting alone is enough evidence that bootstrap already occurred.
+    is_new_session = not chat.messages
     language_context = _resolve_chat_language_context(
         current_turn_text=question_text,
         client_row=client_row,
         tenant_profile=tenant_profile,
-        is_bootstrap_turn=not question_text and not has_prior_user_content_turns,
+        is_bootstrap_turn=not question_text and is_new_session,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
         browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
     )
@@ -1516,24 +1522,23 @@ def process_chat_message(
     )
 
     if not question_text:
-        if has_prior_user_content_turns:
+        if not is_new_session:
             raise ValueError("Question is required")
         greeting = _build_greeting_result(
             product_name=_resolve_product_name(client=client_row, db=db),
             response_language=language_context.response_language,
             api_key=api_key,
         )
-        # Persist the empty user turn alongside the greeting.  The empty user message
-        # is intentional: it satisfies the bootstrap-persistence contract so that a
-        # second empty request in the same session is classified as an invalid empty
-        # follow-up rather than another bootstrap turn.  See spec: "Bootstrap persistence rule".
-        _persist_turn(
+        # Persist only the assistant greeting.  Storing an empty user-message row
+        # would pollute analytics and include a blank turn in the OpenAI transcript.
+        # Bootstrap detection on the next call relies on bool(chat.messages): any
+        # persisted message (even just the assistant greeting) marks the session as
+        # no longer new, so a second empty request is correctly rejected.
+        _persist_assistant_message(
             db,
             chat,
             client_id,
-            "",
             greeting.text,
-            [],
             greeting.tokens_used,
             optional_entity_types=optional_entity_types,
         )

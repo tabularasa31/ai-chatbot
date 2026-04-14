@@ -413,6 +413,10 @@ def fact_from_ticket(
 def transcript_messages_for_openai(chat: Chat) -> list[dict[str, str]]:
     msgs: list[dict[str, str]] = []
     for m in sorted(chat.messages, key=lambda x: x.created_at or x.id):
+        # Skip empty-content messages (defensive guard; bootstrap no longer persists
+        # empty user messages, but old sessions may still have them in the DB).
+        if not (m.content or "").strip():
+            continue
         role = "user" if m.role == MessageRole.user else "assistant"
         msgs.append({"role": role, "content": _safe_message_content(m)})
     return msgs

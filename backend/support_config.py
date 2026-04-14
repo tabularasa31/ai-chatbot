@@ -36,21 +36,31 @@ def with_support_config(
     settings_value: dict[str, Any] | None,
     config: dict[str, str | None],
 ) -> dict[str, Any]:
+    """Merge *config* into *settings_value*.
+
+    Only keys **present** in *config* are written or cleared; absent keys are
+    left unchanged.  Passing ``{"l2_email": "a@b.com"}`` therefore never
+    touches an existing ``escalation_language`` value, which prevents partial
+    PUT requests from silently deleting settings the client did not intend to
+    change.
+    """
     payload = dict(settings_value or {})
     support = payload.get("support")
     support_payload = dict(support) if isinstance(support, dict) else {}
 
-    l2_email = _normalize_email(config.get("l2_email"))
-    if l2_email:
-        support_payload["l2_email"] = l2_email
-    else:
-        support_payload.pop("l2_email", None)
+    if "l2_email" in config:
+        l2_email = _normalize_email(config["l2_email"])
+        if l2_email:
+            support_payload["l2_email"] = l2_email
+        else:
+            support_payload.pop("l2_email", None)
 
-    escalation_language = _normalize_language(config.get("escalation_language"))
-    if escalation_language:
-        support_payload["escalation_language"] = escalation_language
-    else:
-        support_payload.pop("escalation_language", None)
+    if "escalation_language" in config:
+        escalation_language = _normalize_language(config["escalation_language"])
+        if escalation_language:
+            support_payload["escalation_language"] = escalation_language
+        else:
+            support_payload.pop("escalation_language", None)
 
     if support_payload:
         payload["support"] = support_payload

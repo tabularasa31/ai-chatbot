@@ -508,6 +508,9 @@ def run_chat_pipeline(
     never pushes events to queues, never warms caches, never writes audit/observability.
     """
     if language_context is None:
+        # Fallback resolver for standalone / test invocations where process_chat_message
+        # did not supply a pre-computed context.  In production this branch is never taken
+        # because process_chat_message always resolves language_context first.
         language_context = _resolve_chat_language_context(
             current_turn_text=question,
             client_row=None,
@@ -1520,6 +1523,10 @@ def process_chat_message(
             response_language=language_context.response_language,
             api_key=api_key,
         )
+        # Persist the empty user turn alongside the greeting.  The empty user message
+        # is intentional: it satisfies the bootstrap-persistence contract so that a
+        # second empty request in the same session is classified as an invalid empty
+        # follow-up rather than another bootstrap turn.  See spec: "Bootstrap persistence rule".
         _persist_turn(
             db,
             chat,

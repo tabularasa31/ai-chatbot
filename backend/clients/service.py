@@ -180,16 +180,21 @@ def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, 
 
 def update_support_settings_for_user(
     user_id: uuid.UUID,
-    l2_email: str | None,
-    escalation_language: str | None,
+    config: dict[str, str | None],
     db: Session,
 ) -> dict[str, str | None]:
+    """Update support settings using only the keys present in *config*.
+
+    Keys absent from *config* are left unchanged, so callers that only know
+    about a subset of settings (e.g. older API clients that predate
+    escalation_language) cannot accidentally clear fields they did not touch.
+    """
     client = get_client_by_user(user_id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
     client.settings = with_support_config(
         client.settings if isinstance(client.settings, dict) else None,
-        {"l2_email": l2_email, "escalation_language": escalation_language},
+        config,
     )
     db.commit()
     db.refresh(client)

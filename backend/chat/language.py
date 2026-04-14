@@ -193,27 +193,22 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
         )
 
     if detect_langs is not None:
-        try:
-            detections = detect_langs(stripped)
-            if detections:
-                top = detections[0]
-                normalized = _normalize_language_tag(getattr(top, "lang", None))
-                if normalized is None:
-                    return LanguageDetectionResult(
-                        detected_language="unknown",
-                        confidence=0.0,
-                        is_reliable=False,
-                    )
-                confidence = float(getattr(top, "prob", 0.0) or 0.0)
+        detections = detect_langs(stripped)
+        if detections:
+            top = detections[0]
+            normalized = _normalize_language_tag(getattr(top, "lang", None))
+            if normalized is None:
                 return LanguageDetectionResult(
-                    detected_language=normalized,
-                    confidence=confidence,
-                    is_reliable=confidence >= _threshold(),
+                    detected_language="unknown",
+                    confidence=0.0,
+                    is_reliable=False,
                 )
-        except LangDetectException:
-            raise
-        except Exception:
-            raise
+            confidence = float(getattr(top, "prob", 0.0) or 0.0)
+            return LanguageDetectionResult(
+                detected_language=normalized,
+                confidence=confidence,
+                is_reliable=confidence >= _threshold(),
+            )
 
     return _heuristic_language_detection(stripped)
 

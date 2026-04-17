@@ -797,7 +797,7 @@ def test_gap_analyzer_refresh_gap_job_lease_extends_expiration(
     previous_expiry = job.lease_expires_at
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    refreshed = repository.refresh_gap_job_lease(job_id=job.id)
+    refreshed = repository.refresh_gap_job_lease(job_id=job.id, tenant_id=tenant_id)
     db_session.commit()
     db_session.refresh(job)
 
@@ -1066,7 +1066,7 @@ def test_gap_analyzer_fail_gap_job_truncates_to_tail(
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     error_message = "head\n" + ("middle\n" * 1000) + "ValueError: final failure"
-    repository.fail_gap_job(job_id=job.id, error_message=error_message)
+    repository.fail_gap_job(job_id=job.id, tenant_id=client_id, error_message=error_message)
     db_session.commit()
     db_session.refresh(job)
 
@@ -1074,6 +1074,102 @@ def test_gap_analyzer_fail_gap_job_truncates_to_tail(
     assert job.last_error is not None
     assert len(job.last_error) <= _GAP_JOB_LAST_ERROR_MAX_CHARS
     assert "ValueError: final failure" in job.last_error
+
+
+def test_complete_gap_job_ignores_other_tenant(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, tenant_a = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-complete-a@example.com",
+        name="Gap Phase 5 Complete A",
+    )
+    _, tenant_b = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-complete-b@example.com",
+        name="Gap Phase 5 Complete B",
+    )
+    job_a = GapAnalyzerJob(
+        tenant_id=tenant_a,
+        job_kind="mode_a",
+        status="in_progress",
+        trigger="manual",
+    )
+    job_b = GapAnalyzerJob(
+        tenant_id=tenant_b,
+        job_kind="mode_b",
+        status="in_progress",
+        trigger="manual",
+    )
+    db_session.add_all([job_a, job_b])
+    db_session.commit()
+    db_session.refresh(job_a)
+    db_session.refresh(job_b)
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    completed = repository.complete_gap_job(job_id=job_a.id, tenant_id=tenant_b)
+    db_session.commit()
+    db_session.refresh(job_a)
+    db_session.refresh(job_b)
+
+    assert completed is False
+    assert job_a.status == "in_progress"
+    assert job_a.finished_at is None
+    assert job_b.status == "in_progress"
+
+
+def test_fail_gap_job_ignores_other_tenant(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    _, tenant_a = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-fail-a@example.com",
+        name="Gap Phase 5 Fail A",
+    )
+    _, tenant_b = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase5-fail-b@example.com",
+        name="Gap Phase 5 Fail B",
+    )
+    job_a = GapAnalyzerJob(
+        tenant_id=tenant_a,
+        job_kind="mode_a",
+        status="in_progress",
+        trigger="manual",
+        attempt_count=1,
+        max_attempts=1,
+    )
+    job_b = GapAnalyzerJob(
+        tenant_id=tenant_b,
+        job_kind="mode_b",
+        status="in_progress",
+        trigger="manual",
+    )
+    db_session.add_all([job_a, job_b])
+    db_session.commit()
+    db_session.refresh(job_a)
+    db_session.refresh(job_b)
+
+    repository = SqlAlchemyGapAnalyzerRepository(db_session)
+    failed = repository.fail_gap_job(
+        job_id=job_a.id,
+        tenant_id=tenant_b,
+        error_message="should not apply",
+    )
+    db_session.commit()
+    db_session.refresh(job_a)
+    db_session.refresh(job_b)
+
+    assert failed is False
+    assert job_a.status == "in_progress"
+    assert job_a.last_error is None
+    assert job_b.status == "in_progress"
 
 
 def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(

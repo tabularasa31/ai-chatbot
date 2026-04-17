@@ -10,8 +10,6 @@ from pydantic import BaseModel
 
 from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode, GapSource
 
-DismissReason = GapDismissReason
-
 GapItemStatus = Literal["active", "closed", "dismissed", "inactive"]
 GapClassification = Literal["uncovered", "partial", "covered", "unknown"]
 ModeAStatusFilter = Literal["active", "dismissed", "archived", "all"]
@@ -80,7 +78,7 @@ class GapSummaryOnlyResponse(BaseModel):
 
 
 class GapDismissRequest(BaseModel):
-    reason: DismissReason = DismissReason.other
+    reason: GapDismissReason = GapDismissReason.other
 
 
 class GapActionResponse(BaseModel):

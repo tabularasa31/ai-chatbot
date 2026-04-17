@@ -12,7 +12,6 @@ from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 
 logger = logging.getLogger(__name__)
 
-EVAL_JWT_TYP = EVAL_TESTER_JWT_TYP
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
@@ -37,7 +36,7 @@ def create_eval_access_token(tester_id: uuid.UUID) -> str:
     expire = now + dt.timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
     to_encode: dict[str, Any] = {
         "sub": str(tester_id),
-        "typ": EVAL_JWT_TYP,
+        "typ": EVAL_TESTER_JWT_TYP,
         "exp": expire,
         "iat": now,
     }
@@ -54,7 +53,7 @@ def decode_eval_access_token(token: str) -> uuid.UUID | None:
         payload = jwt.decode(token, secret, algorithms=[ALGORITHM])
     except jwt.PyJWTError:
         return None
-    if payload.get("typ") != EVAL_JWT_TYP:
+    if payload.get("typ") != EVAL_TESTER_JWT_TYP:
         return None
     sub = payload.get("sub")
     if not isinstance(sub, str):

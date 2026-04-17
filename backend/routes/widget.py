@@ -24,7 +24,6 @@ from backend.models import Chat, Client, EscalationTrigger, UserContext
 from backend.user_sessions.service import start_user_session, touch_user_session
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
-    SESSION_FORBIDDEN_CODE,
     SESSION_INVALID_CODE,
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
@@ -210,21 +209,17 @@ def widget_chat(
                     "Invalid session_id",
                 ),
             ) from None
-        existing_chat = db.query(Chat).filter(Chat.session_id == sid).first()
+        existing_chat = (
+            db.query(Chat)
+            .filter(Chat.client_id == client.id, Chat.session_id == sid)
+            .first()
+        )
         if existing_chat is None:
             raise HTTPException(
                 status_code=409,
                 detail=widget_session_error_detail(
                     SESSION_NOT_FOUND_CODE,
                     "Session not found",
-                ),
-            )
-        if existing_chat.client_id != client.id:
-            raise HTTPException(
-                status_code=409,
-                detail=widget_session_error_detail(
-                    SESSION_FORBIDDEN_CODE,
-                    "Session belongs to another client",
                 ),
             )
         if existing_chat.ended_at is not None:

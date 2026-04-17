@@ -15,13 +15,16 @@ from uuid import UUID
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer._classification import (
+    _classify_gap,
+    _impact_statement,
+)
 from backend.gap_analyzer._math import (
     _cosine_similarity,
     _tokenize,
     _vector_from_unknown,
     _vector_norm,
 )
-from backend.gap_analyzer.domain import CoveragePolicy
 from backend.gap_analyzer.enums import (
     GapClusterStatus,
     GapCommandStatus,
@@ -1265,7 +1268,7 @@ class SqlAlchemyGapAnalyzerRepository:
 
         for _topic_id, coverage_score, is_new, extracted_at in topic_query.all():
             total_active += 1
-            classification = _classify_gap_value(coverage_score)
+            classification = _classify_gap(coverage_score)
             if classification == "uncovered":
                 uncovered_count += 1
             elif classification == "partial":
@@ -1277,7 +1280,7 @@ class SqlAlchemyGapAnalyzerRepository:
 
         for coverage_score, is_new, last_computed_at, last_question_at, created_at in cluster_rows:
             total_active += 1
-            classification = _classify_gap_value(coverage_score)
+            classification = _classify_gap(coverage_score)
             if classification == "uncovered":
                 uncovered_count += 1
             elif classification == "partial":
@@ -1292,7 +1295,7 @@ class SqlAlchemyGapAnalyzerRepository:
             total_active=total_active,
             uncovered_count=uncovered_count,
             partial_count=partial_count,
-            impact_statement=_gap_summary_impact_statement(
+            impact_statement=_impact_statement(
                 total_active=total_active,
                 uncovered_count=uncovered_count,
                 partial_count=partial_count,
@@ -1427,25 +1430,3 @@ def _remaining_lease_seconds(lease_expires_at: datetime | None) -> int | None:
     return max(1, remaining) if remaining > 0 else None
 
 
-def _classify_gap_value(coverage_score: float | None) -> str:
-    if coverage_score is None:
-        return "unknown"
-    coverage_policy = CoveragePolicy()
-    if coverage_score >= coverage_policy.covered_threshold:
-        return "covered"
-    if coverage_score >= coverage_policy.mode_b_uncovered:
-        return "partial"
-    return "uncovered"
-
-
-def _gap_summary_impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
-    if total_active == 0:
-        return "No active gaps detected."
-    if uncovered_count > 0:
-        noun = "gap" if uncovered_count == 1 else "gaps"
-        return f"{uncovered_count} uncovered {noun} need attention."
-    if partial_count > 0:
-        noun = "gap" if partial_count == 1 else "gaps"
-        return f"{partial_count} partially covered {noun} are worth reviewing."
-    noun = "gap" if total_active == 1 else "gaps"
-    return f"{total_active} active {noun} are being tracked."

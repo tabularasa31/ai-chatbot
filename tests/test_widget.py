@@ -220,7 +220,7 @@ def test_widget_chat_missing_session_returns_controlled_error(
     assert r.json()["detail"]["code"] == "session_not_found"
 
 
-def test_widget_chat_foreign_session_returns_controlled_error(
+def test_widget_chat_foreign_session_id_returns_not_found(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -256,7 +256,7 @@ def test_widget_chat_foreign_session_returns_controlled_error(
         f"/widget/chat?message=hello&client_id={public_id_b}&session_id={foreign_chat.session_id}"
     )
     assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "session_forbidden"
+    assert r.json()["detail"]["code"] == "session_not_found"
 
 
 def test_widget_chat_closed_session_returns_controlled_error(

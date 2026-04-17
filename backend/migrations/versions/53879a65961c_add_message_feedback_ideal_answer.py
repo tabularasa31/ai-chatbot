@@ -51,7 +51,7 @@ def _drop_legacy_feedback_check_constraint(*, dialect: str, offline: bool) -> No
         )
     )
     for row in result:
-        op.execute(sa.text(f"ALTER TABLE messages DROP CONSTRAINT {row[0]}"))
+        op.drop_constraint(row[0], "messages", type_="check")
 
 
 def upgrade() -> None:

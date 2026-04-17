@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    is_postgres = op.get_bind().dialect.name == "postgresql"
+    is_postgres = op.get_context().dialect.name == "postgresql"
 
     if is_postgres:
         op.execute(
@@ -89,7 +89,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    is_postgres = op.get_bind().dialect.name == "postgresql"
+    is_postgres = op.get_context().dialect.name == "postgresql"
 
     op.execute("DROP INDEX IF EXISTS ix_gap_dismissals_tenant_dismissed_at")
     op.execute("DROP INDEX IF EXISTS ix_gap_doc_topics_tenant_extraction_hash")

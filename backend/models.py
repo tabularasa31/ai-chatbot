@@ -1045,7 +1045,6 @@ Index(
     "ix_gap_clusters_linked_doc_topic_id",
     GapCluster.linked_doc_topic_id,
     postgresql_where=GapCluster.linked_doc_topic_id.is_not(None),
-    sqlite_where=GapCluster.linked_doc_topic_id.is_not(None),
 )
 Index(
     "ix_gap_doc_topics_tenant_status",
@@ -1056,14 +1055,12 @@ Index(
     "ix_gap_doc_topics_linked_cluster_id",
     GapDocTopic.linked_cluster_id,
     postgresql_where=GapDocTopic.linked_cluster_id.is_not(None),
-    sqlite_where=GapDocTopic.linked_cluster_id.is_not(None),
 )
 Index(
     "ix_gap_doc_topics_tenant_extraction_hash",
     GapDocTopic.tenant_id,
     GapDocTopic.extraction_chunk_hash,
     postgresql_where=GapDocTopic.extraction_chunk_hash.is_not(None),
-    sqlite_where=GapDocTopic.extraction_chunk_hash.is_not(None),
 )
 Index(
     "ix_gap_questions_tenant_cluster",
@@ -1122,7 +1119,6 @@ Index(
     "ix_gap_jobs_expired_lease_in_progress",
     GapAnalyzerJob.lease_expires_at,
     postgresql_where=GapAnalyzerJob.status == GapJobStatus.in_progress.value,
-    sqlite_where=GapAnalyzerJob.status == GapJobStatus.in_progress.value,
 )
 
 

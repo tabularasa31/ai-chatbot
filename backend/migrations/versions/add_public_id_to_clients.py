@@ -18,13 +18,13 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("clients", sa.Column("public_id", sa.String(32), nullable=True))
+    op.add_column("clients", sa.Column("public_id", sa.String(21), nullable=True))
 
     conn = op.get_bind()
     offline = op.get_context().as_sql
 
     if offline:
-        conn.execute(
+        op.execute(
             text(
                 "UPDATE clients "
                 "SET public_id = 'ch_' || substr(replace(CAST(id AS TEXT), '-', ''), 1, 18) "
@@ -51,7 +51,7 @@ def upgrade() -> None:
     op.alter_column(
         "clients",
         "public_id",
-        existing_type=sa.String(32),
+        existing_type=sa.String(21),
         nullable=False,
     )
     op.create_unique_constraint("uq_clients_public_id", "clients", ["public_id"])

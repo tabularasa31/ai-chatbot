@@ -14,6 +14,13 @@ from uuid import UUID
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer._classification import (
+    _classify_gap,
+    _effective_mode_b_status,
+    _impact_statement,
+    _mode_b_status_from_coverage,
+    _mode_b_status_matches_filter,
+)
 from backend.gap_analyzer._math import (
     _cosine_similarity,
     _tokenize,
@@ -1318,77 +1325,6 @@ def _score_mode_link_pairs_python(
     return scored_pairs
 
 
-def _impact_statement(*, total_active: int, uncovered_count: int, partial_count: int) -> str:
-    if total_active == 0:
-        return "No active gaps detected."
-    if uncovered_count > 0:
-        noun = "gap" if uncovered_count == 1 else "gaps"
-        return f"{uncovered_count} uncovered {noun} need attention."
-    if partial_count > 0:
-        noun = "gap" if partial_count == 1 else "gaps"
-        return f"{partial_count} partially covered {noun} are worth reviewing."
-    noun = "gap" if total_active == 1 else "gaps"
-    return f"{total_active} active {noun} are being tracked."
-
-
-def _classify_gap(coverage_score: float | None) -> str:
-    if coverage_score is None:
-        return "unknown"
-    coverage_policy = CoveragePolicy()
-    if coverage_score >= coverage_policy.covered_threshold:
-        return "covered"
-    if coverage_score >= coverage_policy.mode_b_uncovered:
-        return "partial"
-    return "uncovered"
-
-
-def _cluster_status_value(status: GapClusterStatus | str) -> str:
-    if isinstance(status, GapClusterStatus):
-        return status.value
-    return str(status)
-
-
-def _effective_mode_b_status(cluster: GapCluster) -> GapClusterStatus:
-    status = cluster.status if isinstance(cluster.status, GapClusterStatus) else GapClusterStatus(str(cluster.status))
-    if status == GapClusterStatus.inactive:
-        return GapClusterStatus.inactive
-    if status not in {GapClusterStatus.closed, GapClusterStatus.dismissed}:
-        return status
-    reference_time = _cluster_activity_at(cluster)
-    if reference_time <= datetime.now(UTC) - timedelta(days=GapLifecyclePolicy().inactive_days):
-        return GapClusterStatus.inactive
-    return status
-
-
-def _mode_b_status_matches_filter(status_filter: ModeBStatusFilter, status: GapClusterStatus) -> bool:
-    if status_filter == "active":
-        return status == GapClusterStatus.active
-    if status_filter == "archived":
-        return status in {GapClusterStatus.closed, GapClusterStatus.dismissed, GapClusterStatus.inactive}
-    if status_filter == "closed":
-        return status == GapClusterStatus.closed
-    if status_filter == "dismissed":
-        return status == GapClusterStatus.dismissed
-    if status_filter == "inactive":
-        return status == GapClusterStatus.inactive
-    return status in {
-        GapClusterStatus.active,
-        GapClusterStatus.closed,
-        GapClusterStatus.dismissed,
-        GapClusterStatus.inactive,
-    }
-
-
-def _cluster_activity_at(cluster: GapCluster) -> datetime:
-    for value in (cluster.last_computed_at, cluster.last_question_at, cluster.created_at):
-        if value is None:
-            continue
-        if value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
-        return value
-    return datetime.min.replace(tzinfo=UTC)
-
-
 def _clean_questions(raw_questions: object) -> list[str]:
     if isinstance(raw_questions, str):
         try:
@@ -1745,10 +1681,5 @@ def _finalize_mode_b_cluster(
     )
     cluster.status = _mode_b_status_from_coverage(cluster.coverage_score)
 
-
-def _mode_b_status_from_coverage(coverage_score: float) -> GapClusterStatus:
-    if coverage_score >= CoveragePolicy().covered_threshold:
-        return GapClusterStatus.closed
-    return GapClusterStatus.active
 
 

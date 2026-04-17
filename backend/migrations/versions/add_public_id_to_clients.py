@@ -7,10 +7,9 @@ Create Date: 2026-03-19
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
-
 
 revision = "add_public_id"
 down_revision = "a1b2c3d4e5f6"
@@ -22,21 +21,32 @@ def upgrade() -> None:
     op.add_column("clients", sa.Column("public_id", sa.String(32), nullable=True))
 
     conn = op.get_bind()
-    from backend.core.utils import generate_public_id
+    offline = op.get_context().as_sql
 
-    result = conn.execute(text("SELECT id FROM clients WHERE public_id IS NULL"))
-    rows = result.fetchall()
-    seen: set[str] = set()
-    for (id_val,) in rows:
-        while True:
-            pid = generate_public_id()
-            if pid not in seen:
-                seen.add(pid)
-                break
+    if offline:
         conn.execute(
-            text("UPDATE clients SET public_id = :pid WHERE id = :id"),
-            {"pid": pid, "id": str(id_val)},
+            text(
+                "UPDATE clients "
+                "SET public_id = 'ch_' || substr(replace(CAST(id AS TEXT), '-', ''), 1, 18) "
+                "WHERE public_id IS NULL"
+            )
         )
+    else:
+        from backend.core.utils import generate_public_id
+
+        result = conn.execute(text("SELECT id FROM clients WHERE public_id IS NULL"))
+        rows = result.fetchall()
+        seen: set[str] = set()
+        for (id_val,) in rows:
+            while True:
+                pid = generate_public_id()
+                if pid not in seen:
+                    seen.add(pid)
+                    break
+            conn.execute(
+                text("UPDATE clients SET public_id = :pid WHERE id = :id"),
+                {"pid": pid, "id": str(id_val)},
+            )
 
     op.alter_column(
         "clients",

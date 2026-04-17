@@ -22,6 +22,8 @@ def _is_postgres() -> bool:
 
 
 def _has_table(name: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     return name in insp.get_table_names()

@@ -100,6 +100,15 @@ Optional targeted pgvector hybrid retrieval checks:
 pytest -q -m pgvector tests/pgvector_tests/test_search_pgvector.py -k "hybrid or isolation"
 ```
 
+If Gap Analyzer ANN plans still fall back to sequential scans after a fresh bootstrapping import,
+rebuild the IVFFlat indexes once the tables contain enough data for useful centroids:
+
+```bash
+psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_clusters_centroid_ivfflat"
+psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_doc_topics_topic_embedding_ivfflat"
+psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_questions_embedding_ivfflat"
+```
+
 ## Internal eval QA (`/eval/*`)
 
 Requires `EVAL_JWT_SECRET` in the environment (see `tests/conftest.py` default for local pytest).

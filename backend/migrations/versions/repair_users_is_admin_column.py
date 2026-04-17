@@ -22,6 +22,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if op.get_context().as_sql:
+        return
     bind = op.get_bind()
     insp = sa.inspect(bind)
     cols = {c["name"] for c in insp.get_columns("users")}

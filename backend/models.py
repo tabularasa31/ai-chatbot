@@ -1042,9 +1042,28 @@ Index(
     GapCluster.aggregate_signal_weight,
 )
 Index(
+    "ix_gap_clusters_linked_doc_topic_id",
+    GapCluster.linked_doc_topic_id,
+    postgresql_where=GapCluster.linked_doc_topic_id.is_not(None),
+    sqlite_where=GapCluster.linked_doc_topic_id.is_not(None),
+)
+Index(
     "ix_gap_doc_topics_tenant_status",
     GapDocTopic.tenant_id,
     GapDocTopic.status,
+)
+Index(
+    "ix_gap_doc_topics_linked_cluster_id",
+    GapDocTopic.linked_cluster_id,
+    postgresql_where=GapDocTopic.linked_cluster_id.is_not(None),
+    sqlite_where=GapDocTopic.linked_cluster_id.is_not(None),
+)
+Index(
+    "ix_gap_doc_topics_tenant_extraction_hash",
+    GapDocTopic.tenant_id,
+    GapDocTopic.extraction_chunk_hash,
+    postgresql_where=GapDocTopic.extraction_chunk_hash.is_not(None),
+    sqlite_where=GapDocTopic.extraction_chunk_hash.is_not(None),
 )
 Index(
     "ix_gap_questions_tenant_cluster",
@@ -1061,6 +1080,15 @@ Index(
     GapDismissal.tenant_id,
     GapDismissal.source,
     GapDismissal.gap_id,
+)
+Index(
+    "ix_gap_dismissals_dismissed_by",
+    GapDismissal.dismissed_by,
+)
+Index(
+    "ix_gap_dismissals_tenant_dismissed_at",
+    GapDismissal.tenant_id,
+    GapDismissal.dismissed_at.desc(),
 )
 Index(
     "ix_gap_question_links_gap_question",
@@ -1091,8 +1119,10 @@ Index(
     GapAnalyzerJob.status,
 )
 Index(
-    "ix_gap_jobs_lease_expires",
+    "ix_gap_jobs_expired_lease_in_progress",
     GapAnalyzerJob.lease_expires_at,
+    postgresql_where=GapAnalyzerJob.status == GapJobStatus.in_progress.value,
+    sqlite_where=GapAnalyzerJob.status == GapJobStatus.in_progress.value,
 )
 
 

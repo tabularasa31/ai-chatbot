@@ -123,6 +123,19 @@ def start_user_session(
     user_context: dict[str, Any] | None,
     started_at: datetime | None = None,
 ) -> UserSession | None:
+    """Start a new active session for ``(client_id, user_id)``.
+
+    Closes any existing active sessions and inserts a new row.
+
+    Concurrency: the partial unique index
+    ``uq_user_sessions_client_user_active`` prevents two active rows per
+    ``(client_id, user_id)``. Insert conflicts are isolated behind a
+    SAVEPOINT and resolved by returning the row created by the winner.
+
+    Thread safety: callers must own the SQLAlchemy Session and must not
+    share one Session across threads. Use a fresh ``SessionLocal`` per
+    concurrent caller.
+    """
     user_id = _extract_user_id(user_context)
     if not user_id:
         return None

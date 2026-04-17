@@ -24,11 +24,16 @@ def upgrade() -> None:
     offline = op.get_context().as_sql
 
     if offline:
+        # row_number() ordered by id is deterministically unique per row;
+        # to_hex() padded to 18 chars fits String(21) and avoids the UUID-prefix
+        # collision risk of the substr approach.
         op.execute(
             text(
-                "UPDATE clients "
-                "SET public_id = 'ch_' || substr(replace(CAST(id AS TEXT), '-', ''), 1, 18) "
-                "WHERE public_id IS NULL"
+                "UPDATE clients AS c "
+                "SET public_id = 'ch_' || lpad(to_hex(sub.rn), 18, '0') "
+                "FROM (SELECT id, row_number() OVER (ORDER BY id) AS rn "
+                "      FROM clients WHERE public_id IS NULL) sub "
+                "WHERE c.id = sub.id"
             )
         )
     else:

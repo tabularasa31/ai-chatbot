@@ -21,6 +21,7 @@ _PATCHABLE_USER_CONTEXT_FIELDS = (
 SESSION_INVALID_CODE = "session_invalid"
 SESSION_NOT_FOUND_CODE = "session_not_found"
 # Deprecated: keep for one release for backward compatibility, but do not emit.
+# TODO: remove after the next widget API compatibility window closes.
 SESSION_FORBIDDEN_CODE = "session_forbidden"
 SESSION_CLOSED_CODE = "session_closed"
 

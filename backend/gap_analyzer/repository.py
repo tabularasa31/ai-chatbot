@@ -978,7 +978,7 @@ class SqlAlchemyGapAnalyzerRepository:
             now = datetime.now(UTC)
             lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
             candidate = (
-                self.db.query(GapAnalyzerJob.id)
+                self.db.query(GapAnalyzerJob)
                 .filter(
                     or_(
                         and_(
@@ -1000,33 +1000,22 @@ class SqlAlchemyGapAnalyzerRepository:
             if candidate is None:
                 return None
 
-            job_id = candidate[0]
-            self.db.query(GapAnalyzerJob).filter(GapAnalyzerJob.id == job_id).update(
-                {
-                    GapAnalyzerJob.status: _enum_value(GapJobStatus.in_progress, capabilities=self._capabilities),
-                    GapAnalyzerJob.leased_at: now,
-                    GapAnalyzerJob.lease_expires_at: lease_expires_at,
-                    GapAnalyzerJob.started_at: case(
-                        (GapAnalyzerJob.started_at.is_(None), now),
-                        else_=GapAnalyzerJob.started_at,
-                    ),
-                    GapAnalyzerJob.attempt_count: GapAnalyzerJob.attempt_count + 1,
-                    GapAnalyzerJob.updated_at: now,
-                },
-                synchronize_session=False,
-            )
+            candidate.status = _enum_value(GapJobStatus.in_progress, capabilities=self._capabilities)
+            candidate.leased_at = now
+            candidate.lease_expires_at = lease_expires_at
+            candidate.started_at = candidate.started_at or now
+            candidate.attempt_count = int(candidate.attempt_count or 0) + 1
+            candidate.updated_at = now
+            self.db.add(candidate)
             self.db.flush()
-            job = self.db.get(GapAnalyzerJob, job_id)
-            if job is None:
-                return None
             return GapJobRecord(
-                job_id=job.id,
-                tenant_id=job.tenant_id,
-                job_kind=_gap_job_kind(job.job_kind),
-                status=_gap_job_status(job.status),
-                trigger=job.trigger,
-                attempt_count=int(job.attempt_count or 0),
-                max_attempts=int(job.max_attempts or 0),
+                job_id=candidate.id,
+                tenant_id=candidate.tenant_id,
+                job_kind=_gap_job_kind(candidate.job_kind),
+                status=_gap_job_status(candidate.status),
+                trigger=candidate.trigger,
+                attempt_count=int(candidate.attempt_count or 0),
+                max_attempts=int(candidate.max_attempts or 0),
             )
 
         for _ in range(_GAP_JOB_CLAIM_MAX_ATTEMPTS):

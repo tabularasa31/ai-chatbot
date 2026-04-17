@@ -7,9 +7,8 @@ Create Date: 2026-03-30
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "add_tenant_profiles_and_faq"
 down_revision = "eval_qa_mvp_v1"
@@ -18,6 +17,8 @@ depends_on = None
 
 
 def _has_table(name: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     return name in insp.get_table_names()
@@ -107,4 +108,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Destructive downgrade is intentionally omitted in this repo.
     pass
-

@@ -120,7 +120,7 @@ def _run_claimed_gap_job(job: GapJobRecord) -> None:
     stop_heartbeat = threading.Event()
     threading.Thread(
         target=_refresh_gap_job_lease_until_stopped,
-        args=(job.job_id, stop_heartbeat),
+        args=(job.job_id, job.tenant_id, stop_heartbeat),
         daemon=True,
     ).start()
     db = core_db.SessionLocal()
@@ -133,11 +133,16 @@ def _run_claimed_gap_job(job: GapJobRecord) -> None:
             orchestrator.run_mode_b(job.tenant_id)
         else:
             orchestrator.run_mode_b_weekly_reclustering(job.tenant_id)
-        repository.complete_gap_job(job_id=job.job_id)
+        if not repository.complete_gap_job(job_id=job.job_id, tenant_id=job.tenant_id):
+            logger.error(
+                "gap_analyzer_job_complete_no_rows job_id=%s tenant_id=%s",
+                job.job_id,
+                job.tenant_id,
+            )
         db.commit()
     except Exception as exc:
         db.rollback()
-        _fail_gap_job(job.job_id, str(exc))
+        _fail_gap_job(job.job_id, job.tenant_id, str(exc))
         logger.warning(
             "gap_analyzer_job_failed tenant_id=%s job_kind=%s attempt=%s",
             job.tenant_id,
@@ -150,11 +155,20 @@ def _run_claimed_gap_job(job: GapJobRecord) -> None:
         db.close()
 
 
-def _fail_gap_job(job_id: UUID, error_message: str) -> None:
+def _fail_gap_job(job_id: UUID, tenant_id: UUID, error_message: str) -> None:
     db = core_db.SessionLocal()
     try:
         repository = SqlAlchemyGapAnalyzerRepository(db)
-        repository.fail_gap_job(job_id=job_id, error_message=error_message)
+        if not repository.fail_gap_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            error_message=error_message,
+        ):
+            logger.error(
+                "gap_analyzer_job_fail_no_rows job_id=%s tenant_id=%s",
+                job_id,
+                tenant_id,
+            )
         db.commit()
     except Exception:
         db.rollback()
@@ -163,12 +177,16 @@ def _fail_gap_job(job_id: UUID, error_message: str) -> None:
         db.close()
 
 
-def _refresh_gap_job_lease_until_stopped(job_id: UUID, stop_event: threading.Event) -> None:
+def _refresh_gap_job_lease_until_stopped(
+    job_id: UUID,
+    tenant_id: UUID,
+    stop_event: threading.Event,
+) -> None:
     while not stop_event.wait(_GAP_JOB_HEARTBEAT_SECONDS):
         db = core_db.SessionLocal()
         try:
             repository = SqlAlchemyGapAnalyzerRepository(db)
-            refreshed = repository.refresh_gap_job_lease(job_id=job_id)
+            refreshed = repository.refresh_gap_job_lease(job_id=job_id, tenant_id=tenant_id)
             db.commit()
             if not refreshed:
                 return

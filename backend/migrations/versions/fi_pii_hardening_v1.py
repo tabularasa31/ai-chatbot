@@ -17,12 +17,16 @@ depends_on = None
 
 
 def _has_table(name: str) -> bool:
+    if op.get_context().as_sql:
+        return name in {"messages", "escalation_tickets"}
     bind = op.get_bind()
     insp = sa.inspect(bind)
     return name in insp.get_table_names()
 
 
 def _has_column(table: str, column: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     try:

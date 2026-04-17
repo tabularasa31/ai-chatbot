@@ -50,7 +50,7 @@ from backend.models import (
     PiiEventDirection,
     User,
 )
-from backend.privacy_schemas import OriginalContentDeleteResponse
+from backend.privacy_schemas import DeletedCountResponse
 
 logger = logging.getLogger(__name__)
 
@@ -411,12 +411,12 @@ def get_session_logs_route(
     )
 
 
-@chat_router.post("/logs/session/{session_id}/delete-original", response_model=OriginalContentDeleteResponse)
+@chat_router.post("/logs/session/{session_id}/delete-original", response_model=DeletedCountResponse)
 def delete_session_original_route(
     session_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> OriginalContentDeleteResponse:
+) -> DeletedCountResponse:
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -439,7 +439,7 @@ def delete_session_original_route(
         )
         db.commit()
         db.refresh(chat)
-    return OriginalContentDeleteResponse(deleted_count=deleted_count)
+    return DeletedCountResponse(deleted_count=deleted_count)
 
 
 @chat_router.post("/messages/{message_id}/feedback", response_model=MessageFeedbackResponse)

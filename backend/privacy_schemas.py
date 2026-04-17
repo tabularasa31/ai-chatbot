@@ -7,6 +7,3 @@ from pydantic import BaseModel
 
 class DeletedCountResponse(BaseModel):
     deleted_count: int
-
-
-OriginalContentDeleteResponse = DeletedCountResponse

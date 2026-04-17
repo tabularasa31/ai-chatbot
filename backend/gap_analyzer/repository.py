@@ -156,6 +156,7 @@ class GapJobRecord:
 class _RepositoryCapabilities:
     enum_values_as_strings: bool
     supports_array_values: bool
+    supports_skip_locked: bool
 
 
 def _normalize_bm25_excluded_file_types(
@@ -330,10 +331,13 @@ class GapAnalyzerRepository(Protocol):
     def claim_next_gap_job(self) -> GapJobRecord | None:
         ...
 
-    def complete_gap_job(self, *, job_id: UUID) -> None:
+    def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         ...
 
-    def fail_gap_job(self, *, job_id: UUID, error_message: str) -> None:
+    def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
+        ...
+
+    def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         ...
 
     def enqueue_recalculation(self, tenant_id: UUID, mode: GapRunMode) -> GapJobEnqueueResult:
@@ -963,6 +967,57 @@ class SqlAlchemyGapAnalyzerRepository:
         return GapJobEnqueueResult(status=GapCommandStatus.accepted, enqueued=True)
 
     def claim_next_gap_job(self) -> GapJobRecord | None:
+        """Claim the next eligible gap job.
+
+        PostgreSQL uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so the row
+        selection and reservation happen atomically inside the caller-owned
+        transaction. Dialects without ``SKIP LOCKED`` support keep the
+        retry-loop fallback for SQLite test coverage and correctness.
+        """
+        if self._capabilities.supports_skip_locked:
+            now = datetime.now(UTC)
+            lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
+            candidate = (
+                self.db.query(GapAnalyzerJob)
+                .filter(
+                    or_(
+                        and_(
+                            GapAnalyzerJob.status.in_([GapJobStatus.queued.value, GapJobStatus.retry.value]),
+                            GapAnalyzerJob.available_at <= now,
+                        ),
+                        and_(
+                            GapAnalyzerJob.status == GapJobStatus.in_progress,
+                            GapAnalyzerJob.lease_expires_at.isnot(None),
+                            GapAnalyzerJob.lease_expires_at < now,
+                        ),
+                    )
+                )
+                .order_by(GapAnalyzerJob.available_at.asc(), GapAnalyzerJob.created_at.asc(), GapAnalyzerJob.id.asc())
+                .with_for_update(skip_locked=True, of=GapAnalyzerJob)
+                .limit(1)
+                .first()
+            )
+            if candidate is None:
+                return None
+
+            candidate.status = _enum_value(GapJobStatus.in_progress, capabilities=self._capabilities)
+            candidate.leased_at = now
+            candidate.lease_expires_at = lease_expires_at
+            candidate.started_at = candidate.started_at or now
+            candidate.attempt_count = int(candidate.attempt_count or 0) + 1
+            candidate.updated_at = now
+            self.db.add(candidate)
+            self.db.flush()
+            return GapJobRecord(
+                job_id=candidate.id,
+                tenant_id=candidate.tenant_id,
+                job_kind=_gap_job_kind(candidate.job_kind),
+                status=_gap_job_status(candidate.status),
+                trigger=candidate.trigger,
+                attempt_count=int(candidate.attempt_count or 0),
+                max_attempts=int(candidate.max_attempts or 0),
+            )
+
         for _ in range(_GAP_JOB_CLAIM_MAX_ATTEMPTS):
             now = datetime.now(UTC)
             lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
@@ -1036,12 +1091,13 @@ class SqlAlchemyGapAnalyzerRepository:
             )
         return None
 
-    def refresh_gap_job_lease(self, *, job_id: UUID) -> bool:
+    def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         now = datetime.now(UTC)
         lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
         updated_rows = (
             self.db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
+            .filter(GapAnalyzerJob.tenant_id == tenant_id)
             .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
             .update(
                 {
@@ -1055,11 +1111,12 @@ class SqlAlchemyGapAnalyzerRepository:
         self.db.flush()
         return updated_rows > 0
 
-    def complete_gap_job(self, *, job_id: UUID) -> None:
+    def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         now = datetime.now(UTC)
-        (
+        updated_rows = (
             self.db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
+            .filter(GapAnalyzerJob.tenant_id == tenant_id)
             .update(
                 {
                     GapAnalyzerJob.status: _enum_value(GapJobStatus.completed, capabilities=self._capabilities),
@@ -1073,11 +1130,28 @@ class SqlAlchemyGapAnalyzerRepository:
             )
         )
         self.db.flush()
+        if updated_rows == 0:
+            logger.warning(
+                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s tenant_id=%s",
+                job_id,
+                tenant_id,
+            )
+            return False
+        return True
 
-    def fail_gap_job(self, *, job_id: UUID, error_message: str) -> None:
-        job = self.db.get(GapAnalyzerJob, job_id)
+    def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
+        job = (
+            self.db.query(GapAnalyzerJob)
+            .filter(GapAnalyzerJob.id == job_id, GapAnalyzerJob.tenant_id == tenant_id)
+            .first()
+        )
         if job is None:
-            return
+            logger.warning(
+                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s tenant_id=%s",
+                job_id,
+                tenant_id,
+            )
+            return False
         now = datetime.now(UTC)
         attempt_count = int(job.attempt_count or 0)
         max_attempts = int(job.max_attempts or 0)
@@ -1095,6 +1169,7 @@ class SqlAlchemyGapAnalyzerRepository:
         job.last_error = _truncate_gap_job_error(error_message)
         self.db.add(job)
         self.db.flush()
+        return True
 
     def enqueue_recalculation(self, tenant_id: UUID, mode: GapRunMode) -> GapJobEnqueueResult:
         results: list[GapJobEnqueueResult] = []
@@ -1304,6 +1379,7 @@ def _repository_capabilities(db: Session) -> _RepositoryCapabilities:
     return _RepositoryCapabilities(
         enum_values_as_strings=dialect_name == "sqlite",
         supports_array_values=dialect_name != "sqlite",
+        supports_skip_locked=dialect_name == "postgresql",
     )
 
 

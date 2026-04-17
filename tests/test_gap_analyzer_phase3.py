@@ -146,6 +146,26 @@ def test_run_mode_a_excludes_swagger_docs_from_coverage_corpus(
     assert topics[0].extraction_chunk_hash
 
 
+def test_gap_analyzer_reactivate_mode_a_returns_404_for_unknown_gap_id(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    token, _client_id = _create_client_and_token(
+        client,
+        db_session,
+        email="gap-phase3-reactivate-missing@example.com",
+        name="Gap Phase 3 Reactivate Missing",
+    )
+
+    reactivate_response = client.post(
+        f"/gap-analyzer/mode_a/{uuid.uuid4()}/reactivate",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert reactivate_response.status_code == 404, reactivate_response.text
+    assert reactivate_response.json()["detail"] == "Gap topic not found"
+
+
 def test_run_mode_a_skips_llm_and_row_updates_when_hash_unchanged(
     client: TestClient,
     db_session: Session,

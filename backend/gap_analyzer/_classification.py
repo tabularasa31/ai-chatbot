@@ -40,12 +40,6 @@ def _impact_statement(*, total_active: int, uncovered_count: int, partial_count:
     return f"{total_active} active {noun} are being tracked."
 
 
-def _cluster_status_value(status: GapClusterStatus | str) -> str:
-    if isinstance(status, GapClusterStatus):
-        return status.value
-    return str(status)
-
-
 def _cluster_activity_at(cluster: GapCluster) -> datetime:
     for value in (cluster.last_computed_at, cluster.last_question_at, cluster.created_at):
         if value is None:

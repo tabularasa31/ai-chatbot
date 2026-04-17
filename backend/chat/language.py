@@ -14,17 +14,22 @@ logger = logging.getLogger(__name__)
 LOCALIZATION_MODEL = "gpt-4o-mini"
 
 try:
-    from langdetect import DetectorFactory, LangDetectException, detect_langs
+    import langdetect
 
+    DetectorFactory = langdetect.DetectorFactory
+    LangDetectError = langdetect.LangDetectException
+    LangDetectException = LangDetectError
+    detect_langs = langdetect.detect_langs
     DetectorFactory.seed = 0
 except ImportError:  # pragma: no cover - optional runtime dependency
     DetectorFactory = None
 
-    class LangDetectException(Exception):  # type: ignore[no-redef]
+    class LangDetectError(Exception):  # type: ignore[no-redef]
         """Sentinel raised only by the langdetect library; defined here so that
-        ``except LangDetectException`` works even when langdetect is not installed
+        ``except LangDetectError`` works even when langdetect is not installed
         without accidentally swallowing unrelated exceptions (as ``Exception`` would)."""
 
+    LangDetectException = LangDetectError
     detect_langs = None
 
 
@@ -271,7 +276,7 @@ def resolve_language_context(
 
     try:
         detection = detect_language(current_turn_text)
-    except LangDetectException:
+    except LangDetectError:
         return ResolvedLanguageContext(
             detected_language="unknown",
             confidence=0.0,

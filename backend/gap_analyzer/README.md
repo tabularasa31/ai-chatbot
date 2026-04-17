@@ -150,6 +150,11 @@ This module is intentionally introduced in two thin layers:
   the Python cosine pass only as the SQLite/test fallback.
 - Archive UX now exposes older archived Mode B clusters as `inactive`, and linked Mode B cards can
   render related docs-gap context inline in the dashboard.
+- Postgres ANN indexes for `gap_clusters.centroid`, `gap_doc_topics.topic_embedding`, and
+  `gap_questions.embedding` now use IVFFlat as the safe baseline.
+  On fresh or very small datasets these indexes may stay under-trained until enough rows exist, so
+  operators should plan a `REINDEX INDEX CONCURRENTLY ...` pass after the corresponding table grows
+  past roughly 10k rows.
 
 ## Phase 6B Reclustering Notes
 

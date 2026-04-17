@@ -161,14 +161,20 @@ def test_gap_analyzer_model_indexes_are_present() -> None:
     expected_indexes = {
         "ix_gap_clusters_tenant_status",
         "ix_gap_clusters_tenant_signal_weight",
+        "ix_gap_clusters_linked_doc_topic_id",
         "ix_gap_doc_topics_tenant_status",
+        "ix_gap_doc_topics_linked_cluster_id",
+        "ix_gap_doc_topics_tenant_extraction_hash",
         "ix_gap_questions_tenant_cluster",
         "ix_gap_questions_tenant_signal_weight",
         "ix_gap_dismissals_tenant_gap",
+        "ix_gap_dismissals_dismissed_by",
+        "ix_gap_dismissals_tenant_dismissed_at",
         "ix_gap_question_links_gap_question",
         "ix_gap_question_links_user_message",
         "ix_gap_question_links_assistant_message",
         "ix_gap_question_links_session_id",
+        "ix_gap_jobs_expired_lease_in_progress",
     }
 
     seen_indexes = {

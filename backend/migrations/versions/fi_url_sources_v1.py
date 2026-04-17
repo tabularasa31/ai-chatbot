@@ -17,12 +17,16 @@ depends_on = None
 
 
 def _has_table(name: str) -> bool:
+    if op.get_context().as_sql:
+        return name == "documents"
     bind = op.get_bind()
     insp = sa.inspect(bind)
     return name in insp.get_table_names()
 
 
 def _has_column(table: str, column: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     try:
@@ -33,7 +37,6 @@ def _has_column(table: str, column: str) -> bool:
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
     if not _has_table("url_sources"):
         op.create_table(
             "url_sources",

@@ -17,6 +17,8 @@ depends_on = None
 
 
 def _has_column(table: str, column: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     try:
@@ -27,6 +29,8 @@ def _has_column(table: str, column: str) -> bool:
 
 
 def _has_index(table: str, index_name: str) -> bool:
+    if op.get_context().as_sql:
+        return False
     bind = op.get_bind()
     insp = sa.inspect(bind)
     try:

@@ -29,24 +29,19 @@ def _token_overlap(query_tokens: set[str], chunk_tokens: set[str]) -> float:
 def _vector_from_unknown(raw: object) -> list[float] | None:
     if raw is None:
         return None
-    if isinstance(raw, list):
-        return [float(value) for value in raw]
-    if isinstance(raw, tuple):
-        return [float(value) for value in raw]
-    if hasattr(raw, "tolist"):
-        try:
+    try:
+        if isinstance(raw, (list, tuple)):
+            return [float(value) for value in raw]
+        if hasattr(raw, "tolist"):
             parsed = raw.tolist()
-        except Exception:
-            parsed = None
-        if isinstance(parsed, list):
-            return [float(value) for value in parsed]
-    if isinstance(raw, str):
-        try:
+            if isinstance(parsed, list):
+                return [float(value) for value in parsed]
+        if isinstance(raw, str):
             parsed = json.loads(raw)
-        except Exception:
-            return None
-        if isinstance(parsed, list):
-            return [float(value) for value in parsed]
+            if isinstance(parsed, list):
+                return [float(value) for value in parsed]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
     return None
 
 

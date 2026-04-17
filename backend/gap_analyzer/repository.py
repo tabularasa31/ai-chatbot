@@ -1080,8 +1080,9 @@ class SqlAlchemyGapAnalyzerRepository:
         self.db.flush()
         if updated_rows == 0:
             logger.warning(
-                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s",
+                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s tenant_id=%s",
                 job_id,
+                tenant_id,
             )
             return False
         return True
@@ -1094,8 +1095,9 @@ class SqlAlchemyGapAnalyzerRepository:
         )
         if job is None:
             logger.warning(
-                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s",
+                "gap_analyzer_job_finalize_skipped_unexpected_tenant job_id=%s tenant_id=%s",
                 job_id,
+                tenant_id,
             )
             return False
         now = datetime.now(UTC)

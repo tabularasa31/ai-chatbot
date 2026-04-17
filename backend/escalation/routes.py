@@ -19,7 +19,7 @@ from backend.escalation.schemas import (
 )
 from backend.escalation.service import delete_ticket_original_content, resolve_ticket
 from backend.models import EscalationStatus, EscalationTicket, PiiEvent, PiiEventDirection, User
-from backend.privacy_schemas import OriginalContentDeleteResponse
+from backend.privacy_schemas import DeletedCountResponse
 
 escalation_router = APIRouter(prefix="/escalations", tags=["escalations"])
 
@@ -158,12 +158,12 @@ def resolve_escalation(
     return _serialize_ticket(t, include_original=False)
 
 
-@escalation_router.post("/{ticket_id}/delete-original", response_model=OriginalContentDeleteResponse)
+@escalation_router.post("/{ticket_id}/delete-original", response_model=DeletedCountResponse)
 def delete_escalation_original(
     ticket_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> OriginalContentDeleteResponse:
+) -> DeletedCountResponse:
     client = get_client_by_user(current_user.id, db)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -185,4 +185,4 @@ def delete_escalation_original(
         )
         db.commit()
         db.refresh(ticket)
-    return OriginalContentDeleteResponse(deleted_count=deleted_count)
+    return DeletedCountResponse(deleted_count=deleted_count)

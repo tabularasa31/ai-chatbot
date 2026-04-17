@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.jwt_kinds import USER_ACCESS_JWT_TYP
 from backend.core.security import ALGORITHM, decode_access_token
-from backend.eval.tokens import EVAL_JWT_TYP
+from backend.core.jwt_kinds import EVAL_TESTER_JWT_TYP
 from backend.models import Client, Tester as EvalTesterRecord
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -211,7 +211,7 @@ def test_decode_access_token_rejects_eval_typ() -> None:
     token = jwt.encode(
         {
             "sub": str(uuid.uuid4()),
-            "typ": EVAL_JWT_TYP,
+            "typ": EVAL_TESTER_JWT_TYP,
             "exp": exp,
             "iat": now,
         },

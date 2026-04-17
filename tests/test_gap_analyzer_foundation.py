@@ -16,7 +16,7 @@ from backend.gap_analyzer.domain import CoveragePolicy, DocumentScopePolicy, Dra
 from backend.gap_analyzer.enums import GapDismissReason
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer.schemas import DismissReason, GapRunMode, RecalculateCommandResult
+from backend.gap_analyzer.schemas import GapRunMode, RecalculateCommandResult
 from backend.models import Base, GapDismissReason as ModelGapDismissReason
 
 
@@ -117,7 +117,6 @@ def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
 
 
 def test_gap_analyzer_shared_enums_are_single_source_of_truth() -> None:
-    assert DismissReason is GapDismissReason
     assert ModelGapDismissReason is GapDismissReason
 
 

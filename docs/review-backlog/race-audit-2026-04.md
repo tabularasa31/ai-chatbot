@@ -33,4 +33,4 @@
 - Location: `backend/documents/url_service.py:549`, `backend/documents/url_service.py:670`, `backend/models.py:330`
 - Risk: medium. Duplicate-source prevention is currently only an application-level preflight query on `(client_id, normalized_domain)`. Two concurrent creates can both pass preflight and both commit, which can produce duplicate sources rather than a deterministic 409.
 - Mitigation: none at the database level. `preflight_url_source()` checks for an existing row, but `UrlSource` has no corresponding unique constraint and `create_url_source()` does not catch `IntegrityError`.
-- Recommendation: `нужен фикс в отдельном issue` — add a DB-enforced uniqueness rule for the intended key (`client_id + normalized_domain` or `client_id + normalized_url`, depending on product semantics) and handle the resulting conflict with the same savepoint / `IntegrityError` pattern.
+- Recommendation: `needs a separate fix issue` — add a DB-enforced uniqueness rule for the intended key (`client_id + normalized_domain` or `client_id + normalized_url`, depending on product semantics) and handle the resulting conflict with the same savepoint / `IntegrityError` pattern.

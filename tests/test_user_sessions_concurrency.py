@@ -97,6 +97,9 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
 
     def _inject_conflict(*args, **kwargs):
         nonlocal winner_id
+        # Simulate the competing writer by temporarily restoring the original
+        # helpers, creating the winning replacement row in a separate session,
+        # then reinstating the patched conflict path for the outer caller.
         with session_factory() as db:
             monkeypatch.setattr(user_session_service, "_create_user_session_row", original_create)
             monkeypatch.setattr(user_session_service, "_close_active_user_sessions", original_close)

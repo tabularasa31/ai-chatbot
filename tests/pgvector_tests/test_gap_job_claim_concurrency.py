@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import threading
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
@@ -25,6 +26,7 @@ def test_claim_next_gap_job_claims_unique_jobs_without_double_attempts(
             job_kind=GapJobKind.mode_a.value,
             status="queued",
             trigger=f"test-{index}",
+            available_at=datetime.now(UTC),
         )
         for index in range(5)
     ]
@@ -49,14 +51,16 @@ def test_claim_next_gap_job_claims_unique_jobs_without_double_attempts(
                 db.rollback()
                 return None
             db.commit()
-            return row.job_id
+            return (row.job_id, row.attempt_count)
 
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [executor.submit(_worker) for _ in range(5)]
-        claimed_ids = [future.result(timeout=10) for future in futures]
+        claimed_rows = [future.result(timeout=10) for future in futures]
 
-    assert all(job_id is not None for job_id in claimed_ids)
+    assert all(job_id is not None for job_id, _attempt_count in claimed_rows)
+    claimed_ids = [job_id for job_id, _attempt_count in claimed_rows]
     assert len(set(claimed_ids)) == 5
+    assert all(attempt_count == 1 for _job_id, attempt_count in claimed_rows)
 
     pg_db_session.expire_all()
     refreshed_jobs = (

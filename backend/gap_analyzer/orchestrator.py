@@ -12,9 +12,10 @@ from backend.gap_analyzer._classification import (
     _mode_b_status_from_coverage,
 )
 from backend.gap_analyzer._math import (
-    _tokenize as _tokenize,
+    _tokenize,  # noqa: F401 — re-export for test backward-compat
+    _vector_from_unknown,
+    _vector_norm,
 )
-from backend.gap_analyzer._math import _vector_from_unknown, _vector_norm
 from backend.gap_analyzer.domain import (
     CoveragePolicy,
     DocumentScopePolicy,
@@ -50,16 +51,10 @@ from backend.gap_analyzer.pipelines.mode_a import (
 )
 from backend.gap_analyzer.pipelines.mode_b import (
     _apply_mode_b_questions_to_clusters,
+    _ModeBClusterUpdateRejectedError,  # noqa: F401 — re-export for test backward-compat
+    _MutableModeBCluster,  # noqa: F401 — re-export for test backward-compat
     _prepare_mode_b_clusters,
-)
-from backend.gap_analyzer.pipelines.mode_b import (
-    _ModeBClusterUpdateRejectedError as _ModeBClusterUpdateRejectedError,
-)
-from backend.gap_analyzer.pipelines.mode_b import (
-    _MutableModeBCluster as _MutableModeBCluster,
-)
-from backend.gap_analyzer.pipelines.mode_b import (
-    _update_mode_b_cluster as _update_mode_b_cluster,
+    _update_mode_b_cluster,  # noqa: F401 — re-export for test backward-compat
 )
 from backend.gap_analyzer.prompts import ModeATopicCandidate, embed_texts, extract_mode_a_candidates
 from backend.gap_analyzer.read_models import (

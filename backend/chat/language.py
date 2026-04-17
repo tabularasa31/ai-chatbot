@@ -18,7 +18,6 @@ try:
 
     DetectorFactory = langdetect.DetectorFactory
     LangDetectError = langdetect.LangDetectException
-    LangDetectException = LangDetectError
     detect_langs = langdetect.detect_langs
     DetectorFactory.seed = 0
 except ImportError:  # pragma: no cover - optional runtime dependency
@@ -29,7 +28,6 @@ except ImportError:  # pragma: no cover - optional runtime dependency
         ``except LangDetectError`` works even when langdetect is not installed
         without accidentally swallowing unrelated exceptions (as ``Exception`` would)."""
 
-    LangDetectException = LangDetectError
     detect_langs = None
 
 

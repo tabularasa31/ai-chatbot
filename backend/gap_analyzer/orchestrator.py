@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -16,6 +14,12 @@ from uuid import UUID
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer._math import (
+    _cosine_similarity,
+    _tokenize,
+    _vector_from_unknown,
+    _vector_norm,
+)
 from backend.gap_analyzer.domain import (
     ClusteringPolicy,
     CoveragePolicy,
@@ -60,7 +64,6 @@ from backend.models import GapCluster, GapDismissal, GapDocTopic, GapQuestion
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 _MODE_A_DRAFT_EXAMPLE_LIMIT = 5
 _MODE_B_WEEKLY_RECLUSTER_DAYS = 30
 _BULK_ID_BATCH_SIZE = 1000
@@ -1592,7 +1595,7 @@ def _prepare_corpus_chunks(corpus_chunks: list[ModeACorpusChunk]) -> list[_Prepa
         vector = _vector_from_unknown(chunk.vector)
         prepared.append(
             _PreparedCorpusChunk(
-                tokens=_tokenize(chunk.chunk_text),
+                tokens=set(_tokenize(chunk.chunk_text)),
                 vector=vector,
                 vector_norm=_vector_norm(vector),
             )
@@ -1749,58 +1752,3 @@ def _mode_b_status_from_coverage(coverage_score: float) -> GapClusterStatus:
     return GapClusterStatus.active
 
 
-def _vector_from_unknown(raw: object) -> list[float] | None:
-    if raw is None:
-        return None
-    if isinstance(raw, list):
-        return [float(value) for value in raw]
-    if isinstance(raw, tuple):
-        return [float(value) for value in raw]
-    if hasattr(raw, "tolist"):
-        try:
-            parsed_list = raw.tolist()
-        except Exception:
-            parsed_list = None
-        if isinstance(parsed_list, list):
-            return [float(value) for value in parsed_list]
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return None
-        if isinstance(parsed, list):
-            return [float(value) for value in parsed]
-    return None
-
-
-def _vector_norm(vector: list[float] | None) -> float:
-    if vector is None:
-        return 0.0
-    return math.sqrt(sum(value * value for value in vector))
-
-
-def _cosine_similarity(
-    first: list[float] | None,
-    second: list[float] | None,
-    *,
-    first_norm: float,
-    second_norm: float,
-) -> float:
-    if first is None or second is None or len(first) != len(second):
-        return 0.0
-    if first_norm == 0.0 or second_norm == 0.0:
-        return 0.0
-    dot = 0.0
-    for left, right in zip(first, second, strict=True):
-        dot += left * right
-    return max(0.0, min(1.0, dot / (first_norm * second_norm)))
-
-
-def _token_overlap(query_tokens: set[str], chunk_tokens: set[str]) -> float:
-    if not query_tokens or not chunk_tokens:
-        return 0.0
-    return len(query_tokens & chunk_tokens) / len(query_tokens)
-
-
-def _tokenize(value: str) -> set[str]:
-    return {token for token in _TOKEN_RE.findall(value.casefold()) if token}

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
-import re
 import threading
 import time
 from collections import Counter
@@ -17,6 +15,12 @@ from uuid import UUID
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
+from backend.gap_analyzer._math import (
+    _cosine_similarity,
+    _tokenize,
+    _vector_from_unknown,
+    _vector_norm,
+)
 from backend.gap_analyzer.domain import CoveragePolicy
 from backend.gap_analyzer.enums import (
     GapClusterStatus,
@@ -42,7 +46,6 @@ from backend.models import (
 )
 
 logger = logging.getLogger(__name__)
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 _GAP_JOB_LEASE_SECONDS = 1800
 _GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
 _GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
@@ -1397,57 +1400,6 @@ def _example_questions_value(
     if capabilities.supports_array_values:
         return value
     return None
-
-
-def _tokenize(value: str) -> list[str]:
-    return [token for token in _TOKEN_RE.findall(value.casefold()) if token]
-
-
-def _vector_from_unknown(raw: object) -> list[float] | None:
-    if raw is None:
-        return None
-    if isinstance(raw, list):
-        return [float(value) for value in raw]
-    if isinstance(raw, tuple):
-        return [float(value) for value in raw]
-    if hasattr(raw, "tolist"):
-        try:
-            parsed = raw.tolist()
-        except Exception:
-            parsed = None
-        if isinstance(parsed, list):
-            return [float(value) for value in parsed]
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return None
-        if isinstance(parsed, list):
-            return [float(value) for value in parsed]
-    return None
-
-
-def _vector_norm(vector: list[float] | None) -> float:
-    if vector is None:
-        return 0.0
-    return math.sqrt(sum(value * value for value in vector))
-
-
-def _cosine_similarity(
-    first: list[float] | None,
-    second: list[float] | None,
-    *,
-    first_norm: float,
-    second_norm: float,
-) -> float:
-    if first is None or second is None or len(first) != len(second):
-        return 0.0
-    if first_norm == 0.0 or second_norm == 0.0:
-        return 0.0
-    dot = 0.0
-    for left, right in zip(first, second, strict=True):
-        dot += left * right
-    return max(0.0, min(1.0, dot / (first_norm * second_norm)))
 
 
 def _gap_job_status(value: GapJobStatus | str) -> GapJobStatus:

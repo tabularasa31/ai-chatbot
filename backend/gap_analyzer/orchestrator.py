@@ -578,6 +578,13 @@ class GapAnalyzerOrchestrator:
     ) -> GapActionResponse:
         db = self._require_sqlalchemy_repository().db
         if source == GapSource.mode_a:
+            topic = (
+                db.query(GapDocTopic)
+                .filter(GapDocTopic.id == gap_id, GapDocTopic.tenant_id == tenant_id)
+                .first()
+            )
+            if topic is None:
+                raise GapResourceNotFoundError("Gap topic not found")
             (
                 db.query(GapDismissal)
                 .filter(

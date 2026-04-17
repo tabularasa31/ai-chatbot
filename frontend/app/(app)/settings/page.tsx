@@ -32,6 +32,7 @@ export default function SettingsPage() {
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [supportEmailInput, setSupportEmailInput] = useState("");
+  const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
   const [fallbackEmail, setFallbackEmail] = useState<string | null>(null);
   const [level, setLevel] = useState<DisclosureLevel>("standard");
   const [keySaving, setKeySaving] = useState(false);
@@ -48,6 +49,7 @@ export default function SettingsPage() {
       .then(([client, support, disclosure]) => {
         setHasOpenaiKey(client.has_openai_key ?? false);
         setSupportEmailInput(support.l2_email ?? "");
+        setEscalationLanguageInput(support.escalation_language ?? "");
         setFallbackEmail(support.fallback_email ?? null);
         setLevel(disclosure.level);
       })
@@ -98,8 +100,12 @@ export default function SettingsPage() {
     setSupportSaving(true);
     setSupportSavedOk(false);
     try {
-      const response = await api.support.update({ l2_email: supportEmailInput.trim() || null });
+      const response = await api.support.update({
+        l2_email: supportEmailInput.trim() || null,
+        escalation_language: escalationLanguageInput.trim() || null,
+      });
       setSupportEmailInput(response.l2_email ?? "");
+      setEscalationLanguageInput(response.escalation_language ?? "");
       setFallbackEmail(response.fallback_email ?? null);
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
@@ -115,8 +121,12 @@ export default function SettingsPage() {
     setSupportSaving(true);
     setSupportSavedOk(false);
     try {
-      const response = await api.support.update({ l2_email: null });
+      const response = await api.support.update({
+        l2_email: null,
+        escalation_language: null,
+      });
       setSupportEmailInput(response.l2_email ?? "");
+      setEscalationLanguageInput(response.escalation_language ?? "");
       setFallbackEmail(response.fallback_email ?? null);
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
@@ -190,6 +200,16 @@ export default function SettingsPage() {
           />
           <p className="text-xs text-slate-500">
             Fallback owner email: <span className="font-medium text-slate-700">{fallbackEmail ?? "Not configured"}</span>
+          </p>
+          <input
+            type="text"
+            placeholder="Escalation language (e.g. en, ru, fr, pt-BR)"
+            value={escalationLanguageInput}
+            onChange={(e) => setEscalationLanguageInput(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400"
+          />
+          <p className="text-xs text-slate-500">
+            Used for escalation-only chat copy. Leave empty to fall back to English.
           </p>
           <div className="flex gap-2">
             <button

@@ -164,7 +164,11 @@ def put_privacy_route(
     return PrivacyConfigResponse(**data)
 
 
-@clients_router.get("/me/support-settings", response_model=SupportSettingsResponse)
+@clients_router.get(
+    "/me/support-settings",
+    response_model=SupportSettingsResponse,
+    response_model_exclude_none=True,
+)
 def get_support_settings_route(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -173,13 +177,21 @@ def get_support_settings_route(
     return SupportSettingsResponse(**data)
 
 
-@clients_router.put("/me/support-settings", response_model=SupportSettingsResponse)
+@clients_router.put(
+    "/me/support-settings",
+    response_model=SupportSettingsResponse,
+    response_model_exclude_none=True,
+)
 def put_support_settings_route(
     body: UpdateSupportSettingsRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> SupportSettingsResponse:
-    data = update_support_settings_for_user(current_user.id, body.l2_email, db)
+    # Pass only the fields the client explicitly included in the request body.
+    # Absent fields are left unchanged so that older clients that do not know
+    # about escalation_language cannot accidentally clear it.
+    config: dict[str, str | None] = {k: getattr(body, k) for k in body.model_fields_set}
+    data = update_support_settings_for_user(current_user.id, config, db)
     return SupportSettingsResponse(**data)
 
 

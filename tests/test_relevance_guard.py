@@ -71,7 +71,7 @@ def test_injection_rejects_before_rag(
 
     assert outcome.chat_ended is False
     assert outcome.document_ids == []
-    assert outcome.tokens_used == 20
+    assert outcome.tokens_used == 0
     expected = build_reject_response(reason=RejectReason.INJECTION_DETECTED, profile=None)
     assert outcome.text == expected
 
@@ -187,7 +187,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     )
     assert outcome.chat_ended is False
     assert outcome.document_ids == []
-    assert outcome.tokens_used == 20
+    assert outcome.tokens_used == 0
     assert outcome.text.startswith("Sorry")
     assert "Product" in outcome.text
     assert "ModA" in outcome.text

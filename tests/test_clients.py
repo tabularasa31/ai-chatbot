@@ -257,7 +257,6 @@ def test_support_settings_default_falls_back_to_owner_email(
 
     assert response.status_code == 200
     assert response.json() == {
-        "l2_email": None,
         "fallback_email": "owner-support@example.com",
     }
 
@@ -307,3 +306,65 @@ def test_support_settings_reject_invalid_email(
         json={"l2_email": "not-an-email"},
     )
     assert response.status_code == 422
+
+
+def test_support_settings_null_fields_excluded_from_response(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    """Unset optional fields are NOT included in the response body (exclude_none=True).
+
+    This documents the intentional API contract: clients must not rely on
+    ``l2_email`` or ``escalation_language`` being present as explicit null keys;
+    absence means the field is unset.
+    """
+    token = register_and_verify_user(client, db_session, email="support-exclude@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Exclude None"},
+    )
+
+    response = client.get(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "l2_email" not in body, "unset l2_email must be absent (exclude_none)"
+    assert "escalation_language" not in body, "unset escalation_language must be absent (exclude_none)"
+    assert "fallback_email" in body
+
+
+def test_support_settings_partial_put_preserves_escalation_language(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    """PUT with only l2_email must not clear an existing escalation_language."""
+    token = register_and_verify_user(client, db_session, email="support-partial@example.com")
+    client.post(
+        "/clients",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Partial Put"},
+    )
+
+    # Set both fields first
+    client.put(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "l2@example.com", "escalation_language": "fr"},
+    )
+
+    # Update only l2_email — escalation_language must survive
+    response = client.put(
+        "/clients/me/support-settings",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"l2_email": "new-l2@example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["l2_email"] == "new-l2@example.com"
+    assert response.json().get("escalation_language") == "fr", (
+        "escalation_language must not be cleared by a partial PUT"
+    )

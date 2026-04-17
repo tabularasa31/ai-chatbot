@@ -54,6 +54,10 @@ class Settings(BaseSettings):
         alias="CONTRADICTION_ADJUDICATION_MAX_TOKENS",
     )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
+    language_detection_reliability_threshold: float = Field(
+        0.7,
+        alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",
+    )
 
     # Email verification
     EMAIL_FROM: str | None = Field(None, alias="EMAIL_FROM")

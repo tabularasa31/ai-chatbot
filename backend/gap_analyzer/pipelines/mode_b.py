@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -218,7 +219,7 @@ def _apply_mode_b_questions_to_clusters(
     *,
     repository: GapAnalyzerRepository,
     tenant_id: UUID,
-    questions: list[ModeBQuestionRecord],
+    questions: Iterable[ModeBQuestionRecord],
     clusters: list[_MutableModeBCluster],
     started_at: datetime,
     new_cluster_is_new: bool,

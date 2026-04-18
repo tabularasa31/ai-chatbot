@@ -14,10 +14,27 @@ from backend.models import Chat, Document, DocumentStatus, DocumentType, Embeddi
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
-def _widget_url(public_id: str, message: str = "hello") -> str:
+def _widget_url(public_id: str, message: str = "hello", *, locale: str | None = None) -> str:
     from urllib.parse import quote
 
-    return f"/widget/chat?message={quote(message)}&client_id={public_id}"
+    url = f"/widget/chat?message={quote(message)}&client_id={public_id}"
+    if locale:
+        url += f"&locale={quote(locale)}"
+    return url
+
+
+def _post_widget_chat(
+    client: TestClient,
+    public_id: str,
+    *,
+    message: str,
+    session_id: str | None = None,
+    locale: str | None = None,
+) -> object:
+    query = f"/widget/chat?client_id={public_id}"
+    if session_id:
+        query += f"&session_id={session_id}"
+    return client.post(query, json={"message": message, "locale": locale})
 
 
 def _seed_rag_chunk(db_session: Session, client_uuid: uuid.UUID) -> None:
@@ -68,7 +85,7 @@ def test_widget_chat_success(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    r = client.post(_widget_url(public_id, message="widget support"))
+    r = _post_widget_chat(client, public_id, message="widget support")
     assert r.status_code == 200
     data = r.json()
     assert data["response"] == "Widget says hi"
@@ -76,7 +93,7 @@ def test_widget_chat_success(
     assert data.get("chat_ended") is False
 
 
-def test_widget_chat_empty_message_returns_default_greeting(
+def test_widget_chat_empty_message_returns_422(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -90,52 +107,18 @@ def test_widget_chat_empty_message_returns_default_greeting(
     set_client_openai_key(client, token)
     public_id = cl_resp.json()["public_id"]
 
-    r = client.post(_widget_url(public_id, message=""))
-    assert r.status_code == 200
-    data = r.json()
-    assert data["response"] == (
-        "I'm the Widget Greeting Co assistant and can help with documentation, "
-        "product setup, integrations, and finding the right information. Ask your question."
-    )
-    assert "session_id" in data
-    assert data.get("chat_ended") is False
+    r = _post_widget_chat(client, public_id, message="")
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "message_required"
 
 
-def test_widget_chat_empty_message_uses_locale_for_greeting(
-    client: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    token = register_and_verify_user(client, db_session, email="widget-greeting-locale@example.com")
-    cl_resp = client.post(
-        "/clients",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Widget Greeting Locale Co"},
-    )
-    assert cl_resp.status_code == 201
-    set_client_openai_key(client, token)
-    public_id = cl_resp.json()["public_id"]
-
-    monkeypatch.setattr(
-        "backend.chat.service.localize_text_to_question_language_result",
-        lambda **kwargs: __import__("backend.chat.language", fromlist=["LocalizationResult"]).LocalizationResult(
-            text="Je suis l'assistant Widget Greeting Locale Co. Posez votre question.",
-            tokens_used=6,
-        ),
-    )
-
-    r = client.post(f"{_widget_url(public_id, message='')}&locale=fr-FR")
-    assert r.status_code == 200
-    assert r.json()["response"] == "Je suis l'assistant Widget Greeting Locale Co. Posez votre question."
-
-
-def test_widget_chat_rate_limit_429_after_20_requests_same_ip(
+def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     mock_openai_client: Mock,
     client: TestClient,
     db_session: Session,
 ) -> None:
     """
-    With a fixed rate-limit key, request 21 in the same window returns 429.
+    With a fixed rate-limit key, request 31 in the same window returns 429.
 
     Default test `Limiter` key_func uses a fresh UUID per call, so limits never
     accumulate; widget uses `widget_public_rate_limit_key` with an override hook.
@@ -160,16 +143,27 @@ def test_widget_chat_rate_limit_429_after_20_requests_same_ip(
         Mock(message=Mock(content="ok"))
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        "backend.routes.widget.process_chat_message",
+        lambda *args, **kwargs: ChatTurnOutcome(
+            text="ok",
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        ),
+    )
 
     set_widget_public_rate_limit_key_override(lambda _r: "test-widget-rate-limit-ip")
     try:
-        for i in range(20):
+        for i in range(30):
             r = client.post(_widget_url(public_id, message=f"widget support {i}"))
             assert r.status_code == 200, f"request {i + 1}: {r.status_code} {r.text}"
 
-        r21 = client.post(_widget_url(public_id, message="widget support over-limit"))
-        assert r21.status_code == 429
+        r31 = client.post(_widget_url(public_id, message="widget support over-limit"))
+        assert r31.status_code == 429
     finally:
+        monkeypatch.undo()
         set_widget_public_rate_limit_key_override(None)
 
 
@@ -336,8 +330,11 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    r = client.post(
-        f"/widget/chat?message=widget%20support&client_id={public_id}&session_id={session_id}"
+    r = _post_widget_chat(
+        client,
+        public_id,
+        message="widget support",
+        session_id=session_id,
     )
     assert r.status_code == 200
 
@@ -375,7 +372,7 @@ def test_widget_chat_returns_plain_answer_payload(
         ),
     )
 
-    r = client.post(_widget_url(public_id, message="How to connect domain?"))
+    r = _post_widget_chat(client, public_id, message="How to connect domain?")
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Which provider are you trying to configure?"

@@ -15,8 +15,14 @@ from backend.clients.widget_chat_gate import (
     WidgetChatClientGateError,
     get_client_eligible_for_widget_chat,
 )
+from backend.core.config import settings
 from backend.core.db import get_db
-from backend.core.limiter import limiter, widget_public_rate_limit_key
+from backend.core.limiter import (
+    limiter,
+    widget_client_rate_limit_key,
+    widget_init_rate_limit_key,
+    widget_public_rate_limit_key,
+)
 from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
@@ -28,12 +34,14 @@ from backend.widget.service import (
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
     find_resumable_identified_chat,
+    sanitize_locale,
     widget_session_error_detail,
 )
 
 logger = logging.getLogger(__name__)
 
 widget_router = APIRouter(prefix="/widget", tags=["widget"])
+_WIDGET_MESSAGE_MAX_CHARS = settings.widget_message_max_chars
 
 
 class WidgetSessionInitRequest(BaseModel):
@@ -45,6 +53,11 @@ class WidgetSessionInitRequest(BaseModel):
 class WidgetSessionInitResponse(BaseModel):
     session_id: uuid.UUID
     mode: Literal["identified", "anonymous"]
+
+
+class WidgetChatRequest(BaseModel):
+    message: str | None = None
+    locale: str | None = Field(default=None, max_length=64)
 
 
 @widget_router.get("/health")
@@ -83,7 +96,7 @@ def _resolve_widget_identity(
 
 
 @widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
-@limiter.limit("20/minute", key_func=widget_public_rate_limit_key)
+@limiter.limit("10/minute", key_func=widget_init_rate_limit_key)
 def widget_session_init(
     request: Request,
     body: Annotated[WidgetSessionInitRequest, Body()],
@@ -97,13 +110,16 @@ def widget_session_init(
         .filter(Client.api_key == body.api_key.strip())
         .first()
     )
-    if not client:
+    if not client or not client.is_active:
+        logger.info(
+            "widget_session_init_rejected",
+            extra={"reason": "not_found" if not client else "inactive"},
+        )
         raise HTTPException(status_code=404, detail="Invalid API key")
-    if not client.is_active:
-        raise HTTPException(status_code=403, detail="Client is not active")
 
     session_id = uuid.uuid4()
     mode: Literal["identified", "anonymous"] = "anonymous"
+    locale = sanitize_locale(body.locale)
 
     ctx, fail_reason = _resolve_widget_identity(client, body.identity_token)
     if ctx is not None:
@@ -117,7 +133,7 @@ def widget_session_init(
             resumable_chat.user_context = apply_identity_context_patch(
                 resumable_chat.user_context,
                 ctx,
-                browser_locale=body.locale,
+                browser_locale=locale,
             )
             db.add(resumable_chat)
             touch_user_session(
@@ -132,7 +148,7 @@ def widget_session_init(
             merged = apply_identity_context_patch(
                 {"user_id": ctx["user_id"]},
                 ctx,
-                browser_locale=body.locale,
+                browser_locale=locale,
             )
             chat = Chat(
                 client_id=client.id,
@@ -157,11 +173,11 @@ def widget_session_init(
     elif body.identity_token and body.identity_token.strip():
         reason = fail_reason or "invalid_token"
         logger.info("kyc_validation_failed: reason=%s", reason)
-    elif body.locale and body.locale.strip():
+    elif locale is not None:
         chat = Chat(
             client_id=client.id,
             session_id=session_id,
-            user_context={"browser_locale": body.locale.strip()},
+            user_context={"browser_locale": locale},
         )
         db.add(chat)
         db.commit()
@@ -170,11 +186,19 @@ def widget_session_init(
 
 
 @widget_router.post("/chat")
-@limiter.limit("20/minute", key_func=widget_public_rate_limit_key)
+@limiter.limit(
+    settings.effective_widget_chat_per_client_rate,
+    key_func=widget_client_rate_limit_key,
+)
+@limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
 def widget_chat(
     request: Request,
-    message: Annotated[str, Query(description="User message")],
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
+    body: Annotated[WidgetChatRequest | None, Body()] = None,
+    message: Annotated[
+        str | None,
+        Query(description="Deprecated legacy user message", min_length=1),
+    ] = None,
     session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
     locale: Annotated[
         str | None, Query(description="Browser locale hint (e.g. ru-RU)")
@@ -185,6 +209,44 @@ def widget_chat(
     PUBLIC endpoint for embedded widget.
     No authentication required (clientId = permission).
     """
+    body_message = body.message if body is not None else None
+    if body_message is None and message is not None:
+        logger.info("widget_chat_legacy_query_params", extra={"client_id": client_id})
+
+    resolved_message = body_message if body_message is not None else message
+    if resolved_message is None:
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "empty", "length": 0},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "message_required", "message": "message is required"},
+        )
+    if not resolved_message:
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "empty", "length": 0},
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "message_required", "message": "message is required"},
+        )
+    if len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "too_long", "length": len(resolved_message)},
+        )
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "message_too_long",
+                "max_chars": _WIDGET_MESSAGE_MAX_CHARS,
+            },
+        )
+
+    locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
+
     try:
         client = get_client_eligible_for_widget_chat(db, client_id)
     except WidgetChatClientGateError as e:
@@ -236,12 +298,12 @@ def widget_chat(
     try:
         outcome = process_chat_message(
             client_id=client.id,
-            question=message,
+            question=resolved_message,
             session_id=sid,
             db=db,
             api_key=client.openai_api_key,
             user_context=None,
-            browser_locale=locale.strip() if locale and locale.strip() else None,
+            browser_locale=locale_hint,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

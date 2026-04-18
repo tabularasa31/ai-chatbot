@@ -49,6 +49,8 @@ def test_get_profile(client: TestClient, db_session: Session) -> None:
     data = resp.json()
     assert data["product_name"] == "Acme API"
     assert data["extraction_status"] == "done"
+    assert data["topics"] == ["Payments"]
+    assert "modules" not in data
 
 
 def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
@@ -75,7 +77,7 @@ def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["product_name"] == "Acme API v2"
-    assert data["modules"] == ["Payments"]
+    assert data["topics"] == ["Payments"]
 
 
 def test_get_faq_filters(client: TestClient, db_session: Session) -> None:
@@ -243,4 +245,3 @@ def test_wrong_tenant_404(client: TestClient, db_session: Session) -> None:
         headers={"Authorization": f"Bearer {token1}"},
     )
     assert resp.status_code == 404, resp.text
-

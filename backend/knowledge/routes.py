@@ -124,7 +124,6 @@ def get_knowledge_profile(
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
         topics=list(profile.modules or []),
-        modules=list(profile.modules or []),
         glossary=list(profile.glossary or []),
         support_email=profile.support_email,
         support_urls=list(profile.support_urls or []),
@@ -151,8 +150,6 @@ def patch_knowledge_profile(
         profile.product_name = payload.product_name
     if "topics" in payload.model_fields_set and payload.topics is not None:
         profile.modules = payload.topics
-    elif "modules" in payload.model_fields_set and payload.modules is not None:
-        profile.modules = payload.modules
     if "glossary" in payload.model_fields_set and payload.glossary is not None:
         profile.glossary = payload.glossary
     if "support_email" in payload.model_fields_set:
@@ -166,7 +163,6 @@ def patch_knowledge_profile(
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
         topics=list(profile.modules or []),
-        modules=list(profile.modules or []),
         glossary=list(profile.glossary or []),
         support_email=profile.support_email,
         support_urls=list(profile.support_urls or []),

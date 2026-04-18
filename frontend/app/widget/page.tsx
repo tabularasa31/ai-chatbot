@@ -6,7 +6,7 @@ import { ChatWidget } from "@/components/ChatWidget";
 
 function WidgetContent() {
   const searchParams = useSearchParams();
-  const botId = searchParams.get("botId") || searchParams.get("clientId");
+  const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
 
   if (!botId) {

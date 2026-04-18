@@ -62,7 +62,7 @@ function DashboardContent() {
   }
 
   function getEmbedSnippet() {
-    const scriptUrl = `${API_URL}/embed.js?clientId=${encodeURIComponent(publicId ?? "")}`;
+    const scriptUrl = `${API_URL}/embed.js?botId=${encodeURIComponent(publicId ?? "")}`;
     if (APP_URL && APP_URL !== API_URL) {
       return `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n<script src="${scriptUrl}"></script>`;
     }
@@ -101,8 +101,7 @@ function DashboardContent() {
           <div className="mb-6">
             <h2 className="text-base font-semibold text-slate-800 mb-1">Your Bot ID</h2>
             <p className="mb-2 text-sm text-slate-500">
-              Public bot identifier used in the widget snippet. The embed parameter remains{" "}
-              <code className="bg-slate-100 px-1 rounded">clientId</code> for compatibility.
+              Public bot identifier used in the widget snippet.
             </p>
             <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
               {publicId}
@@ -145,7 +144,7 @@ function DashboardContent() {
           preClassName="text-sm mb-3"
         />
         <p className="text-slate-400 text-xs mb-4">
-          One-line embed — works on any domain. No CORS setup needed. `clientId` is the public bot ID.
+          One-line embed — works on any domain. No CORS setup needed. `botId` is the public bot ID.
         </p>
       </div>
 

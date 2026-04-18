@@ -4,13 +4,12 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class KnowledgeProfileResponse(BaseModel):
     product_name: str | None
     topics: list[str] = Field(default_factory=list)
-    modules: list[str] = Field(default_factory=list)
     glossary: list[dict] = Field(default_factory=list)
     support_email: str | None
     support_urls: list[str] = Field(default_factory=list)
@@ -22,18 +21,9 @@ class KnowledgeProfileResponse(BaseModel):
 class KnowledgeProfilePatchRequest(BaseModel):
     product_name: str | None = None
     topics: list[str] | None = None
-    modules: list[str] | None = None
     glossary: list[dict] | None = None
     support_email: str | None = None
     support_urls: list[str] | None = None
-
-    @model_validator(mode="after")
-    def _sync_topics_and_modules(self) -> KnowledgeProfilePatchRequest:
-        if self.topics is None and self.modules is not None:
-            self.topics = list(self.modules)
-        elif self.modules is None and self.topics is not None:
-            self.modules = list(self.topics)
-        return self
 
 
 class KnowledgeFaqItemResponse(BaseModel):

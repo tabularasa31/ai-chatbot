@@ -1,4 +1,4 @@
-"""Widget API routes for embedded chat (public, clientId-based)."""
+"""Widget API routes for embedded chat (public, bot-id based)."""
 
 import logging
 import uuid
@@ -195,10 +195,6 @@ def widget_chat(
     request: Request,
     client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
     body: Annotated[WidgetChatRequest | None, Body()] = None,
-    message: Annotated[
-        str | None,
-        Query(description="Deprecated legacy user message", min_length=1),
-    ] = None,
     session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
     locale: Annotated[
         str | None, Query(description="Browser locale hint (e.g. ru-RU)")
@@ -207,13 +203,9 @@ def widget_chat(
 ) -> dict:
     """
     PUBLIC endpoint for embedded widget.
-    No authentication required (clientId = permission).
+    No authentication required (public bot ID = permission).
     """
-    body_message = body.message if body is not None else None
-    if body_message is None and message is not None:
-        logger.info("widget_chat_legacy_query_params", extra={"client_id": client_id})
-
-    resolved_message = body_message if body_message is not None else message
+    resolved_message = body.message if body is not None else None
     if resolved_message is not None:
         resolved_message = resolved_message.strip()
     if not resolved_message:
@@ -322,7 +314,7 @@ def widget_escalate(
     session_id: Annotated[str, Query(description="Chat session UUID")],
     db: Session = Depends(get_db),
 ) -> ManualEscalateResponse:
-    """Manual escalation for embedded widget (public clientId + session)."""
+    """Manual escalation for embedded widget (public bot ID + session)."""
     try:
         client = get_client_eligible_for_widget_chat(db, client_id)
     except WidgetChatClientGateError as e:

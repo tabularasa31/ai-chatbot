@@ -8,10 +8,10 @@
 
   var scriptSrc = currentScript.src;
   var url = new URL(scriptSrc);
-  var clientId = url.searchParams.get("clientId");
+  var botId = url.searchParams.get("botId");
 
-  if (!clientId) {
-    console.error("Chat9: clientId not found in script URL");
+  if (!botId) {
+    console.error("Chat9: botId not found in script URL");
     return;
   }
 
@@ -97,7 +97,7 @@
 
   // ── Iframe ─────────────────────────────────────────────────────────────────
   var iframe = document.createElement("iframe");
-  var widgetParams = new URLSearchParams({ clientId: clientId });
+  var widgetParams = new URLSearchParams({ botId: botId });
   if (browserLocale) widgetParams.set("locale", browserLocale);
   iframe.src = widgetBase + "/widget?" + widgetParams.toString();
   iframe.id = "chat9-widget-iframe";
@@ -206,5 +206,5 @@
   container.appendChild(fab);
   document.body.appendChild(resizeOverlay);
 
-  console.log("Chat9 Widget loaded", { clientId: clientId });
+  console.log("Chat9 Widget loaded", { botId: botId });
 })();

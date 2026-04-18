@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import backend.chat.service as chat_service_module
+import backend.escalation.openai_escalation as openai_escalation_module
+import backend.guards.reject_response as reject_response_module
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -4716,14 +4719,12 @@ def test_localization_model_overridden_via_env(
 
 
 def test_all_callers_migrated() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
-    files = [
-        repo_root / "backend/chat/service.py",
-        repo_root / "backend/escalation/openai_escalation.py",
-        repo_root / "backend/guards/reject_response.py",
+    modules = [
+        chat_service_module,
+        openai_escalation_module,
+        reject_response_module,
     ]
 
-    for file_path in files:
-        with file_path.open(encoding="utf-8") as file_obj:
-            contents = file_obj.read()
+    for module in modules:
+        contents = inspect.getsource(module)
         assert "localize_text_to_question_language" not in contents

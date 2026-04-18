@@ -15,7 +15,7 @@ from typing import Any, Literal
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from backend.chat.language import (
-    _STICKY_WINDOW,
+    STICKY_WINDOW,
     LocalizationResult,
     ResolvedLanguageContext,
     localize_text_to_language_result,
@@ -88,6 +88,7 @@ from backend.user_sessions.service import record_user_session_turn, touch_user_s
 PREVIEW_MAX_LEN = 120
 
 logger = logging.getLogger(__name__)
+RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE = "escalation_override"
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 DISCLOSURE_HARD_LIMITS = (
@@ -485,7 +486,7 @@ def _resolve_chat_language_context(
             db,
             chat,
             current_turn_text,
-            limit=_STICKY_WINDOW,
+            limit=STICKY_WINDOW,
         )
         if chat is not None and db is not None
         else [current_turn_text]
@@ -512,13 +513,18 @@ def _load_recent_user_turn_texts(
     limit: int,
 ) -> list[str]:
     recent_rows = (
-        db.query(Message.content)
+        db.query(Message.content_original_encrypted, Message.content_redacted, Message.content)
         .filter(Message.chat_id == chat.id, Message.role == MessageRole.user)
         .order_by(Message.created_at.desc())
         .limit(max(limit - 1, 0))
         .all()
     )
-    texts = [current_turn_text, *[row[0] for row in recent_rows]]
+    historical_texts = []
+    for encrypted_original, redacted_content, plain_content in recent_rows:
+        historical_texts.append(
+            _decrypt_optional(encrypted_original) or redacted_content or plain_content or ""
+        )
+    texts = [current_turn_text, *historical_texts]
     return [text for text in texts if text and text.strip()][:limit]
 
 
@@ -2275,13 +2281,6 @@ def process_chat_message(
                 chat.escalation_awaiting_ticket_id = ticket.id
             else:
                 chat.escalation_followup_pending = True
-            _set_last_response_language(
-                db=db,
-                chat=chat,
-                client_id=client_id,
-                response_language=language_context.escalation_language,
-                resolution_reason=language_context.response_language_resolution_reason,
-            )
             db.add(chat)
             db.commit()
         except Exception as e:
@@ -2292,7 +2291,11 @@ def process_chat_message(
         chat=chat,
         client_id=client_id,
         response_language=language_context.escalation_language if escalate else language_context.response_language,
-        resolution_reason=language_context.response_language_resolution_reason,
+        resolution_reason=(
+            RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE
+            if escalate
+            else language_context.response_language_resolution_reason
+        ),
     )
     user_message, assistant_message = _persist_turn(
         db,

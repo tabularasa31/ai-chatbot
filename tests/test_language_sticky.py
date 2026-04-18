@@ -9,17 +9,19 @@ from sqlalchemy.orm import Session
 
 from backend.chat.language import (
     LanguageDetectionResult,
+    STICKY_WINDOW,
     _STICKY_SWITCH_MARGIN,
     _weighted_vote,
     resolve_language_context,
 )
 from backend.chat.service import (
     ChatPipelineResult,
+    RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE,
     RetrievalContext,
     _load_recent_user_turn_texts,
     process_chat_message,
 )
-from backend.models import Chat, Message, MessageRole
+from backend.models import Chat, EscalationTicket, EscalationTrigger, Message, MessageRole
 from backend.search.service import build_reliability_assessment
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -249,6 +251,33 @@ def test_language_root_collapse_zh_variants(monkeypatch: pytest.MonkeyPatch) -> 
     assert votes == {"zh": 5}
 
 
+def test_resolve_language_context_preserves_latest_variant_for_winning_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        _detect_from_map(
+            {
+                "最新消息": _detection("zh-Hant"),
+                "你好": _detection("zh-CN"),
+            }
+        ),
+    )
+
+    context = resolve_language_context(
+        current_turn_text="最新消息",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=None,
+        previous_response_language="en",
+        recent_user_turn_texts=["最新消息", "你好"],
+    )
+
+    assert context.response_language == "zh-Hant"
+    assert context.response_language_resolution_reason == "sticky_switched"
+
+
 def test_window_truncation_limits_to_three(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "backend.chat.language.detect_language",
@@ -267,6 +296,7 @@ def test_window_truncation_limits_to_three(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert winner == "en"
     assert votes == {"en": 3, "fr": 2, "ru": 1}
+    assert len(votes) <= STICKY_WINDOW
 
 
 def test_resolve_language_context_backwards_compatible_without_sticky_kwargs(
@@ -484,6 +514,76 @@ def test_chat_logs_response_language_changed_on_switch(
     )
 
 
+def test_chat_logs_escalation_override_reason(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client_id, api_key = _chat_test_setup(client, db_session, "sticky-escalate@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"Как сбросить пароль": _detection("ru")},
+    )
+
+    def _escalating_pipeline(*args, **kwargs) -> ChatPipelineResult:
+        result = _make_pipeline_result_for_language(kwargs["language_context"].response_language)
+        return ChatPipelineResult(
+            raw_answer=result.raw_answer,
+            final_answer=result.final_answer,
+            tokens_used=result.tokens_used,
+            strategy=result.strategy,
+            reject_reason=result.reject_reason,
+            is_reject=result.is_reject,
+            is_faq_direct=result.is_faq_direct,
+            validation_applied=result.validation_applied,
+            validation_outcome=result.validation_outcome,
+            retrieval=result.retrieval,
+            validation=result.validation,
+            escalation_recommended=True,
+            escalation_trigger=type("Trigger", (), {"value": "user_request"})(),
+        )
+
+    monkeypatch.setattr("backend.chat.service.run_chat_pipeline", _escalating_pipeline)
+    def _create_ticket(*args, **kwargs) -> EscalationTicket:
+        ticket = EscalationTicket(
+            client_id=client_id,
+            ticket_number="ESC-TEST",
+            primary_question="Как сбросить пароль",
+            trigger=EscalationTrigger.user_request,
+            chat_id=kwargs.get("chat_id"),
+            session_id=kwargs.get("session_id"),
+        )
+        db_session.add(ticket)
+        db_session.flush()
+        return ticket
+
+    monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _create_ticket)
+    monkeypatch.setattr(
+        "backend.chat.service.complete_escalation_openai_turn",
+        lambda **kwargs: type("EscalationOut", (), {"message_to_user": "Support will reach out", "tokens_used": 2})(),
+    )
+    monkeypatch.setattr("backend.chat.service.fact_from_ticket", lambda *args, **kwargs: {})
+    monkeypatch.setattr("backend.chat.service.build_chat_messages_for_openai", lambda *args, **kwargs: [])
+
+    with caplog.at_level("INFO"):
+        process_chat_message(
+            client_id,
+            "Как сбросить пароль",
+            session_id,
+            db_session,
+            api_key=api_key,
+        )
+
+    records = [record for record in caplog.records if record.msg == "response_language_changed"]
+    assert any(
+        getattr(record, "next", None) == "en"
+        and getattr(record, "reason", None) == RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE
+        for record in records
+    )
+
+
 def test_load_recent_user_turn_texts_without_duplicating_current(
     client: TestClient,
     db_session: Session,
@@ -523,3 +623,35 @@ def test_load_recent_user_turn_texts_without_duplicating_current(
     )
 
     assert texts == ["current question", "latest previous question", "older question"]
+
+
+def test_load_recent_user_turn_texts_prefers_decrypted_original(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    client_id, _api_key = _chat_test_setup(client, db_session, "sticky-history-original@example.com")
+    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.flush()
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="REDACTED",
+            content_original_encrypted="encrypted-token",
+            content_redacted="REDACTED",
+        )
+    )
+    db_session.commit()
+
+    original_decrypt = "backend.chat.service._decrypt_optional"
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(original_decrypt, lambda _value: "Как сбросить пароль?")
+        texts = _load_recent_user_turn_texts(
+            db_session,
+            chat,
+            "current question",
+            limit=2,
+        )
+
+    assert texts == ["current question", "Как сбросить пароль?"]

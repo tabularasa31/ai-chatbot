@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 _DETECT_CACHE_MAX_INPUT_CHARS = 512
 _DETECT_CACHE_SIZE = 1024
-_STICKY_WINDOW = 3
+STICKY_WINDOW = 3
 _STICKY_WEIGHTS = [3, 2, 1]
 _STICKY_SWITCH_MARGIN = 2
 
@@ -267,7 +267,7 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
 
 def _weighted_vote(texts: list[str]) -> tuple[str | None, dict[str, int]]:
     votes: dict[str, int] = defaultdict(int)
-    for text, weight in zip(texts[:_STICKY_WINDOW], _STICKY_WEIGHTS, strict=False):
+    for text, weight in zip(texts[:STICKY_WINDOW], _STICKY_WEIGHTS, strict=False):
         try:
             detection = detect_language(text)
         except LangDetectError:
@@ -385,11 +385,22 @@ def resolve_language_context(
     resolution_reason = "detected"
     if previous_root and previous_root != winner:
         resolution_reason = "sticky_switched"
+    response_language = winner
+    for text in recent_turns[:STICKY_WINDOW]:
+        try:
+            recent_detection = detect_language(text)
+        except LangDetectError:
+            continue
+        if not recent_detection.is_reliable or recent_detection.detected_language == "unknown":
+            continue
+        if _language_root(recent_detection.detected_language) == winner:
+            response_language = recent_detection.detected_language
+            break
     return ResolvedLanguageContext(
         detected_language=detection.detected_language,
         confidence=detection.confidence,
         is_reliable=detection.is_reliable,
-        response_language=winner,
+        response_language=response_language,
         response_language_resolution_reason=resolution_reason,
         escalation_language=escalation_language,
         escalation_language_source=escalation_language_source,

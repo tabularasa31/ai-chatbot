@@ -7,9 +7,8 @@ Create Date: 2026-03-18 18:00:00.000000
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "a1b2c3d4e5f6"
 down_revision = "add_email_verification"
@@ -25,5 +24,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # no-op: downgrade is never executed (see project CLAUDE.md)
-    pass
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

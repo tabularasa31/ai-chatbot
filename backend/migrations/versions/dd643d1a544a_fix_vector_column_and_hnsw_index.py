@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
 revision = 'dd643d1a544a'
 down_revision = 'add_reset_password'
@@ -46,5 +45,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # no-op: downgrade is never executed (see project CLAUDE.md)
-    pass
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

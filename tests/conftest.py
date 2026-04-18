@@ -50,6 +50,15 @@ from backend.models import Base
 
 
 @pytest.fixture(autouse=True)
+def clear_detect_language_cache() -> Generator[None, None, None]:
+    from backend.chat.language import _detect_language_cached
+
+    _detect_language_cached.cache_clear()
+    yield
+    _detect_language_cached.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def reset_gap_analyzer_job_runner_state() -> Generator[None, None, None]:
     import backend.gap_analyzer.jobs as gap_jobs
 

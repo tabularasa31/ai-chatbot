@@ -56,7 +56,8 @@ FILE_SIZE_LIMITS: dict[str, int] = {
 def test_file_size_within_limit(rel_path: str, limit: int) -> None:
     path = GAP_DIR / rel_path
     assert path.exists(), f"{path} does not exist"
-    line_count = sum(1 for _ in path.open())
+    with path.open() as f:
+        line_count = sum(1 for _ in f)
     assert line_count <= limit, (
         f"{rel_path} has {line_count} lines — exceeds the {limit}-line guardrail. "
         "Decompose or raise the limit deliberately."
@@ -78,16 +79,18 @@ def _collect_imports(path: Path) -> set[str]:
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 names.add(node.module)
+                for alias in node.names:
+                    names.add(f"{node.module}.{alias.name}")
     return names
 
 
 def _gap_imports(path: Path) -> set[str]:
     """Filter to only gap_analyzer-internal imports."""
-    prefix = "backend.gap_analyzer."
-    return {n for n in _collect_imports(path) if n.startswith(prefix)}
+    prefix = "backend.gap_analyzer"
+    return {n for n in _collect_imports(path) if n == prefix or n.startswith(f"{prefix}.")}
 
 
-PIPELINE_FILES = list((GAP_DIR / "pipelines").glob("*.py"))
+PIPELINE_FILES = [p for p in (GAP_DIR / "pipelines").glob("*.py") if p.name != "__init__.py"]
 REPO_SUBMODULE_FILES = [
     p for p in (GAP_DIR / "_repo").glob("*.py")
     if p.name != "__init__.py"
@@ -107,7 +110,7 @@ def test_pipelines_do_not_import_orchestrator(path: Path) -> None:
 @pytest.mark.parametrize("path", REPO_SUBMODULE_FILES, ids=lambda p: p.name)
 def test_repo_submodules_do_not_import_pipelines(path: Path) -> None:
     imports = _gap_imports(path)
-    pipeline_imports = {m for m in imports if ".pipelines." in m}
+    pipeline_imports = {m for m in imports if "pipelines" in m.split(".")}
     assert not pipeline_imports, (
         f"_repo/{path.name} imports pipeline modules {pipeline_imports}. "
         "_repo submodules must not depend on the pipeline layer."

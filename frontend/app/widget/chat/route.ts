@@ -16,13 +16,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const params = new URLSearchParams({ client_id: botId, message });
+  const params = new URLSearchParams({ client_id: botId });
   if (sessionId) params.set("session_id", sessionId);
   if (locale) params.set("locale", locale);
 
   const res = await fetch(`${API_URL}/widget/chat?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
   });
 
   const data = await res.json().catch(() => ({}));

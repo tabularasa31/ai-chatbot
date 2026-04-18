@@ -15,6 +15,7 @@ from typing import Any, Literal
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from backend.chat.language import (
+    _STICKY_WINDOW,
     LocalizationResult,
     ResolvedLanguageContext,
     localize_text_to_language_result,
@@ -472,9 +473,22 @@ def _resolve_chat_language_context(
     bootstrap_user_locale: str | None,
     browser_locale: str | None,
     is_bootstrap_turn: bool,
+    chat: Chat | None = None,
+    db: Session | None = None,
 ) -> ResolvedLanguageContext:
     support_config = public_support_config_dict(
         client_row.settings if client_row and isinstance(client_row.settings, dict) else None
+    )
+    previous_response_language = chat.last_response_language if chat is not None else None
+    recent_user_turn_texts = (
+        _load_recent_user_turn_texts(
+            db,
+            chat,
+            current_turn_text,
+            limit=_STICKY_WINDOW,
+        )
+        if chat is not None and db is not None
+        else [current_turn_text]
     )
     return resolve_language_context(
         current_turn_text=current_turn_text,
@@ -485,7 +499,58 @@ def _resolve_chat_language_context(
             support_config.get("escalation_language")
             or getattr(tenant_profile, "escalation_language", None)
         ),
+        previous_response_language=previous_response_language,
+        recent_user_turn_texts=recent_user_turn_texts,
     )
+
+
+def _load_recent_user_turn_texts(
+    db: Session,
+    chat: Chat,
+    current_turn_text: str,
+    *,
+    limit: int,
+) -> list[str]:
+    recent_rows = (
+        db.query(Message.content)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.user)
+        .order_by(Message.created_at.desc())
+        .limit(max(limit - 1, 0))
+        .all()
+    )
+    texts = [current_turn_text, *[row[0] for row in recent_rows]]
+    return [text for text in texts if text and text.strip()][:limit]
+
+
+def _assistant_turn_index(chat: Chat) -> int:
+    return sum(1 for message in (chat.messages or []) if message.role == MessageRole.assistant) + 1
+
+
+def _set_last_response_language(
+    *,
+    db: Session,
+    chat: Chat,
+    client_id: uuid.UUID,
+    response_language: str | None,
+    resolution_reason: str | None,
+) -> None:
+    if not response_language:
+        return
+    previous_language = chat.last_response_language
+    if previous_language != response_language:
+        logger.info(
+            "response_language_changed",
+            extra={
+                "chat_id": str(chat.id),
+                "client_id": str(client_id),
+                "previous": previous_language,
+                "next": response_language,
+                "reason": resolution_reason,
+                "turn_index": _assistant_turn_index(chat),
+            },
+        )
+    chat.last_response_language = response_language
+    db.add(chat)
 
 
 def run_chat_pipeline(
@@ -1514,6 +1579,8 @@ def process_chat_message(
         is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
         browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
+        chat=chat,
+        db=db,
     )
 
     explicit_human_request_raw = detect_human_request(redacted_question)
@@ -1555,6 +1622,13 @@ def process_chat_message(
         # Bootstrap detection on the next call relies on bool(chat.messages): any
         # persisted message (even just the assistant greeting) marks the session as
         # no longer new, so a second empty request is correctly rejected.
+        _set_last_response_language(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            response_language=language_context.response_language,
+            resolution_reason=language_context.response_language_resolution_reason,
+        )
         _persist_assistant_message(
             db,
             chat,
@@ -1616,6 +1690,13 @@ def process_chat_message(
             response_language=language_context.response_language,
             api_key=api_key,
         )
+        _set_last_response_language(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            response_language=language_context.response_language,
+            resolution_reason=language_context.response_language_resolution_reason,
+        )
         user_message, assistant_message = _persist_turn(
             db,
             chat,
@@ -1670,6 +1751,13 @@ def process_chat_message(
             latest_user_text=redacted_question,
             api_key=api_key,
             escalation_language=language_context.escalation_language,
+        )
+        _set_last_response_language(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            response_language=language_context.escalation_language,
+            resolution_reason=language_context.response_language_resolution_reason,
         )
         _persist_turn(
             db,
@@ -1728,6 +1816,13 @@ def process_chat_message(
                         escalation_language=language_context.escalation_language,
                     )
                     chat.escalation_followup_pending = True
+                    _set_last_response_language(
+                        db=db,
+                        chat=chat,
+                        client_id=client_id,
+                        response_language=language_context.escalation_language,
+                        resolution_reason=language_context.response_language_resolution_reason,
+                    )
                     db.add(chat)
                     db.commit()
                     _persist_turn(
@@ -1757,6 +1852,13 @@ def process_chat_message(
                         tokens_used=out.tokens_used,
                         chat_ended=False,
                     )
+                _set_last_response_language(
+                    db=db,
+                    chat=chat,
+                    client_id=client_id,
+                    response_language=language_context.escalation_language,
+                    resolution_reason=language_context.response_language_resolution_reason,
+                )
                 out = complete_escalation_openai_turn(
                     phase=EscalationPhase.email_parse_failed,
                     chat_messages=msgs,
@@ -1826,6 +1928,13 @@ def process_chat_message(
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 db.add(chat)
+                _set_last_response_language(
+                    db=db,
+                    chat=chat,
+                    client_id=client_id,
+                    response_language=language_context.escalation_language,
+                    resolution_reason=language_context.response_language_resolution_reason,
+                )
                 _persist_turn(
                     db,
                     chat,
@@ -1856,6 +1965,13 @@ def process_chat_message(
                 _clear_escalation_clarify_flag(chat)
                 chat.ended_at = datetime.now(UTC)
                 db.add(chat)
+                _set_last_response_language(
+                    db=db,
+                    chat=chat,
+                    client_id=client_id,
+                    response_language=language_context.escalation_language,
+                    resolution_reason=language_context.response_language_resolution_reason,
+                )
                 _persist_turn(
                     db,
                     chat,
@@ -1883,6 +1999,13 @@ def process_chat_message(
                 )
             _set_escalation_clarify_flag(chat)
             db.add(chat)
+            _set_last_response_language(
+                db=db,
+                chat=chat,
+                client_id=client_id,
+                response_language=language_context.escalation_language,
+                resolution_reason=language_context.response_language_resolution_reason,
+            )
             _persist_turn(
                 db,
                 chat,
@@ -1951,6 +2074,13 @@ def process_chat_message(
                 chat.escalation_awaiting_ticket_id = ticket.id
             else:
                 chat.escalation_followup_pending = True
+            _set_last_response_language(
+                db=db,
+                chat=chat,
+                client_id=client_id,
+                response_language=language_context.escalation_language,
+                resolution_reason=language_context.response_language_resolution_reason,
+            )
             db.add(chat)
             db.commit()
             user_message, assistant_message = _persist_turn(
@@ -2012,6 +2142,13 @@ def process_chat_message(
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).
     if result.is_reject or result.is_faq_direct:
+        _set_last_response_language(
+            db=db,
+            chat=chat,
+            client_id=client_id,
+            response_language=language_context.response_language,
+            resolution_reason=language_context.response_language_resolution_reason,
+        )
         user_message, assistant_message = _persist_turn(
             db,
             chat,
@@ -2138,11 +2275,25 @@ def process_chat_message(
                 chat.escalation_awaiting_ticket_id = ticket.id
             else:
                 chat.escalation_followup_pending = True
+            _set_last_response_language(
+                db=db,
+                chat=chat,
+                client_id=client_id,
+                response_language=language_context.escalation_language,
+                resolution_reason=language_context.response_language_resolution_reason,
+            )
             db.add(chat)
             db.commit()
         except Exception as e:
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
+    _set_last_response_language(
+        db=db,
+        chat=chat,
+        client_id=client_id,
+        response_language=language_context.escalation_language if escalate else language_context.response_language,
+        resolution_reason=language_context.response_language_resolution_reason,
+    )
     user_message, assistant_message = _persist_turn(
         db,
         chat,

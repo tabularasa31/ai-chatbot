@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import warnings
+from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 _DETECT_CACHE_MAX_INPUT_CHARS = 512
 _DETECT_CACHE_SIZE = 1024
+_STICKY_WINDOW = 3
+_STICKY_WEIGHTS = [3, 2, 1]
+_STICKY_SWITCH_MARGIN = 2
 
 try:
     import langdetect
@@ -261,6 +265,22 @@ def detect_language(text: str | None) -> LanguageDetectionResult:
     return _detect_language_cached(stripped)
 
 
+def _weighted_vote(texts: list[str]) -> tuple[str | None, dict[str, int]]:
+    votes: dict[str, int] = defaultdict(int)
+    for text, weight in zip(texts[:_STICKY_WINDOW], _STICKY_WEIGHTS, strict=False):
+        try:
+            detection = detect_language(text)
+        except LangDetectError:
+            continue
+        if not detection.is_reliable or detection.detected_language == "unknown":
+            continue
+        votes[_language_root(detection.detected_language)] += weight
+    if not votes:
+        return None, {}
+    winner = max(votes.items(), key=lambda item: item[1])[0]
+    return winner, dict(votes)
+
+
 def resolve_language_context(
     *,
     current_turn_text: str | None,
@@ -268,6 +288,8 @@ def resolve_language_context(
     bootstrap_user_locale: str | None,
     browser_locale: str | None,
     tenant_escalation_language: str | None,
+    previous_response_language: str | None = None,
+    recent_user_turn_texts: list[str] | None = None,
 ) -> ResolvedLanguageContext:
     escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
     escalation_language_source = "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
@@ -318,26 +340,57 @@ def resolve_language_context(
             escalation_language_source=escalation_language_source,
         )
 
-    if detection.detected_language != "unknown" and detection.is_reliable:
+    recent_turns = [text for text in (recent_user_turn_texts or [current_turn_text or ""]) if str(text or "").strip()]
+    winner, votes = _weighted_vote(recent_turns)
+
+    if winner is None:
+        if previous_response_language:
+            return ResolvedLanguageContext(
+                detected_language=detection.detected_language,
+                confidence=detection.confidence,
+                is_reliable=detection.is_reliable,
+                response_language=previous_response_language,
+                response_language_resolution_reason="sticky_no_signal",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
+            )
+        reason = "detector_unknown"
+        if detection.detected_language != "unknown":
+            reason = "detector_unreliable"
         return ResolvedLanguageContext(
             detected_language=detection.detected_language,
             confidence=detection.confidence,
             is_reliable=detection.is_reliable,
-            response_language=detection.detected_language,
-            response_language_resolution_reason="detected",
+            response_language="en",
+            response_language_resolution_reason=reason,
             escalation_language=escalation_language,
             escalation_language_source=escalation_language_source,
         )
 
-    reason = "detector_unknown"
-    if detection.detected_language != "unknown":
-        reason = "detector_unreliable"
+    previous_root = _language_root(previous_response_language) if previous_response_language else None
+    if previous_root and previous_root != winner:
+        previous_score = votes.get(previous_root, 0)
+        winner_score = votes.get(winner, 0)
+        if winner_score - previous_score < _STICKY_SWITCH_MARGIN:
+            return ResolvedLanguageContext(
+                detected_language=detection.detected_language,
+                confidence=detection.confidence,
+                is_reliable=detection.is_reliable,
+                response_language=previous_response_language,
+                response_language_resolution_reason="sticky_retained",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
+            )
+
+    resolution_reason = "detected"
+    if previous_root and previous_root != winner:
+        resolution_reason = "sticky_switched"
     return ResolvedLanguageContext(
         detected_language=detection.detected_language,
         confidence=detection.confidence,
         is_reliable=detection.is_reliable,
-        response_language="en",
-        response_language_resolution_reason=reason,
+        response_language=winner,
+        response_language_resolution_reason=resolution_reason,
         escalation_language=escalation_language,
         escalation_language_source=escalation_language_source,
     )

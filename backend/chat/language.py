@@ -172,14 +172,22 @@ def _heuristic_language_detection(text: str) -> LanguageDetectionResult:
     tokens = _TOKEN_RE.findall(text)
     # Use the token set for word-boundary matching so that "hallo" does not
     # spuriously match inside "halloway" and "pricing" does not match "pricingpage".
-    token_set = {t.casefold() for t in tokens}
-    for hint, (language, confidence) in _LATIN_WORD_HINTS.items():
-        if hint in token_set:
-            return LanguageDetectionResult(
-                detected_language=language,
-                confidence=confidence,
-                is_reliable=confidence >= _threshold(),
-            )
+    # For multi-token inputs apply all hints.  For single-token inputs, apply
+    # only non-English hints: "bonjour" or "hola" are strong first-turn signals
+    # even alone, but "hello" / "pricing" / "thanks" are too common in any
+    # language context and cause false positives in established conversations.
+    if tokens:
+        token_set = {t.casefold() for t in tokens}
+        single_token = len(tokens) == 1
+        for hint, (language, confidence) in _LATIN_WORD_HINTS.items():
+            if single_token and language == "en":
+                continue
+            if hint in token_set:
+                return LanguageDetectionResult(
+                    detected_language=language,
+                    confidence=confidence,
+                    is_reliable=confidence >= _threshold(),
+                )
 
     if re.search(r"[\u3040-\u30FF]", text):
         return LanguageDetectionResult("ja", 0.99, True)

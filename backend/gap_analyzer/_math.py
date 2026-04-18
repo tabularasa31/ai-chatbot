@@ -27,6 +27,17 @@ def _token_overlap(query_tokens: set[str], chunk_tokens: set[str]) -> float:
 
 
 def _vector_from_unknown(raw: object) -> list[float] | None:
+    """Convert an embedding stored in an unknown format to list[float] | None.
+
+    Behaviour vs. original split implementations:
+    - list/tuple with non-numeric elements: now returns None (caught by the unified
+      try-block) instead of raising TypeError/ValueError at the call site.
+    - tolist() raising something other than ValueError/TypeError (e.g. AttributeError
+      on a broken __tolist__ implementation): now propagates, previously swallowed by
+      bare `except Exception`. In practice tolist() on numpy/pgvector arrays only raises
+      ValueError/TypeError, so this is safe for all DB-sourced embeddings.
+    - json.JSONDecodeError is a subclass of ValueError, listed explicitly for clarity.
+    """
     if raw is None:
         return None
     try:

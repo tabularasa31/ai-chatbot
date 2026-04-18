@@ -287,6 +287,20 @@ def _reset_widget_rate_limit_key_override():
     set_widget_public_rate_limit_key_override(None)
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter_state():
+    """Reset shared slowapi in-memory counters so tests do not leak 429 state."""
+    from backend.core.limiter import limiter
+
+    limiter.reset()
+    if hasattr(limiter, "_storage") and hasattr(limiter._storage, "reset"):
+        limiter._storage.reset()
+    yield
+    limiter.reset()
+    if hasattr(limiter, "_storage") and hasattr(limiter._storage, "reset"):
+        limiter._storage.reset()
+
+
 def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-test") -> None:
     """Set OpenAI API key for current user's client. Call after creating client."""
     r = test_client.patch(

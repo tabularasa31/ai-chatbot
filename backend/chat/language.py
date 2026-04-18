@@ -83,7 +83,7 @@ def _threshold() -> float:
     return float(settings.language_detection_reliability_threshold)
 
 
-def _log_llm_tokens(
+def log_llm_tokens(
     *,
     operation: str,
     target_language: str,
@@ -348,24 +348,25 @@ def localize_text_result(
     canonical_text: str,
     response_language: str,
     api_key: str | None,
+    operation: str = "localize",
 ) -> LocalizationResult:
     if not canonical_text.strip():
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     normalized_target = _normalize_language_tag(response_language) or "en"
     if not api_key or _language_matches(normalized_target, "en"):
-        _log_llm_tokens(operation="localize", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     if _already_in_target_language(canonical_text, normalized_target):
-        _log_llm_tokens(operation="localize", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     return _invoke_localize_llm(
         canonical_text=canonical_text,
         target_language=normalized_target,
         api_key=api_key,
-        operation="localize",
+        operation=operation,
     )
 
 
@@ -380,11 +381,11 @@ def translate_text_result(
 
     normalized_target = _normalize_language_tag(target_language) or "en"
     if not api_key:
-        _log_llm_tokens(operation="translate", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation="translate", target_language=normalized_target, tokens=0)
         return LocalizationResult(text=source_text, tokens_used=0)
 
     if _already_in_target_language(source_text, normalized_target):
-        _log_llm_tokens(operation="translate", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation="translate", target_language=normalized_target, tokens=0)
         return LocalizationResult(text=source_text, tokens_used=0)
 
     try:
@@ -411,7 +412,7 @@ def translate_text_result(
             ],
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
-        _log_llm_tokens(operation="translate", target_language=normalized_target, tokens=tokens_used)
+        log_llm_tokens(operation="translate", target_language=normalized_target, tokens=tokens_used)
         if not response.choices:
             return LocalizationResult(text=source_text, tokens_used=tokens_used)
         translated = (response.choices[0].message.content or "").strip()
@@ -444,6 +445,7 @@ def localize_text_to_language_result(
     target_language: str | None,
     api_key: str | None,
     fallback_locale: str | None = None,
+    operation: str = "localize_to_language",
 ) -> LocalizationResult:
     if not canonical_text.strip():
         return LocalizationResult(text=canonical_text, tokens_used=0)
@@ -454,20 +456,20 @@ def localize_text_to_language_result(
         or "en"
     )
     if not api_key:
-        _log_llm_tokens(operation="localize_to_language", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
     if _language_matches(normalized_target, "en"):
-        _log_llm_tokens(operation="localize_to_language", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
     if _already_in_target_language(canonical_text, normalized_target):
-        _log_llm_tokens(operation="localize_to_language", target_language=normalized_target, tokens=0)
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
 
     return _invoke_localize_llm(
         canonical_text=canonical_text,
         target_language=normalized_target,
         api_key=api_key,
-        operation="localize_to_language",
+        operation=operation,
     )
 
 
@@ -552,7 +554,7 @@ def _invoke_localize_llm(
             ],
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
-        _log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
+        log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
         if not response.choices:
             return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
         localized = (response.choices[0].message.content or "").strip()

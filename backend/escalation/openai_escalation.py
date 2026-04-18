@@ -9,8 +9,8 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from backend.chat.language import (
-    _log_llm_tokens,
     localize_text_to_language_result,
+    log_llm_tokens,
 )
 from backend.core.openai_client import get_openai_client
 from backend.models import EscalationPhase
@@ -105,7 +105,7 @@ def complete_escalation_openai_turn(
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)
         tokens = response.usage.total_tokens if response.usage else 0
-        _log_llm_tokens(
+        log_llm_tokens(
             operation="escalate_draft",
             target_language=escalation_language,
             tokens=tokens,
@@ -135,7 +135,7 @@ def complete_escalation_openai_turn(
     except Exception as e:
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         tn = fact_json.get("ticket_number")
-        _log_llm_tokens(
+        log_llm_tokens(
             operation="escalate_draft",
             target_language=escalation_language,
             tokens=0,

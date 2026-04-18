@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -4715,12 +4716,14 @@ def test_localization_model_overridden_via_env(
 
 
 def test_all_callers_migrated() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
     files = [
-        "/Users/tabularasa/Projects/ai-chatbot/backend/chat/service.py",
-        "/Users/tabularasa/Projects/ai-chatbot/backend/escalation/openai_escalation.py",
-        "/Users/tabularasa/Projects/ai-chatbot/backend/guards/reject_response.py",
+        repo_root / "backend/chat/service.py",
+        repo_root / "backend/escalation/openai_escalation.py",
+        repo_root / "backend/guards/reject_response.py",
     ]
 
     for file_path in files:
-        contents = open(file_path, encoding="utf-8").read()
+        with file_path.open(encoding="utf-8") as file_obj:
+            contents = file_obj.read()
         assert "localize_text_to_question_language" not in contents

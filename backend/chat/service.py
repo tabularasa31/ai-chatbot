@@ -14,13 +14,11 @@ from typing import Any, Literal
 
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-PREVIEW_MAX_LEN = 120
-
 from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
-    _log_llm_tokens,
     localize_text_to_language_result,
+    log_llm_tokens,
     render_direct_faq_answer_result,
     resolve_language_context,
 )
@@ -85,6 +83,8 @@ from backend.search.service import (
 )
 from backend.support_config import public_support_config_dict
 from backend.user_sessions.service import record_user_session_turn, touch_user_session
+
+PREVIEW_MAX_LEN = 120
 
 logger = logging.getLogger(__name__)
 
@@ -1050,7 +1050,7 @@ def generate_answer(
         )
         answer_text = response.choices[0].message.content or ""
         total_tokens = response.usage.total_tokens if response.usage else 0
-        _log_llm_tokens(
+        log_llm_tokens(
             operation="generate",
             target_language=response_language,
             tokens=total_tokens,
@@ -1080,7 +1080,7 @@ def generate_answer(
             )
         return (answer_text.strip(), total_tokens)
     except Exception as exc:
-        _log_llm_tokens(
+        log_llm_tokens(
             operation="generate",
             target_language=response_language,
             tokens=0,

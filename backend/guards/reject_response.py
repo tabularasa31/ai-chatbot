@@ -4,7 +4,6 @@ import enum
 
 from backend.chat.language import (
     LocalizationResult,
-    _log_llm_tokens,
     detect_language,
     localize_text_result,
     localize_text_to_language,
@@ -131,21 +130,13 @@ def build_reject_response_result(
             target_language=target_language,
             api_key=api_key,
             fallback_locale=fallback_locale,
-        )
-        _log_llm_tokens(
             operation="reject_guard",
-            target_language=target_language or fallback_locale or "en",
-            tokens=result.tokens_used,
         )
         return result
     result = localize_text_result(
         canonical_text=canonical_text,
         response_language=response_language,
         api_key=api_key,
-    )
-    _log_llm_tokens(
         operation="reject_guard",
-        target_language=response_language,
-        tokens=result.tokens_used,
     )
     return result

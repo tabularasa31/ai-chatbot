@@ -15,6 +15,7 @@ This file re-exports all public symbols for backward compatibility.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -42,7 +43,7 @@ from backend.gap_analyzer._repo.records import (
 )
 from backend.gap_analyzer._repo.signals import _SignalsOps
 from backend.gap_analyzer._repo.summary import _SummaryOps
-from backend.gap_analyzer.enums import GapJobKind
+from backend.gap_analyzer.enums import GapClusterStatus, GapJobKind
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.prompts import ModeATopicCandidate
 from backend.gap_analyzer.schemas import GapRunMode, GapSummaryResponse
@@ -147,9 +148,9 @@ class GapAnalyzerRepository(Protocol):
         question_count: int,
         aggregate_signal_weight: float,
         coverage_score: float,
-        status: object,
-        last_question_at: object,
-        last_computed_at: object,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
         is_new: bool = True,
     ) -> UUID:
         ...
@@ -170,9 +171,9 @@ class GapAnalyzerRepository(Protocol):
         question_count: int,
         aggregate_signal_weight: float,
         coverage_score: float,
-        status: object,
-        last_question_at: object,
-        last_computed_at: object,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
     ) -> None:
         ...
 
@@ -346,9 +347,9 @@ class SqlAlchemyGapAnalyzerRepository:
         question_count: int,
         aggregate_signal_weight: float,
         coverage_score: float,
-        status: object,
-        last_question_at: object,
-        last_computed_at: object,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
         is_new: bool = True,
     ) -> UUID:
         return self._mode_b.create_mode_b_cluster(
@@ -358,9 +359,9 @@ class SqlAlchemyGapAnalyzerRepository:
             question_count=question_count,
             aggregate_signal_weight=aggregate_signal_weight,
             coverage_score=coverage_score,
-            status=status,  # type: ignore[arg-type]
-            last_question_at=last_question_at,  # type: ignore[arg-type]
-            last_computed_at=last_computed_at,  # type: ignore[arg-type]
+            status=status,
+            last_question_at=last_question_at,
+            last_computed_at=last_computed_at,
             is_new=is_new,
         )
 
@@ -383,9 +384,9 @@ class SqlAlchemyGapAnalyzerRepository:
         question_count: int,
         aggregate_signal_weight: float,
         coverage_score: float,
-        status: object,
-        last_question_at: object,
-        last_computed_at: object,
+        status: GapClusterStatus,
+        last_question_at: datetime,
+        last_computed_at: datetime,
     ) -> None:
         return self._mode_b.update_mode_b_cluster(
             cluster_id=cluster_id,
@@ -393,9 +394,9 @@ class SqlAlchemyGapAnalyzerRepository:
             question_count=question_count,
             aggregate_signal_weight=aggregate_signal_weight,
             coverage_score=coverage_score,
-            status=status,  # type: ignore[arg-type]
-            last_question_at=last_question_at,  # type: ignore[arg-type]
-            last_computed_at=last_computed_at,  # type: ignore[arg-type]
+            status=status,
+            last_question_at=last_question_at,
+            last_computed_at=last_computed_at,
         )
 
     # --- job queue ---

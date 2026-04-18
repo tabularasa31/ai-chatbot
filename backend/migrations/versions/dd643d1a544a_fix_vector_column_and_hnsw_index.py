@@ -46,8 +46,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_embeddings_vector_hnsw")
-    op.execute("ALTER TABLE embeddings DROP COLUMN IF EXISTS vector")
-    op.execute("ALTER TABLE embeddings ADD COLUMN vector UUID[]")
-    op.create_index("ix_embeddings_vector", "embeddings", ["vector"], unique=False)
-
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

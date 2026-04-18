@@ -55,4 +55,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_clients_user_id", "clients", type_="unique")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

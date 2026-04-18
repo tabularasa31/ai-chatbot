@@ -49,12 +49,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_user_sessions_client_user", table_name="user_sessions")
-    op.drop_index(op.f("ix_user_sessions_user_id"), table_name="user_sessions")
-    op.drop_index(op.f("ix_user_sessions_client_id"), table_name="user_sessions")
-    op.drop_table("user_sessions")
-    op.drop_column("chats", "user_context")
-    op.drop_column("clients", "kyc_secret_key_hint")
-    op.drop_column("clients", "kyc_secret_previous_expires_at")
-    op.drop_column("clients", "kyc_secret_key_previous")
-    op.drop_column("clients", "kyc_secret_key")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

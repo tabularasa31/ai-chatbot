@@ -104,5 +104,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Documented for local discipline; never run downgrade in shared/prod DBs."""
+    # no-op: downgrade is never executed (see project CLAUDE.md)
     pass

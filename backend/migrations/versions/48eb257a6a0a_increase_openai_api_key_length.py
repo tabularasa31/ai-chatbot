@@ -25,7 +25,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "ALTER TABLE clients ALTER COLUMN openai_api_key TYPE VARCHAR(200)"
-    )
-
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

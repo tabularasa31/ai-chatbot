@@ -34,6 +34,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_users_reset_password_token", "users", type_="unique")
-    op.drop_column("users", "reset_password_expires_at")
-    op.drop_column("users", "reset_password_token")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

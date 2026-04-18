@@ -45,6 +45,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_users_client_id"), table_name="users")
-    op.drop_constraint("fk_users_client_id", "users", type_="foreignkey")
-    op.drop_column("users", "client_id")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

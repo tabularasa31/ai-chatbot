@@ -64,4 +64,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("log_analysis_state")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

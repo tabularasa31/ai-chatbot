@@ -77,21 +77,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    conn = op.get_bind()
-    dialect = conn.dialect.name
-    offline = op.get_context().as_sql
-    if dialect == "postgresql":
-        op.execute("ALTER TABLE messages DROP CONSTRAINT IF EXISTS messages_feedback_check")
-    conn.execute(
-        sa.text(
-            "UPDATE messages SET feedback = CASE feedback "
-            "WHEN 'up' THEN 'positive' WHEN 'down' THEN 'negative' ELSE feedback END"
-        )
-    )
-    if dialect == "postgresql":
-        _drop_legacy_feedback_check_constraint(dialect=dialect, offline=offline)
-        op.execute(
-            "ALTER TABLE messages ADD CONSTRAINT messages_feedback_check "
-            "CHECK (feedback IN ('none', 'positive', 'negative'))"
-        )
-    op.drop_column("messages", "ideal_answer")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

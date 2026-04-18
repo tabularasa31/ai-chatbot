@@ -89,22 +89,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    is_postgres = op.get_context().dialect.name == "postgresql"
-
-    op.execute("DROP INDEX IF EXISTS ix_gap_dismissals_tenant_dismissed_at")
-    op.execute("DROP INDEX IF EXISTS ix_gap_doc_topics_tenant_extraction_hash")
-    op.execute("DROP INDEX IF EXISTS ix_gap_jobs_expired_lease_in_progress")
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS ix_gap_jobs_lease_expires
-        ON gap_analyzer_jobs (lease_expires_at)
-        """
-    )
-    op.execute("DROP INDEX IF EXISTS ix_gap_dismissals_dismissed_by")
-    op.execute("DROP INDEX IF EXISTS ix_gap_doc_topics_linked_cluster_id")
-    op.execute("DROP INDEX IF EXISTS ix_gap_clusters_linked_doc_topic_id")
-
-    if is_postgres:
-        op.execute("DROP INDEX IF EXISTS ix_gap_questions_embedding_ivfflat")
-        op.execute("DROP INDEX IF EXISTS ix_gap_doc_topics_topic_embedding_ivfflat")
-        op.execute("DROP INDEX IF EXISTS ix_gap_clusters_centroid_ivfflat")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

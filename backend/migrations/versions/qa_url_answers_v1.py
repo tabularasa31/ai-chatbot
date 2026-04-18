@@ -68,4 +68,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Intentionally empty: upgrade is conditional and must not drop pre-existing tables."""
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

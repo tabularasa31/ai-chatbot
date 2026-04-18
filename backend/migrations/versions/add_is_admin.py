@@ -25,4 +25,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("users", "is_admin")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

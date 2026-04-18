@@ -26,4 +26,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("uq_user_sessions_client_user_active", table_name="user_sessions")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

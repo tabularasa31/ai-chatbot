@@ -25,4 +25,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("chats", "tokens_used")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

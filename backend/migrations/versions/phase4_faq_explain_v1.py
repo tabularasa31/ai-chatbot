@@ -33,5 +33,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("tenant_faq", "source_message_ids")
-    op.drop_column("tenant_faq", "cluster_size")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

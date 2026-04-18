@@ -38,7 +38,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_users_verification_token", "users", type_="unique")
-    op.drop_column("users", "verification_expires_at")
-    op.drop_column("users", "verification_token")
-    op.drop_column("users", "is_verified")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

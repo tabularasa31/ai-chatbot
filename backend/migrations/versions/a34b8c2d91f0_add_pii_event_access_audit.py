@@ -59,5 +59,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Upgrade-only migration for deployed environments."""
-    raise NotImplementedError("Downgrade is not supported for a34b8c2d91f0")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

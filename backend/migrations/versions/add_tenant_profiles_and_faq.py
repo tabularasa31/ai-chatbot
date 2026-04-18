@@ -106,5 +106,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Destructive downgrade is intentionally omitted in this repo.
+    # no-op: downgrade is never executed (see project CLAUDE.md)
     pass

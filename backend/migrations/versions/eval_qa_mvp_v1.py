@@ -82,11 +82,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_eval_results_session_id"), table_name="eval_results")
-    op.drop_table("eval_results")
-    op.drop_index("ix_eval_sessions_tester_started", table_name="eval_sessions")
-    op.drop_index(op.f("ix_eval_sessions_tester_id"), table_name="eval_sessions")
-    op.drop_index(op.f("ix_eval_sessions_bot_id"), table_name="eval_sessions")
-    op.drop_table("eval_sessions")
-    op.drop_index(op.f("ix_testers_username"), table_name="testers")
-    op.drop_table("testers")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

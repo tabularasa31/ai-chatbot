@@ -20,4 +20,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("tenant_profiles", "escalation_language")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

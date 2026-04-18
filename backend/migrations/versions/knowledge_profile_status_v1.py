@@ -28,5 +28,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("tenant_profiles", "extraction_status")
-
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

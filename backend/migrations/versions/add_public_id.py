@@ -63,5 +63,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_clients_public_id", "clients", type_="unique")
-    op.drop_column("clients", "public_id")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

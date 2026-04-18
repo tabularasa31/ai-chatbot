@@ -41,4 +41,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Intentionally empty — see RULES-database-migrations.md (no downgrade in prod)."""
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

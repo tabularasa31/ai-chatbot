@@ -25,4 +25,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("documents", "health_status")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

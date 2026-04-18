@@ -82,5 +82,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Upgrade-only migration for deployed environments."""
+    # no-op: downgrade is never executed (see project CLAUDE.md)
     pass

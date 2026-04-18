@@ -76,7 +76,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_gap_jobs_lease_expires", table_name="gap_analyzer_jobs")
-    op.drop_index("ix_gap_jobs_tenant_kind_status", table_name="gap_analyzer_jobs")
-    op.drop_index("ix_gap_jobs_status_available", table_name="gap_analyzer_jobs")
-    op.drop_table("gap_analyzer_jobs")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

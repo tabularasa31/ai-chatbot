@@ -50,5 +50,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_message_embeddings_tenant_last_used", table_name="message_embeddings")
-    op.drop_table("message_embeddings")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

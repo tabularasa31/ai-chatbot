@@ -27,4 +27,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("chats", "last_response_language")
+    # no-op: downgrade is never executed (see project CLAUDE.md)
+    pass

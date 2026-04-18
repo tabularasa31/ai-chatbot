@@ -26,9 +26,6 @@ from backend.gap_analyzer._repo.bm25_cache import (
     invalidate_bm25_cache_for_tenant,  # noqa: F401 — public, re-exported for callers
 )
 from backend.gap_analyzer._repo.job_queue import _JobQueueOps
-from backend.gap_analyzer._repo.job_queue_helpers import (
-    _GAP_JOB_LAST_ERROR_MAX_CHARS,  # noqa: F401 — re-export for test backward-compat
-)
 from backend.gap_analyzer._repo.mode_a_queries import _ModeAQueriesOps
 from backend.gap_analyzer._repo.mode_b_queries import _ModeBQueriesOps
 from backend.gap_analyzer._repo.records import (

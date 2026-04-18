@@ -182,7 +182,6 @@ def chat(
 
     return ChatResponse(
         text=outcome.text,
-        answer=outcome.text,
         session_id=session_id,
         source_documents=outcome.document_ids,
         tokens_used=outcome.tokens_used,

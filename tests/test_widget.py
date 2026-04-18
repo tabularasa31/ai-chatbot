@@ -88,7 +88,7 @@ def test_widget_chat_success(
     r = _post_widget_chat(client, public_id, message="widget support")
     assert r.status_code == 200
     data = r.json()
-    assert data["response"] == "Widget says hi"
+    assert data["text"] == "Widget says hi"
     assert "session_id" in data
     assert data.get("chat_ended") is False
 
@@ -376,6 +376,5 @@ def test_widget_chat_returns_plain_answer_payload(
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Which provider are you trying to configure?"
-    assert data["response"] == data["text"]
     assert "message_type" not in data
     assert "clarification" not in data

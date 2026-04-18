@@ -69,13 +69,12 @@ function DemoChat() {
       }
 
       const data = (await res.json()) as {
-        text?: string;
-        response: string;
+        text: string;
         session_id: string;
         chat_ended?: boolean;
       };
 
-      const rawText = data.text ?? data.response;
+      const rawText = data.text;
       const ticket = rawText.match(ESC_TICKET_RE)?.[1] ?? null;
       const display = stripEscalationToken(rawText) || rawText;
       setMessages((prev) => [

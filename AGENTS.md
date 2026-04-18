@@ -63,7 +63,7 @@ Chat responses now support structured clarification outcomes in addition to plai
 - `clarification`
 - `partial_with_clarification`
 
-For `/chat` and `/widget/chat`, legacy text aliases (`answer` / `response`) still exist for compatibility, but the typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
+For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
 Language behavior is now:
 

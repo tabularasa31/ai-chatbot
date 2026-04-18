@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 from backend.gap_analyzer.enums import GapSource
 from backend.gap_analyzer.jobs import _GapJobRunnerState, start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer._repo.job_queue_helpers import _GAP_JOB_LAST_ERROR_MAX_CHARS
 from backend.gap_analyzer.repository import (
-    _GAP_JOB_LAST_ERROR_MAX_CHARS,
     SqlAlchemyGapAnalyzerRepository,
     invalidate_bm25_cache_for_tenant,
 )

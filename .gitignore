@@ -23,6 +23,7 @@ env/
 *.swp
 *.swo
 .claude/worktrees/
+.claude/settings.local.json
 
 # Environment variables
 .env

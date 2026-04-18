@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     language_detection_reliability_threshold: float = Field(
         0.7,
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",
+    )
+    allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
+    widget_message_max_chars: int = Field(4000, alias="WIDGET_MESSAGE_MAX_CHARS")
+    widget_chat_per_client_rate: str | None = Field(
+        None,
+        alias="WIDGET_CHAT_PER_CLIENT_RATE",
     )
 
     # Email verification
@@ -123,10 +129,29 @@ class Settings(BaseSettings):
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    @property
+    def effective_widget_chat_per_client_rate(self) -> str:
+        if self.widget_chat_per_client_rate and self.widget_chat_per_client_rate.strip():
+            return self.widget_chat_per_client_rate.strip()
+        if self.environment == "development":
+            return "1000/minute"
+        return "120/minute"
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        items = [
+            item.strip()
+            for item in self.allowed_hosts_raw.split(",")
+            if item.strip()
+        ]
+        return items or ["*"]
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        enable_decoding=False,
+    )
 
 
 settings = Settings()

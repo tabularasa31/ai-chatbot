@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 from backend.core import db as core_db
+from backend.core.openai_errors import OpenAIFailureKind, classify_openai_error
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import GapJobRecord, SqlAlchemyGapAnalyzerRepository
@@ -172,7 +173,14 @@ def _run_claimed_gap_job(job: GapJobRecord) -> None:
         db.commit()
     except Exception as exc:
         db.rollback()
-        _fail_gap_job(job.job_id, job.tenant_id, str(exc))
+        classified = classify_openai_error(exc)
+        _fail_gap_job(
+            job.job_id,
+            job.tenant_id,
+            str(exc),
+            failure_kind=classified.kind,
+            retry_after_seconds=classified.retry_after_seconds,
+        )
         logger.warning(
             "gap_analyzer_job_failed tenant_id=%s job_kind=%s attempt=%s",
             job.tenant_id,
@@ -186,7 +194,14 @@ def _run_claimed_gap_job(job: GapJobRecord) -> None:
         db.close()
 
 
-def _fail_gap_job(job_id: UUID, tenant_id: UUID, error_message: str) -> None:
+def _fail_gap_job(
+    job_id: UUID,
+    tenant_id: UUID,
+    error_message: str,
+    *,
+    failure_kind: OpenAIFailureKind,
+    retry_after_seconds: float | None,
+) -> None:
     db = core_db.SessionLocal()
     try:
         repository = SqlAlchemyGapAnalyzerRepository(db)
@@ -194,6 +209,8 @@ def _fail_gap_job(job_id: UUID, tenant_id: UUID, error_message: str) -> None:
             job_id=job_id,
             tenant_id=tenant_id,
             error_message=error_message,
+            failure_kind=failure_kind,
+            retry_after_seconds=retry_after_seconds,
         ):
             logger.error(
                 "gap_analyzer_job_fail_no_rows job_id=%s tenant_id=%s",

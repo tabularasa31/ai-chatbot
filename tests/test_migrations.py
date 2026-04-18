@@ -57,3 +57,14 @@ def test_chat_sticky_language_migration_metadata() -> None:
 
     assert module.revision == "chat_sticky_language_v1"
     assert module.down_revision == "gap_analyzer_indexes_v1"
+
+
+def test_gap_jobs_retry_migration_metadata() -> None:
+    path = MIGRATIONS_DIR / "gap_jobs_retry_v1.py"
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None and spec.loader is not None, f"Could not load {path.name}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.revision == "gap_jobs_retry_v1"
+    assert module.down_revision == "chat_sticky_language_v1"

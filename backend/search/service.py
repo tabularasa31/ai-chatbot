@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.models import Client, Document, Embedding
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
@@ -1123,9 +1124,12 @@ def embed_query(
         1536-dimensional embedding vector.
     """
     openai_client = get_openai_client(api_key, timeout=timeout)
-    response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=query,
+    response = call_openai_with_retry(
+        "search_embed_query",
+        lambda: openai_client.embeddings.create(
+            model=EMBEDDING_MODEL,
+            input=query,
+        ),
     )
     return response.data[0].embedding
 
@@ -1140,9 +1144,12 @@ def embed_queries(
     if not queries:
         return []
     openai_client = get_openai_client(api_key, timeout=timeout)
-    response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=queries,
+    response = call_openai_with_retry(
+        "search_embed_queries",
+        lambda: openai_client.embeddings.create(
+            model=EMBEDDING_MODEL,
+            input=queries,
+        ),
     )
     return [item.embedding for item in response.data]
 

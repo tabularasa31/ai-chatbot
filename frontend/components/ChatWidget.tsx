@@ -184,11 +184,11 @@ export function ChatWidget({
 
   const applyAssistantMessage = useCallback((
     payload: {
-      text?: string;
+      text: string;
       chat_ended?: boolean;
     },
   ) => {
-    const raw = payload.text ?? "";
+    const raw = payload.text;
     const ticket = parseEscalationTicket(raw);
     if (ticket) setActiveTicket(ticket);
     const display = stripEscalationToken(raw) || raw;
@@ -234,7 +234,7 @@ export function ChatWidget({
       throw new Error(formatApiDetail(payload.detail, `API error: ${res.status}`));
     }
     const data = payload as {
-      text?: string;
+      text: string;
       session_id: string;
       chat_ended?: boolean;
     };
@@ -328,7 +328,7 @@ export function ChatWidget({
       }
 
       const data = payload as {
-        text?: string;
+        text: string;
         session_id: string;
         chat_ended?: boolean;
       };

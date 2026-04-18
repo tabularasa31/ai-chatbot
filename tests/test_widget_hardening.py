@@ -157,6 +157,23 @@ def test_widget_chat_rejects_empty_message(
     assert response.json()["detail"]["code"] == "message_required"
 
 
+def test_widget_chat_rejects_whitespace_only_message(
+    client: TestClient,
+    db_session: Session,
+) -> None:
+    body = _create_widget_client(
+        client,
+        db_session,
+        email="widget-hardening-whitespace@example.com",
+        name="Widget Hardening Whitespace",
+    )
+
+    response = _post_widget_chat(client, body["public_id"], message="   ")
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "message_required"
+
+
 def test_per_client_ip_rate_limit(
     mock_openai_client: Mock,
     client: TestClient,

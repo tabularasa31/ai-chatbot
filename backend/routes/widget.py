@@ -214,15 +214,8 @@ def widget_chat(
         logger.info("widget_chat_legacy_query_params", extra={"client_id": client_id})
 
     resolved_message = body_message if body_message is not None else message
-    if resolved_message is None:
-        logger.info(
-            "widget_message_rejected",
-            extra={"reason": "empty", "length": 0},
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "message_required", "message": "message is required"},
-        )
+    if resolved_message is not None:
+        resolved_message = resolved_message.strip()
     if not resolved_message:
         logger.info(
             "widget_message_rejected",

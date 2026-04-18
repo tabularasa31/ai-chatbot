@@ -110,11 +110,11 @@
 │                   (Client's Website)                     │
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
-│  <script src="https://api/embed.js?clientId=ch_…">      │
+│  <script src="https://api/embed.js?botId=ch_…">         │
 │  optional: window.Chat9Config.widgetUrl → Next.js origin   │
 │                                                           │
 │  ↓                                                        │
-│  Loader injects iframe → Next.js /widget?clientId=…      │
+│  Loader injects iframe → Next.js /widget?botId=…         │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │              Next.js /widget (ChatWidget)                 │
@@ -135,7 +135,7 @@
 │                  (Railway deployment)                    │
 │                                                           │
 │  POST /widget/session/init (api_key, optional identity)  │
-│  POST /widget/chat (public clientId) or POST /chat (X-API-Key) │
+│  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve client → client_id + openai_api_key        │
 │    2. Redact PII in question (regex + tenant toggles)    │
@@ -154,7 +154,7 @@
 │   10. Track token usage                                  │
 │   11. Save encrypted original + redacted-safe message    │
 │   12. Return canonical {text, message_type,              │
-│       clarification?} plus legacy answer/response alias  │
+│       clarification?}                                    │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
@@ -191,7 +191,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 
 - `topics` are lightweight documentation-derived themes surfaced for operator review/editing
 - they can represent feature areas, setup stages, dashboard pages, or other recurring doc concepts
-- the backend storage layer still uses the legacy `tenant_profiles.modules` column name for compatibility, but public docs and UI should refer to these values as `topics`
+- the backend storage layer still uses the `tenant_profiles.modules` column name, but public docs and UI should refer to these values as `topics`
 
 ---
 
@@ -200,9 +200,9 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 ```
 1. Visitor types question
    ↓
-2. Widget sends: `POST /widget/chat?client_id=ch_…&message=...`
+2. Widget sends `POST /widget/chat?client_id=ch_…` with JSON body `{ "message": "..." }`
    ↓
-3. Backend resolves the public bot ID (`clientId` / `client_id` compatibility seam) → gets internal `client_id` + client's OpenAI key
+3. Backend resolves the public bot ID (`client_id` query param) → gets internal `client_id` + client's OpenAI key
    ↓
 4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
@@ -231,7 +231,6 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
     the standard chat pipeline, not a side branch.
    ↓
 12. Return canonical `text` + `message_type` + optional `clarification`
-    (legacy `/chat.answer` and `/widget.chat.response` still mirror `text`)
    ↓
 13. Widget / dashboard displays the message; widget renders quick replies only
     for the latest assistant clarification
@@ -246,11 +245,6 @@ plain text only.
 - `clarification` — one structured follow-up question
 - `partial_with_clarification` — safe partial guidance plus one follow-up question
 
-For compatibility:
-
-- `POST /chat` still returns `answer`, but it is now an alias of canonical `text`
-- `POST /widget/chat` still returns `response`, but it is now an alias of canonical `text`
-
 When `message_type != answer`, the payload also includes structured
 `clarification` data (`reason`, `type`, `options`, `requested_fields`,
 `original_user_message`, `turn_index`).
@@ -262,7 +256,7 @@ When `message_type != answer`, the payload also includes structured
 ### API Key Authentication
 - Client gets 32-character random API key
 - Dashboard / private API calls use the client API key (`X-API-Key`)
-- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the legacy `clientId` / `client_id` compatibility seam; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `client_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
 - Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `client_id` and the client's OpenAI key
 - All queries filter by client_id (no data leaks between tenants)
 

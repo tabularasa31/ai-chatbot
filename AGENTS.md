@@ -53,10 +53,9 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 | `job_queue.py` | `_JobQueueOps` — job lifecycle + helpers |
 | `summary.py` | `_SummaryOps` — gap summary aggregation |
 
-**Import-graph rules** (enforced by `tests/test_gap_analyzer_architecture.py`):
+**Import-graph conventions** (design intent, not test-enforced):
 - `pipelines/` must not import `orchestrator`
 - `_repo/` must not import `pipelines/` or `orchestrator`
-- File-size limits per module prevent re-growth of the monolith
 
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 
@@ -64,7 +63,7 @@ Chat responses now support structured clarification outcomes in addition to plai
 - `clarification`
 - `partial_with_clarification`
 
-For `/chat` and `/widget/chat`, legacy text aliases (`answer` / `response`) still exist for compatibility, but the typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
+For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
 Language behavior is now:
 
@@ -125,7 +124,7 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 - REST-style paths: lowercase, hyphens or path segments consistent with existing routers.
 - Bodies and responses via Pydantic; FastAPI errors: `HTTPException`, consistent `detail` messages.
 - Chat endpoints may return structured clarification payloads. Keep `message_type` and `clarification` in sync across backend schemas, service-layer literals, and frontend transport/widget types.
-- Knowledge profile terminology: prefer **`topics`** for extracted documentation themes shown in the dashboard/API. The underlying DB/storage layer may still use the legacy `modules` field name for compatibility, but user-facing docs and contracts should call these extracted items `topics`, not product modules.
+- Knowledge profile terminology: prefer **`topics`** for extracted documentation themes shown in the dashboard/API. The underlying DB/storage layer still uses the `modules` field name, but user-facing docs and contracts should call these extracted items `topics`, not product modules.
 
 ---
 

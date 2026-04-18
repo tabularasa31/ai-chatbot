@@ -23,20 +23,12 @@ def test_resolve_level_primary_key() -> None:
     assert resolve_level({"level": "corporate"}) == "corporate"
 
 
-def test_resolve_level_default_level_alias() -> None:
-    assert resolve_level({"default_level": "detailed"}) == "detailed"
-
-
-def test_resolve_level_prefers_level_over_alias() -> None:
-    assert resolve_level({"level": "standard", "default_level": "detailed"}) == "standard"
-
-
 def test_resolve_level_invalid_falls_back() -> None:
     assert resolve_level({"level": "nope"}) == "standard"
 
 
 def test_public_config_dict() -> None:
-    assert public_config_dict({"default_level": "corporate"}) == {"level": "corporate"}
+    assert public_config_dict({"level": "corporate"}) == {"level": "corporate"}
 
 
 def test_get_disclosure_defaults(
@@ -75,7 +67,7 @@ def test_put_and_get_disclosure(
     assert r2.json() == {"level": "corporate"}
 
 
-def test_get_disclosure_default_level_alias_from_db(
+def test_get_disclosure_ignores_unsupported_keys_in_db(
     client: TestClient,
     db_session: Session,
 ) -> None:
@@ -87,12 +79,12 @@ def test_get_disclosure_default_level_alias_from_db(
     )
     cl = db_session.query(Client).filter(Client.name == "Alias Co").first()
     assert cl is not None
-    cl.disclosure_config = {"default_level": "detailed"}
+    cl.disclosure_config = {"legacy_level": "detailed"}
     db_session.commit()
 
     r = client.get("/clients/me/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
-    assert r.json() == {"level": "detailed"}
+    assert r.json() == {"level": "standard"}
 
 
 def test_put_disclosure_invalid_level(

@@ -7,9 +7,8 @@ Create Date: 2026-03-19
 """
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "add_reset_password"
 down_revision = "add_public_id"
@@ -34,6 +33,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_users_reset_password_token", "users", type_="unique")
-    op.drop_column("users", "reset_password_expires_at")
-    op.drop_column("users", "reset_password_token")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

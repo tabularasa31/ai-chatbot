@@ -338,9 +338,7 @@ Current MVP behavior:
 Public response contracts:
 
 - `POST /chat` now returns canonical `text`, `message_type`, and optional `clarification`
-- legacy `answer` remains as a compatibility alias of `text`
 - `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
-- legacy `response` remains as a compatibility alias of `text`
 - both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
 
 Clarification payloads can include:
@@ -379,8 +377,8 @@ Knowledge profile terminology:
 
 - the public/dashboard term is **`topics`**
 - `topics` are extracted documentation themes, not guaranteed canonical product module names
-- for backward compatibility the storage layer and some internal code still use the legacy `modules` field name
-- `GET/PATCH /knowledge/profile` now treats `topics` as the canonical public field and keeps `modules` as a compatibility alias during the transition
+- the storage layer and some internal code still use the `modules` field name
+- `GET/PATCH /knowledge/profile` exposes `topics` in the public contract
 
 **Trace sampling:** Environment flag `FULL_CAPTURE_MODE` (default `true`) controls whether adaptive client sampling runs. When `true`, all traces are sampled (after the Langfuse no-op gate); when `false`, the backend uses in-process heuristics (`TRACE_*` settings) as before. Materialized traces carry `sampling_mode` in metadata (`full_capture` vs `adaptive`) and a matching `sampling_mode:*` tag. Settings: `backend/core/config.py`; decision logic: `backend/observability/service.py`. Rollout notes: `docs/07-observability-rollout.md`.
 
@@ -549,7 +547,7 @@ Behavior details:
 | Channel | Auth | Endpoint |
 |---------|------|----------|
 | Dashboard / API | `X-Api-Key` | `POST /chat` |
-| Widget (public) | `botId` in frontend/UI, legacy `clientId` in embed seam (same `public_id`) | `POST /widget/chat` |
+| Widget (public) | `botId` in frontend/UI and embed seam (same `public_id`) | `POST /widget/chat` |
 | Debug tool | JWT + `bot_id` query param (`Client.public_id`) | `POST /chat/debug?bot_id=ch_...` |
 
 The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated client's `public_id`; users are not expected to edit the URL manually. The explicit `bot_id` URL pattern remains part of the eval flow only (`/eval/chat?bot_id=...`).
@@ -646,21 +644,21 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ### How embedding works
 
-Users copy a snippet from the **Dashboard** (and optionally from docs). In product/UI language this is the bot ID. The legacy embed seam still uses `clientId` in the script URL, and that value is the client/bot **`public_id`** (`ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
+Users copy a snippet from the **Dashboard** (and optionally from docs). In product/UI language this is the bot ID, and the script URL uses the same `botId` value, which is the client/bot **`public_id`** (`ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
 
-Example (placeholders — the Dashboard fills in your real public bot ID and URLs; the script param remains `clientId` for compatibility):
+Example (placeholders — the Dashboard fills in your real public bot ID and URLs):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script src="https://<your-api-host>/embed.js?clientId=ch_xxxxxxxxxxxxxxxx"></script>
+<script src="https://<your-api-host>/embed.js?botId=ch_xxxxxxxxxxxxxxxx"></script>
 ```
 
-If the frontend and API share the same origin, you can omit `Chat9Config` and use a single script tag with `?clientId=…` only.
+If the frontend and API share the same origin, you can omit `Chat9Config` and use a single script tag with `?botId=…` only.
 
 `embed.js` (vanilla JS, served from the API):
-- Reads legacy `clientId` from the script URL query string (required compatibility seam)
+- Reads `botId` from the script URL query string
 - Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script’s origin, as the **iframe base URL**
-- Appends a fixed-position container and an `<iframe>` pointing to `/widget?clientId=…&locale=<navigator.language>`
+- Appends a fixed-position container and an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>`
 - The iframe renders the full `ChatWidget` React component
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk.
@@ -703,12 +701,12 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 | POST | `/eval/sessions/{id}/results` | Eval JWT; snapshot `question`, `bot_answer`, `verdict`, optional `error_category`, `comment` |
 | GET | `/eval/sessions/{id}/results` | Eval JWT; list results for **own** sessions only (404 if not owner) |
 
-### `bot_id` = public bot ID (same value as widget `clientId`, not the API key)
+### `bot_id` = public bot ID (same value as widget `botId`, not the API key)
 
-The query/body field **`bot_id`** is exactly the public bot ID from the dashboard embed snippet. For compatibility, it is the same value currently carried as **`clientId`** in the script URL, e.g. `embed.js?clientId=ch_xxxxxxxxxxxxxxxx`.
+The query/body field **`bot_id`** is exactly the public bot ID from the dashboard embed snippet, e.g. `embed.js?botId=ch_xxxxxxxxxxxxxxxx`.
 
 ```html
-<script src="https://<api-host>/embed.js?clientId=ch_bwf5xpwxgaok3bzqjg"></script>
+<script src="https://<api-host>/embed.js?botId=ch_bwf5xpwxgaok3bzqjg"></script>
 ```
 
 → use **`/eval/chat?bot_id=ch_bwf5xpwxgaok3bzqjg`** (same string).

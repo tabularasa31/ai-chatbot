@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
 revision = 'dd643d1a544a'
 down_revision = 'add_reset_password'
@@ -46,8 +45,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS ix_embeddings_vector_hnsw")
-    op.execute("ALTER TABLE embeddings DROP COLUMN IF EXISTS vector")
-    op.execute("ALTER TABLE embeddings ADD COLUMN vector UUID[]")
-    op.create_index("ix_embeddings_vector", "embeddings", ["vector"], unique=False)
-
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

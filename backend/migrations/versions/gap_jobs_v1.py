@@ -76,7 +76,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_gap_jobs_lease_expires", table_name="gap_analyzer_jobs")
-    op.drop_index("ix_gap_jobs_tenant_kind_status", table_name="gap_analyzer_jobs")
-    op.drop_index("ix_gap_jobs_status_available", table_name="gap_analyzer_jobs")
-    op.drop_table("gap_analyzer_jobs")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

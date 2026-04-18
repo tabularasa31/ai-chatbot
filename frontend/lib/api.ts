@@ -691,11 +691,7 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
       return {
         ...data,
-        topics: Array.isArray(data.topics)
-          ? data.topics
-          : Array.isArray(data.modules)
-            ? data.modules
-            : [],
+        topics: Array.isArray(data.topics) ? data.topics : [],
       } as KnowledgeProfile;
     },
     async patchProfile(

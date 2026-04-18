@@ -9,12 +9,12 @@ from sqlalchemy.orm import Session
 
 from backend.chat.service import _start_mode_b_followup, _try_ingest_gap_signal
 from backend.gap_analyzer.enums import GapJobKind
-from backend.gap_analyzer.orchestrator import (
-    GapAnalyzerOrchestrator,
+from backend.gap_analyzer._math import _tokenize
+from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
+from backend.gap_analyzer.pipelines.link_sync import _sync_mode_links
+from backend.gap_analyzer.pipelines.mode_b import (
     _ModeBClusterUpdateRejectedError,
     _prepare_mode_b_clusters,
-    _sync_mode_links,
-    _tokenize,
     _update_mode_b_cluster,
 )
 from backend.gap_analyzer.repository import (

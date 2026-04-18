@@ -26,10 +26,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("gap_analyzer_jobs") as batch_op:
-        batch_op.alter_column(
-            "max_attempts",
-            server_default="3",
-            existing_type=sa.Integer(),
-            existing_nullable=False,
-        )
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

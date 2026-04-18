@@ -14,7 +14,7 @@ async def get_embed_script():
     Public script for embedding Chat9 widget.
     No authentication required.
 
-    Usage: <script src="https://chat9.live/embed.js?clientId=ch_xyz"></script>
+    Usage: <script src="https://chat9.live/embed.js?botId=ch_xyz"></script>
     """
     script_path = Path(__file__).resolve().parent.parent / "static" / "embed.js"
     return FileResponse(

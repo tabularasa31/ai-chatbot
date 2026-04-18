@@ -758,7 +758,7 @@ def test_chat_success(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "The answer is 42"
+    assert data["text"] == "The answer is 42"
     assert "session_id" in data
     assert data["source_documents"] == [str(doc.id)]
     assert data["tokens_used"] == 50
@@ -888,7 +888,7 @@ def test_chat_empty_question_returns_default_greeting(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == (
+    assert data["text"] == (
         "I'm the Empty Client assistant and can help with documentation, "
         "product setup, integrations, and finding the right information. Ask your question."
     )
@@ -926,7 +926,7 @@ def test_chat_empty_question_uses_browser_locale_for_greeting(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "Je suis l'assistant Greeting Locale Client. Posez votre question."
+    assert data["text"] == "Je suis l'assistant Greeting Locale Client. Posez votre question."
     assert data["tokens_used"] == 9
 
 
@@ -983,9 +983,9 @@ def test_chat_no_embeddings(
     assert response.status_code == 200
     data = response.json()
     expected_prefix = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None)
-    assert data["answer"].startswith(expected_prefix)
-    assert "A support ticket was created for you." in data["answer"]
-    assert "[[escalation_ticket:ESC-0001]]" in data["answer"]
+    assert data["text"].startswith(expected_prefix)
+    assert "A support ticket was created for you." in data["text"]
+    assert "[[escalation_ticket:ESC-0001]]" in data["text"]
     # English response_language keeps the canonical fallback text, so only the
     # mocked escalation handoff contributes tokens.
     assert data["tokens_used"] == 15
@@ -1044,7 +1044,7 @@ def test_chat_uses_context(
         json={"question": "What is the secret?"},
     )
     assert response.status_code == 200
-    assert "99" in response.json()["answer"]
+    assert "99" in response.json()["text"]
     # Verify the chunk was passed to chat (via build_rag_prompt)
     call_args = mock_openai_client.chat.completions.create.call_args
     messages = call_args.kwargs["messages"]
@@ -1101,8 +1101,8 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["answer"] == "Максимум 100 документов можно загрузить на аккаунт."
-    assert "[[escalation_ticket:" not in data["answer"]
+    assert data["text"] == "Максимум 100 документов можно загрузить на аккаунт."
+    assert "[[escalation_ticket:" not in data["text"]
     assert data["source_documents"] == [str(doc_id)]
 
 
@@ -3035,7 +3035,7 @@ def test_chat_when_already_closed_uses_closed_phase(
     )
     assert response.status_code == 200
     assert response.json()["chat_ended"] is True
-    assert "Chat already ended" in response.json()["answer"]
+    assert "Chat already ended" in response.json()["text"]
     rows = (
         db_session.query(UserSession)
         .filter(UserSession.client_id == client_id, UserSession.user_id == "u-closed")
@@ -3162,7 +3162,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
         json={"session_id": str(chat.session_id), "question": "What is the answer?"},
     )
     assert response.status_code == 200
-    assert response.json()["answer"] == "Tracked answer"
+    assert response.json()["text"] == "Tracked answer"
 
     messages = db_session.query(Message).filter(Message.chat_id == chat.id).all()
     assert len(messages) == 2

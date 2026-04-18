@@ -1,4 +1,4 @@
-"""Tenant-wide disclosure level: single JSON field on Client (`level`; `default_level` accepted when reading)."""
+"""Tenant-wide disclosure level: single JSON field on Client (`level`)."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ DEFAULT_LEVEL = "standard"
 def resolve_level(raw: dict[str, Any] | None) -> str:
     """
     Effective level for prompts and API responses.
-    Accepts `level` or legacy alias `default_level` in stored JSON.
     """
     if not raw or not isinstance(raw, dict):
         return DEFAULT_LEVEL
-    v = raw.get("level") or raw.get("default_level")
+    v = raw.get("level")
     if isinstance(v, str):
         s = v.strip()
         if s in ALLOWED_LEVELS:

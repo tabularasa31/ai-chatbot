@@ -401,10 +401,6 @@ class ChatTurnOutcome:
     tokens_used: int
     chat_ended: bool
 
-    @property
-    def answer(self) -> str:
-        return self.text
-
 
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
     if trace is None:

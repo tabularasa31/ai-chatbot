@@ -15,10 +15,10 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def _widget_url(public_id: str, message: str = "hello", *, locale: str | None = None) -> str:
-    from urllib.parse import quote
-
-    url = f"/widget/chat?message={quote(message)}&client_id={public_id}"
+    url = f"/widget/chat?client_id={public_id}"
     if locale:
+        from urllib.parse import quote
+
         url += f"&locale={quote(locale)}"
     return url
 
@@ -88,7 +88,7 @@ def test_widget_chat_success(
     r = _post_widget_chat(client, public_id, message="widget support")
     assert r.status_code == 200
     data = r.json()
-    assert data["response"] == "Widget says hi"
+    assert data["text"] == "Widget says hi"
     assert "session_id" in data
     assert data.get("chat_ended") is False
 
@@ -157,10 +157,16 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     set_widget_public_rate_limit_key_override(lambda _r: "test-widget-rate-limit-ip")
     try:
         for i in range(30):
-            r = client.post(_widget_url(public_id, message=f"widget support {i}"))
+            r = client.post(
+                _widget_url(public_id),
+                json={"message": f"widget support {i}"},
+            )
             assert r.status_code == 200, f"request {i + 1}: {r.status_code} {r.text}"
 
-        r31 = client.post(_widget_url(public_id, message="widget support over-limit"))
+        r31 = client.post(
+            _widget_url(public_id),
+            json={"message": "widget support over-limit"},
+        )
         assert r31.status_code == 429
     finally:
         monkeypatch.undo()
@@ -168,7 +174,7 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
 
 
 def test_widget_chat_unknown_public_id_404(client: TestClient) -> None:
-    r = client.post("/widget/chat?message=hi&client_id=ch_doesnotexist000")
+    r = client.post("/widget/chat?client_id=ch_doesnotexist000", json={"message": "hi"})
     assert r.status_code == 404
 
 
@@ -187,7 +193,8 @@ def test_widget_chat_invalid_session_id_returns_controlled_error(
     public_id = cl_resp.json()["public_id"]
 
     r = client.post(
-        f"/widget/chat?message=hello&client_id={public_id}&session_id=not-a-uuid"
+        f"/widget/chat?client_id={public_id}&session_id=not-a-uuid",
+        json={"message": "hello"},
     )
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == "session_invalid"
@@ -208,7 +215,8 @@ def test_widget_chat_missing_session_returns_controlled_error(
     public_id = cl_resp.json()["public_id"]
 
     r = client.post(
-        f"/widget/chat?message=hello&client_id={public_id}&session_id={uuid.uuid4()}"
+        f"/widget/chat?client_id={public_id}&session_id={uuid.uuid4()}",
+        json={"message": "hello"},
     )
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "session_not_found"
@@ -247,7 +255,8 @@ def test_widget_chat_foreign_session_id_returns_not_found(
     db_session.commit()
 
     r = client.post(
-        f"/widget/chat?message=hello&client_id={public_id_b}&session_id={foreign_chat.session_id}"
+        f"/widget/chat?client_id={public_id_b}&session_id={foreign_chat.session_id}",
+        json={"message": "hello"},
     )
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "session_not_found"
@@ -280,7 +289,8 @@ def test_widget_chat_closed_session_returns_controlled_error(
     db_session.commit()
 
     r = client.post(
-        f"/widget/chat?message=hello&client_id={public_id}&session_id={closed_chat.session_id}"
+        f"/widget/chat?client_id={public_id}&session_id={closed_chat.session_id}",
+        json={"message": "hello"},
     )
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "session_closed"
@@ -376,6 +386,5 @@ def test_widget_chat_returns_plain_answer_payload(
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Which provider are you trying to configure?"
-    assert data["response"] == data["text"]
     assert "message_type" not in data
     assert "clarification" not in data

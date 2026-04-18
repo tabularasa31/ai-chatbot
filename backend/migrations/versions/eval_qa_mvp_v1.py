@@ -82,11 +82,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_eval_results_session_id"), table_name="eval_results")
-    op.drop_table("eval_results")
-    op.drop_index("ix_eval_sessions_tester_started", table_name="eval_sessions")
-    op.drop_index(op.f("ix_eval_sessions_tester_id"), table_name="eval_sessions")
-    op.drop_index(op.f("ix_eval_sessions_bot_id"), table_name="eval_sessions")
-    op.drop_table("eval_sessions")
-    op.drop_index(op.f("ix_testers_username"), table_name="testers")
-    op.drop_table("testers")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

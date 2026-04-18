@@ -318,28 +318,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    is_postgres = _is_postgres()
-
-    op.execute("DROP VIEW IF EXISTS gap_unified")
-
-    if is_postgres:
-        op.drop_constraint("fk_gap_doc_topics_linked_cluster_id", "gap_doc_topics", type_="foreignkey")
-        op.drop_constraint("fk_gap_clusters_linked_doc_topic_id", "gap_clusters", type_="foreignkey")
-        op.execute("DROP INDEX IF EXISTS ix_gap_dismissals_topic_embedding_ivfflat")
-
-    op.drop_index("ix_gap_question_links_assistant_message", table_name="gap_question_message_links")
-    op.drop_index("ix_gap_question_links_user_message", table_name="gap_question_message_links")
-    op.drop_index("ix_gap_question_links_gap_question", table_name="gap_question_message_links")
-    op.drop_index("ix_gap_question_links_session_id", table_name="gap_question_message_links")
-    op.drop_index("ix_gap_dismissals_tenant_gap", table_name="gap_dismissals")
-    op.drop_index("ix_gap_questions_tenant_signal_weight", table_name="gap_questions")
-    op.drop_index("ix_gap_questions_tenant_cluster", table_name="gap_questions")
-    op.drop_index("ix_gap_doc_topics_tenant_status", table_name="gap_doc_topics")
-    op.drop_index("ix_gap_clusters_tenant_signal_weight", table_name="gap_clusters")
-    op.drop_index("ix_gap_clusters_tenant_status", table_name="gap_clusters")
-
-    op.drop_table("gap_question_message_links")
-    op.drop_table("gap_dismissals")
-    op.drop_table("gap_questions")
-    op.drop_table("gap_doc_topics")
-    op.drop_table("gap_clusters")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

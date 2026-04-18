@@ -5,9 +5,7 @@ import { motion } from "framer-motion";
 import { MessageCircle, Send } from "lucide-react";
 
 const LANDING_DEMO_BOT_ID =
-  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() ??
-  process.env.NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID?.trim() ??
-  "";
+  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() ?? "";
 
 const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
 
@@ -69,13 +67,12 @@ function DemoChat() {
       }
 
       const data = (await res.json()) as {
-        text?: string;
-        response: string;
+        text: string;
         session_id: string;
         chat_ended?: boolean;
       };
 
-      const rawText = data.text ?? data.response;
+      const rawText = data.text;
       const ticket = rawText.match(ESC_TICKET_RE)?.[1] ?? null;
       const display = stripEscalationToken(rawText) || rawText;
       setMessages((prev) => [
@@ -235,11 +232,7 @@ export function DemoBlock() {
                 <code className="text-[#FAF5FF]/60 text-xs">
                   NEXT_PUBLIC_LANDING_DEMO_BOT_ID
                 </code>{" "}
-                to your public bot ID. Legacy{" "}
-                <code className="text-[#FAF5FF]/60 text-xs">
-                  NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID
-                </code>{" "}
-                still works for compatibility.
+                to your public bot ID.
               </p>
             </div>
           )}

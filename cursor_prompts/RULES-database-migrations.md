@@ -33,9 +33,14 @@ alembic check                  # verify model/migration sync
 
 1. **Create the migration file manually** — do NOT use `alembic revision --autogenerate` against production DB
 2. Set correct `down_revision` — it must point to the current head (`alembic heads` before you start)
-3. **Normal migrations:** `upgrade()` adds columns/tables, `downgrade()` reverses them — write both for documentation and local discipline, but **never run downgrade** against shared or production DBs
+3. **Normal migrations:** implement `upgrade()` with the actual schema change. `downgrade()` must be a **fail-loud stub** that raises `NotImplementedError` — we never run downgrade, so this guarantees an accidental `alembic downgrade` errors out instead of silently moving `alembic_version` backward while the schema stays put:
+   ```python
+   def downgrade() -> None:
+       # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+       raise NotImplementedError("downgrade is not supported for this migration")
+   ```
 4. Test by reading the migration file and running **`alembic upgrade head`** on a throwaway/local DB — not by downgrade/upgrade cycles
-5. **Repair / idempotent migrations** (schema drift, “column already exists” on some envs): in `upgrade()`, use `inspect()` or SQL `IF NOT EXISTS` so applying twice is safe. `downgrade()` may be a **documented no-op** if reversing would drop data or collide with older revisions — note this in the file docstring (example: `repair_is_admin_v1.py`)
+5. **Repair / idempotent migrations** (schema drift, “column already exists” on some envs): in `upgrade()`, use `inspect()` or SQL `IF NOT EXISTS` so applying twice is safe. `downgrade()` follows the same fail-loud stub pattern as normal migrations
 
 ```bash
 # Correct flow:

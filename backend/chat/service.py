@@ -153,7 +153,6 @@ def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
         "script": 4,
         "regex": 3,
         "source_url": 2,
-        "root_fallback": 1,
     }.get(method, 0)
     source_name = ((getattr(answer.source, "name", None) or "") if getattr(answer, "source", None) else "").lower()
     source_url = ((getattr(answer.source, "url", None) or "") if getattr(answer, "source", None) else "").lower()

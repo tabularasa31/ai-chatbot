@@ -166,6 +166,13 @@ Security hardening in v1:
 - Requests ignore environment proxy variables (`trust_env=False`)
 - Oversized responses are rejected before indexing
 
+Quick answers hardening:
+
+- The crawler extracts a small structured quick-answer set from HTML pages, including support email, documentation URL, pricing URL, trial info, status page URL, and support chat provider.
+- Support emails are rejected when the local part is clearly non-support (`noreply`, `no-reply`, `donotreply`, `do-not-reply`, `notifications`, `notification`, `mailer-daemon`, `postmaster`, `bounce`, `bounces`, `privacy`, `legal`, `compliance`, `gdpr`, `dpo`, `dmca`, `abuse`, `security`, `press`, `pr`, `media`, `investors`, `ir`, `jobs`, `careers`, `recruiting`, `hr`, `talent`, `marketing`, `newsletter`, `subscribe`, `unsubscribe`, `webmaster`, `admin`, `root`).
+- Support emails are also length-gated to practical limits: local part `<= 40`, total address `<= 120`, with malformed dotted forms rejected.
+- Trial info is stored only as one user-readable sentence, capped at `240` characters and trimmed at a word boundary with an ellipsis when needed.
+
 User-visible states:
 
 - `queued` — ready to start

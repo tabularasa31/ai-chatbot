@@ -192,7 +192,7 @@ def detect_injection_semantic(
 def detect_injection(
     text: str,
     *,
-    client_id: str,
+    tenant_id: str,
     api_key: str,
 ) -> InjectionDetectionResult:
     """Two-level injection detection.
@@ -203,7 +203,7 @@ def detect_injection(
     # Level 1: structural (~0 ms)
     result = detect_injection_structural(text)
     if result.detected:
-        _log_detection(client_id, result)
+        _log_detection(tenant_id, result)
         return result
 
     # Level 2: semantic (~50-100 ms)
@@ -212,17 +212,17 @@ def detect_injection(
             text, result.normalized_input, api_key=api_key,
         )
         if result.detected:
-            _log_detection(client_id, result)
+            _log_detection(tenant_id, result)
             return result
         return result
 
     return result
 
 
-def _log_detection(client_id: str, result: InjectionDetectionResult) -> None:
+def _log_detection(tenant_id: str, result: InjectionDetectionResult) -> None:
     logger.warning(
-        "Injection detected — client=%s level=%s method=%s",
-        client_id,
+        "Injection detected — tenant=%s level=%s method=%s",
+        tenant_id,
         result.level,
         result.method,
     )

@@ -102,7 +102,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
 
     trace = FakeTrace()
     bundle = search_similar_chunks_detailed(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         query="hello",
         top_k=3,
         db=FakeDB(),
@@ -191,7 +191,7 @@ def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> 
 
     trace = FakeTrace()
     bundle = search_similar_chunks_detailed(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=3,
         db=FakeDB(),
@@ -250,9 +250,9 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
             return span
 
     user = _create_user(db_session, email="sqlite_trace@example.com")
-    client_id = _create_client(db_session, user, name="SQLite Trace").id
+    tenant_id = _create_client(db_session, user, name="SQLite Trace").id
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="reset.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -293,7 +293,7 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
 
     trace = FakeTrace()
     bundle = search_similar_chunks_detailed(
-        client_id=client_id,
+        tenant_id=tenant_id,
         query="Reset-password!!   reset password",
         top_k=2,
         db=db_session,
@@ -366,7 +366,7 @@ def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> No
     )
 
     bundle = search_similar_chunks_detailed(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=2,
         db=FakeDB(),
@@ -413,7 +413,7 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
     )
 
     def fake_python_cosine_search(
-        client_id: uuid.UUID,
+        tenant_id: uuid.UUID,
         query_vector: list[float],
         top_k: int,
         db,
@@ -462,7 +462,7 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
     )
 
     bundle = search_similar_chunks_detailed(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=2,
         db=FakeDB(),
@@ -692,7 +692,7 @@ def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
 
     trace = FakeTrace()
     bundle = search_similar_chunks_detailed(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         query="как сбросить пароль",
         top_k=3,
         db=FakeDB(),
@@ -2058,8 +2058,8 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="adj-disabled@example.com")
-    client = _create_client(db_session, user, name="Adj Disabled")
-    client.settings = {
+    tenant = _create_client(db_session, user, name="Adj Disabled")
+    tenant.settings = {
         "retrieval": {
             "contradiction_adjudication": {
                 "enabled": True,
@@ -2096,7 +2096,7 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
     _canonical, obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=(pair,),
         final_results=[(first, 0.9), (second, 0.88)],
-        client=client,
+        tenant=tenant,
         api_key="sk-test",
     )
 
@@ -2109,13 +2109,13 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
         "backend.search.service.settings.contradiction_adjudication_enabled",
         True,
     )
-    client.settings = {"retrieval": {}}
+    tenant.settings = {"retrieval": {}}
     db_session.commit()
 
     _canonical, obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=(pair,),
         final_results=[(first, 0.9), (second, 0.88)],
-        client=client,
+        tenant=tenant,
         api_key="sk-test",
     )
 
@@ -2133,8 +2133,8 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="adj-enabled@example.com")
-    client = _create_client(db_session, user, name="Adj Enabled")
-    client.settings = {
+    tenant = _create_client(db_session, user, name="Adj Enabled")
+    tenant.settings = {
         "retrieval": {
             "contradiction_adjudication": {
                 "enabled": True,
@@ -2210,7 +2210,7 @@ def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact
     canonical, _obs = _build_contradiction_adjudication_evidence(
         contradiction_pairs=pairs,
         final_results=[(first, 0.9), (second, 0.88)],
-        client=client,
+        tenant=tenant,
         api_key="sk-test",
     )
 
@@ -2429,20 +2429,20 @@ def test_detect_source_overlaps_respects_similarity_threshold_boundary() -> None
 
 
 def test_search_no_embeddings(
-    mock_openai_client: Mock, client: TestClient, db_session: Session
+    mock_openai_client: Mock, tenant: TestClient, db_session: Session
 ) -> None:
     """Given no embeddings in DB, POST /search → returns empty results list."""
-    token = register_and_verify_user(client, db_session, email="noemb@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="noemb@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "No Emb Client"},
+        json={"name": "No Emb Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "anything", "top_k": 3},
@@ -2453,7 +2453,7 @@ def test_search_no_embeddings(
 
 
 def test_search_route_traces_variant_summary(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2473,13 +2473,13 @@ def test_search_route_traces_variant_summary(
         def update(self, **kwargs: object) -> None:
             self.update_calls.append(kwargs)
 
-    token = register_and_verify_user(client, db_session, email="trace-search@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="trace-search@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Trace Search Client"},
+        json={"name": "Trace Search Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
     fake_trace = FakeTrace()
     monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
@@ -2508,7 +2508,7 @@ def test_search_route_traces_variant_summary(
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "Reset-password!!   reset password", "top_k": 3},
@@ -2581,33 +2581,33 @@ def test_search_route_traces_variant_summary(
 
 def test_search_single_embedding_match(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Create user, client, document, embedding; mock embed_query to return similar vector."""
+    """Create user, tenant, document, embedding; mock embed_query to return similar vector."""
     vec = [0.1] * 1536
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    token = register_and_verify_user(client, db_session, email="single@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="single@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Single Client"},
+        json={"name": "Single Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# Doc\n\nRelevant content here."
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("doc.md", md_content, "text/markdown")},
     )
     doc_id = upload_resp.json()["id"]
-    client.post(
+    tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "relevant content", "top_k": 3},
@@ -2622,23 +2622,23 @@ def test_search_single_embedding_match(
 
 def test_search_multiple_results_sorted(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """3 embeddings with different similarity scores; results sorted DESC by similarity."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="multi@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="multi@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Multi Client"},
+        json={"name": "Multi Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="multi.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2667,7 +2667,7 @@ def test_search_multiple_results_sorted(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "search", "top_k": 3},
@@ -2682,23 +2682,23 @@ def test_search_multiple_results_sorted(
 
 def test_search_respects_top_k(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Have > top_k embeddings, request top_k=2, only 2 results returned."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="topk@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="topk@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "TopK Client"},
+        json={"name": "TopK Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="topk.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2721,7 +2721,7 @@ def test_search_respects_top_k(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "x", "top_k": 2},
@@ -2732,42 +2732,42 @@ def test_search_respects_top_k(
 
 def test_search_other_client_isolated(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Create embeddings for client A and B; search as user A → only A's results."""
+    """Create embeddings for tenant A and B; search as user A → only A's results."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token_a = register_and_verify_user(client, db_session, email="isol_a@example.com")
-    cl_a_resp = client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="isol_a@example.com")
+    cl_a_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
-    set_client_openai_key(client, token_a)
+    set_client_openai_key(tenant, token_a)
     client_a_id = uuid.UUID(cl_a_resp.json()["id"])
 
-    token_b = register_and_verify_user(client, db_session, email="isol_b@example.com")
-    cl_b_resp = client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="isol_b@example.com")
+    cl_b_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
     client_b_id = uuid.UUID(cl_b_resp.json()["id"])
 
     doc_a = Document(
-        client_id=client_a_id,
+        tenant_id=client_a_id,
         filename="a.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
-        parsed_text="Client A secret",
+        parsed_text="Tenant A secret",
     )
     doc_b = Document(
-        client_id=client_b_id,
+        tenant_id=client_b_id,
         filename="b.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
-        parsed_text="Client B secret",
+        parsed_text="Tenant B secret",
     )
     db_session.add_all([doc_a, doc_b])
     db_session.commit()
@@ -2777,13 +2777,13 @@ def test_search_other_client_isolated(
     vec = [0.1] * 1536
     emb_a = Embedding(
         document_id=doc_a.id,
-        chunk_text="Client A secret",
+        chunk_text="Tenant A secret",
         vector=None,
         metadata_json={"chunk_index": 0, "vector": vec},
     )
     emb_b = Embedding(
         document_id=doc_b.id,
-        chunk_text="Client B secret",
+        chunk_text="Tenant B secret",
         vector=None,
         metadata_json={"chunk_index": 0, "vector": vec},
     )
@@ -2792,7 +2792,7 @@ def test_search_other_client_isolated(
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=vec)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token_a}"},
         json={"query": "secret", "top_k": 5},
@@ -2801,24 +2801,24 @@ def test_search_other_client_isolated(
     results = response.json()["results"]
     assert len(results) == 1
     assert results[0]["document_id"] == str(doc_a.id)
-    assert "Client A" in results[0]["chunk_text"]
+    assert "Tenant A" in results[0]["chunk_text"]
 
 
-def test_search_requires_auth(client: TestClient) -> None:
+def test_search_requires_auth(tenant: TestClient) -> None:
     """No JWT → 401."""
-    response = client.post(
+    response = tenant.post(
         "/search",
         json={"query": "test", "top_k": 3},
     )
     assert response.status_code == 401
 
 
-def test_search_requires_client(client: TestClient, db_session: Session) -> None:
-    """Auth user without a client → 404."""
-    token = register_and_verify_user(client, db_session, email="noclient@example.com")
-    # Do NOT create a client
+def test_search_requires_client(tenant: TestClient, db_session: Session) -> None:
+    """Auth user without a tenant → 404."""
+    token = register_and_verify_user(tenant, db_session, email="noclient@example.com")
+    # Do NOT create a tenant
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "test", "top_k": 3},
@@ -2826,17 +2826,17 @@ def test_search_requires_client(client: TestClient, db_session: Session) -> None
     assert response.status_code == 404
 
 
-def test_search_invalid_top_k(client: TestClient, db_session: Session) -> None:
+def test_search_invalid_top_k(tenant: TestClient, db_session: Session) -> None:
     """top_k <= 0 → 422."""
-    token = register_and_verify_user(client, db_session, email="invalid@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="invalid@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Invalid Client"},
+        json={"name": "Invalid Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "test", "top_k": 0},
@@ -2845,18 +2845,18 @@ def test_search_invalid_top_k(client: TestClient, db_session: Session) -> None:
 
 
 def test_search_empty_query_rejected(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
     """Empty query → 422."""
-    token = register_and_verify_user(client, db_session, email="emptyq@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="emptyq@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Client"},
+        json={"name": "Empty Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "", "top_k": 3},
@@ -2865,19 +2865,19 @@ def test_search_empty_query_rejected(
 
 
 def test_search_default_top_k(
-    mock_openai_client: Mock, client: TestClient, db_session: Session
+    mock_openai_client: Mock, tenant: TestClient, db_session: Session
 ) -> None:
     """Omit top_k → defaults to 3."""
-    token = register_and_verify_user(client, db_session, email="default@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="default@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Default Client"},
+        json={"name": "Default Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "test"},
@@ -2895,9 +2895,9 @@ def test_bm25_search_chunks_finds_match(db_session) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
     user = _create_user(db_session, email="kw@example.com")
-    cl = _create_client(db_session, user, name="KW Client")
+    cl = _create_client(db_session, user, name="KW Tenant")
     doc = Document(
-        client_id=cl.id,
+        tenant_id=cl.id,
         filename="cors.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2965,23 +2965,23 @@ def test_bm25_signal_uses_overlap_fallback_when_raw_scores_are_flat() -> None:
 
 def test_search_low_vector_similarity_still_returns_chunk(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """SQLite shared pipeline still returns lexical matches even with zero vector confidence."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="fallback@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fallback@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fallback Client"},
+        json={"name": "Fallback Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="cors.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3006,7 +3006,7 @@ def test_search_low_vector_similarity_still_returns_chunk(
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "cors", "top_k": 3},
@@ -3021,22 +3021,22 @@ def test_search_low_vector_similarity_still_returns_chunk(
 
 def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_cosine(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="sqlitehybrid@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="sqlitehybrid@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "SQLite Hybrid Client"},
+        json={"name": "SQLite Hybrid Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="hybrid.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3067,7 +3067,7 @@ def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_co
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "cors configuration", "top_k": 2},
@@ -3082,25 +3082,25 @@ def test_search_sqlite_hybrid_pipeline_allows_lexical_signal_to_outrank_purer_co
 
 def test_search_openai_unavailable_returns_503(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from openai import APIError
 
-    token = register_and_verify_user(client, db_session, email="search503@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="search503@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Search 503 Client"},
+        json={"name": "Search 503 Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     mock_openai_client.embeddings.create.side_effect = APIError(
         "Service unavailable",
         request=Mock(),
         body=None,
     )
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "hello", "top_k": 3},
@@ -3110,21 +3110,21 @@ def test_search_openai_unavailable_returns_503(
 
 def test_search_openai_timeout_returns_503(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from openai import APITimeoutError
 
-    token = register_and_verify_user(client, db_session, email="search-timeout@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="search-timeout@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Search Timeout Client"},
+        json={"name": "Search Timeout Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     mock_openai_client.embeddings.create.side_effect = APITimeoutError(request=Mock())
 
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "hello", "top_k": 3},
@@ -3134,22 +3134,22 @@ def test_search_openai_timeout_returns_503(
 
 def test_search_skips_malformed_metadata_vectors(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="malformedvec@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="malformedvec@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Malformed Vec Client"},
+        json={"name": "Malformed Vec Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="badvec.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3178,7 +3178,7 @@ def test_search_skips_malformed_metadata_vectors(
     db_session.commit()
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "content", "top_k": 5},
@@ -3189,22 +3189,22 @@ def test_search_skips_malformed_metadata_vectors(
 
 def test_search_skips_vector_with_wrong_dimension(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="wrongdim@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="wrongdim@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Wrong Dim Client"},
+        json={"name": "Wrong Dim Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="wrongdim.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3224,7 +3224,7 @@ def test_search_skips_vector_with_wrong_dimension(
     db_session.commit()
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    response = client.post(
+    response = tenant.post(
         "/search",
         headers={"Authorization": f"Bearer {token}"},
         json={"query": "anything", "top_k": 3},

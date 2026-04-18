@@ -1,4 +1,4 @@
-"""Tenant-wide support notification settings stored in Client.settings."""
+"""Tenant-wide support notification settings stored in Tenant.settings."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def with_support_config(
     Only keys **present** in *config* are written or cleared; absent keys are
     left unchanged.  Passing ``{"l2_email": "a@b.com"}`` therefore never
     touches an existing ``escalation_language`` value, which prevents partial
-    PUT requests from silently deleting settings the client did not intend to
+    PUT requests from silently deleting settings the tenant did not intend to
     change.
     """
     payload = dict(settings_value or {})

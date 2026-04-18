@@ -6,30 +6,30 @@ from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Client, TenantFaq, TenantProfile
+from backend.models import Tenant, TenantFaq, TenantProfile
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
-def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[str, Client]:
+def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[str, Tenant]:
     token = register_and_verify_user(http, db, email=email)
     resp = http.post(
-        "/clients",
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Knowledge API Client"},
+        json={"name": "Knowledge API Tenant"},
     )
     assert resp.status_code in (200, 201), resp.text
     set_client_openai_key(http, token)
-    client_row = db.get(Client, uuid.UUID(resp.json()["id"]))
+    client_row = db.get(Tenant, uuid.UUID(resp.json()["id"]))
     assert client_row is not None
     return token, client_row
 
 
-def _kbase(client_row: Client) -> str:
-    return f"/api/v1/bots/{client_row.public_id}/knowledge"
+def _kbase(client_row: Tenant) -> str:
+    return f"/api/v1/tenants/{client_row.public_id}/knowledge"
 
 
-def test_get_profile(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-profile@example.com")
+def test_get_profile(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-profile@example.com")
     profile = TenantProfile(
         tenant_id=client_row.id,
         product_name="Acme API",
@@ -44,7 +44,7 @@ def test_get_profile(client: TestClient, db_session: Session) -> None:
     db_session.add(profile)
     db_session.commit()
 
-    resp = client.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert data["product_name"] == "Acme API"
@@ -53,8 +53,8 @@ def test_get_profile(client: TestClient, db_session: Session) -> None:
     assert "modules" not in data
 
 
-def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-patch@example.com")
+def test_patch_profile_partial(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-patch@example.com")
     profile = TenantProfile(
         tenant_id=client_row.id,
         product_name="Acme API",
@@ -69,7 +69,7 @@ def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
     db_session.add(profile)
     db_session.commit()
 
-    resp = client.patch(
+    resp = tenant.patch(
         f"{_kbase(client_row)}/profile",
         headers={"Authorization": f"Bearer {token}"},
         json={"product_name": "Acme API v2"},
@@ -80,8 +80,8 @@ def test_patch_profile_partial(client: TestClient, db_session: Session) -> None:
     assert data["topics"] == ["Payments"]
 
 
-def test_get_faq_filters(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-faq@example.com")
+def test_get_faq_filters(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-faq@example.com")
     db_session.add_all(
         [
             TenantFaq(
@@ -102,7 +102,7 @@ def test_get_faq_filters(client: TestClient, db_session: Session) -> None:
     )
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         f"{_kbase(client_row)}/faq?approved=false",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -113,8 +113,8 @@ def test_get_faq_filters(client: TestClient, db_session: Session) -> None:
     assert data["pending_count"] == 1
 
 
-def test_approve_all_count(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-approve-all@example.com")
+def test_approve_all_count(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-approve-all@example.com")
     db_session.add_all(
         [
             TenantFaq(
@@ -135,7 +135,7 @@ def test_approve_all_count(client: TestClient, db_session: Session) -> None:
     )
     db_session.commit()
 
-    resp = client.post(
+    resp = tenant.post(
         f"{_kbase(client_row)}/faq/approve-all",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -143,8 +143,8 @@ def test_approve_all_count(client: TestClient, db_session: Session) -> None:
     assert resp.json()["approved_count"] == 2
 
 
-def test_edit_resets_approved(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-edit@example.com")
+def test_edit_resets_approved(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-edit@example.com")
     faq = TenantFaq(
         tenant_id=client_row.id,
         question="How?",
@@ -156,7 +156,7 @@ def test_edit_resets_approved(client: TestClient, db_session: Session) -> None:
     db_session.commit()
     db_session.refresh(faq)
 
-    resp = client.put(
+    resp = tenant.put(
         f"{_kbase(client_row)}/faq/{faq.id}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How exactly?", "answer": "Like this."},
@@ -165,8 +165,8 @@ def test_edit_resets_approved(client: TestClient, db_session: Session) -> None:
     assert resp.json()["approved"] is False
 
 
-def test_edit_answer_only_keeps_approved(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-edit-answer@example.com")
+def test_edit_answer_only_keeps_approved(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-edit-answer@example.com")
     faq = TenantFaq(
         tenant_id=client_row.id,
         question="How exactly?",
@@ -179,7 +179,7 @@ def test_edit_answer_only_keeps_approved(client: TestClient, db_session: Session
     db_session.commit()
     db_session.refresh(faq)
 
-    resp = client.put(
+    resp = tenant.put(
         f"{_kbase(client_row)}/faq/{faq.id}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How exactly?", "answer": "New answer"},
@@ -188,8 +188,8 @@ def test_edit_answer_only_keeps_approved(client: TestClient, db_session: Session
     assert resp.json()["approved"] is True
 
 
-def test_approve_all_generates_embedding_for_missing(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-approve-all-embed@example.com")
+def test_approve_all_generates_embedding_for_missing(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-approve-all-embed@example.com")
     faq = TenantFaq(
         tenant_id=client_row.id,
         question="How retries work?",
@@ -202,7 +202,7 @@ def test_approve_all_generates_embedding_for_missing(client: TestClient, db_sess
     db_session.commit()
     db_session.refresh(faq)
 
-    resp = client.post(
+    resp = tenant.post(
         f"{_kbase(client_row)}/faq/approve-all",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -212,8 +212,8 @@ def test_approve_all_generates_embedding_for_missing(client: TestClient, db_sess
     assert faq.question_embedding is not None
 
 
-def test_approve_generates_embedding(client: TestClient, db_session: Session) -> None:
-    token, client_row = _create_client(client, db_session, email="kapi-approve-embed@example.com")
+def test_approve_generates_embedding(tenant: TestClient, db_session: Session) -> None:
+    token, client_row = _create_client(tenant, db_session, email="kapi-approve-embed@example.com")
     faq = TenantFaq(
         tenant_id=client_row.id,
         question="Webhook retries?",
@@ -226,7 +226,7 @@ def test_approve_generates_embedding(client: TestClient, db_session: Session) ->
     db_session.commit()
     db_session.refresh(faq)
 
-    resp = client.post(
+    resp = tenant.post(
         f"{_kbase(client_row)}/faq/{faq.id}/approve",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -236,12 +236,12 @@ def test_approve_generates_embedding(client: TestClient, db_session: Session) ->
     assert faq.question_embedding is not None
 
 
-def test_wrong_tenant_404(client: TestClient, db_session: Session) -> None:
-    token1, client1 = _create_client(client, db_session, email="kapi-owner-1@example.com")
-    _token2, client2 = _create_client(client, db_session, email="kapi-owner-2@example.com")
+def test_wrong_tenant_404(tenant: TestClient, db_session: Session) -> None:
+    token1, client1 = _create_client(tenant, db_session, email="kapi-owner-1@example.com")
+    _token2, client2 = _create_client(tenant, db_session, email="kapi-owner-2@example.com")
 
-    resp = client.get(
-        f"/api/v1/bots/{client2.public_id}/knowledge/profile",
+    resp = tenant.get(
+        f"/api/v1/tenants/{client2.public_id}/knowledge/profile",
         headers={"Authorization": f"Bearer {token1}"},
     )
     assert resp.status_code == 404, resp.text

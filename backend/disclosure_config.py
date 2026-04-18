@@ -1,4 +1,5 @@
-"""Tenant-wide disclosure level: single JSON field on Client (`level`)."""
+
+"""Tenant-wide disclosure level: single JSON field on Tenant (`level`)."""
 
 from __future__ import annotations
 

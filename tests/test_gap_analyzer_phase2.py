@@ -24,15 +24,15 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def _create_client_and_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     *,
     email: str,
     name: str,
 ) -> tuple[str, uuid.UUID]:
-    token = register_and_verify_user(client, db_session, email=email)
-    response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email=email)
+    response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": name},
     )
@@ -63,18 +63,18 @@ def _make_retrieval_context(score: float) -> RetrievalContext:
     ],
 )
 def test_gap_signal_ingestion_persists_weight_and_message_link(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     signal_kwargs: dict[str, object],
     expected_weight: float,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email=f"gap-signal-{expected_weight}@example.com",
-        name="Gap Signal Client",
+        name="Gap Signal Tenant",
     )
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -88,7 +88,7 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
     signal_payload: dict[str, object] = {
-        "tenant_id": client_id,
+        "tenant_id": tenant_id,
         "chat_id": chat.id,
         "session_id": chat.session_id,
         "user_message_id": user_message.id,
@@ -117,16 +117,16 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
 
 
 def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-feedback@example.com",
-        name="Gap Feedback Client",
+        name="Gap Feedback Tenant",
     )
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -141,12 +141,12 @@ def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
     db_session.refresh(assistant_second)
 
     gap_question_first = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How does this work?",
         gap_signal_weight=1.0,
     )
     gap_question_second = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How does this work?",
         gap_signal_weight=1.0,
     )
@@ -174,7 +174,7 @@ def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
     )
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         f"/chat/messages/{assistant_second.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "down", "ideal_answer": "Better answer"},
@@ -191,16 +191,16 @@ def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
 
 
 def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-feedback-up@example.com",
-        name="Gap Feedback Up Client",
+        name="Gap Feedback Up Tenant",
     )
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -218,7 +218,7 @@ def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
     db_session.refresh(assistant_message)
 
     gap_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How does this work?",
         gap_signal_weight=4.0,
         answer_confidence=0.4,
@@ -237,7 +237,7 @@ def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
     )
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         f"/chat/messages/{assistant_message.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "up"},
@@ -252,17 +252,17 @@ def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
 
 
 def test_process_chat_message_persists_gap_signal_for_fallback_turn(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owner_token, owner_client_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-process@example.com",
-        name="Gap Process Client",
+        name="Gap Process Tenant",
     )
-    set_client_openai_key(client, owner_token)
+    set_client_openai_key(tenant, owner_token)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",

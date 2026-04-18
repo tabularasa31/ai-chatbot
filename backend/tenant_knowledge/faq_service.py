@@ -50,7 +50,7 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 def _dedupe_existing_faq_by_similarity(
     *,
     db: Session,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     question_embedding: list[float],
 ) -> bool:
     """Return True if candidate is duplicate and should be skipped."""
@@ -60,7 +60,7 @@ def _dedupe_existing_faq_by_similarity(
         )
         row = (
             db.query(TenantFaqModel, distance_expr.label("distance"))
-            .filter(TenantFaqModel.tenant_id == client_id)
+            .filter(TenantFaqModel.tenant_id == tenant_id)
             .filter(TenantFaqModel.question_embedding.isnot(None))
             .order_by(distance_expr)
             .limit(1)
@@ -75,7 +75,7 @@ def _dedupe_existing_faq_by_similarity(
         # SQLite fallback (vector stored as TEXT for tests).
         existing = (
             db.query(TenantFaqModel)
-            .filter(TenantFaqModel.tenant_id == client_id)
+            .filter(TenantFaqModel.tenant_id == tenant_id)
             .filter(TenantFaqModel.question_embedding.isnot(None))
             .all()
         )
@@ -91,7 +91,7 @@ def _dedupe_existing_faq_by_similarity(
 def insert_new_faq_candidates(
     *,
     db: Session,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     faq_candidates: Iterable[FaqCandidate],
     api_key: str,
     document_id: uuid.UUID | None = None,
@@ -118,10 +118,10 @@ def insert_new_faq_candidates(
                 skipped_low_confidence += 1
                 logger.info(
                     "FAQ candidate skipped: low confidence "
-                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%s source=%s)",
+                    "(batch_id=%s document_id=%s tenant_id=%s question=%r confidence=%s source=%s)",
                     correlation_batch_id,
                     document_id,
-                    client_id,
+                    tenant_id,
                     candidate.question,
                     candidate.confidence,
                     candidate.source,
@@ -134,10 +134,10 @@ def insert_new_faq_candidates(
                 skipped_empty += 1
                 logger.info(
                     "FAQ candidate skipped: empty normalized question/answer "
-                    "(batch_id=%s document_id=%s client_id=%s question=%r source=%s)",
+                    "(batch_id=%s document_id=%s tenant_id=%s question=%r source=%s)",
                     correlation_batch_id,
                     document_id,
-                    client_id,
+                    tenant_id,
                     candidate.question,
                     candidate.source,
                 )
@@ -157,7 +157,7 @@ def insert_new_faq_candidates(
             with db.begin_nested():
                 if _dedupe_existing_faq_by_similarity(
                     db=db,
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     question_embedding=question_embedding,
                 ):
                     skipped_duplicate += 1
@@ -165,7 +165,7 @@ def insert_new_faq_candidates(
                 else:
                     db.add(
                         TenantFaqModel(
-                            tenant_id=client_id,
+                            tenant_id=tenant_id,
                             question=question,
                             answer=answer,
                             question_embedding=question_embedding,
@@ -183,10 +183,10 @@ def insert_new_faq_candidates(
             if inserted_candidate:
                 logger.info(
                     "FAQ candidate queued for insert "
-                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s approved=%s)",
+                    "(batch_id=%s document_id=%s tenant_id=%s question=%r confidence=%.3f source=%s approved=%s)",
                     correlation_batch_id,
                     document_id,
-                    client_id,
+                    tenant_id,
                     question,
                     float(candidate.confidence),
                     candidate.source,
@@ -195,10 +195,10 @@ def insert_new_faq_candidates(
             elif skipped_as_duplicate:
                 logger.info(
                     "FAQ candidate skipped: semantic duplicate "
-                    "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                    "(batch_id=%s document_id=%s tenant_id=%s question=%r confidence=%.3f source=%s)",
                     correlation_batch_id,
                     document_id,
-                    client_id,
+                    tenant_id,
                     question,
                     float(candidate.confidence),
                     candidate.source,
@@ -208,21 +208,21 @@ def insert_new_faq_candidates(
             candidate_errors += 1
             logger.exception(
                 "Failed to insert FAQ candidate "
-                "(batch_id=%s document_id=%s client_id=%s)",
+                "(batch_id=%s document_id=%s tenant_id=%s)",
                 correlation_batch_id,
                 document_id,
-                client_id,
+                tenant_id,
             )
             continue
 
     db.commit()
     logger.info(
         "FAQ insert summary "
-        "(batch_id=%s document_id=%s client_id=%s total=%s inserted=%s auto_approved=%s skipped_low_confidence=%s "
+        "(batch_id=%s document_id=%s tenant_id=%s total=%s inserted=%s auto_approved=%s skipped_low_confidence=%s "
         "skipped_empty=%s skipped_duplicate=%s candidate_errors=%s)",
         correlation_batch_id,
         document_id,
-        client_id,
+        tenant_id,
         total_candidates,
         inserted,
         auto_approved,

@@ -45,33 +45,33 @@ def _vector(*values: float) -> list[float]:
 
 
 def _create_client_and_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     *,
     email: str,
     name: str,
 ) -> tuple[str, uuid.UUID]:
-    token = register_and_verify_user(client, db_session, email=email)
-    response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email=email)
+    response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": name},
     )
     assert response.status_code == 201, response.json()
-    client_id = uuid.UUID(response.json()["id"])
-    set_client_openai_key(client, token)
-    return token, client_id
+    tenant_id = uuid.UUID(response.json()["id"])
+    set_client_openai_key(tenant, token)
+    return token, tenant_id
 
 
 def _add_document_with_embedding(
     db_session: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     chunk_text: str,
     vector: list[float],
 ) -> None:
     document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -91,17 +91,17 @@ def _add_document_with_embedding(
 
 
 def test_run_mode_b_creates_cluster_for_unclustered_question(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-create@example.com",
-        name="Gap Mode B Create Client",
+        name="Gap Mode B Create Tenant",
     )
     gap_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=_vector(1.0, 0.0, 0.0),
         gap_signal_weight=2.0,
@@ -110,12 +110,12 @@ def test_run_mode_b_creates_cluster_for_unclustered_question(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    result = orchestrator.run_mode_b(client_id)
+    result = orchestrator.run_mode_b(tenant_id)
 
-    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).one()
+    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == tenant_id).one()
     db_session.refresh(gap_question)
 
-    assert result.tenant_id == client_id
+    assert result.tenant_id == tenant_id
     assert gap_question.cluster_id == cluster.id
     assert cluster.label == "How do invoice exports work?"
     assert cluster.question_count == 1
@@ -124,17 +124,17 @@ def test_run_mode_b_creates_cluster_for_unclustered_question(
 
 
 def test_run_mode_b_joins_existing_active_cluster_when_similarity_matches(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-join@example.com",
-        name="Gap Mode B Join Client",
+        name="Gap Mode B Join Tenant",
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         centroid=_vector(1.0, 0.0, 0.0),
         question_count=1,
@@ -143,7 +143,7 @@ def test_run_mode_b_joins_existing_active_cluster_when_similarity_matches(
         status=GapClusterStatus.active,
     )
     question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work for teams?",
         embedding=_vector(0.95, 0.05, 0.0),
         gap_signal_weight=2.0,
@@ -152,9 +152,9 @@ def test_run_mode_b_joins_existing_active_cluster_when_similarity_matches(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_b(client_id)
+    orchestrator.run_mode_b(tenant_id)
 
-    clusters = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).all()
+    clusters = db_session.query(GapCluster).filter(GapCluster.tenant_id == tenant_id).all()
     db_session.refresh(cluster)
     db_session.refresh(question)
 
@@ -165,23 +165,23 @@ def test_run_mode_b_joins_existing_active_cluster_when_similarity_matches(
 
 
 def test_run_mode_b_closes_cluster_when_document_coverage_is_high(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-covered@example.com",
-        name="Gap Mode B Covered Client",
+        name="Gap Mode B Covered Tenant",
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         chunk_text="How do invoice exports work and how do invoice exports work for teams",
         vector=_vector(1.0, 0.0, 0.0),
     )
     gap_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=_vector(1.0, 0.0, 0.0),
         gap_signal_weight=1.0,
@@ -190,26 +190,26 @@ def test_run_mode_b_closes_cluster_when_document_coverage_is_high(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_b(client_id)
+    orchestrator.run_mode_b(tenant_id)
 
-    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).one()
+    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == tenant_id).one()
     assert cluster.status == GapClusterStatus.closed
     assert cluster.coverage_score is not None
     assert cluster.coverage_score >= 0.70
 
 
 def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-link@example.com",
-        name="Gap Mode B Link Client",
+        name="Gap Mode B Link Tenant",
     )
     topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Invoice exports",
         topic_embedding=_vector(1.0, 0.0, 0.0),
         coverage_score=0.2,
@@ -217,7 +217,7 @@ def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
         extracted_at=datetime.now(timezone.utc),
     )
     question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=_vector(0.98, 0.02, 0.0),
         gap_signal_weight=2.0,
@@ -226,9 +226,9 @@ def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_b(client_id)
+    orchestrator.run_mode_b(tenant_id)
 
-    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).one()
+    cluster = db_session.query(GapCluster).filter(GapCluster.tenant_id == tenant_id).one()
     db_session.refresh(topic)
 
     assert cluster.linked_doc_topic_id == topic.id
@@ -236,17 +236,17 @@ def test_run_mode_b_links_cluster_to_matching_mode_a_topic(
 
 
 def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-inactive-link@example.com",
-        name="Gap Mode B Inactive Link Client",
+        name="Gap Mode B Inactive Link Tenant",
     )
     stale_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Legacy imports",
         topic_embedding=_vector(0.0, 1.0, 0.0),
         coverage_score=0.2,
@@ -254,7 +254,7 @@ def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
         extracted_at=datetime.now(timezone.utc),
     )
     fresh_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Invoice exports",
         topic_embedding=_vector(0.98, 0.02, 0.0),
         coverage_score=0.2,
@@ -262,7 +262,7 @@ def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
         extracted_at=datetime.now(timezone.utc),
     )
     inactive_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Legacy imports",
         centroid=_vector(0.0, 1.0, 0.0),
         question_count=2,
@@ -272,7 +272,7 @@ def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
         last_computed_at=datetime.now(timezone.utc),
     )
     active_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice exports",
         centroid=_vector(0.99, 0.01, 0.0),
         question_count=3,
@@ -289,7 +289,7 @@ def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
     db_session.add_all([stale_topic, inactive_cluster])
     db_session.commit()
 
-    _sync_mode_links(db_session, tenant_id=client_id)
+    _sync_mode_links(db_session, tenant_id=tenant_id)
     db_session.refresh(stale_topic)
     db_session.refresh(fresh_topic)
     db_session.refresh(inactive_cluster)
@@ -302,17 +302,17 @@ def test_sync_mode_links_clears_stale_links_for_inactive_clusters(
 
 
 def test_sync_mode_links_clears_stale_links_for_unlabeled_topics(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-unlabeled-link@example.com",
-        name="Gap Mode A Unlabeled Link Client",
+        name="Gap Mode A Unlabeled Link Tenant",
     )
     unlabeled_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label=None,
         topic_embedding=_vector(1.0, 0.0, 0.0),
         coverage_score=0.2,
@@ -320,7 +320,7 @@ def test_sync_mode_links_clears_stale_links_for_unlabeled_topics(
         extracted_at=datetime.now(timezone.utc),
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Legacy unlabeled docs gap",
         centroid=_vector(1.0, 0.0, 0.0),
         question_count=1,
@@ -337,7 +337,7 @@ def test_sync_mode_links_clears_stale_links_for_unlabeled_topics(
     db_session.add_all([unlabeled_topic, cluster])
     db_session.commit()
 
-    _sync_mode_links(db_session, tenant_id=client_id)
+    _sync_mode_links(db_session, tenant_id=tenant_id)
     db_session.refresh(unlabeled_topic)
     db_session.refresh(cluster)
 
@@ -346,17 +346,17 @@ def test_sync_mode_links_clears_stale_links_for_unlabeled_topics(
 
 
 def test_try_ingest_gap_signal_triggers_mode_b_best_effort(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-trigger@example.com",
-        name="Gap Mode B Trigger Client",
+        name="Gap Mode B Trigger Tenant",
     )
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -376,7 +376,7 @@ def test_try_ingest_gap_signal_triggers_mode_b_best_effort(
 
     _try_ingest_gap_signal(
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=chat.session_id,
         user_message=user_message,
         assistant_message=assistant_message,
@@ -388,21 +388,21 @@ def test_try_ingest_gap_signal_triggers_mode_b_best_effort(
         language="en",
     )
 
-    assert trigger_calls == [client_id]
+    assert trigger_calls == [tenant_id]
 
 
 def test_run_mode_b_joins_existing_closed_cluster_when_similarity_matches(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-closed-join@example.com",
-        name="Gap Mode B Closed Join Client",
+        name="Gap Mode B Closed Join Tenant",
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         centroid=_vector(1.0, 0.0, 0.0),
         question_count=1,
@@ -411,7 +411,7 @@ def test_run_mode_b_joins_existing_closed_cluster_when_similarity_matches(
         status=GapClusterStatus.closed,
     )
     question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work for teams?",
         embedding=_vector(0.95, 0.05, 0.0),
         gap_signal_weight=2.0,
@@ -420,9 +420,9 @@ def test_run_mode_b_joins_existing_closed_cluster_when_similarity_matches(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_b(client_id)
+    orchestrator.run_mode_b(tenant_id)
 
-    clusters = db_session.query(GapCluster).filter(GapCluster.tenant_id == client_id).all()
+    clusters = db_session.query(GapCluster).filter(GapCluster.tenant_id == tenant_id).all()
     db_session.refresh(cluster)
     db_session.refresh(question)
 
@@ -513,24 +513,24 @@ def test_mutable_mode_b_cluster_post_init_recomputes_centroid_norm() -> None:
 
 
 def test_ensure_mode_b_question_embeddings_skips_blank_questions_without_misalignment(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-b-blank-embeddings@example.com",
-        name="Gap Mode B Blank Embeddings Client",
+        name="Gap Mode B Blank Embeddings Tenant",
     )
     blank_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="   ",
         embedding=None,
         gap_signal_weight=1.0,
     )
     valid_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=None,
         gap_signal_weight=1.0,
@@ -546,7 +546,7 @@ def test_ensure_mode_b_question_embeddings_skips_blank_questions_without_misalig
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
     orchestrator._ensure_mode_b_question_embeddings(
         encrypted_api_key="encrypted-key",
-        questions=SqlAlchemyGapAnalyzerRepository(db_session).list_unclustered_mode_b_questions(client_id),
+        questions=SqlAlchemyGapAnalyzerRepository(db_session).list_unclustered_mode_b_questions(tenant_id),
     )
 
     db_session.refresh(blank_question)

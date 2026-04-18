@@ -113,7 +113,7 @@ class _ModeBQueriesOps:
             scored_rows = (
                 self._db.query(Embedding.id, distance_expr.label("distance"))
                 .join(Document, Embedding.document_id == Document.id)
-                .filter(Document.client_id == tenant_id)
+                .filter(Document.tenant_id == tenant_id)
                 .filter(Document.status == "ready")
                 .filter(Embedding.chunk_text.isnot(None))
                 .filter(~Document.file_type.in_([ft.casefold() for ft in excluded_file_types]))

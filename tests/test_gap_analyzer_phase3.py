@@ -35,28 +35,28 @@ def _vector(*values: float) -> list[float]:
 
 
 def _create_client_and_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     *,
     email: str,
     name: str,
 ) -> tuple[str, uuid.UUID]:
-    token = register_and_verify_user(client, db_session, email=email)
-    response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email=email)
+    response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": name},
     )
     assert response.status_code == 201, response.json()
-    client_id = uuid.UUID(response.json()["id"])
-    set_client_openai_key(client, token)
-    return token, client_id
+    tenant_id = uuid.UUID(response.json()["id"])
+    set_client_openai_key(tenant, token)
+    return token, tenant_id
 
 
 def _add_document_with_embedding(
     db_session: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     filename: str,
     file_type: DocumentType,
     chunk_text: str,
@@ -65,7 +65,7 @@ def _add_document_with_embedding(
     source_url: str | None = None,
 ) -> Document:
     document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename=filename,
         file_type=file_type,
         status=DocumentStatus.ready,
@@ -88,19 +88,19 @@ def _add_document_with_embedding(
 
 
 def test_run_mode_a_excludes_swagger_docs_from_coverage_corpus(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-swagger@example.com",
-        name="Gap Mode A Swagger Client",
+        name="Gap Mode A Swagger Tenant",
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="openapi.json",
         file_type=DocumentType.swagger,
         chunk_text="Swagger rate limits operation details",
@@ -109,7 +109,7 @@ def test_run_mode_a_excludes_swagger_docs_from_coverage_corpus(
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         chunk_text="Billing invoice export guide",
@@ -132,32 +132,32 @@ def test_run_mode_a_excludes_swagger_docs_from_coverage_corpus(
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    result = orchestrator.run_mode_a(client_id)
+    result = orchestrator.run_mode_a(tenant_id)
 
     topics = (
         db_session.query(GapDocTopic)
-        .filter(GapDocTopic.tenant_id == client_id, GapDocTopic.status == GapDocTopicStatus.active)
+        .filter(GapDocTopic.tenant_id == tenant_id, GapDocTopic.status == GapDocTopicStatus.active)
         .all()
     )
 
-    assert result.tenant_id == client_id
+    assert result.tenant_id == tenant_id
     assert len(topics) == 1
     assert topics[0].topic_label == "Rate limits"
     assert topics[0].extraction_chunk_hash
 
 
 def test_gap_analyzer_reactivate_mode_a_returns_404_for_unknown_gap_id(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase3-reactivate-missing@example.com",
         name="Gap Phase 3 Reactivate Missing",
     )
 
-    reactivate_response = client.post(
+    reactivate_response = tenant.post(
         f"/gap-analyzer/mode_a/{uuid.uuid4()}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -167,19 +167,19 @@ def test_gap_analyzer_reactivate_mode_a_returns_404_for_unknown_gap_id(
 
 
 def test_run_mode_a_skips_llm_and_row_updates_when_hash_unchanged(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-hash@example.com",
-        name="Gap Mode A Hash Client",
+        name="Gap Mode A Hash Tenant",
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         chunk_text="Invoice export overview",
@@ -202,11 +202,11 @@ def test_run_mode_a_skips_llm_and_row_updates_when_hash_unchanged(
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_a(client_id)
+    orchestrator.run_mode_a(tenant_id)
 
     first_topic = (
         db_session.query(GapDocTopic)
-        .filter(GapDocTopic.tenant_id == client_id, GapDocTopic.status == GapDocTopicStatus.active)
+        .filter(GapDocTopic.tenant_id == tenant_id, GapDocTopic.status == GapDocTopicStatus.active)
         .one()
     )
     first_topic_id = first_topic.id
@@ -217,11 +217,11 @@ def test_run_mode_a_skips_llm_and_row_updates_when_hash_unchanged(
         raise AssertionError("LLM extraction should not run when extraction hash is unchanged")
 
     monkeypatch.setattr("backend.gap_analyzer.orchestrator.extract_mode_a_candidates", _unexpected_extract)
-    orchestrator.run_mode_a(client_id)
+    orchestrator.run_mode_a(tenant_id)
 
     topics = (
         db_session.query(GapDocTopic)
-        .filter(GapDocTopic.tenant_id == client_id, GapDocTopic.status == GapDocTopicStatus.active)
+        .filter(GapDocTopic.tenant_id == tenant_id, GapDocTopic.status == GapDocTopicStatus.active)
         .all()
     )
 
@@ -232,19 +232,19 @@ def test_run_mode_a_skips_llm_and_row_updates_when_hash_unchanged(
 
 
 def test_run_mode_a_filters_candidates_at_or_above_coverage_gate(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-gate@example.com",
-        name="Gap Mode A Gate Client",
+        name="Gap Mode A Gate Tenant",
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         chunk_text="How do I configure API rate limits and throttling",
@@ -267,17 +267,17 @@ def test_run_mode_a_filters_candidates_at_or_above_coverage_gate(
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_a(client_id)
+    orchestrator.run_mode_a(tenant_id)
 
     active_topics = (
         db_session.query(GapDocTopic)
-        .filter(GapDocTopic.tenant_id == client_id, GapDocTopic.status == GapDocTopicStatus.active)
+        .filter(GapDocTopic.tenant_id == tenant_id, GapDocTopic.status == GapDocTopicStatus.active)
         .all()
     )
     hash_marker = (
         db_session.query(GapDocTopic)
         .filter(
-            GapDocTopic.tenant_id == client_id,
+            GapDocTopic.tenant_id == tenant_id,
             GapDocTopic.status == GapDocTopicStatus.closed,
             GapDocTopic.topic_label.is_(None),
         )
@@ -289,22 +289,22 @@ def test_run_mode_a_filters_candidates_at_or_above_coverage_gate(
 
 
 def test_run_mode_a_suppresses_dismissed_topics_across_reindex(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-dismissed@example.com",
-        name="Gap Mode A Dismissed Client",
+        name="Gap Mode A Dismissed Tenant",
     )
     dismissed_by = (
         db_session.query(User).filter(User.email == "gap-mode-a-dismissed@example.com").one().id
     )
     _add_document_with_embedding(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         chunk_text="Invoice export overview",
@@ -313,7 +313,7 @@ def test_run_mode_a_suppresses_dismissed_topics_across_reindex(
     )
     db_session.add(
         GapDismissal(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source=GapSource.mode_a,
             gap_id=uuid.uuid4(),
             topic_label="Billing exports",
@@ -339,11 +339,11 @@ def test_run_mode_a_suppresses_dismissed_topics_across_reindex(
     )
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    orchestrator.run_mode_a(client_id)
+    orchestrator.run_mode_a(tenant_id)
 
     active_topics = (
         db_session.query(GapDocTopic)
-        .filter(GapDocTopic.tenant_id == client_id, GapDocTopic.status == GapDocTopicStatus.active)
+        .filter(GapDocTopic.tenant_id == tenant_id, GapDocTopic.status == GapDocTopicStatus.active)
         .all()
     )
 
@@ -351,18 +351,18 @@ def test_run_mode_a_suppresses_dismissed_topics_across_reindex(
 
 
 def test_run_embeddings_background_triggers_queue_empty_mode_a_check_after_ready(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-embedding-trigger@example.com",
-        name="Gap Mode A Embedding Trigger Client",
+        name="Gap Mode A Embedding Trigger Tenant",
     )
     document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.embedding,
@@ -385,22 +385,22 @@ def test_run_embeddings_background_triggers_queue_empty_mode_a_check_after_ready
 
     db_session.refresh(document)
     assert document.status == DocumentStatus.ready
-    trigger.assert_called_once_with(client_id)
+    trigger.assert_called_once_with(tenant_id)
 
 
 def test_crawl_url_source_triggers_queue_empty_mode_a_check_after_successful_finalize(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-url-trigger@example.com",
-        name="Gap Mode A URL Trigger Client",
+        name="Gap Mode A URL Trigger Tenant",
     )
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/start",
         normalized_domain="docs.example.com",
@@ -437,31 +437,31 @@ def test_crawl_url_source_triggers_queue_empty_mode_a_check_after_successful_fin
 
     url_service.crawl_url_source(source.id, api_key="sk-test")
 
-    trigger.assert_called_once_with(client_id)
+    trigger.assert_called_once_with(tenant_id)
 
 
 def test_mode_a_queue_empty_helper_skips_run_when_documents_or_sources_are_pending(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-queue-busy@example.com",
-        name="Gap Mode A Queue Busy Client",
+        name="Gap Mode A Queue Busy Tenant",
     )
     db_session.add_all(
         [
             Document(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 filename="pending.md",
                 file_type=DocumentType.markdown,
                 status=DocumentStatus.embedding,
                 parsed_text="pending",
             ),
             UrlSource(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 name="Docs",
                 url="https://docs.example.com/start",
                 normalized_domain="docs.example.com",
@@ -478,21 +478,21 @@ def test_mode_a_queue_empty_helper_skips_run_when_documents_or_sources_are_pendi
     monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", session_factory)
     monkeypatch.setattr(gap_jobs, "run_mode_a_for_tenant_best_effort", trigger)
 
-    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(client_id)
+    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
 
     trigger.assert_not_called()
 
 
 def test_mode_a_queue_empty_helper_runs_once_when_tenant_queue_is_empty(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-mode-a-queue-empty@example.com",
-        name="Gap Mode A Queue Empty Client",
+        name="Gap Mode A Queue Empty Tenant",
     )
 
     trigger = Mock()
@@ -500,10 +500,10 @@ def test_mode_a_queue_empty_helper_runs_once_when_tenant_queue_is_empty(
     monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", session_factory)
     monkeypatch.setattr(gap_jobs, "enqueue_gap_job_for_tenant_best_effort", trigger)
 
-    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(client_id)
+    gap_jobs.run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
 
     trigger.assert_called_once_with(
-        client_id,
+        tenant_id,
         job_kind=gap_jobs.GapJobKind.mode_a,
         trigger="queue_empty",
     )

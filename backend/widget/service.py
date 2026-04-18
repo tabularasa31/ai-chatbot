@@ -76,7 +76,7 @@ def sanitize_locale(raw: str | None) -> str | None:
 def find_resumable_identified_chat(
     db: Session,
     *,
-    client_id: Any,
+    tenant_id: Any,
     user_id: str,
     ttl_hours: int = WIDGET_IDENTIFIED_RESUME_TTL_HOURS,
 ) -> Chat | None:
@@ -89,7 +89,7 @@ def find_resumable_identified_chat(
     return (
         db.query(Chat)
         .filter(
-            Chat.client_id == client_id,
+            Chat.tenant_id == tenant_id,
             Chat.ended_at.is_(None),
             Chat.updated_at >= cutoff,
             Chat.user_context.isnot(None),

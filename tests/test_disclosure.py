@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.disclosure_config import public_config_dict, resolve_level
-from backend.models import Client
+from backend.models import Tenant
 from tests.conftest import register_and_verify_user
 
 
@@ -32,73 +32,73 @@ def test_public_config_dict() -> None:
 
 
 def test_get_disclosure_defaults(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="disc-get@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="disc-get@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Disc Client"},
+        json={"name": "Disc Tenant"},
     )
-    r = client.get("/clients/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
 
 def test_put_and_get_disclosure(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="disc-put@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="disc-put@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Disc Put"},
     )
-    r = client.put(
-        "/clients/me/disclosure",
+    r = tenant.put(
+        "/tenants/me/disclosure",
         headers={"Authorization": f"Bearer {token}"},
         json={"level": "corporate"},
     )
     assert r.status_code == 200
     assert r.json() == {"level": "corporate"}
-    r2 = client.get("/clients/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r2 = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r2.json() == {"level": "corporate"}
 
 
 def test_get_disclosure_ignores_unsupported_keys_in_db(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="disc-alias@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="disc-alias@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Alias Co"},
     )
-    cl = db_session.query(Client).filter(Client.name == "Alias Co").first()
+    cl = db_session.query(Tenant).filter(Tenant.name == "Alias Co").first()
     assert cl is not None
     cl.disclosure_config = {"legacy_level": "detailed"}
     db_session.commit()
 
-    r = client.get("/clients/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
 
 def test_put_disclosure_invalid_level(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="disc-bad@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="disc-bad@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Bad Level Co"},
     )
-    r = client.put(
-        "/clients/me/disclosure",
+    r = tenant.put(
+        "/tenants/me/disclosure",
         headers={"Authorization": f"Bearer {token}"},
         json={"level": "mega"},
     )

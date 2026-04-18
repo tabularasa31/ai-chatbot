@@ -90,7 +90,7 @@ def generate_kyc_token(user_context: dict, secret_key: str, ttl_seconds: int = 3
 def validate_kyc_token_detail(
     token: str,
     secret_key: str,
-    client_id: str,
+    tenant_id: str,
 ) -> tuple[dict | None, str | None]:
     """
     Validate a signed identity token. Returns (user_context_dict, None) or (None, reason).
@@ -126,7 +126,7 @@ def validate_kyc_token_detail(
         return None, "expired"
 
     tid = data.get("tenant_id")
-    if tid != client_id:
+    if tid != tenant_id:
         return None, "wrong_tenant"
 
     uid = data.get("user_id")
@@ -145,11 +145,11 @@ def validate_kyc_token_detail(
     return out, None
 
 
-def validate_kyc_token(token: str, secret_key: str, client_id: str) -> dict | None:
+def validate_kyc_token(token: str, secret_key: str, tenant_id: str) -> dict | None:
     """
     Validate a signed identity token.
 
     Returns UserContext fields dict if valid, None otherwise (never raises).
     """
-    ctx, _err = validate_kyc_token_detail(token, secret_key, client_id)
+    ctx, _err = validate_kyc_token_detail(token, secret_key, tenant_id)
     return ctx

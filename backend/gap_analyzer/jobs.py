@@ -13,7 +13,7 @@ from backend.core.openai_errors import OpenAIFailureKind, classify_openai_error
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import GapJobRecord, SqlAlchemyGapAnalyzerRepository
-from backend.models import Client, Document, DocumentStatus, SourceStatus, UrlSource
+from backend.models import Document, DocumentStatus, SourceStatus, Tenant, UrlSource
 
 logger = logging.getLogger(__name__)
 _GAP_JOB_HEARTBEAT_SECONDS = 300
@@ -332,13 +332,13 @@ def run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id: UUID) -> None:
     try:
         pending_document_count = (
             db.query(Document)
-            .filter(Document.client_id == tenant_id)
+            .filter(Document.tenant_id == tenant_id)
             .filter(Document.status.in_([DocumentStatus.processing.value, DocumentStatus.embedding.value]))
             .count()
         )
         pending_source_count = (
             db.query(UrlSource)
-            .filter(UrlSource.client_id == tenant_id)
+            .filter(UrlSource.tenant_id == tenant_id)
             .filter(UrlSource.status.in_([SourceStatus.queued.value, SourceStatus.indexing.value]))
             .count()
         )
@@ -397,7 +397,7 @@ def run_mode_b_weekly_reclustering_for_tenant_best_effort(tenant_id: UUID) -> No
 def run_mode_b_weekly_reclustering_for_all_tenants_best_effort() -> None:
     db = core_db.SessionLocal()
     try:
-        tenant_ids = [tenant_id for (tenant_id,) in db.query(Client.id).order_by(Client.id.asc()).all()]
+        tenant_ids = [tenant_id for (tenant_id,) in db.query(Tenant.id).order_by(Tenant.id.asc()).all()]
     finally:
         db.close()
 

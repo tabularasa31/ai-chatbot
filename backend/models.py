@@ -166,9 +166,9 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_admin = Column(Boolean, nullable=False, default=False, server_default="false")
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="SET NULL", use_alter=True, name="fk_users_client_id"),
+        ForeignKey("tenants.id", ondelete="SET NULL", use_alter=True, name="fk_users_tenant_id"),
         nullable=True,
         index=True,
     )
@@ -189,17 +189,17 @@ class User(Base):
         onupdate=_utcnow,
     )
 
-    clients = relationship(
-        "Client",
+    tenant = relationship(
+        "Tenant",
         back_populates="user",
-        foreign_keys="Client.user_id",
+        foreign_keys="Tenant.user_id",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
 
 
-class Client(Base):
-    __tablename__ = "clients"
+class Tenant(Base):
+    __tablename__ = "tenants"
 
     id = Column(
         PG_UUID(as_uuid=True),
@@ -238,34 +238,34 @@ class Client(Base):
         onupdate=_utcnow,
     )
 
-    user = relationship("User", back_populates="clients", foreign_keys="Client.user_id")
+    user = relationship("User", back_populates="tenant", foreign_keys="Tenant.user_id")
     documents = relationship(
         "Document",
-        back_populates="client",
+        back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     url_sources = relationship(
         "UrlSource",
-        back_populates="client",
+        back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     quick_answers = relationship(
         "QuickAnswer",
-        back_populates="client",
+        back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     chats = relationship(
         "Chat",
-        back_populates="client",
+        back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
     escalation_tickets = relationship(
         "EscalationTicket",
-        back_populates="client",
+        back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
@@ -279,9 +279,9 @@ class Document(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -317,7 +317,7 @@ class Document(Base):
         onupdate=_utcnow,
     )
 
-    client = relationship("Client", back_populates="documents")
+    tenant = relationship("Tenant", back_populates="documents")
     source = relationship("UrlSource", back_populates="documents")
     embeddings = relationship(
         "Embedding",
@@ -335,9 +335,9 @@ class UrlSource(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -376,7 +376,7 @@ class UrlSource(Base):
         onupdate=_utcnow,
     )
 
-    client = relationship("Client", back_populates="url_sources")
+    tenant = relationship("Tenant", back_populates="url_sources")
     documents = relationship(
         "Document",
         back_populates="source",
@@ -439,7 +439,7 @@ class QuickAnswer(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -465,7 +465,7 @@ class QuickAnswer(Base):
         UniqueConstraint("source_id", "key", name="uq_quick_answers_source_key"),
     )
 
-    client = relationship("Client", back_populates="quick_answers")
+    tenant = relationship("Tenant", back_populates="quick_answers")
     source = relationship("UrlSource", back_populates="quick_answers")
 
 
@@ -511,7 +511,7 @@ class TenantProfile(Base):
 
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         primary_key=True,
         index=True,
     )
@@ -531,7 +531,7 @@ class TenantProfile(Base):
     )  # 'pending' | 'done' | 'failed'
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 
-    client = relationship("Client")
+    tenant = relationship("Tenant")
 
 
 class TenantFaq(Base):
@@ -546,7 +546,7 @@ class TenantFaq(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -561,7 +561,7 @@ class TenantFaq(Base):
     source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
-    client = relationship("Client")
+    tenant = relationship("Tenant")
 
 
 class LogAnalysisState(Base):
@@ -571,7 +571,7 @@ class LogAnalysisState(Base):
 
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         primary_key=True,
     )
     last_run_at = Column(DateTime, nullable=True)
@@ -614,7 +614,7 @@ class LogAnalysisState(Base):
         server_default="1",
     )
 
-    client = relationship("Client")
+    tenant = relationship("Tenant")
 
 
 class MessageEmbedding(Base):
@@ -628,7 +628,7 @@ class MessageEmbedding(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -636,7 +636,7 @@ class MessageEmbedding(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     last_used_at = Column(DateTime, nullable=False, default=_utcnow)
 
-    client = relationship("Client")
+    tenant = relationship("Tenant")
 
 
 class Chat(Base):
@@ -647,9 +647,9 @@ class Chat(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -682,7 +682,7 @@ class Chat(Base):
         onupdate=_utcnow,
     )
 
-    client = relationship("Client", back_populates="chats")
+    tenant = relationship("Tenant", back_populates="chats")
     messages = relationship(
         "Message",
         back_populates="chat",
@@ -694,7 +694,7 @@ class Chat(Base):
 class EscalationTicket(Base):
     __tablename__ = "escalation_tickets"
     __table_args__ = (
-        UniqueConstraint("client_id", "ticket_number", name="uq_escalation_client_ticket_number"),
+        UniqueConstraint("tenant_id", "ticket_number", name="uq_escalation_tenant_ticket_number"),
     )
 
     id = Column(
@@ -702,9 +702,9 @@ class EscalationTicket(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -761,7 +761,7 @@ class EscalationTicket(Base):
     )
     session_id = Column(PG_UUID(as_uuid=True), nullable=True, index=True)
 
-    client = relationship("Client", back_populates="escalation_tickets")
+    tenant = relationship("Tenant", back_populates="escalation_tickets")
     chat = relationship("Chat", foreign_keys=[chat_id])
 
 
@@ -817,7 +817,7 @@ class GapCluster(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -865,7 +865,7 @@ class GapDocTopic(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -905,7 +905,7 @@ class GapQuestion(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -939,7 +939,7 @@ class GapDismissal(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1005,7 +1005,7 @@ class GapAnalyzerJob(Base):
     )
     tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1131,9 +1131,9 @@ class PiiEvent(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1176,9 +1176,9 @@ class UserSession(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    client_id = Column(
+    tenant_id = Column(
         PG_UUID(as_uuid=True),
-        ForeignKey("clients.id", ondelete="CASCADE"),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -1194,13 +1194,13 @@ class UserSession(Base):
 
 
 Index(
-    "ix_user_sessions_client_user",
-    UserSession.client_id,
+    "ix_user_sessions_tenant_user",
+    UserSession.tenant_id,
     UserSession.user_id,
 )
 Index(
-    "uq_user_sessions_client_user_active",
-    UserSession.client_id,
+    "uq_user_sessions_tenant_user_active",
+    UserSession.tenant_id,
     UserSession.user_id,
     unique=True,
     postgresql_where=UserSession.session_ended_at.is_(None),
@@ -1249,7 +1249,7 @@ class EvalSession(Base):
         nullable=False,
         index=True,
     )
-    bot_id = Column(String(64), nullable=False, index=True)
+    tenant_id = Column(String(64), nullable=False, index=True)
     started_at = Column(DateTime, nullable=False, default=_utcnow)
 
     tester = relationship("Tester", back_populates="sessions")

@@ -16,7 +16,7 @@ from backend.gap_analyzer._repo.capabilities import (
 from backend.gap_analyzer._repo.records import ModeACorpusChunk, ModeADismissalRecord
 from backend.gap_analyzer.enums import GapDocTopicStatus, GapSource
 from backend.gap_analyzer.prompts import ModeATopicCandidate
-from backend.models import Client, Document, Embedding, GapDismissal, GapDocTopic
+from backend.models import Document, Embedding, GapDismissal, GapDocTopic, Tenant
 
 
 def _mode_a_embedding_rows(
@@ -28,7 +28,7 @@ def _mode_a_embedding_rows(
     rows_query = (
         db.query(Embedding, Document)
         .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.client_id == tenant_id)
+        .filter(Document.tenant_id == tenant_id)
         .filter(Document.status == "ready")
         .filter(Embedding.chunk_text.isnot(None))
         .order_by(Document.id.asc(), Embedding.id.asc())
@@ -49,8 +49,8 @@ class _ModeAQueriesOps:
         self._db = db
 
     def get_client_openai_key(self, tenant_id: UUID) -> str | None:
-        client = self._db.get(Client, tenant_id)
-        return client.openai_api_key if client is not None else None
+        tenant = self._db.get(Tenant, tenant_id)
+        return tenant.openai_api_key if tenant is not None else None
 
     def get_latest_mode_a_hash(self, tenant_id: UUID) -> str | None:
         row = (
@@ -71,7 +71,7 @@ class _ModeAQueriesOps:
         rows = (
             self._db.query(Embedding, Document)
             .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.client_id == tenant_id)
+            .filter(Document.tenant_id == tenant_id)
             .filter(Document.status == "ready")
             .filter(Embedding.chunk_text.isnot(None))
             .order_by(Document.id.asc(), Embedding.id.asc())

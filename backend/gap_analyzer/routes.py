@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
-from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
 from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
@@ -28,6 +27,7 @@ from backend.gap_analyzer.schemas import (
     RecalculateCommandResult,
 )
 from backend.models import User
+from backend.tenants.service import get_tenant_by_user
 
 gap_analyzer_router = APIRouter(tags=["gap-analyzer"])
 
@@ -41,10 +41,10 @@ def _resolve_gap_analyzer_repository(*, db: Session) -> SqlAlchemyGapAnalyzerRep
 
 
 def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
-    client = get_client_by_user(current_user.id, db)
-    if client is None:
-        raise HTTPException(status_code=404, detail="Client not found")
-    return client.id
+    tenant = get_tenant_by_user(current_user.id, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return tenant.id
 
 
 @gap_analyzer_router.get("", response_model=GapAnalyzerResponse)

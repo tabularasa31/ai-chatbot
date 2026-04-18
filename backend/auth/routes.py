@@ -28,12 +28,12 @@ from backend.auth.service import (
     register_user,
     reset_password,
 )
-from backend.clients.service import ensure_client_for_user
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.email.service import send_email
 from backend.models import User
+from backend.tenants.service import ensure_tenant_for_user
 
 auth_router = APIRouter(tags=["auth"])
 
@@ -139,7 +139,7 @@ def verify_email(
     user.is_verified = True
     user.verification_token = None
     user.verification_expires_at = None
-    ensure_client_for_user(user.id, db)
+    ensure_tenant_for_user(user.id, db)
     db.commit()
 
     jwt_token, expires_in = create_token_for_user(user)

@@ -107,13 +107,11 @@ def test_widget_chat_accepts_4000_chars_exactly(
     assert response.status_code == 200
 
 
-def test_widget_chat_accepts_body_and_query_fallback(
+def test_widget_chat_rejects_query_only_message(
     mock_openai_client: Mock,
     client: TestClient,
     db_session: Session,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level("INFO")
     body = _create_widget_client(
         client,
         db_session,
@@ -136,8 +134,8 @@ def test_widget_chat_accepts_body_and_query_fallback(
     )
 
     assert body_response.status_code == 200
-    assert query_response.status_code == 200
-    assert "widget_chat_legacy_query_params" in caplog.text
+    assert query_response.status_code == 422
+    assert query_response.json()["detail"]["code"] == "message_required"
 
 
 def test_widget_chat_rejects_empty_message(

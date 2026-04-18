@@ -29,7 +29,6 @@ Required env:
 Useful optional env:
 
 - `NEXT_PUBLIC_LANDING_DEMO_BOT_ID` — preferred public bot ID for the live landing-page demo chat
-- `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID` — legacy alias for the same public bot ID; kept for compatibility
 
 ## Scripts
 

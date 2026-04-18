@@ -4,12 +4,12 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function POST(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const botId = searchParams.get("botId") || searchParams.get("clientId");
+  const botId = searchParams.get("botId");
   const sessionId = searchParams.get("session_id");
 
   if (!botId || !sessionId) {
     return NextResponse.json(
-      { detail: "botId (or legacy clientId) and session_id are required" },
+      { detail: "botId and session_id are required" },
       { status: 400 }
     );
   }

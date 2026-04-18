@@ -123,7 +123,7 @@ Create an internal tester (uses app DB from `DATABASE_URL` / `.env`):
 PYTHONPATH=. python scripts/create_tester.py --username anna --password 'your-secret'
 ```
 
-Manual UI: **`/eval/chat?bot_id=<widget bot ID>`** — same value as `embed.js?clientId=ch_…` (public bot ID; `clientId` is kept for widget compatibility), not the private API key.
+Manual UI: **`/eval/chat?bot_id=<widget bot ID>`** — same value as `embed.js?botId=ch_…` (public bot ID), not the private API key.
 
 ## Coverage Snapshot (backend, SQLite-only)
 

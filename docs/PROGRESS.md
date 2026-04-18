@@ -51,10 +51,9 @@
 - ✅ **Knowledge Hub wording updated:** dashboard profile UI now uses **Topics** instead of **Modules** for extracted documentation themes.
 - ✅ **Meaning clarified:** these items are documented as extracted doc themes, not guaranteed canonical product module names.
 
-### API and extraction compatibility
+### API and extraction cleanup
 
 - ✅ **Public profile contract updated:** `GET/PATCH /knowledge/profile` now uses `topics` as the canonical public field.
-- ✅ **Backward compatibility preserved:** `modules` remains accepted/emitted as a compatibility alias while the transition is in progress.
 - ✅ **Extractor prompt updated:** tenant knowledge extraction now asks the model for `topics`, with fallback support for legacy `modules` payloads.
 
 ### Docs sync
@@ -118,7 +117,7 @@
 ### Typed chat outcomes + clarification policy
 
 - ✅ **Typed chat outcomes** (`backend/chat/service.py`, `backend/chat/schemas.py`): chat turns now resolve to `answer`, `clarification`, or `partial_with_clarification` instead of treating every assistant turn as plain answer text.
-- ✅ **Canonical additive response contract:** `POST /chat` and `POST /widget/chat` now return canonical `text`, `message_type`, and optional structured `clarification`, while keeping legacy `answer` / `response` aliases for compatibility.
+- ✅ **Canonical additive response contract:** `POST /chat` and `POST /widget/chat` now return canonical `text`, `message_type`, and optional structured `clarification`.
 - ✅ **Deterministic clarification policy:** clarification is considered only after the normal guard/FAQ/retrieval pipeline and only for narrow MVP triggers: ambiguous intent, missing critical slot, or low retrieval confidence.
 - ✅ **Safe partial-answer boundary:** `partial_with_clarification` is limited to approved safe sources rather than free-form “weak answer” generation.
 
@@ -302,10 +301,10 @@
 ### Live chat demo on landing page (feature/landing-demo-chat)
 
 - ✅ **DemoBlock** — заменён статичный макет чата на `DemoChat`: живые API-запросы к `/widget/chat`, тёмная цветовая схема лендинга (`#2D2D44` / `#38BDF8` / `#E879F9`), аватары у сообщений бота, typing-indicator (три точки). Анимация появления переведена на `whileInView + once: true` — не сбрасывается при скролле. Скролл сообщений происходит внутри контейнера чата, не прокручивает страницу.
-- ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: frontend product seam now accepts `botId` and still understands legacy `clientId`; при проксировании на бэкенд значение уходит как `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
+- ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: frontend product seam accepts `botId`; при проксировании на бэкенд значение уходит как `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
 - ✅ **ChatWidget error handling** — добавлена `formatApiDetail`: корректно читает `detail` из FastAPI-ответа в любом формате (строка, массив validation objects). Устранён `[object Object]` в сообщениях об ошибках.
-- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_BOT_ID` is now the preferred env for the landing demo public bot ID; legacy `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID` still works as a compatibility alias. При отсутствии — fallback-заглушка без падения страницы.
-- **Setup:** set `NEXT_PUBLIC_LANDING_DEMO_BOT_ID=ch_...` (public bot ID from the dashboard embed snippet). Legacy `NEXT_PUBLIC_LANDING_DEMO_CLIENT_ID=ch_...` still works in `.env.local` and Vercel env until fully migrated.
+- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_BOT_ID` is the env for the landing demo public bot ID. При отсутствии — fallback-заглушка без падения страницы.
+- **Setup:** set `NEXT_PUBLIC_LANDING_DEMO_BOT_ID=ch_...` (public bot ID from the dashboard embed snippet).
 
 ---
 
@@ -332,7 +331,7 @@
 ### Documentation sync (registry + product docs)
 
 - ✅ **`IMPLEMENTED_FEATURES.md` / `PROGRESS.md`** — путь UI для FI-021: `knowledge/page.tsx` (старый `/documents` удалён)
-- ✅ **`docs/04-features.md`** — embed docs now distinguish public bot terminology from the legacy `clientId` compatibility seam (`embed.js?clientId=…`, optional `Chat9Config.widgetUrl`); Dashboard section names stay aligned with UI-NAV (Knowledge, Agents, sidebar); Admin — в сайдбаре
+- ✅ **`docs/04-features.md`** — embed docs now describe the public bot ID seam via `embed.js?botId=…` and optional `Chat9Config.widgetUrl`; Dashboard section names stay aligned with UI-NAV (Knowledge, Agents, sidebar); Admin — в сайдбаре
 - ✅ **`demo-docs/04-dashboard-features.md`** — Knowledge hub, Agents (`/settings`), навигация через sidebar
 - ✅ **`README.md`** — формулировка про Dashboard / Knowledge hub
 
@@ -383,7 +382,7 @@
 
 ### Disclosure controls (FI-DISC) — client-wide response level
 - ✅ **FI-DISC (v1)** — один уровень детализации ответа на весь тенант (**Detailed** / **Standard** / **Corporate**) для всех каналов (виджет, `POST /chat` по X-API-Key); жёсткие лимиты + блок `[Response level: …]` в system-части RAG-промпта (`build_rag_prompt` / `generate_answer`); загрузка `Client.disclosure_config` в `process_chat_message` и `run_debug`
-- **Хранение:** `clients.disclosure_config` JSON; каноническое поле **`level`**; при чтении поддерживается алиас **`default_level`**
+- **Хранение:** `clients.disclosure_config` JSON; каноническое поле **`level`**
 - **API:** `GET` / `PUT /clients/me/disclosure` (PUT — только для подтверждённого email)
 - **UI:** `frontend/app/(app)/settings/disclosure/page.tsx`, пункт навигации **Response controls**, `api.disclosure`
 - **Миграция:** `fi_disc_v1` (`backend/migrations/versions/fi_disc_v1.py`); модуль `backend/disclosure_config.py`; тесты `tests/test_disclosure.py`
@@ -398,7 +397,7 @@
 
 ### Widget / marketing
 - ✅ **FI-038** — футер виджета «Powered by Chat9 →» в `frontend/components/ChatWidget.tsx` (ссылка на сайт; prod: iframe-виджет через `backend/static/embed.js` + `/widget`)
-- Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed seam: product-facing bot ID with legacy `clientId` / `public_id` compatibility
+- Удалён неиспользуемый legacy-скрипт `backend/widget/static/embed.js` (старый `data-api-key` + `#ai-chat-widget`); README, demo-docs и `docs/03-tech-stack.md` приведены к актуальному embed seam: product-facing bot ID via `botId` / `public_id`
 
 ### Search / retrieval
 - ✅ **FI-019 ext (FI-008)** — BM25 + RRF гибридный поиск (`rank-bm25`); промпт `FI-019ext-bm25-hybrid-hnsw.md` удалён после внедрения
@@ -481,7 +480,7 @@
 - ✅ **FI-EMBED-MVP** — Zero-config widget embedding (CORS solved via iframe)
   - `public_id` on Client model (ch_xxx format)
   - `/embed.js` public endpoint
-  - `/widget/chat` public API (no auth, clientId-based)
+  - `/widget/chat` public API (no auth, public-bot-id based)
   - `/widget` iframe page + ChatWidget component
   - Dashboard shows embed code
 - ✅ **FI-AUTH: Forgot Password** — Full reset flow

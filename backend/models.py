@@ -673,6 +673,7 @@ class Chat(Base):
         server_default="false",
     )
     ended_at = Column(DateTime, nullable=True)
+    last_response_language = Column(String(16), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

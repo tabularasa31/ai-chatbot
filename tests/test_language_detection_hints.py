@@ -1,9 +1,10 @@
-"""Tests for _heuristic_language_detection Latin-word hint suppression on single-token input.
+"""Tests for the Latin-word hint suppression on single English-token inputs.
 
-Rule: _LATIN_WORD_HINTS only fire when len(tokens) >= 2.  A lone word like
-"hello" or "bonjour" must not be forced to a language through the hint path —
-it should fall back to "unknown" (relying on sticky or default English
-resolution upstream).
+Rule: for single-token inputs, English hints (hello/pricing/thanks) are
+suppressed because they are common cross-language words that cause false
+positives in established conversations.  Non-English hints (bonjour/hola/…)
+are retained even for single tokens because they are strong first-turn signals
+and there is no sticky history to fall back on yet.
 """
 from __future__ import annotations
 
@@ -23,75 +24,83 @@ def clear_cache():
 
 
 # ---------------------------------------------------------------------------
-# Single-word: hints must NOT fire
+# Single-word English hints must NOT fire (false-positive prevention)
 # ---------------------------------------------------------------------------
 
 
-def test_single_word_hello_not_forced_en():
-    """'hello' alone must not be forced to en via the hint path."""
-    result = detect_language("hello")
-    # The single-ASCII-token guard in _detect_language_uncached returns "unknown"
-    # for all single-word ASCII inputs regardless; what we verify is that no
-    # reliable English signal is asserted from the hint.
-    assert not result.is_reliable or result.detected_language == "unknown"
+@pytest.mark.parametrize("word", ["hello", "pricing", "thanks"])
+def test_single_english_hint_word_not_forced(word: str):
+    """Single English hint words must not produce a reliable signal via the hint path.
 
-
-def test_single_word_bonjour_not_forced_fr():
-    """'bonjour' alone must not be forced to fr via the hint path."""
-    result = detect_language("bonjour")
-    assert not result.is_reliable or result.detected_language == "unknown"
-
-
-def test_single_word_hola_not_forced_es():
-    """'hola' alone must not be forced to es via the hint path."""
-    result = detect_language("hola")
-    assert not result.is_reliable or result.detected_language == "unknown"
-
-
-def test_single_word_hallo_not_forced_de():
-    """'hallo' alone must not be forced to de via the hint path."""
-    result = detect_language("hallo")
+    These words appear in any language context (copied text, UI labels, debug
+    output) and would cause false language flips in established conversations.
+    The single-ASCII-token guard in _detect_language_uncached returns "unknown"
+    for them regardless; the hint must not override that.
+    """
+    result = detect_language(word)
     assert not result.is_reliable or result.detected_language == "unknown"
 
 
 # ---------------------------------------------------------------------------
-# Multi-word: hints SHOULD still fire
+# Single-word non-English hints MUST still fire (first-turn signal)
 # ---------------------------------------------------------------------------
 
 
-def test_two_token_hello_world_detected_en():
-    """'hello world' (two tokens) should still trigger the en hint."""
-    result = detect_language("hello world")
-    assert result.detected_language == "en"
-    assert result.is_reliable
+@pytest.mark.parametrize(
+    "word, expected_lang",
+    [
+        ("bonjour", "fr"),
+        ("merci", "fr"),
+        ("hola", "es"),
+        ("gracias", "es"),
+        ("hallo", "de"),
+        ("guten", "de"),
+        ("obrigado", "pt"),
+    ],
+)
+def test_single_non_english_hint_word_detected(word: str, expected_lang: str):
+    """Single non-English hint words must resolve to the correct language.
 
-
-def test_two_token_merci_beaucoup_detected_fr():
-    """'merci beaucoup' (two tokens) should still trigger the fr hint."""
-    result = detect_language("merci beaucoup")
-    assert result.detected_language == "fr"
-    assert result.is_reliable
-
-
-def test_two_token_hola_amigo_detected_es():
-    """'hola amigo' (two tokens) should still trigger the es hint."""
-    result = detect_language("hola amigo")
-    assert result.detected_language == "es"
+    On a first real turn with no sticky history these are the only cheap signal
+    available; suppressing them would regress the user's language to English.
+    """
+    result = detect_language(word)
+    assert result.detected_language == expected_lang
     assert result.is_reliable
 
 
 # ---------------------------------------------------------------------------
-# Single-word short tokens: must produce no reliable signal (sticky safety)
+# Multi-token inputs: all hints fire normally
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected_lang",
+    [
+        ("hello world", "en"),
+        ("merci beaucoup", "fr"),
+        ("hola amigo", "es"),
+        ("guten morgen", "de"),
+    ],
+)
+def test_multi_token_hints_fire(text: str, expected_lang: str):
+    """Multi-token inputs must trigger all hints, including English ones."""
+    result = detect_language(text)
+    assert result.detected_language == expected_lang
+    assert result.is_reliable
+
+
+# ---------------------------------------------------------------------------
+# Very short tokens: no reliable signal (sticky safety)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("word", ["ok", "hi", "yes", "no"])
 def test_short_single_word_unreliable(word: str):
-    """Very short single words must yield no reliable detection signal.
+    """Very short (≤3-char) words must yield no reliable signal.
 
-    In a sticky-enabled caller, an unreliable result cannot override a
-    previously established language, so Russian chats stay Russian even if
-    the user types a brief English word.
+    Callers with sticky logic cannot flip an established language on these;
+    callers without history fall back safely to English.
     """
     result = detect_language(word)
     assert not result.is_reliable

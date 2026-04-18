@@ -37,7 +37,7 @@ class ClassifiedError:
     message: str
 
 
-def classify_openai_error(exc: BaseException) -> ClassifiedError:
+def classify_openai_error(exc: Exception) -> ClassifiedError:
     status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
     retry_after = _parse_retry_after(exc)
     message = str(exc)[:500]
@@ -58,7 +58,7 @@ def classify_openai_error(exc: BaseException) -> ClassifiedError:
     return ClassifiedError(OpenAIFailureKind.PERMANENT, None, None, message)
 
 
-def _parse_retry_after(exc: BaseException) -> float | None:
+def _parse_retry_after(exc: Exception) -> float | None:
     response = getattr(exc, "response", None)
     if response is None:
         return None

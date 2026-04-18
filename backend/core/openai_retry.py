@@ -6,10 +6,14 @@ import logging
 import random
 import time
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from backend.core.config import settings
-from backend.core.openai_errors import OpenAIFailureKind, classify_openai_error
+from backend.core.openai_errors import (
+    ClassifiedError,
+    OpenAIFailureKind,
+    classify_openai_error,
+)
 
 T = TypeVar("T")
 
@@ -28,12 +32,12 @@ def call_openai_with_retry(
     started = time.monotonic()
     max_attempts = settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds
-    last_exc: BaseException | None = None
+    last_exc: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
         try:
             return fn()
-        except BaseException as exc:
+        except Exception as exc:
             classified = classify_openai_error(exc)
             if classified.kind == OpenAIFailureKind.PERMANENT:
                 raise
@@ -81,7 +85,7 @@ def call_openai_with_retry(
 
 def _delay_for_user(
     *,
-    classified: Any,
+    classified: ClassifiedError,
     attempt: int,
     budget_seconds: float,
 ) -> float:
@@ -104,7 +108,7 @@ def _log_retry_exhausted(
     operation: str,
     attempt: int,
     elapsed: float,
-    classified: Any,
+    classified: ClassifiedError,
 ) -> None:
     logger.warning(
         "openai_user_retry_exhausted",

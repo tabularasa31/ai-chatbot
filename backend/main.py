@@ -21,6 +21,7 @@ from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.escalation.routes import escalation_router
 from backend.eval.routes import eval_router
+from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.knowledge.routes import knowledge_router
 from backend.observability import init_observability, shutdown_observability
@@ -35,6 +36,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        gap_graceful_shutdown(timeout_seconds=25.0)
         shutdown_observability()
 
 

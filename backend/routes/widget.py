@@ -308,7 +308,6 @@ def widget_chat(
 
     return {
         "text": outcome.text,
-        "response": outcome.text,
         "session_id": str(sid),
         "chat_ended": outcome.chat_ended,
     }

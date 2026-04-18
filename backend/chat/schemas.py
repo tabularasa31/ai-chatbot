@@ -58,7 +58,6 @@ class ChatResponse(BaseModel):
     """Response from chat endpoint."""
 
     text: str
-    answer: str
     session_id: UUID
     source_documents: list[UUID]
     tokens_used: int

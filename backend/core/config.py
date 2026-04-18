@@ -85,6 +85,32 @@ class Settings(BaseSettings):
         10.0,
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
     )
+    openai_user_retry_max_attempts: int = Field(
+        3,
+        alias="OPENAI_USER_RETRY_MAX_ATTEMPTS",
+        ge=1,
+        le=5,
+    )
+    openai_user_retry_budget_seconds: float = Field(
+        1.5,
+        alias="OPENAI_USER_RETRY_BUDGET_SECONDS",
+        gt=0,
+    )
+    gap_transient_max_attempts: int = Field(
+        5,
+        alias="GAP_TRANSIENT_MAX_ATTEMPTS",
+        ge=1,
+    )
+    gap_base_delay_seconds: float = Field(
+        30.0,
+        alias="GAP_BASE_DELAY_SECONDS",
+        gt=0,
+    )
+    gap_max_delay_seconds: float = Field(
+        1800.0,
+        alias="GAP_MAX_DELAY_SECONDS",
+        gt=0,
+    )
 
     # ── Injection detector v2 ────────────────────────────────────────────
     injection_semantic_threshold: float = Field(

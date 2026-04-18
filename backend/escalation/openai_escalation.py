@@ -13,6 +13,7 @@ from backend.chat.language import (
     log_llm_tokens,
 )
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.models import EscalationPhase
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,15 @@ def complete_escalation_openai_turn(
 
     try:
         client = get_openai_client(api_key)
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=messages,
-            temperature=0.3,
-            max_tokens=600,
-            response_format={"type": "json_object"},
+        response = call_openai_with_retry(
+            "escalation_complete_turn",
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=600,
+                response_format={"type": "json_object"},
+            ),
         )
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)

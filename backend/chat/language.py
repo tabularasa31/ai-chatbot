@@ -7,10 +7,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 
-from openai import APIError
-
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -462,26 +461,29 @@ def translate_text_result(
 
     try:
         client = get_openai_client(api_key)
-        response = client.chat.completions.create(
-            model=settings.localization_model,
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You translate support FAQ answers. Translate the FAQ answer strictly "
-                        f"into {normalized_target}. Preserve semantic equivalence and do not "
-                        "broaden or invent information beyond the provided answer. Preserve links, "
-                        "product names, commands, field names, code snippets, quoted config keys, "
-                        "identifiers, placeholders, and ticket tokens exactly. Return only the "
-                        "translated FAQ answer."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"FAQ answer to translate:\n{source_text}",
-                },
-            ],
+        response = call_openai_with_retry(
+            "chat_translate",
+            lambda: client.chat.completions.create(
+                model=settings.localization_model,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You translate support FAQ answers. Translate the FAQ answer strictly "
+                            f"into {normalized_target}. Preserve semantic equivalence and do not "
+                            "broaden or invent information beyond the provided answer. Preserve links, "
+                            "product names, commands, field names, code snippets, quoted config keys, "
+                            "identifiers, placeholders, and ticket tokens exactly. Return only the "
+                            "translated FAQ answer."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"FAQ answer to translate:\n{source_text}",
+                    },
+                ],
+            ),
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(operation="translate", target_language=normalized_target, tokens=tokens_used)
@@ -489,7 +491,7 @@ def translate_text_result(
             return LocalizationResult(text=source_text, tokens_used=tokens_used)
         translated = (response.choices[0].message.content or "").strip()
         return LocalizationResult(text=translated or source_text, tokens_used=tokens_used)
-    except (APIError, IndexError) as exc:
+    except Exception as exc:
         logger.warning("FAQ translation failed; using source text: %s", exc)
         return LocalizationResult(text=source_text, tokens_used=0)
 
@@ -606,24 +608,27 @@ def _invoke_localize_llm(
 ) -> LocalizationResult:
     try:
         client = get_openai_client(api_key)
-        response = client.chat.completions.create(
-            model=settings.localization_model,
-            temperature=0,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You localize assistant messages. Rewrite the assistant message strictly "
-                        f"in {target_language}. Preserve meaning, tone, product names, module "
-                        "names, placeholders, quoted config keys, commands, code snippets, links, "
-                        "and ticket tokens exactly. Return only the localized assistant message."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Assistant message to localize:\n{canonical_text}",
-                },
-            ],
+        response = call_openai_with_retry(
+            operation,
+            lambda: client.chat.completions.create(
+                model=settings.localization_model,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You localize assistant messages. Rewrite the assistant message strictly "
+                            f"in {target_language}. Preserve meaning, tone, product names, module "
+                            "names, placeholders, quoted config keys, commands, code snippets, links, "
+                            "and ticket tokens exactly. Return only the localized assistant message."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Assistant message to localize:\n{canonical_text}",
+                    },
+                ],
+            ),
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)
@@ -631,6 +636,6 @@ def _invoke_localize_llm(
             return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
         localized = (response.choices[0].message.content or "").strip()
         return LocalizationResult(text=localized or canonical_text, tokens_used=tokens_used)
-    except (APIError, IndexError) as exc:
+    except Exception as exc:
         logger.warning("Localization failed; using canonical text: %s", exc)
         return LocalizationResult(text=canonical_text, tokens_used=0)

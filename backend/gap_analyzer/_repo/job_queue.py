@@ -202,7 +202,10 @@ class _JobQueueOps:
                             (GapAnalyzerJob.started_at.is_(None), now),
                             else_=GapAnalyzerJob.started_at,
                         ),
-                        GapAnalyzerJob.attempt_count: GapAnalyzerJob.attempt_count + 1,
+                        GapAnalyzerJob.attempt_count: case(
+                            (GapAnalyzerJob.attempt_count.is_(None), 1),
+                            else_=GapAnalyzerJob.attempt_count + 1,
+                        ),
                         GapAnalyzerJob.updated_at: now,
                     },
                     synchronize_session=False,

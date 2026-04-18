@@ -116,7 +116,7 @@ class _ModeBQueriesOps:
                 .filter(Document.client_id == tenant_id)
                 .filter(Document.status == "ready")
                 .filter(Embedding.chunk_text.isnot(None))
-                .filter(~Document.file_type.in_(excluded_file_types))
+                .filter(~Document.file_type.in_([ft.casefold() for ft in excluded_file_types]))
                 .order_by(distance_expr.asc(), Embedding.id.asc())
                 .limit(top_k)
                 .all()

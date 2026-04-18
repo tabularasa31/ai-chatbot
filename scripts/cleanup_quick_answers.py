@@ -10,11 +10,12 @@ from collections.abc import Callable
 from sqlalchemy.orm import Session
 
 from backend.core.db import SessionLocal
-from backend.documents.quick_answers import _TRIAL_MAX_LEN, _is_acceptable_support_email
+from backend.documents.quick_answers import TRIAL_MAX_LEN, is_acceptable_support_email
 from backend.models import QuickAnswer
 
 logger = logging.getLogger(__name__)
 _ROOT_FALLBACK_METHOD = "root" "_fallback"
+_CLEANUP_BATCH_SIZE = 500
 
 
 def _should_delete(answer: QuickAnswer) -> str | None:
@@ -23,12 +24,12 @@ def _should_delete(answer: QuickAnswer) -> str | None:
 
     if method == _ROOT_FALLBACK_METHOD:
         return _ROOT_FALLBACK_METHOD
-    if answer.key == "support_email" and not _is_acceptable_support_email(
+    if answer.key == "support_email" and not is_acceptable_support_email(
         answer.value,
         page_url=answer.source_url,
     ):
         return "support_email_invalid"
-    if answer.key == "trial_info" and len(answer.value) > _TRIAL_MAX_LEN:
+    if answer.key == "trial_info" and len(answer.value) > TRIAL_MAX_LEN:
         return "trial_info_too_long"
     return None
 
@@ -41,7 +42,7 @@ def run_cleanup(
     db = session_factory()
     removed = 0
     try:
-        answers = db.query(QuickAnswer).all()
+        answers = db.query(QuickAnswer).yield_per(_CLEANUP_BATCH_SIZE)
         for answer in answers:
             reason = _should_delete(answer)
             if reason is None:

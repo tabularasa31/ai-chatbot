@@ -78,6 +78,9 @@ _EMAIL_MAX_LOCAL = 40
 _EMAIL_MAX_TOTAL = 120
 _TRIAL_MAX_LEN = 240
 logger = logging.getLogger(__name__)
+EMAIL_MAX_LOCAL = _EMAIL_MAX_LOCAL
+EMAIL_MAX_TOTAL = _EMAIL_MAX_TOTAL
+TRIAL_MAX_LEN = _TRIAL_MAX_LEN
 
 
 @dataclass
@@ -198,6 +201,10 @@ def _is_acceptable_support_email(value: str, *, page_url: str) -> bool:
         )
         return False
     return True
+
+
+def is_acceptable_support_email(value: str, *, page_url: str) -> bool:
+    return _is_acceptable_support_email(value, page_url=page_url)
 
 
 def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> QuickAnswerCandidate | None:

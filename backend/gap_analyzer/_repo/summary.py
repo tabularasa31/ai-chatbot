@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer._classification import _classify_gap, _impact_statement
+from backend.gap_analyzer._repo.capabilities import _aware_datetime
 from backend.gap_analyzer.enums import GapClusterStatus, GapDocTopicStatus, GapSource
 from backend.gap_analyzer.schemas import GapSummaryResponse
 from backend.models import GapCluster, GapDismissal, GapDocTopic
@@ -98,8 +99,10 @@ class _SummaryOps:
             if bool(is_new):
                 new_badge_count += 1
             cluster_updated_at = last_computed_at or last_question_at or created_at
-            if cluster_updated_at is not None and (last_updated is None or cluster_updated_at > last_updated):
-                last_updated = cluster_updated_at
+            if cluster_updated_at is not None:
+                cluster_updated_at = _aware_datetime(cluster_updated_at)
+                if last_updated is None or cluster_updated_at > last_updated:
+                    last_updated = cluster_updated_at
 
         return GapSummaryResponse(
             total_active=total_active,

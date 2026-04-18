@@ -17,12 +17,46 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |
 | Widget | Dedicated Next.js routes (`/widget`), API calls; some public endpoints in `backend/routes/widget.py` and `backend/widget/` |
 
-Gap Analyzer is now implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
+Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
 
 - `Mode A` — documentation-side gap discovery from the indexed corpus, with deterministic sampling, hash-based no-op skips, coverage gating, dismissal persistence, and Swagger/OpenAPI sources excluded from this document-analysis path
 - `Mode B` — user-question clustering from low-confidence / fallback / rejected / escalated chat signals, with exact feedback correlation, incremental clustering, periodic full reclustering, inactive archive aging, and Mode A ↔ Mode B linking/dedupe on the read side
 
-Gap Analyzer orchestration is now backed by durable `gap_analyzer_jobs` rows with claim/retry state in the backend module itself. The dashboard/API surface currently includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
+Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with claim/retry state. The dashboard/API surface includes `GET /gap-analyzer`, `GET /gap-analyzer/summary`, `POST /gap-analyzer/recalculate`, dismiss/reactivate, and draft-generation endpoints. Linked active Mode B items are the primary surface; archive views stay source-specific.
+
+**Package layout** (`backend/gap_analyzer/`):
+
+| File / dir | Role |
+|---|---|
+| `orchestrator.py` | `GapAnalyzerOrchestrator` — thin shell, delegates to pipelines |
+| `repository.py` | `SqlAlchemyGapAnalyzerRepository` — thin proxy, delegates to `_repo/` |
+| `_repo/` | Persistence subpackage (8 focused ops modules, see below) |
+| `pipelines/mode_a.py` | Mode A coverage pipeline helpers |
+| `pipelines/mode_b.py` | Mode B clustering state machine |
+| `pipelines/link_sync.py` | Mode A ↔ Mode B vector link sync |
+| `pipelines/drafts.py` | Markdown draft builders |
+| `read_models.py` | Response-shape builders (DB rows → API objects) |
+| `_math.py` | Pure vector/token math (no I/O) |
+| `_classification.py` | Gap classification and status helpers |
+| `routes.py`, `schemas.py`, `enums.py`, `events.py`, `domain.py`, `prompts.py`, `jobs.py` | Standard domain slices |
+
+`_repo/` submodules (all imported only through `repository.py`):
+
+| Submodule | Contents |
+|---|---|
+| `records.py` | Public dataclass records (no internal deps) |
+| `capabilities.py` | Dialect capabilities, enum/value helpers, shared utils |
+| `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_Bm25CacheOps` |
+| `signals.py` | `_SignalsOps` — signal ingestion/query |
+| `mode_a_queries.py` | `_ModeAQueriesOps` — corpus/topic queries |
+| `mode_b_queries.py` | `_ModeBQueriesOps` — cluster/question queries + vector/BM25 |
+| `job_queue.py` | `_JobQueueOps` — job lifecycle + helpers |
+| `summary.py` | `_SummaryOps` — gap summary aggregation |
+
+**Import-graph rules** (enforced by `tests/test_gap_analyzer_architecture.py`):
+- `pipelines/` must not import `orchestrator`
+- `_repo/` must not import `pipelines/` or `orchestrator`
+- File-size limits per module prevent re-growth of the monolith
 
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 

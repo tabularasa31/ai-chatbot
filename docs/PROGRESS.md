@@ -378,7 +378,7 @@
 - ✅ **FI-ESC (v1)** — при провале RAG, запросе «человека» или ручном действии создаётся тикет **ESC-####** (per client), письмо на email владельца клиента, ответ пользователю формулирует отдельный OpenAI-call с JSON; машинный маркер `[[escalation_ticket:…]]` при необходимости дописывается в коде
 - **API:** JWT `GET/POST /escalations`, `GET /escalations/{id}`, `POST /escalations/{id}/resolve`; X-API-Key `POST /chat/{session_id}/escalate`; публично `POST /widget/escalate` + `chat_ended` / `locale` на виджете (см. `backend/routes/widget.py`)
 - **UI:** `frontend/app/(app)/escalations/page.tsx`, пункт **Escalations** в навбаре; виджет: **Talk to support**, баннер тикета, блокировка ввода при закрытом чате (`ChatWidget.tsx`)
-- **Модель/миграция:** `EscalationTicket`, колонки `Chat` для state machine; `backend/migrations/versions/fi_esc_v1.py` (`fi_esc_v1`); модуль `backend/escalation/`
+- **Модель/миграция:** `EscalationTicket`, колонки `Chat` для state machine; `fi_esc_v1` (`backend/migrations/versions/fi_esc_v1.py`); модуль `backend/escalation/`
 - **QA:** `docs/qa/FI-ESC-escalation-tickets-qa.md`
 
 ### Disclosure controls (FI-DISC) — client-wide response level
@@ -393,7 +393,7 @@
 - ✅ **FI-KYC** — идентификация пользователя виджета через **краткоживущий HMAC-токен** (не через `data-*` в embed): `POST /widget/session/init` (`api_key`, опционально `identity_token`), ответ `session_id` + `mode` (`identified` | `anonymous`); контекст в `chats.user_context` (JSON); в LLM попадают только `plan_tier`, `locale`, `audience_tag`
 - **Секрет подписи:** `POST/GET/POST` `/clients/me/kyc/secret|status|rotate` (шифрование как у OpenAI key; ротация с перекрытием старого ключа 1 ч); UI: `frontend/app/(app)/settings/widget/page.tsx`, `api.kyc`, пункт навигации **Widget API**
 - ✅ **FI-KYC continuity v2** — backend resume for identified users (`client_id + user_id`, 24h, only open chats), browser-local continuity for anonymous users, `Start new chat` after `chat_ended`, controlled widget session retries, live `user_sessions` lifecycle tracking
-- **Код:** `backend/core/security.py` (`generate_kyc_token`, `validate_kyc_token`), `backend/routes/widget.py`, `backend/widget/service.py`, `backend/user_sessions/service.py`, миграции `fi_kyc_v1.py` и `phase4_user_sessions_active_v1.py`, тесты `tests/test_kyc.py`, `tests/test_widget.py`, `tests/test_chat.py`, `tests/test_escalation.py`
+- **Код:** `backend/core/security.py` (`generate_kyc_token`, `validate_kyc_token`), `backend/routes/widget.py`, `backend/widget/service.py`, `backend/user_sessions/service.py`, миграции `fi_kyc_v1` (`backend/migrations/versions/fi_kyc_v1.py`) и `phase4_user_sessions_active_v1` (`backend/migrations/versions/phase4_user_sessions_active_v1.py`), тесты `tests/test_kyc.py`, `tests/test_widget.py`, `tests/test_chat.py`, `tests/test_escalation.py`
 - Промпт `cursor_prompts/FI-KYC-user-identification.md` **удалён** после внедрения (описание здесь и в `BACKLOG_PRODUCT.md`)
 
 ### Widget / marketing

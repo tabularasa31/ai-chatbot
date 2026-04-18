@@ -1,3 +1,5 @@
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 from typing import Generator, Optional
@@ -45,6 +47,25 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from backend.models import Base
+
+
+@pytest.fixture(autouse=True)
+def reset_gap_analyzer_job_runner_state() -> Generator[None, None, None]:
+    import backend.gap_analyzer.jobs as gap_jobs
+
+    gap_jobs._shutdown_event.clear()
+    gap_jobs._clear_active_job()
+    gap_jobs._job_runner_state = gap_jobs._GapJobRunnerState()
+    try:
+        yield
+    finally:
+        gap_jobs._shutdown_event.set()
+        thread = gap_jobs._job_runner_state.current_thread()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=1.0)
+        gap_jobs._clear_active_job()
+        gap_jobs._job_runner_state = gap_jobs._GapJobRunnerState()
+        gap_jobs._shutdown_event.clear()
 
 
 @pytest.fixture(scope="function")

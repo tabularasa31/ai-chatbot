@@ -195,6 +195,15 @@ class GapAnalyzerRepository(Protocol):
     def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
         ...
 
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
+        ...
+
     def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         ...
 
@@ -422,6 +431,19 @@ class SqlAlchemyGapAnalyzerRepository:
 
     def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
         return self._jobs.fail_gap_job(job_id=job_id, tenant_id=tenant_id, error_message=error_message)
+
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
+        return self._jobs.release_gap_job_for_retry(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            reason=reason,
+        )
 
     def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         return self._jobs.refresh_gap_job_lease(job_id=job_id, tenant_id=tenant_id)

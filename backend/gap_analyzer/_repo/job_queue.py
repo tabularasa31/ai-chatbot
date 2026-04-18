@@ -248,12 +248,44 @@ class _JobQueueOps:
         self._db.flush()
         return updated_rows > 0
 
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
+        capabilities = _repository_capabilities(self._db)
+        now = datetime.now(UTC)
+        updated_rows = (
+            self._db.query(GapAnalyzerJob)
+            .filter(GapAnalyzerJob.id == job_id)
+            .filter(GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
+            .update(
+                {
+                    GapAnalyzerJob.status: _enum_value(GapJobStatus.retry, capabilities=capabilities),
+                    GapAnalyzerJob.leased_at: None,
+                    GapAnalyzerJob.lease_expires_at: None,
+                    GapAnalyzerJob.available_at: now,
+                    GapAnalyzerJob.updated_at: now,
+                    GapAnalyzerJob.last_error: _truncate_gap_job_error(
+                        f"released_for_graceful_shutdown: {reason}"
+                    ),
+                },
+                synchronize_session=False,
+            )
+        )
+        self._db.flush()
+        return updated_rows > 0
+
     def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         now = datetime.now(UTC)
         updated_rows = (
             self._db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
             .filter(GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
             .update(
                 {
                     GapAnalyzerJob.status: _enum_value(GapJobStatus.completed, capabilities=_repository_capabilities(self._db)),
@@ -279,7 +311,11 @@ class _JobQueueOps:
     def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
         job = (
             self._db.query(GapAnalyzerJob)
-            .filter(GapAnalyzerJob.id == job_id, GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(
+                GapAnalyzerJob.id == job_id,
+                GapAnalyzerJob.tenant_id == tenant_id,
+                GapAnalyzerJob.status == GapJobStatus.in_progress,
+            )
             .first()
         )
         if job is None:

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from sqlalchemy.orm import Session
 
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle
 
@@ -120,15 +121,18 @@ def check_relevance_precheck(
 
     def _call_llm() -> tuple[bool, str]:
         openai_client = get_openai_client(api_key)
-        response = openai_client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=80,
-            response_format={"type": "json_object"},
+        response = call_openai_with_retry(
+            "guard_relevance_check",
+            lambda: openai_client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                max_tokens=80,
+                response_format={"type": "json_object"},
+            ),
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)

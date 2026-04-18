@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -58,6 +58,17 @@ class Settings(BaseSettings):
         0.7,
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",
     )
+    localization_model: str = Field(
+        "gpt-4o-mini",
+        alias="LOCALIZATION_MODEL",
+        description="OpenAI chat model used for localize/translate/render paths.",
+    )
+    allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
+    widget_message_max_chars: int = Field(4000, alias="WIDGET_MESSAGE_MAX_CHARS")
+    widget_chat_per_client_rate: str | None = Field(
+        None,
+        alias="WIDGET_CHAT_PER_CLIENT_RATE",
+    )
 
     # Email verification
     EMAIL_FROM: str | None = Field(None, alias="EMAIL_FROM")
@@ -73,6 +84,32 @@ class Settings(BaseSettings):
     openai_request_timeout_seconds: float = Field(
         10.0,
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
+    )
+    openai_user_retry_max_attempts: int = Field(
+        3,
+        alias="OPENAI_USER_RETRY_MAX_ATTEMPTS",
+        ge=1,
+        le=5,
+    )
+    openai_user_retry_budget_seconds: float = Field(
+        1.5,
+        alias="OPENAI_USER_RETRY_BUDGET_SECONDS",
+        gt=0,
+    )
+    gap_transient_max_attempts: int = Field(
+        5,
+        alias="GAP_TRANSIENT_MAX_ATTEMPTS",
+        ge=1,
+    )
+    gap_base_delay_seconds: float = Field(
+        30.0,
+        alias="GAP_BASE_DELAY_SECONDS",
+        gt=0,
+    )
+    gap_max_delay_seconds: float = Field(
+        1800.0,
+        alias="GAP_MAX_DELAY_SECONDS",
+        gt=0,
     )
 
     # ── Injection detector v2 ────────────────────────────────────────────
@@ -123,10 +160,29 @@ class Settings(BaseSettings):
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    @property
+    def effective_widget_chat_per_client_rate(self) -> str:
+        if self.widget_chat_per_client_rate and self.widget_chat_per_client_rate.strip():
+            return self.widget_chat_per_client_rate.strip()
+        if self.environment == "development":
+            return "1000/minute"
+        return "120/minute"
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        items = [
+            item.strip()
+            for item in self.allowed_hosts_raw.split(",")
+            if item.strip()
+        ]
+        return items or ["*"]
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        enable_decoding=False,
+    )
 
 
 settings = Settings()

@@ -21,6 +21,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from backend.core.openai_errors import OpenAIFailureKind
 from backend.gap_analyzer._repo.bm25_cache import (
     invalidate_bm25_cache_for_tenant,  # noqa: F401 — public, re-exported for callers
 )
@@ -192,7 +193,24 @@ class GapAnalyzerRepository(Protocol):
     def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         ...
 
-    def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
+    def fail_gap_job(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        error_message: str,
+        failure_kind: OpenAIFailureKind = OpenAIFailureKind.UNKNOWN,
+        retry_after_seconds: float | None = None,
+    ) -> bool:
+        ...
+
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
         ...
 
     def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
@@ -420,8 +438,35 @@ class SqlAlchemyGapAnalyzerRepository:
     def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         return self._jobs.complete_gap_job(job_id=job_id, tenant_id=tenant_id)
 
-    def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
-        return self._jobs.fail_gap_job(job_id=job_id, tenant_id=tenant_id, error_message=error_message)
+    def fail_gap_job(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        error_message: str,
+        failure_kind: OpenAIFailureKind = OpenAIFailureKind.UNKNOWN,
+        retry_after_seconds: float | None = None,
+    ) -> bool:
+        return self._jobs.fail_gap_job(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            error_message=error_message,
+            failure_kind=failure_kind,
+            retry_after_seconds=retry_after_seconds,
+        )
+
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
+        return self._jobs.release_gap_job_for_retry(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            reason=reason,
+        )
 
     def refresh_gap_job_lease(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         return self._jobs.refresh_gap_job_lease(job_id=job_id, tenant_id=tenant_id)

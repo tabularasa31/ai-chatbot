@@ -1,5 +1,4 @@
 """Gap analyzer job queue operations and helpers."""
-
 from __future__ import annotations
 
 import logging
@@ -9,10 +8,15 @@ from uuid import UUID
 from sqlalchemy import and_, case, or_
 from sqlalchemy.orm import Session
 
+from backend.core.openai_errors import OpenAIFailureKind
 from backend.gap_analyzer._repo.capabilities import (
     _aware_datetime,
     _enum_value,
     _repository_capabilities,
+)
+from backend.gap_analyzer._repo.job_retry import (
+    effective_max_attempts,
+    retry_delay_for_kind,
 )
 from backend.gap_analyzer._repo.records import GapJobEnqueueResult, GapJobRecord
 from backend.gap_analyzer.enums import GapCommandStatus, GapJobKind, GapJobStatus
@@ -20,38 +24,23 @@ from backend.gap_analyzer.schemas import GapRunMode
 from backend.models import GapAnalyzerJob
 
 logger = logging.getLogger(__name__)
-
 _GAP_JOB_LEASE_SECONDS = 1800
-_GAP_JOB_RETRY_DELAYS_SECONDS = (30, 120, 300)
 _GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
 _GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
-
-
 def _gap_job_status(value: GapJobStatus | str) -> GapJobStatus:
     if isinstance(value, GapJobStatus):
         return value
     return GapJobStatus(str(value))
-
-
 def _gap_job_kind(value: GapJobKind | str) -> GapJobKind:
     if isinstance(value, GapJobKind):
         return value
     return GapJobKind(str(value))
-
-
-def _retry_delay_seconds(attempt_count: int) -> int:
-    index = max(0, min(len(_GAP_JOB_RETRY_DELAYS_SECONDS) - 1, max(attempt_count - 1, 0)))
-    return _GAP_JOB_RETRY_DELAYS_SECONDS[index]
-
-
 def _remaining_lease_seconds(lease_expires_at: datetime | None) -> int | None:
     if lease_expires_at is None:
         return None
     aware_lease_expires_at = _aware_datetime(lease_expires_at)
     remaining = int((aware_lease_expires_at - datetime.now(UTC)).total_seconds())
     return max(1, remaining) if remaining > 0 else None
-
-
 def _truncate_gap_job_error(error_message: str) -> str:
     if len(error_message) <= _GAP_JOB_LAST_ERROR_MAX_CHARS:
         return error_message
@@ -61,8 +50,6 @@ def _truncate_gap_job_error(error_message: str) -> str:
         return error_message[-_GAP_JOB_LAST_ERROR_MAX_CHARS:]
     # Keep the traceback tail because the final frames and exception text are usually the most actionable.
     return truncated_prefix + error_message[-tail_size:]
-
-
 class _JobQueueOps:
     def __init__(self, db: Session) -> None:
         self._db = db
@@ -100,13 +87,7 @@ class _JobQueueOps:
         return GapJobEnqueueResult(status=GapCommandStatus.accepted, enqueued=True)
 
     def claim_next_gap_job(self) -> GapJobRecord | None:
-        """Claim the next eligible gap job.
-
-        PostgreSQL uses ``SELECT ... FOR UPDATE SKIP LOCKED`` so the row
-        selection and reservation happen atomically inside the caller-owned
-        transaction. Dialects without ``SKIP LOCKED`` support keep the
-        retry-loop fallback for SQLite test coverage and correctness.
-        """
+        """Claim the next eligible gap job, using SKIP LOCKED when available."""
         capabilities = _repository_capabilities(self._db)
         if capabilities.supports_skip_locked:
             now = datetime.now(UTC)
@@ -248,12 +229,44 @@ class _JobQueueOps:
         self._db.flush()
         return updated_rows > 0
 
+    def release_gap_job_for_retry(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        reason: str,
+    ) -> bool:
+        capabilities = _repository_capabilities(self._db)
+        now = datetime.now(UTC)
+        updated_rows = (
+            self._db.query(GapAnalyzerJob)
+            .filter(GapAnalyzerJob.id == job_id)
+            .filter(GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
+            .update(
+                {
+                    GapAnalyzerJob.status: _enum_value(GapJobStatus.retry, capabilities=capabilities),
+                    GapAnalyzerJob.leased_at: None,
+                    GapAnalyzerJob.lease_expires_at: None,
+                    GapAnalyzerJob.available_at: now,
+                    GapAnalyzerJob.updated_at: now,
+                    GapAnalyzerJob.last_error: _truncate_gap_job_error(
+                        f"released_for_graceful_shutdown: {reason}"
+                    ),
+                },
+                synchronize_session=False,
+            )
+        )
+        self._db.flush()
+        return updated_rows > 0
+
     def complete_gap_job(self, *, job_id: UUID, tenant_id: UUID) -> bool:
         now = datetime.now(UTC)
         updated_rows = (
             self._db.query(GapAnalyzerJob)
             .filter(GapAnalyzerJob.id == job_id)
             .filter(GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(GapAnalyzerJob.status == GapJobStatus.in_progress)
             .update(
                 {
                     GapAnalyzerJob.status: _enum_value(GapJobStatus.completed, capabilities=_repository_capabilities(self._db)),
@@ -276,10 +289,22 @@ class _JobQueueOps:
             return False
         return True
 
-    def fail_gap_job(self, *, job_id: UUID, tenant_id: UUID, error_message: str) -> bool:
+    def fail_gap_job(
+        self,
+        *,
+        job_id: UUID,
+        tenant_id: UUID,
+        error_message: str,
+        failure_kind: OpenAIFailureKind = OpenAIFailureKind.UNKNOWN,
+        retry_after_seconds: float | None = None,
+    ) -> bool:
         job = (
             self._db.query(GapAnalyzerJob)
-            .filter(GapAnalyzerJob.id == job_id, GapAnalyzerJob.tenant_id == tenant_id)
+            .filter(
+                GapAnalyzerJob.id == job_id,
+                GapAnalyzerJob.tenant_id == tenant_id,
+                GapAnalyzerJob.status == GapJobStatus.in_progress,
+            )
             .first()
         )
         if job is None:
@@ -292,15 +317,45 @@ class _JobQueueOps:
         capabilities = _repository_capabilities(self._db)
         now = datetime.now(UTC)
         attempt_count = int(job.attempt_count or 0)
-        max_attempts = int(job.max_attempts or 0)
-        if attempt_count >= max_attempts:
+        max_attempts = effective_max_attempts(job, failure_kind)
+        final_failure = (
+            failure_kind == OpenAIFailureKind.PERMANENT or attempt_count >= max_attempts
+        )
+        if final_failure:
             job.status = _enum_value(GapJobStatus.failed, capabilities=capabilities)
             job.finished_at = now
             job.available_at = now
+            logger.warning(
+                "gap_analyzer_job_final_failure",
+                extra={
+                    "job_id": str(job_id),
+                    "tenant_id": str(tenant_id),
+                    "job_kind": str(job.job_kind),
+                    "attempt_count": attempt_count,
+                    "failure_kind": failure_kind.value,
+                    "last_error_preview": error_message[:200],
+                },
+            )
         else:
-            retry_delay = _retry_delay_seconds(attempt_count)
+            retry_delay = retry_delay_for_kind(
+                attempt_count=attempt_count,
+                failure_kind=failure_kind,
+                retry_after_seconds=retry_after_seconds,
+            )
             job.status = _enum_value(GapJobStatus.retry, capabilities=capabilities)
             job.available_at = now + timedelta(seconds=retry_delay)
+            logger.info(
+                "gap_analyzer_job_retry_scheduled",
+                extra={
+                    "job_id": str(job_id),
+                    "tenant_id": str(tenant_id),
+                    "attempt_count": attempt_count,
+                    "next_attempt": attempt_count + 1,
+                    "failure_kind": failure_kind.value,
+                    "delay_seconds": retry_delay,
+                    "retry_after_hint": retry_after_seconds,
+                },
+            )
         job.leased_at = None
         job.lease_expires_at = None
         job.updated_at = now

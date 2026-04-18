@@ -40,4 +40,5 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
     return OpenAI(
         api_key=decrypted_key,
         timeout=effective_timeout,
+        max_retries=0,
     )

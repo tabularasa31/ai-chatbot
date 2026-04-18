@@ -6,9 +6,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +18,13 @@ from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
 from backend.clients.routes import clients_router
-from backend.core.limiter import limiter
+from backend.core.config import settings
+from backend.core.limiter import hash_ip_for_logs, limiter
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.escalation.routes import escalation_router
 from backend.eval.routes import eval_router
+from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.knowledge.routes import knowledge_router
 from backend.observability import init_observability, shutdown_observability
@@ -35,13 +39,28 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        gap_graceful_shutdown()
         shutdown_observability()
 
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)
 
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    logger.info(
+        "widget_rate_limit_exceeded",
+        extra={
+            "route": request.url.path,
+            "client_id": request.query_params.get("client_id") or "unknown",
+            "ip_hash": hash_ip_for_logs(get_remote_address(request)),
+        },
+    )
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # CORS configuration
 ALLOWED_ORIGINS = [
@@ -60,6 +79,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Browser-Locale"],
 )
+
+if settings.allowed_hosts != ["*"]:
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=settings.allowed_hosts,
+    )
 
 
 @app.exception_handler(Exception)

@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Literal
 
 from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -256,12 +257,15 @@ def adjudicate_contradictions(
     started_at = perf_counter()
     try:
         client = get_openai_client(api_key)
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": _build_prompt(sent_candidates)}],
-            temperature=0,
-            max_tokens=max_tokens,
-            response_format={"type": "json_object"},
+        response = call_openai_with_retry(
+            "search_contradiction_adjudication",
+            lambda: client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": _build_prompt(sent_candidates)}],
+                temperature=0,
+                max_tokens=max_tokens,
+                response_format={"type": "json_object"},
+            ),
         )
         raw_content = response.choices[0].message.content or ""
         parsed = json.loads(raw_content)

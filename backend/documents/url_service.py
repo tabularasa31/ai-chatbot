@@ -1517,9 +1517,6 @@ def _replace_quick_answers_for_source(
     for candidate in quick_answers.values():
         if candidate.key not in SUPPORTED_QUICK_ANSWER_KEYS:
             continue
-        # Skip pure HTML-fallback candidates that carry no real signal
-        if candidate.metadata.get("method") == "root_fallback":
-            continue
         db.add(
             QuickAnswer(
                 tenant_id=source.client_id,

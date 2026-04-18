@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -16,10 +17,11 @@ SUPPORTED_QUICK_ANSWER_KEYS = {
 }
 
 _EMAIL_RE = re.compile(r"\b[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}\b", re.IGNORECASE)
-_TRIAL_RE = re.compile(
-    r"[^.?!\n]*(?:free trial|trial period|[0-9]{1,3}[- ]day free|[0-9]{1,3}[- ]day trial)[^.?!\n]*[.?!]?",
+_TRIAL_CORE_RE = re.compile(
+    r"(?:free trial|trial period|(?P<days>[0-9]{1,3})[- ]day (?:free )?trial)",
     re.IGNORECASE,
 )
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 _PRICING_TEXT_RE = re.compile(r"\b(pricing|plans?|tariff|tarif)\b", re.IGNORECASE)
 _DOCS_TEXT_RE = re.compile(
     r"\b(docs|documentation|developer docs|help center|knowledge base)\b",
@@ -33,6 +35,52 @@ _SUPPORT_CHAT_PATTERNS: dict[str, re.Pattern[str]] = {
     "Crisp": re.compile(r"\$crisp|crisp\.chat|crisp-client", re.IGNORECASE),
     "Drift": re.compile(r"drift", re.IGNORECASE),
 }
+_EMAIL_LOCAL_BLOCKLIST = frozenset(
+    {
+        "noreply",
+        "no-reply",
+        "donotreply",
+        "do-not-reply",
+        "notifications",
+        "notification",
+        "mailer-daemon",
+        "postmaster",
+        "bounce",
+        "bounces",
+        "privacy",
+        "legal",
+        "compliance",
+        "gdpr",
+        "dpo",
+        "dmca",
+        "abuse",
+        "security",
+        "press",
+        "pr",
+        "media",
+        "investors",
+        "ir",
+        "jobs",
+        "careers",
+        "recruiting",
+        "hr",
+        "talent",
+        "marketing",
+        "newsletter",
+        "subscribe",
+        "unsubscribe",
+        "webmaster",
+        "admin",
+        "root",
+    }
+)
+_EMAIL_MAX_LOCAL = 40
+_EMAIL_MAX_TOTAL = 120
+_TRIAL_MAX_LEN = 240
+logger = logging.getLogger(__name__)
+EMAIL_MAX_LOCAL = _EMAIL_MAX_LOCAL
+EMAIL_MAX_TOTAL = _EMAIL_MAX_TOTAL
+TRIAL_MAX_LEN = _TRIAL_MAX_LEN
 
 
 @dataclass
@@ -42,6 +90,18 @@ class QuickAnswerCandidate:
     source_url: str
     score: int
     metadata: dict[str, str]
+
+
+def _log_rejection(*, key: str, reason: str, source_url: str, value: str) -> None:
+    logger.info(
+        "quick_answer_rejected",
+        extra={
+            "key": key,
+            "reason": reason,
+            "source_url": source_url,
+            "value_preview": value[:50],
+        },
+    )
 
 
 def _normalize_url(url: str) -> str:
@@ -88,6 +148,65 @@ def _pick_better(
         current[candidate.key] = candidate
 
 
+def _is_acceptable_support_email(value: str, *, page_url: str) -> bool:
+    if len(value) > _EMAIL_MAX_TOTAL:
+        _log_rejection(
+            key="support_email",
+            reason="length",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    try:
+        local, domain = value.split("@", 1)
+    except ValueError:
+        _log_rejection(
+            key="support_email",
+            reason="malformed",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    if len(local) > _EMAIL_MAX_LOCAL or not local or not domain:
+        _log_rejection(
+            key="support_email",
+            reason="length" if len(local) > _EMAIL_MAX_LOCAL else "malformed",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    normalized_local = local.lower()
+    if normalized_local in _EMAIL_LOCAL_BLOCKLIST:
+        _log_rejection(
+            key="support_email",
+            reason="local_blocklist",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    if ".." in local or local.startswith(".") or local.endswith("."):
+        _log_rejection(
+            key="support_email",
+            reason="malformed",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    if ".." in domain or domain.startswith(".") or domain.endswith("."):
+        _log_rejection(
+            key="support_email",
+            reason="malformed",
+            source_url=page_url,
+            value=value,
+        )
+        return False
+    return True
+
+
+def is_acceptable_support_email(value: str, *, page_url: str) -> bool:
+    return _is_acceptable_support_email(value, page_url=page_url)
+
+
 def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> QuickAnswerCandidate | None:
     best_mailto: QuickAnswerCandidate | None = None
     for anchor in soup.find_all("a", href=True):
@@ -96,6 +215,8 @@ def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> Qui
             email_match = _EMAIL_RE.search(href)
             if email_match:
                 value = email_match.group(0)
+                if not _is_acceptable_support_email(value, page_url=page_url):
+                    continue
                 local_part = value.split("@", 1)[0]
                 context_parts = [
                     anchor.get_text(" ", strip=True),
@@ -118,18 +239,16 @@ def _extract_support_email(soup: BeautifulSoup, text: str, page_url: str) -> Qui
         return best_mailto
     match = _EMAIL_RE.search(text)
     if match:
-        return _candidate("support_email", match.group(0), page_url, 70, method="regex")
+        value = match.group(0)
+        if _is_acceptable_support_email(value, page_url=page_url):
+            return _candidate("support_email", value, page_url, 70, method="regex")
     return None
 
 
 def _extract_documentation_url(soup: BeautifulSoup, page_url: str, root_url: str) -> QuickAnswerCandidate | None:
-    best: QuickAnswerCandidate | None = _candidate(
-        "documentation_url",
-        _normalize_url(root_url),
-        root_url,
-        10,
-        method="root_fallback",
-    )
+    """Returns None if no documentation anchor is found; do not fall back to the site root."""
+
+    best: QuickAnswerCandidate | None = None
     for anchor in soup.find_all("a", href=True):
         href = anchor.get("href") or ""
         text = anchor.get_text(" ", strip=True)
@@ -178,13 +297,30 @@ def _extract_pricing_url(soup: BeautifulSoup, page_url: str, root_url: str) -> Q
 
 
 def _extract_trial_info(text: str, page_url: str) -> QuickAnswerCandidate | None:
-    match = _TRIAL_RE.search(text)
-    if not match:
-        return None
-    sentence = " ".join(match.group(0).split())
-    if not sentence:
-        return None
-    return _candidate("trial_info", sentence[:400], page_url, 80, method="regex")
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        normalized = " ".join(sentence.split())
+        if not normalized:
+            continue
+        match = _TRIAL_CORE_RE.search(normalized)
+        if not match:
+            continue
+        days = match.group("days")
+        if days and not (1 <= int(days) <= 90):
+            _log_rejection(
+                key="trial_info",
+                reason="days_out_of_range",
+                source_url=page_url,
+                value=normalized,
+            )
+            continue
+        value = normalized
+        if len(value) > _TRIAL_MAX_LEN:
+            cut = value.rfind(" ", 0, _TRIAL_MAX_LEN - 1)
+            if cut < 100:
+                cut = _TRIAL_MAX_LEN - 1
+            value = value[:cut].rstrip(",;:") + "…"
+        return _candidate("trial_info", value, page_url, 80, method="regex")
+    return None
 
 
 def _extract_status_page_url(soup: BeautifulSoup, page_url: str) -> QuickAnswerCandidate | None:

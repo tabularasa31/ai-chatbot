@@ -9,7 +9,8 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from backend.chat.language import (
-    localize_text_to_question_language_result,
+    _log_llm_tokens,
+    localize_text_to_language_result,
 )
 from backend.core.openai_client import get_openai_client
 from backend.models import EscalationPhase
@@ -104,12 +105,17 @@ def complete_escalation_openai_turn(
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)
         tokens = response.usage.total_tokens if response.usage else 0
+        _log_llm_tokens(
+            operation="escalate_draft",
+            target_language=escalation_language,
+            tokens=tokens,
+            model=model_name,
+        )
         msg = (data.get("message_to_user") or "").strip()
         if not msg:
-            localization = localize_text_to_question_language_result(
+            localization = localize_text_to_language_result(
                 canonical_text=FALLBACK_EN_GENERIC,
-                question=None,
-                fallback_locale=escalation_language,
+                target_language=escalation_language,
                 api_key=api_key,
             )
             msg = localization.text
@@ -129,10 +135,15 @@ def complete_escalation_openai_turn(
     except Exception as e:
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         tn = fact_json.get("ticket_number")
-        localization = localize_text_to_question_language_result(
+        _log_llm_tokens(
+            operation="escalate_draft",
+            target_language=escalation_language,
+            tokens=0,
+            model=model_name,
+        )
+        localization = localize_text_to_language_result(
             canonical_text=FALLBACK_EN_GENERIC,
-            question=None,
-            fallback_locale=escalation_language,
+            target_language=escalation_language,
             api_key=api_key,
         )
         fb = localization.text

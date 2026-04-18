@@ -4,9 +4,11 @@ import enum
 
 from backend.chat.language import (
     LocalizationResult,
+    _log_llm_tokens,
+    detect_language,
     localize_text_result,
-    localize_text_to_question_language,
-    localize_text_to_question_language_result,
+    localize_text_to_language,
+    localize_text_to_language_result,
 )
 from backend.models import TenantProfile as TenantProfileModel
 
@@ -16,6 +18,18 @@ class RejectReason(enum.Enum):
     NOT_RELEVANT = "not_relevant"
     LOW_RETRIEVAL_SCORE = "low_retrieval"
     INSUFFICIENT_CONFIDENCE = "insufficient_confidence"
+
+
+def _resolve_reject_target_language(
+    *,
+    question: str | None,
+    fallback_locale: str | None,
+) -> str | None:
+    if question and question.strip():
+        detection = detect_language(question)
+        if detection.is_reliable and detection.detected_language != "unknown":
+            return detection.detected_language
+    return fallback_locale
 
 
 def _build_canonical_reject_response(
@@ -77,9 +91,13 @@ def build_reject_response(
         profile=profile,
     )
     if response_language is None:
-        return localize_text_to_question_language(
-            canonical_text=canonical_text,
+        target_language = _resolve_reject_target_language(
             question=question,
+            fallback_locale=fallback_locale,
+        )
+        return localize_text_to_language(
+            canonical_text=canonical_text,
+            target_language=target_language,
             api_key=api_key,
             fallback_locale=fallback_locale,
         )
@@ -104,14 +122,30 @@ def build_reject_response_result(
         profile=profile,
     )
     if response_language is None:
-        return localize_text_to_question_language_result(
-            canonical_text=canonical_text,
+        target_language = _resolve_reject_target_language(
             question=question,
+            fallback_locale=fallback_locale,
+        )
+        result = localize_text_to_language_result(
+            canonical_text=canonical_text,
+            target_language=target_language,
             api_key=api_key,
             fallback_locale=fallback_locale,
         )
-    return localize_text_result(
+        _log_llm_tokens(
+            operation="reject_guard",
+            target_language=target_language or fallback_locale or "en",
+            tokens=result.tokens_used,
+        )
+        return result
+    result = localize_text_result(
         canonical_text=canonical_text,
         response_language=response_language,
         api_key=api_key,
     )
+    _log_llm_tokens(
+        operation="reject_guard",
+        target_language=response_language,
+        tokens=result.tokens_used,
+    )
+    return result

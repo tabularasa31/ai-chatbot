@@ -58,6 +58,11 @@ class Settings(BaseSettings):
         0.7,
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",
     )
+    localization_model: str = Field(
+        "gpt-4o-mini",
+        alias="LOCALIZATION_MODEL",
+        description="OpenAI chat model used for localize/translate/render paths.",
+    )
     allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
     widget_message_max_chars: int = Field(4000, alias="WIDGET_MESSAGE_MAX_CHARS")
     widget_chat_per_client_rate: str | None = Field(

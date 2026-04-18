@@ -19,7 +19,8 @@ PREVIEW_MAX_LEN = 120
 from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
-    localize_text_to_question_language_result,
+    _log_llm_tokens,
+    localize_text_to_language_result,
     render_direct_faq_answer_result,
     resolve_language_context,
 )
@@ -446,10 +447,9 @@ def _build_greeting_result(
         f"I'm the {product_name} assistant and can help with documentation, "
         "product setup, integrations, and finding the right information. Ask your question."
     )
-    return localize_text_to_question_language_result(
+    return localize_text_to_language_result(
         canonical_text=canonical_text,
-        question=None,
-        fallback_locale=response_language,
+        target_language=response_language,
         api_key=api_key,
     )
 
@@ -1050,6 +1050,12 @@ def generate_answer(
         )
         answer_text = response.choices[0].message.content or ""
         total_tokens = response.usage.total_tokens if response.usage else 0
+        _log_llm_tokens(
+            operation="generate",
+            target_language=response_language,
+            tokens=total_tokens,
+            model="gpt-4o-mini",
+        )
         if generation is not None:
             prompt_tokens = _safe_int(
                 getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
@@ -1074,6 +1080,12 @@ def generate_answer(
             )
         return (answer_text.strip(), total_tokens)
     except Exception as exc:
+        _log_llm_tokens(
+            operation="generate",
+            target_language=response_language,
+            tokens=0,
+            model="gpt-4o-mini",
+        )
         if generation is not None:
             generation.end(
                 metadata={

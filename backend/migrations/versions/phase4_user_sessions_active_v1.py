@@ -26,4 +26,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("uq_user_sessions_client_user_active", table_name="user_sessions")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

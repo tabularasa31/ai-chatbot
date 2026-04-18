@@ -8,8 +8,6 @@ Create Date: 2026-03-18 14:47:41.978681
 from __future__ import annotations
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers, used by Alembic.
 revision = '48eb257a6a0a'
@@ -25,7 +23,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "ALTER TABLE clients ALTER COLUMN openai_api_key TYPE VARCHAR(200)"
-    )
-
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

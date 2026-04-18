@@ -78,18 +78,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_chats_escalation_awaiting_ticket_id"), table_name="chats")
-    op.drop_constraint("fk_chats_escalation_awaiting_ticket_id", "chats", type_="foreignkey")
-    op.drop_column("chats", "ended_at")
-    op.drop_column("chats", "escalation_followup_pending")
-    op.drop_column("chats", "escalation_awaiting_ticket_id")
-
-    op.drop_index(op.f("ix_escalation_tickets_session_id"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_chat_id"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_user_id"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_created_at"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_status"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_trigger"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_ticket_number"), table_name="escalation_tickets")
-    op.drop_index(op.f("ix_escalation_tickets_client_id"), table_name="escalation_tickets")
-    op.drop_table("escalation_tickets")
+    # Intentional fail-loud: downgrade is never executed (see project CLAUDE.md).
+    # Keep this as raise, not pass, so accidental `alembic downgrade` errors out
+    # instead of silently moving `alembic_version` backward while schema stays.
+    raise NotImplementedError("downgrade is not supported for this migration")

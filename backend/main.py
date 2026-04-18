@@ -36,7 +36,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        gap_graceful_shutdown(timeout_seconds=25.0)
+        gap_graceful_shutdown()
         shutdown_observability()
 
 

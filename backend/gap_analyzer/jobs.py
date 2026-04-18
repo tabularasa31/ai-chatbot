@@ -102,7 +102,7 @@ def start_gap_analyzer_job_runner() -> None:
             if not _job_runner_state.finish_cycle():
                 return
 
-    thread = threading.Thread(target=_runner, name="gap-analyzer-job-runner")
+    thread = threading.Thread(target=_runner, name="gap-analyzer-job-runner", daemon=True)
     _job_runner_state.set_thread(thread)
     thread.start()
 

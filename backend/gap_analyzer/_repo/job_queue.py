@@ -1,4 +1,4 @@
-"""Gap analyzer job queue operations and helpers."""
+"""Gap analyzer job queue operations."""
 from __future__ import annotations
 
 import logging
@@ -10,9 +10,16 @@ from sqlalchemy.orm import Session
 
 from backend.core.openai_errors import OpenAIFailureKind
 from backend.gap_analyzer._repo.capabilities import (
-    _aware_datetime,
     _enum_value,
     _repository_capabilities,
+)
+from backend.gap_analyzer._repo.job_queue_helpers import (
+    _GAP_JOB_CLAIM_MAX_ATTEMPTS,
+    _GAP_JOB_LEASE_SECONDS,
+    _gap_job_kind,
+    _gap_job_status,
+    _remaining_lease_seconds,
+    _truncate_gap_job_error,
 )
 from backend.gap_analyzer._repo.job_retry import (
     effective_max_attempts,
@@ -24,32 +31,8 @@ from backend.gap_analyzer.schemas import GapRunMode
 from backend.models import GapAnalyzerJob
 
 logger = logging.getLogger(__name__)
-_GAP_JOB_LEASE_SECONDS = 1800
-_GAP_JOB_CLAIM_MAX_ATTEMPTS = 3
-_GAP_JOB_LAST_ERROR_MAX_CHARS = 4000
-def _gap_job_status(value: GapJobStatus | str) -> GapJobStatus:
-    if isinstance(value, GapJobStatus):
-        return value
-    return GapJobStatus(str(value))
-def _gap_job_kind(value: GapJobKind | str) -> GapJobKind:
-    if isinstance(value, GapJobKind):
-        return value
-    return GapJobKind(str(value))
-def _remaining_lease_seconds(lease_expires_at: datetime | None) -> int | None:
-    if lease_expires_at is None:
-        return None
-    aware_lease_expires_at = _aware_datetime(lease_expires_at)
-    remaining = int((aware_lease_expires_at - datetime.now(UTC)).total_seconds())
-    return max(1, remaining) if remaining > 0 else None
-def _truncate_gap_job_error(error_message: str) -> str:
-    if len(error_message) <= _GAP_JOB_LAST_ERROR_MAX_CHARS:
-        return error_message
-    truncated_prefix = "...[truncated]\n"
-    tail_size = _GAP_JOB_LAST_ERROR_MAX_CHARS - len(truncated_prefix)
-    if tail_size <= 0:
-        return error_message[-_GAP_JOB_LAST_ERROR_MAX_CHARS:]
-    # Keep the traceback tail because the final frames and exception text are usually the most actionable.
-    return truncated_prefix + error_message[-tail_size:]
+
+
 class _JobQueueOps:
     def __init__(self, db: Session) -> None:
         self._db = db

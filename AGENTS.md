@@ -53,10 +53,9 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 | `job_queue.py` | `_JobQueueOps` — job lifecycle + helpers |
 | `summary.py` | `_SummaryOps` — gap summary aggregation |
 
-**Import-graph rules** (enforced by `tests/test_gap_analyzer_architecture.py`):
+**Import-graph conventions** (design intent, not test-enforced):
 - `pipelines/` must not import `orchestrator`
 - `_repo/` must not import `pipelines/` or `orchestrator`
-- File-size limits per module prevent re-growth of the monolith
 
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 

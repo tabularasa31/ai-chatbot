@@ -462,7 +462,7 @@ def test_inactive_filter_surfaces_archived_clusters(
                 aggregate_signal_weight=1.0,
                 coverage_score=0.9,
                 status=GapClusterStatus.closed,
-                last_computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                last_computed_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
             ),
             GapCluster(
                 tenant_id=tenant_id,

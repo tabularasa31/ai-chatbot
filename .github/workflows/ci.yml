@@ -37,6 +37,8 @@ jobs:
               - 'backend/search/**'
               - 'backend/embeddings/**'
               - 'backend/models.py'
+              - 'backend/gap_analyzer/**'
+              - 'backend/contact_sessions/**'
               - 'alembic/**'
               - 'tests/pgvector_tests/**'
 

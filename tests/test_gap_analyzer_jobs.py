@@ -115,7 +115,7 @@ def test_job_lease_refresh_extends_expiration(
         job_kind="mode_b",
         status="in_progress",
         trigger="manual",
-        lease_expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        lease_expires_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
     db_session.add(job)
     db_session.commit()

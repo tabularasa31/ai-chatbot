@@ -502,6 +502,8 @@ def perform_manual_escalation(
             support_config.get("escalation_language")
             or getattr(tenant_profile, "escalation_language", None)
         ),
+        tenant_id=getattr(tenant, "public_id", None),
+        chat_id=str(chat.id) if chat is not None else None,
     )
     out = complete_escalation_openai_turn(
         phase=phase,

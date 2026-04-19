@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     langfuse_host: str | None = Field(None, alias="LANGFUSE_HOST")
     langfuse_public_key: str | None = Field(None, alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str | None = Field(None, alias="LANGFUSE_SECRET_KEY")
+    posthog_api_key: str | None = Field(None, alias="POSTHOG_API_KEY")
+    posthog_host: str = Field("https://us.i.posthog.com", alias="POSTHOG_HOST")
+    sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
+    git_sha: str | None = Field(None, alias="GIT_SHA")
     observability_capture_full_prompts: bool = Field(
         False,
         alias="OBSERVABILITY_CAPTURE_FULL_PROMPTS",

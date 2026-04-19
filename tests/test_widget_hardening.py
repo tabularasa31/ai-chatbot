@@ -12,7 +12,7 @@ from backend.chat.service import ChatTurnOutcome
 from backend.models import Tenant
 from backend.widget.service import apply_identity_context_patch, sanitize_locale
 from tests.conftest import register_and_verify_user, set_client_openai_key
-from tests.test_widget import _seed_rag_chunk
+from tests.test_widget import _create_bot, _seed_rag_chunk
 
 
 def _create_widget_client(
@@ -30,12 +30,14 @@ def _create_widget_client(
     )
     assert response.status_code == 201
     set_client_openai_key(tenant, token)
-    return response.json()
+    data = response.json()
+    data["bot_public_id"] = _create_bot(tenant, token)
+    return data
 
 
 def _post_widget_chat(
     tenant: TestClient,
-    public_id: str,
+    bot_public_id: str,
     *,
     message: str | None = None,
     query_message: str | None = None,
@@ -43,7 +45,7 @@ def _post_widget_chat(
     session_id: str | None = None,
     test_ip: str | None = None,
 ):
-    query = f"/widget/chat?tenant_id={public_id}"
+    query = f"/widget/chat?bot_id={bot_public_id}"
     if query_message is not None:
         from urllib.parse import quote
 
@@ -74,7 +76,7 @@ def test_widget_chat_rejects_oversized_message(
         name="Widget Hardening Too Long",
     )
 
-    response = _post_widget_chat(tenant, body["public_id"], message="x" * 5000)
+    response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 5000)
 
     assert response.status_code == 413
     assert response.json()["detail"] == {
@@ -102,7 +104,7 @@ def test_widget_chat_accepts_4000_chars_exactly(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
 
-    response = _post_widget_chat(tenant, body["public_id"], message="x" * 4000)
+    response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 4000)
 
     assert response.status_code == 200
 
@@ -126,10 +128,10 @@ def test_widget_chat_rejects_query_only_message(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
 
-    body_response = _post_widget_chat(tenant, body["public_id"], message="hello from body")
+    body_response = _post_widget_chat(tenant, body["bot_public_id"], message="hello from body")
     query_response = _post_widget_chat(
         tenant,
-        body["public_id"],
+        body["bot_public_id"],
         query_message="hello from query",
     )
 
@@ -149,7 +151,7 @@ def test_widget_chat_rejects_empty_message(
         name="Widget Hardening Empty",
     )
 
-    response = _post_widget_chat(tenant, body["public_id"], message="")
+    response = _post_widget_chat(tenant, body["bot_public_id"], message="")
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "message_required"
@@ -166,7 +168,7 @@ def test_widget_chat_rejects_whitespace_only_message(
         name="Widget Hardening Whitespace",
     )
 
-    response = _post_widget_chat(tenant, body["public_id"], message="   ")
+    response = _post_widget_chat(tenant, body["bot_public_id"], message="   ")
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "message_required"
@@ -210,7 +212,7 @@ def test_per_client_ip_rate_limit(
         for _ in range(30):
             response = _post_widget_chat(
                 tenant,
-                body["public_id"],
+                body["bot_public_id"],
                 message="hello",
                 test_ip="198.51.100.1",
             )
@@ -218,7 +220,7 @@ def test_per_client_ip_rate_limit(
 
         limited = _post_widget_chat(
             tenant,
-            body["public_id"],
+            body["bot_public_id"],
             message="hello",
             test_ip="198.51.100.1",
         )
@@ -266,7 +268,7 @@ def test_global_per_client_rate_limit_with_rotating_ip(
         for i in range(120):
             response = _post_widget_chat(
                 tenant,
-                body["public_id"],
+                body["bot_public_id"],
                 message="hello",
                 test_ip=f"198.51.100.{i}",
             )
@@ -274,7 +276,7 @@ def test_global_per_client_rate_limit_with_rotating_ip(
 
         limited = _post_widget_chat(
             tenant,
-            body["public_id"],
+            body["bot_public_id"],
             message="hello",
             test_ip="198.51.100.250",
         )
@@ -329,13 +331,13 @@ def test_per_ip_independence_across_clients(
         for _ in range(30):
             response_a = _post_widget_chat(
                 tenant,
-                first["public_id"],
+                first["bot_public_id"],
                 message="hello",
                 test_ip="203.0.113.10",
             )
             response_b = _post_widget_chat(
                 tenant,
-                second["public_id"],
+                second["bot_public_id"],
                 message="hello",
                 test_ip="203.0.113.10",
             )

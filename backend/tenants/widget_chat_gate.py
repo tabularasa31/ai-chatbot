@@ -1,10 +1,10 @@
-"""Single source of truth: when a Tenant (by public_id) may use public widget chat / escalate."""
+"""Single source of truth: when a Bot/Tenant may use public widget chat / escalate."""
 
 from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from backend.models import Tenant
+from backend.models import Bot, Tenant
 
 
 class WidgetChatTenantGateError(Exception):
@@ -23,7 +23,7 @@ class WidgetChatTenantGateError(Exception):
 
 def get_tenant_eligible_for_widget_chat(db: Session, public_id: str) -> Tenant:
     """
-    Same eligibility as POST /widget/chat and POST /widget/escalate.
+    Resolve a Tenant directly by its public_id. Used by eval service.
 
     Raises:
         WidgetChatTenantGateError: NOT_FOUND | INACTIVE | NO_OPENAI
@@ -37,3 +37,25 @@ def get_tenant_eligible_for_widget_chat(db: Session, public_id: str) -> Tenant:
     if not key or not str(key).strip():
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.NO_OPENAI)
     return tenant
+
+
+def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
+    """
+    Resolve a Bot by its public_id, then verify the owning Tenant is eligible.
+    Used by POST /widget/chat and POST /widget/escalate.
+
+    Raises:
+        WidgetChatTenantGateError: NOT_FOUND | INACTIVE | NO_OPENAI
+    """
+    bot = db.query(Bot).filter(Bot.public_id == bot_public_id).first()
+    if not bot or not bot.is_active:
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
+    tenant = db.query(Tenant).filter(Tenant.id == bot.tenant_id).first()
+    if not tenant:
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
+    if not tenant.is_active:
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
+    key = tenant.openai_api_key
+    if not key or not str(key).strip():
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NO_OPENAI)
+    return bot, tenant

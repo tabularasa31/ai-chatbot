@@ -14,24 +14,34 @@ from backend.models import Chat, Document, DocumentStatus, DocumentType, Embeddi
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
-def _widget_url(public_id: str, *, locale: str | None = None) -> str:
-    url = f"/widget/chat?tenant_id={public_id}"
+def _create_bot(client: TestClient, token: str) -> str:
+    """Create a default bot for the current user's tenant; return bot public_id."""
+    resp = client.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Test Bot"},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["public_id"]
+
+
+def _widget_url(bot_public_id: str, *, locale: str | None = None) -> str:
+    url = f"/widget/chat?bot_id={bot_public_id}"
     if locale:
         from urllib.parse import quote
-
         url += f"&locale={quote(locale)}"
     return url
 
 
 def _post_widget_chat(
     tenant: TestClient,
-    public_id: str,
+    bot_public_id: str,
     *,
     message: str,
     session_id: str | None = None,
     locale: str | None = None,
 ) -> object:
-    query = f"/widget/chat?tenant_id={public_id}"
+    query = f"/widget/chat?bot_id={bot_public_id}"
     if session_id:
         query += f"&session_id={session_id}"
     return tenant.post(query, json={"message": message, "locale": locale})
@@ -75,8 +85,8 @@ def test_widget_chat_success(
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     body = cl_resp.json()
-    public_id = body["public_id"]
     client_uuid = uuid.UUID(body["id"])
+    bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -85,7 +95,7 @@ def test_widget_chat_success(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    r = _post_widget_chat(tenant, public_id, message="widget support")
+    r = _post_widget_chat(tenant, bot_public_id, message="widget support")
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Widget says hi"
@@ -105,9 +115,9 @@ def test_widget_chat_empty_message_returns_422(
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
-    public_id = cl_resp.json()["public_id"]
+    bot_public_id = _create_bot(tenant, token)
 
-    r = _post_widget_chat(tenant, public_id, message="")
+    r = _post_widget_chat(tenant, bot_public_id, message="")
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == "message_required"
 
@@ -119,9 +129,6 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
 ) -> None:
     """
     With a fixed rate-limit key, request 31 in the same window returns 429.
-
-    Default test `Limiter` key_func uses a fresh UUID per call, so limits never
-    accumulate; widget uses `widget_public_rate_limit_key` with an override hook.
     """
     from backend.core.limiter import set_widget_public_rate_limit_key_override
 
@@ -134,8 +141,8 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     body = cl_resp.json()
-    public_id = body["public_id"]
     client_uuid = uuid.UUID(body["id"])
+    bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
@@ -158,13 +165,13 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     try:
         for i in range(30):
             r = tenant.post(
-                _widget_url(public_id),
+                _widget_url(bot_public_id),
                 json={"message": f"widget support {i}"},
             )
             assert r.status_code == 200, f"request {i + 1}: {r.status_code} {r.text}"
 
         r31 = tenant.post(
-            _widget_url(public_id),
+            _widget_url(bot_public_id),
             json={"message": "widget support over-limit"},
         )
         assert r31.status_code == 429
@@ -173,8 +180,8 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
         set_widget_public_rate_limit_key_override(None)
 
 
-def test_widget_chat_unknown_public_id_404(tenant: TestClient) -> None:
-    r = tenant.post("/widget/chat?tenant_id=ch_doesnotexist000", json={"message": "hi"})
+def test_widget_chat_unknown_bot_id_404(tenant: TestClient) -> None:
+    r = tenant.post("/widget/chat?bot_id=doesnotexist00000000", json={"message": "hi"})
     assert r.status_code == 404
 
 
@@ -190,10 +197,10 @@ def test_widget_chat_invalid_session_id_returns_controlled_error(
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
-    public_id = cl_resp.json()["public_id"]
+    bot_public_id = _create_bot(tenant, token)
 
     r = tenant.post(
-        f"/widget/chat?tenant_id={public_id}&session_id=not-a-uuid",
+        f"/widget/chat?bot_id={bot_public_id}&session_id=not-a-uuid",
         json={"message": "hello"},
     )
     assert r.status_code == 422
@@ -212,10 +219,10 @@ def test_widget_chat_missing_session_returns_controlled_error(
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
-    public_id = cl_resp.json()["public_id"]
+    bot_public_id = _create_bot(tenant, token)
 
     r = tenant.post(
-        f"/widget/chat?tenant_id={public_id}&session_id={uuid.uuid4()}",
+        f"/widget/chat?bot_id={bot_public_id}&session_id={uuid.uuid4()}",
         json={"message": "hello"},
     )
     assert r.status_code == 409
@@ -245,7 +252,7 @@ def test_widget_chat_foreign_session_id_returns_not_found(
     set_client_openai_key(tenant, token_b)
 
     client_a_uuid = uuid.UUID(cl_resp_a.json()["id"])
-    public_id_b = cl_resp_b.json()["public_id"]
+    bot_public_id_b = _create_bot(tenant, token_b)
     foreign_chat = Chat(
         tenant_id=client_a_uuid,
         session_id=uuid.uuid4(),
@@ -255,7 +262,7 @@ def test_widget_chat_foreign_session_id_returns_not_found(
     db_session.commit()
 
     r = tenant.post(
-        f"/widget/chat?tenant_id={public_id_b}&session_id={foreign_chat.session_id}",
+        f"/widget/chat?bot_id={bot_public_id_b}&session_id={foreign_chat.session_id}",
         json={"message": "hello"},
     )
     assert r.status_code == 409
@@ -278,7 +285,7 @@ def test_widget_chat_closed_session_returns_controlled_error(
     set_client_openai_key(tenant, token)
 
     client_uuid = uuid.UUID(cl_resp.json()["id"])
-    public_id = cl_resp.json()["public_id"]
+    bot_public_id = _create_bot(tenant, token)
     closed_chat = Chat(
         tenant_id=client_uuid,
         session_id=uuid.uuid4(),
@@ -289,7 +296,7 @@ def test_widget_chat_closed_session_returns_controlled_error(
     db_session.commit()
 
     r = tenant.post(
-        f"/widget/chat?tenant_id={public_id}&session_id={closed_chat.session_id}",
+        f"/widget/chat?bot_id={bot_public_id}&session_id={closed_chat.session_id}",
         json={"message": "hello"},
     )
     assert r.status_code == 409
@@ -312,9 +319,10 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     body = cl_resp.json()
-    public_id = body["public_id"]
+    tenant_public_id = body["public_id"]  # KYC token still uses tenant public_id as audience
     client_uuid = uuid.UUID(body["id"])
     api_key = body["api_key"]
+    bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
     sk_resp = tenant.post(
@@ -324,7 +332,7 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert sk_resp.status_code == 200
     secret_hex = sk_resp.json()["secret_key"]
     identity_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id, "email": "user@example.com"},
+        {"user_id": "ext-42", "tenant_id": tenant_public_id, "email": "user@example.com"},
         secret_hex,
     )
     init_resp = tenant.post(
@@ -342,7 +350,7 @@ def test_widget_chat_identified_session_increments_user_session_turns(
 
     r = _post_widget_chat(
         tenant,
-        public_id,
+        bot_public_id,
         message="widget support",
         session_id=session_id,
     )
@@ -370,7 +378,7 @@ def test_widget_chat_returns_plain_answer_payload(
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
-    public_id = cl_resp.json()["public_id"]
+    bot_public_id = _create_bot(tenant, token)
 
     monkeypatch.setattr(
         "backend.routes.widget.process_chat_message",
@@ -382,7 +390,7 @@ def test_widget_chat_returns_plain_answer_payload(
         ),
     )
 
-    r = _post_widget_chat(tenant, public_id, message="How to connect domain?")
+    r = _post_widget_chat(tenant, bot_public_id, message="How to connect domain?")
     assert r.status_code == 200
     data = r.json()
     assert data["text"] == "Which provider are you trying to configure?"

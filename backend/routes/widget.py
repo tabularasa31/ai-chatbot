@@ -26,7 +26,7 @@ from backend.models import Chat, EscalationTrigger, Tenant, UserContext
 from backend.tenants.service import get_kyc_decrypted_keys_for_validation
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
-    get_tenant_eligible_for_widget_chat,
+    get_bot_and_tenant_for_widget_chat,
 )
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
@@ -193,7 +193,7 @@ def widget_session_init(
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
 def widget_chat(
     request: Request,
-    tenant_id: Annotated[str, Query(description="Public tenant ID (ch_xyz)")],
+    bot_id: Annotated[str, Query(description="Bot public ID")],
     body: Annotated[WidgetChatRequest | None, Body()] = None,
     session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
     locale: Annotated[
@@ -203,7 +203,7 @@ def widget_chat(
 ) -> dict:
     """
     PUBLIC endpoint for embedded widget.
-    No authentication required (public bot ID = permission).
+    No authentication required (bot public_id = permission).
     """
     resolved_message = body.message if body is not None else None
     if resolved_message is not None:
@@ -233,10 +233,10 @@ def widget_chat(
     locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
 
     try:
-        tenant = get_tenant_eligible_for_widget_chat(db, tenant_id)
+        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
-            raise HTTPException(status_code=404, detail="Tenant not found") from e
+            raise HTTPException(status_code=404, detail="Bot not found") from e
         if e.reason == WidgetChatTenantGateError.INACTIVE:
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
@@ -310,16 +310,16 @@ def widget_chat(
 def widget_escalate(
     request: Request,
     body: ManualEscalateRequest,
-    tenant_id: Annotated[str, Query(description="Public tenant ID (ch_xyz)")],
+    bot_id: Annotated[str, Query(description="Bot public ID")],
     session_id: Annotated[str, Query(description="Chat session UUID")],
     db: Session = Depends(get_db),
 ) -> ManualEscalateResponse:
-    """Manual escalation for embedded widget (public bot ID + session)."""
+    """Manual escalation for embedded widget (bot public_id + session)."""
     try:
-        tenant = get_tenant_eligible_for_widget_chat(db, tenant_id)
+        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
-            raise HTTPException(status_code=404, detail="Tenant not found") from e
+            raise HTTPException(status_code=404, detail="Bot not found") from e
         if e.reason == WidgetChatTenantGateError.INACTIVE:
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(

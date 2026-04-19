@@ -123,6 +123,16 @@ export type EscalationTicket = {
   session_id: string | null;
 };
 
+export type BotResponse = {
+  id: string;
+  tenant_id: string;
+  name: string;
+  public_id: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AdminMetricsSummary = {
   total_users: number;
   total_tenants: number;
@@ -456,6 +466,14 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));
       return data as { message: string };
+    },
+  },
+  bots: {
+    async list(): Promise<BotResponse[]> {
+      const res = await authFetch(`${BASE_URL}/bots`);
+      if (!res.ok) throw new Error("Failed to load bots");
+      const data = await res.json();
+      return (data.items ?? []) as BotResponse[];
     },
   },
   clients: {

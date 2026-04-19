@@ -984,7 +984,7 @@ def test_gap_analyzer_repository_bm25_cache_reuses_corpus_until_invalidated(
     )
     db_session.add(user)
     db_session.flush()
-    client_record = Tenant(user_id=user.id, name="Gap BM25 Cache", api_key="k" * 32)
+    client_record = Tenant(name="Gap BM25 Cache", api_key="k" * 32)
     db_session.add(client_record)
     db_session.flush()
     document = Document(

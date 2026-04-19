@@ -54,7 +54,7 @@ def get_metrics_summary(
 ) -> AdminMetricsSummary:
     """Platform-wide metrics summary."""
     total_users = db.query(User).count()
-    total_clients = db.query(Tenant).count()
+    total_tenants = db.query(Tenant).count()
     total_documents = db.query(Document).count()
     total_chat_sessions = db.query(Chat).count()
     total_messages_user = db.query(Message).filter(
@@ -65,14 +65,14 @@ def get_metrics_summary(
     ).count()
     total_tokens_chat = db.query(func.sum(Chat.tokens_used)).scalar() or 0
 
-    doc_client_ids = {row[0] for row in db.query(Document.tenant_id).distinct()}
-    chat_client_ids = {row[0] for row in db.query(Chat.tenant_id).distinct()}
-    active_clients = len(doc_client_ids & chat_client_ids)
+    doc_tenant_ids = {row[0] for row in db.query(Document.tenant_id).distinct()}
+    chat_tenant_ids = {row[0] for row in db.query(Chat.tenant_id).distinct()}
+    active_tenants = len(doc_tenant_ids & chat_tenant_ids)
 
     return AdminMetricsSummary(
         total_users=total_users,
-        total_clients=total_clients,
-        active_clients=active_clients,
+        total_tenants=total_tenants,
+        active_tenants=active_tenants,
         total_documents=total_documents,
         total_chat_sessions=total_chat_sessions,
         total_messages_user=total_messages_user,
@@ -125,7 +125,12 @@ def get_tenant_metrics(
             AdminTenantMetricsItem(
                 tenant_id=c.id,
                 public_id=c.public_id,
-                owner_email=c.user.email if c.user else None,
+                owner_email=(
+                    db.query(User.email)
+                    .filter(User.tenant_id == c.id, User.role == "owner")
+                    .limit(1)
+                    .scalar()
+                ),
                 users_count=users_count,
                 documents_count=documents_count,
                 embedded_documents_count=embedded_documents_count,

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import ChatTurnOutcome
-from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, UserSession
+from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, ContactSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -349,8 +349,8 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert r.status_code == 200
 
     row = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == client_uuid, UserSession.user_id == "ext-42")
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "ext-42")
         .first()
     )
     assert row is not None

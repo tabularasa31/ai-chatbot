@@ -19,7 +19,7 @@ def _create_client(db_session: Session, *, email: str) -> uuid.UUID:
     )
     db_session.add(user)
     db_session.flush()
-    tenant = Tenant(user_id=user.id, name="FAQ Tenant", api_key="k" * 32)
+    tenant = Tenant(name="FAQ Tenant", api_key="k" * 32)
     db_session.add(tenant)
     db_session.commit()
     db_session.refresh(tenant)

@@ -125,8 +125,8 @@ export type EscalationTicket = {
 
 export type AdminMetricsSummary = {
   total_users: number;
-  total_clients: number;
-  active_clients: number;
+  total_tenants: number;
+  active_tenants: number;
   total_documents: number;
   total_chat_sessions: number;
   total_messages_user: number;

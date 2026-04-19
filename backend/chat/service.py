@@ -84,7 +84,7 @@ from backend.search.service import (
     search_similar_chunks_detailed,
 )
 from backend.support_config import public_support_config_dict
-from backend.user_sessions.service import record_user_session_turn, touch_user_session
+from backend.contact_sessions.service import record_user_session_turn, touch_user_session
 
 PREVIEW_MAX_LEN = 120
 
@@ -466,7 +466,7 @@ def _is_bootstrap_question(text: str) -> bool:
 def _resolve_chat_language_context(
     *,
     current_turn_text: str,
-    client_row: Tenant | None,
+    tenant_row: Tenant | None,
     tenant_profile: TenantProfile | None,
     bootstrap_user_locale: str | None,
     browser_locale: str | None,
@@ -475,7 +475,7 @@ def _resolve_chat_language_context(
     db: Session | None = None,
 ) -> ResolvedLanguageContext:
     support_config = public_support_config_dict(
-        client_row.settings if client_row and isinstance(client_row.settings, dict) else None
+        tenant_row.settings if tenant_row and isinstance(tenant_row.settings, dict) else None
     )
     previous_response_language = chat.last_response_language if chat is not None else None
     recent_user_turn_texts = (
@@ -652,7 +652,7 @@ def run_chat_pipeline(
         # because process_chat_message always resolves language_context first.
         language_context = _resolve_chat_language_context(
             current_turn_text=question,
-            client_row=None,
+            tenant_row=None,
             tenant_profile=None,
             is_bootstrap_turn=_is_bootstrap_question(question),
             bootstrap_user_locale=None,
@@ -1580,8 +1580,8 @@ def process_chat_message(
     Returns:
         Typed turn outcome. The object is also iterable for legacy tuple-style callers.
     """
-    client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    optional_entity_types = _tenant_optional_entity_types(client_row)
+    tenant_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redaction = redact(question, optional_entity_types=optional_entity_types)
     redacted_question = redaction.redacted_text
 
@@ -1632,7 +1632,7 @@ def process_chat_message(
         effective_user_ctx = dict(chat.user_context)
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
-        if client_row is not None
+        if tenant_row is not None
         else None
     )
     question_text = question.strip()
@@ -1643,7 +1643,7 @@ def process_chat_message(
     is_new_session = not chat.messages
     language_context = _resolve_chat_language_context(
         current_turn_text=question_text,
-        client_row=client_row,
+        tenant_row=tenant_row,
         tenant_profile=tenant_profile,
         is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
         bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
@@ -1682,7 +1682,7 @@ def process_chat_message(
         if not is_new_session:
             raise ValueError("Question is required")
         greeting = _build_greeting_result(
-            product_name=_resolve_product_name(tenant=client_row, db=db),
+            product_name=_resolve_product_name(tenant=tenant_row, db=db),
             response_language=language_context.response_language,
             api_key=api_key,
         )
@@ -1723,8 +1723,8 @@ def process_chat_message(
     explicit_human_request = detect_human_request(question_for_pipeline)
 
     disclosure_cfg: dict[str, Any] | None = None
-    if client_row and isinstance(client_row.disclosure_config, dict):
-        disclosure_cfg = client_row.disclosure_config
+    if tenant_row and isinstance(tenant_row.disclosure_config, dict):
+        disclosure_cfg = tenant_row.disclosure_config
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
 
@@ -2411,25 +2411,25 @@ def run_debug(
         debug_dict includes strategy, reject_reason, validation_outcome,
         raw_answer vs final_answer, retrieval details, and validation payload.
     """
-    client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    optional_entity_types = _tenant_optional_entity_types(client_row)
+    tenant_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redacted_question = redact(
         question,
         optional_entity_types=optional_entity_types,
     ).redacted_text
 
     disclosure_cfg: dict[str, Any] | None = None
-    if client_row and isinstance(client_row.disclosure_config, dict):
-        disclosure_cfg = client_row.disclosure_config
+    if tenant_row and isinstance(tenant_row.disclosure_config, dict):
+        disclosure_cfg = tenant_row.disclosure_config
 
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
-        if client_row is not None
+        if tenant_row is not None
         else None
     )
     language_context = _resolve_chat_language_context(
         current_turn_text=redacted_question,
-        client_row=client_row,
+        tenant_row=tenant_row,
         tenant_profile=tenant_profile,
         is_bootstrap_turn=_is_bootstrap_question(redacted_question),
         bootstrap_user_locale=None,

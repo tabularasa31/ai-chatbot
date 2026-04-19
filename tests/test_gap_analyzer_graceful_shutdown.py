@@ -46,8 +46,7 @@ def _create_tenant(db_session: Session) -> uuid.UUID:
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-        user_id=user.id,
-        name=f"Gap Shutdown {uuid.uuid4().hex[:8]}",
+                name=f"Gap Shutdown {uuid.uuid4().hex[:8]}",
         api_key=f"gap-{uuid.uuid4().hex[:28]}",
     )
     db_session.add(tenant)

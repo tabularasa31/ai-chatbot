@@ -83,13 +83,13 @@ export default function AdminMetricsPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
             <div className="text-2xl font-bold text-slate-800">
-              {summary?.total_clients ?? 0}
+              {summary?.total_tenants ?? 0}
             </div>
             <div className="text-sm text-slate-600">Total clients</div>
           </div>
           <div className="bg-white rounded-lg shadow p-4 border border-slate-200">
             <div className="text-2xl font-bold text-slate-800">
-              {summary?.active_clients ?? 0}
+              {summary?.active_tenants ?? 0}
             </div>
             <div className="text-sm text-slate-600">Active clients</div>
           </div>

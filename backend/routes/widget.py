@@ -27,7 +27,7 @@ from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_tenant_eligible_for_widget_chat,
 )
-from backend.user_sessions.service import start_user_session, touch_user_session
+from backend.contact_sessions.service import start_user_session, touch_user_session
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
     SESSION_INVALID_CODE,

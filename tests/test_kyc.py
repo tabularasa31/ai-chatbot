@@ -15,7 +15,7 @@ from backend.core.security import (
     validate_kyc_token,
     validate_kyc_token_detail,
 )
-from backend.models import Chat, Tenant, UserSession
+from backend.models import Chat, Tenant, ContactSession
 from tests.conftest import register_and_verify_user
 
 
@@ -159,8 +159,8 @@ def test_widget_session_init_identified_and_anonymous(
     assert chat.user_context is not None
     assert chat.user_context.get("user_id") == "ext-42"
     row = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == client_uuid, UserSession.user_id == "ext-42")
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == client_uuid, ContactSession.contact_id == "ext-42")
         .first()
     )
     assert row is not None
@@ -295,8 +295,8 @@ def test_widget_session_init_resumes_identified_session_and_patches_context(
     assert chat.user_context.get("plan_tier") == "enterprise"
     assert chat.user_context.get("browser_locale") == "de-DE"
     rows = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == uuid.UUID(cr.json()["id"]), UserSession.user_id == "ext-42")
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == uuid.UUID(cr.json()["id"]), ContactSession.contact_id == "ext-42")
         .all()
     )
     assert len(rows) == 1
@@ -349,9 +349,9 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
     second_sid = uuid.UUID(r2.json()["session_id"])
     assert second_sid != first_sid
     rows = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == uuid.UUID(cr.json()["id"]), UserSession.user_id == "ext-42")
-        .order_by(UserSession.session_started_at.asc())
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == uuid.UUID(cr.json()["id"]), ContactSession.contact_id == "ext-42")
+        .order_by(ContactSession.session_started_at.asc())
         .all()
     )
     assert len(rows) == 2
@@ -403,9 +403,9 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
     assert r2.status_code == 200
     assert uuid.UUID(r2.json()["session_id"]) != first_sid
     rows = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == uuid.UUID(cr.json()["id"]), UserSession.user_id == "ext-42")
-        .order_by(UserSession.session_started_at.asc())
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == uuid.UUID(cr.json()["id"]), ContactSession.contact_id == "ext-42")
+        .order_by(ContactSession.session_started_at.asc())
         .all()
     )
     assert len(rows) == 2

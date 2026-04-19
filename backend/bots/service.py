@@ -49,10 +49,23 @@ def update_bot(
     return bot
 
 
+_MIN_BOTS_PER_TENANT = 1
+
+
 def delete_bot(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> None:
-    bot = get_bot_by_id(bot_id, tenant_id, db)
-    remaining = db.query(Bot).filter(Bot.tenant_id == tenant_id).count()
-    if remaining <= 1:
+    # Lock all bot rows for this tenant before counting to prevent the race
+    # condition where two concurrent deletes both pass the count check.
+    # with_for_update() is a no-op on SQLite (which serialises writes anyway).
+    bots = (
+        db.query(Bot)
+        .filter(Bot.tenant_id == tenant_id)
+        .with_for_update()
+        .all()
+    )
+    if len(bots) <= _MIN_BOTS_PER_TENANT:
         raise HTTPException(status_code=409, detail="Cannot delete the last bot of a tenant")
-    db.delete(bot)
+    target = next((b for b in bots if b.id == bot_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    db.delete(target)
     db.commit()

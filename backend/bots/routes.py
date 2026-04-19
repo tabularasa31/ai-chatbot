@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
@@ -11,20 +11,17 @@ from backend.bots import service as bots_service
 from backend.bots.schemas import BotCreate, BotList, BotResponse, BotUpdate
 from backend.core.db import get_db
 from backend.models import User
-from backend.tenants.service import get_tenant_by_user
 
 bots_router = APIRouter(prefix="/bots", tags=["bots"])
 
 
 def _tenant_id(
     current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
 ) -> uuid.UUID:
-    tenant = get_tenant_by_user(current_user.id, db)
-    if not tenant:
-        from fastapi import HTTPException
+    """Return tenant_id directly from the already-loaded user — no extra DB query."""
+    if not current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    return tenant.id
+    return current_user.tenant_id
 
 
 @bots_router.get("", response_model=BotList)

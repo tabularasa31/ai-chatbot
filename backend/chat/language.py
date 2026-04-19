@@ -790,9 +790,41 @@ def _invoke_localize_llm(
             return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
         localized = (response.choices[0].message.content or "").strip()
         output_text = localized or canonical_text
+        _emit_localized_event_safely(
+            canonical_text=canonical_text,
+            output_text=output_text,
+            target_language=target_language,
+            operation=operation,
+            started_at=started_at,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            chat_id=chat_id,
+        )
+        return LocalizationResult(text=output_text, tokens_used=tokens_used)
+    except Exception as exc:
+        logger.warning("Localization failed; using canonical text: %s", exc)
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+
+def _emit_localized_event_safely(
+    *,
+    canonical_text: str,
+    output_text: str,
+    target_language: str,
+    operation: str,
+    started_at: float,
+    tenant_id: str | None,
+    bot_id: str | None,
+    chat_id: str | None,
+) -> None:
+    # Skip when neither identifier is known — emitting would collapse all
+    # such events under distinct_id="unknown" and pollute per-tenant rollups.
+    # Real production callers gain identifiers in a follow-up PR.
+    if tenant_id is None and bot_id is None:
+        return
+    try:
         try:
-            source_detection = detect_language(canonical_text)
-            source_lang = source_detection.detected_language
+            source_lang = detect_language(canonical_text).detected_language
         except Exception:
             source_lang = "unknown"
         capture_event(
@@ -810,7 +842,5 @@ def _invoke_localize_llm(
                 "chat_id": chat_id,
             },
         )
-        return LocalizationResult(text=output_text, tokens_used=tokens_used)
-    except Exception as exc:
-        logger.warning("Localization failed; using canonical text: %s", exc)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
+    except Exception:
+        logger.warning("Failed to emit language.localized event", exc_info=True)

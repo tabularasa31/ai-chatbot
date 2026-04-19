@@ -150,6 +150,64 @@ def test_invoke_localize_llm_emits_localized(captured_events):
     assert props["chat_id"] == "chat_test"
 
 
+def test_invoke_localize_llm_skips_emit_when_no_identifiers(captured_events):
+    fake_response = type(
+        "R",
+        (),
+        {
+            "usage": type("U", (), {"total_tokens": 1})(),
+            "choices": [
+                type("C", (), {"message": type("M", (), {"content": "Bonjour"})()})()
+            ],
+        },
+    )()
+
+    with patch("backend.chat.language.get_openai_client", return_value=object()), patch(
+        "backend.chat.language.call_openai_with_retry", return_value=fake_response
+    ):
+        result = _invoke_localize_llm(
+            canonical_text="Hello",
+            target_language="fr",
+            api_key="sk-test",
+            operation="localize",
+        )
+
+    assert result.text == "Bonjour"
+    assert _events_named(captured_events, "language.localized") == []
+
+
+def test_invoke_localize_llm_returns_output_when_capture_event_raises(monkeypatch):
+    fake_response = type(
+        "R",
+        (),
+        {
+            "usage": type("U", (), {"total_tokens": 1})(),
+            "choices": [
+                type("C", (), {"message": type("M", (), {"content": "Bonjour"})()})()
+            ],
+        },
+    )()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("posthog down")
+
+    monkeypatch.setattr("backend.chat.language.capture_event", boom)
+
+    with patch("backend.chat.language.get_openai_client", return_value=object()), patch(
+        "backend.chat.language.call_openai_with_retry", return_value=fake_response
+    ):
+        result = _invoke_localize_llm(
+            canonical_text="Hello",
+            target_language="fr",
+            api_key="sk-test",
+            operation="localize",
+            tenant_id="tnt_test",
+        )
+
+    # Telemetry failure must NOT discard the localized output.
+    assert result.text == "Bonjour"
+
+
 def test_invoke_localize_llm_does_not_emit_on_failure(captured_events):
     with patch(
         "backend.chat.language.get_openai_client",

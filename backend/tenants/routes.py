@@ -12,14 +12,12 @@ from backend.core.limiter import limiter
 from backend.models import User
 from backend.tenants.schemas import (
     CreateTenantRequest,
-    DisclosureConfigResponse,
     KycSecretGeneratedResponse,
     KycStatusResponse,
     PrivacyConfigResponse,
     SupportSettingsResponse,
     TenantMeResponse,
     TenantResponse,
-    UpdateDisclosureConfigRequest,
     UpdatePrivacyConfigRequest,
     UpdateSupportSettingsRequest,
     UpdateTenantRequest,
@@ -29,7 +27,6 @@ from backend.tenants.service import (
     create_tenant,
     delete_tenant,
     generate_kyc_secret_for_tenant,
-    get_disclosure_config_for_user,
     get_kyc_status,
     get_redaction_config_for_user,
     get_support_settings_for_user,
@@ -37,7 +34,6 @@ from backend.tenants.service import (
     get_tenant_by_id,
     get_tenant_by_user,
     rotate_kyc_secret,
-    update_disclosure_config_for_user,
     update_redaction_config_for_user,
     update_support_settings_for_user,
     update_tenant,
@@ -122,27 +118,6 @@ def kyc_status_route(
     """Return KYC secret presence and identified-session metrics."""
     data = get_kyc_status(current_user.id, db)
     return KycStatusResponse(**data)
-
-
-@tenants_router.get("/me/disclosure", response_model=DisclosureConfigResponse)
-def get_disclosure_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> DisclosureConfigResponse:
-    """Tenant-wide response detail level (same for all users and channels)."""
-    data = get_disclosure_config_for_user(current_user.id, db)
-    return DisclosureConfigResponse(**data)
-
-
-@tenants_router.put("/me/disclosure", response_model=DisclosureConfigResponse)
-def put_disclosure_route(
-    body: UpdateDisclosureConfigRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> DisclosureConfigResponse:
-    """Update tenant-wide disclosure level."""
-    data = update_disclosure_config_for_user(current_user.id, body.level, db)
-    return DisclosureConfigResponse(**data)
 
 
 @tenants_router.get("/me/privacy", response_model=PrivacyConfigResponse)

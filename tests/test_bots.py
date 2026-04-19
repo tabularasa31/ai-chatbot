@@ -24,13 +24,14 @@ def _auth(client: TestClient, db: Session, email: str = "bot-owner@example.com")
 
 
 def test_list_bots_returns_default_bot(tenant: TestClient, db_session: Session) -> None:
-    """After creating a tenant the backfill gives no bots (SQLite test DB), but list endpoint works."""
-    token, tenant_id = _auth(tenant, db_session, "list-bots@example.com")
+    """create_tenant auto-creates one default bot; list returns it immediately."""
+    token, _ = _auth(tenant, db_session, "list-bots@example.com")
 
     resp = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
-    assert "items" in data
+    assert len(data["items"]) == 1
+    assert data["items"][0]["name"] == "Bot Test Tenant"
 
 
 def test_create_and_get_bot(tenant: TestClient, db_session: Session) -> None:
@@ -77,14 +78,10 @@ def test_update_bot(tenant: TestClient, db_session: Session) -> None:
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
-    """Deleting the only bot should return 409."""
-    token, tenant_id = _auth(tenant, db_session, "del-bot@example.com")
+    """Deleting the only bot (the auto-created default) should return 409."""
+    token, _ = _auth(tenant, db_session, "del-bot@example.com")
 
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Solo Bot"},
-    ).json()["id"]
+    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
 
     del_resp = tenant.delete(
         f"/bots/{bot_id}",
@@ -113,6 +110,37 @@ def test_delete_bot_allowed_when_multiple(tenant: TestClient, db_session: Sessio
         headers={"Authorization": f"Bearer {token}"},
     )
     assert del_resp.status_code == 204
+
+
+def test_deactivate_last_active_bot_blocked(tenant: TestClient, db_session: Session) -> None:
+    """Deactivating the only active bot should return 409."""
+    token, _ = _auth(tenant, db_session, "deact-last@example.com")
+    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert resp.status_code == 409
+
+
+def test_deactivate_bot_allowed_when_another_active(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "deact-ok@example.com")
+    extra_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Second Bot"},
+    ).json()["id"]
+
+    first_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
+    resp = tenant.patch(
+        f"/bots/{first_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_active"] is False
 
 
 def test_bot_not_accessible_by_other_tenant(tenant: TestClient, db_session: Session) -> None:

@@ -475,6 +475,22 @@ export const api = {
       const data = await res.json();
       return (data.items ?? []) as BotResponse[];
     },
+    async getDisclosure(botId: string): Promise<DisclosureConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/bots/${botId}/disclosure`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
+      return data as DisclosureConfigResponse;
+    },
+    async updateDisclosure(botId: string, config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
+      const res = await authFetch(`${BASE_URL}/bots/${botId}/disclosure`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
+      return data as DisclosureConfigResponse;
+    },
   },
   clients: {
     async create(name: string) {
@@ -526,24 +542,6 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate KYC secret"));
       return data as KycSecretResponse;
-    },
-  },
-  disclosure: {
-    async get(): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
-      return data as DisclosureConfigResponse;
-    },
-    async update(config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save disclosure settings"));
-      return data as DisclosureConfigResponse;
     },
   },
   support: {

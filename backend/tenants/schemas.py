@@ -82,20 +82,7 @@ class KycStatusResponse(BaseModel):
     masked_secret_hint: str | None = None
 
 
-DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
 RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
-
-
-class DisclosureConfigResponse(BaseModel):
-    """Tenant-wide bot response detail level (all end-users)."""
-
-    level: DisclosureLevelLiteral
-
-
-class UpdateDisclosureConfigRequest(BaseModel):
-    """PUT body for /clients/me/disclosure."""
-
-    level: DisclosureLevelLiteral
 
 
 class PrivacyConfigResponse(BaseModel):

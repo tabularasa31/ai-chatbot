@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type TenantMeResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
+import { api, type BotResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function WidgetSettingsPage() {
-  const [tenantInfo, setTenantInfo] = useState<TenantMeResponse | null>(null);
+  const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
   const [status, setStatus] = useState<KycStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -17,9 +17,12 @@ export default function WidgetSettingsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [s, c] = await Promise.all([api.kyc.getStatus(), api.clients.getMe()]);
+      const [s, bots] = await Promise.all([
+        api.kyc.getStatus(),
+        api.bots.list(),
+      ]);
       setStatus(s);
-      setTenantInfo(c);
+      setDefaultBot(bots.find((b) => b.is_active) ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -69,8 +72,8 @@ export default function WidgetSettingsPage() {
   }
 
   async function copyBotId() {
-    if (!tenantInfo?.public_id) return;
-    await navigator.clipboard.writeText(tenantInfo.public_id);
+    if (!defaultBot?.public_id) return;
+    await navigator.clipboard.writeText(defaultBot.public_id);
     setCopiedBotId(true);
     setTimeout(() => setCopiedBotId(false), 2000);
   }
@@ -79,7 +82,6 @@ export default function WidgetSettingsPage() {
 
 function makeWidgetIdentityToken({
   secretHex,
-  botPublicId,
   userId,
   extras = {},
   ttlSeconds = 300,
@@ -87,7 +89,6 @@ function makeWidgetIdentityToken({
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     user_id: userId,
-    tenant_id: botPublicId,
     exp: now + ttlSeconds,
     iat: now,
     ...extras,
@@ -137,7 +138,7 @@ function makeWidgetIdentityToken({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <code className="text-xs break-all bg-slate-50 border border-slate-200 text-slate-900 font-mono rounded px-3 py-2 flex-1 min-w-0">
-            {tenantInfo?.public_id ?? "—"}
+            {defaultBot?.public_id ?? "—"}
           </code>
           <button
             type="button"

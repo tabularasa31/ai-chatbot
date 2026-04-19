@@ -13,8 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
-from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
-from backend.models import Chat, Tenant, User
+from backend.models import Bot, Chat, Tenant, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
 
@@ -52,6 +51,7 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
+        db.add(Bot(tenant_id=tenant.id, name=name))
         db.commit()
         db.refresh(tenant)
     except IntegrityError as exc:
@@ -120,35 +120,6 @@ def get_tenant_by_id(
 def get_tenant_by_api_key(api_key: str, db: Session) -> Tenant | None:
     """Get tenant by API key. Used by widget/chat to validate API key."""
     return db.query(Tenant).filter(Tenant.api_key == api_key).first()
-
-
-def get_disclosure_config_for_user(user_id: uuid.UUID, db: Session) -> dict[str, str]:
-    """Return canonical {\"level\": ...} for the current user's tenant (defaults if unset)."""
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    raw = tenant.disclosure_config if isinstance(tenant.disclosure_config, dict) else None
-    return public_config_dict(raw)
-
-
-def update_disclosure_config_for_user(
-    user_id: uuid.UUID,
-    level: str,
-    db: Session,
-) -> dict[str, str]:
-    """Validate level, persist {\"level\": ...}, return canonical config."""
-    if level not in ALLOWED_LEVELS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"level must be one of: {', '.join(sorted(ALLOWED_LEVELS))}",
-        )
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    tenant.disclosure_config = {"level": level}
-    db.commit()
-    db.refresh(tenant)
-    return public_config_dict(tenant.disclosure_config)
 
 
 def get_redaction_config_for_user(user_id: uuid.UUID, db: Session) -> dict[str, list[str]]:

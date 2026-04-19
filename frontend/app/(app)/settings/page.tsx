@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, type DisclosureLevel } from "@/lib/api";
+import { api, type DisclosureLevel, type BotResponse } from "@/lib/api";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -35,6 +35,7 @@ export default function SettingsPage() {
   const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
   const [fallbackEmail, setFallbackEmail] = useState<string | null>(null);
   const [level, setLevel] = useState<DisclosureLevel>("standard");
+  const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
   const [keySaving, setKeySaving] = useState(false);
   const [supportSaving, setSupportSaving] = useState(false);
   const [disclosureSaving, setDisclosureSaving] = useState(false);
@@ -45,13 +46,18 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([api.clients.getMe(), api.support.get(), api.disclosure.get()])
-      .then(([client, support, disclosure]) => {
+    Promise.all([api.clients.getMe(), api.support.get(), api.bots.list()])
+      .then(async ([client, support, bots]) => {
         setHasOpenaiKey(client.has_openai_key ?? false);
         setSupportEmailInput(support.l2_email ?? "");
         setEscalationLanguageInput(support.escalation_language ?? "");
         setFallbackEmail(support.fallback_email ?? null);
-        setLevel(disclosure.level);
+        const bot = bots.find((b) => b.is_active) ?? null;
+        setDefaultBot(bot);
+        if (bot) {
+          const disclosure = await api.bots.getDisclosure(bot.id);
+          setLevel(disclosure.level);
+        }
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Failed to load settings");
@@ -138,11 +144,12 @@ export default function SettingsPage() {
   }
 
   async function saveDisclosure() {
+    if (!defaultBot) return;
     setError("");
     setDisclosureSaving(true);
     setDisclosureSavedOk(false);
     try {
-      await api.disclosure.update({ level });
+      await api.bots.updateDisclosure(defaultBot.id, { level });
       setDisclosureSavedOk(true);
       setTimeout(() => setDisclosureSavedOk(false), 2500);
     } catch (err) {

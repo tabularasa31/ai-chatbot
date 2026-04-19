@@ -36,23 +36,23 @@ def widget_public_rate_limit_key(request: Request) -> str:
     slowapi captures this callable at import time; tests pin behavior via
     `_widget_public_rate_limit_key_override` so the same key is used across requests.
     """
-    tenant_id = (
-        request.query_params.get("tenant_id")
-        or request.headers.get("x-widget-tenant-id")
+    bot_id = (
+        request.query_params.get("bot_id")
+        or request.headers.get("x-widget-bot-id")
         or "unknown"
     )
     ip = _widget_rate_limit_ip(request)
-    return f"{tenant_id[:32]}|{ip}"
+    return f"{bot_id[:32]}|{ip}"
 
 
-def widget_tenant_rate_limit_key(request: Request) -> str:
-    """Global widget rate-limit identity per tenant_id."""
-    tenant_id = (
-        request.query_params.get("tenant_id")
-        or request.headers.get("x-widget-tenant-id")
+def widget_bot_rate_limit_key(request: Request) -> str:
+    """Global widget rate-limit identity per bot_id."""
+    bot_id = (
+        request.query_params.get("bot_id")
+        or request.headers.get("x-widget-bot-id")
         or "unknown"
     )
-    return tenant_id[:32]
+    return bot_id[:32]
 
 
 def widget_init_rate_limit_key(request: Request) -> str:

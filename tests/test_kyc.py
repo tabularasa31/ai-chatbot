@@ -21,61 +21,48 @@ from tests.conftest import register_and_verify_user
 
 def test_generate_kyc_token_validate_returns_user_context() -> None:
     secret = secrets.token_hex(32)
-    tenant = "ch_roundtrip0000001"
     payload = {
         "user_id": "user-1",
-        "tenant_id": tenant,
         "plan_tier": "pro",
         "locale": "en",
     }
     token = generate_kyc_token(payload, secret)
-    out = validate_kyc_token(token, secret, tenant)
+    out = validate_kyc_token(token, secret)
     assert out is not None
     assert out["user_id"] == "user-1"
     assert out["plan_tier"] == "pro"
     assert out["locale"] == "en"
-    assert "tenant_id" not in out
     assert "exp" not in out
 
 
 def test_validate_kyc_token_expired_returns_none() -> None:
     secret = secrets.token_hex(32)
-    tenant = "ch_expired00000001"
     token = generate_kyc_token(
-        {"user_id": "u", "tenant_id": tenant},
+        {"user_id": "u"},
         secret,
         ttl_seconds=-120,
     )
-    assert validate_kyc_token(token, secret, tenant) is None
-    _ctx, reason = validate_kyc_token_detail(token, secret, tenant)
+    assert validate_kyc_token(token, secret) is None
+    _ctx, reason = validate_kyc_token_detail(token, secret)
     assert reason == "expired"
 
 
 def test_validate_kyc_token_tampered_payload_returns_none() -> None:
     secret = secrets.token_hex(32)
-    tenant = "ch_tamper000000001"
-    token = generate_kyc_token({"user_id": "u", "tenant_id": tenant}, secret)
+    token = generate_kyc_token({"user_id": "u"}, secret)
     b64, sig = token.split(".", 1)
     flip = "b" if b64[-1] != "b" else "a"
     bad = f"{b64[:-1]}{flip}.{sig}"
-    assert validate_kyc_token(bad, secret, tenant) is None
-    _ctx, reason = validate_kyc_token_detail(bad, secret, tenant)
+    assert validate_kyc_token(bad, secret) is None
+    _ctx, reason = validate_kyc_token_detail(bad, secret)
     assert reason == "bad_signature"
-
-
-def test_validate_kyc_token_wrong_tenant_returns_none() -> None:
-    secret = secrets.token_hex(32)
-    tenant = "ch_correct0000001"
-    token = generate_kyc_token({"user_id": "u", "tenant_id": tenant}, secret)
-    assert validate_kyc_token(token, secret, "ch_other0000000001") is None
 
 
 def test_validate_kyc_token_missing_user_id_returns_none() -> None:
     secret = secrets.token_hex(32)
-    tenant = "ch_nouid0000000001"
     now = __import__("time").time()
     raw = json.dumps(
-        {"tenant_id": tenant, "exp": int(now) + 300, "iat": int(now)},
+        {"exp": int(now) + 300, "iat": int(now)},
         sort_keys=True,
     )
     import base64
@@ -91,7 +78,7 @@ def test_validate_kyc_token_missing_user_id_returns_none() -> None:
         hashlib.sha256,
     ).hexdigest()
     token = f"{b64}.{sig}"
-    assert validate_kyc_token(token, secret, tenant) is None
+    assert validate_kyc_token(token, secret) is None
 
 
 def test_kyc_secret_endpoint_returns_key_once(
@@ -139,7 +126,7 @@ def test_widget_session_init_identified_and_anonymous(
     secret_hex = sk_resp.json()["secret_key"]
 
     id_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id, "plan_tier": "growth"},
+        {"user_id": "ext-42", "plan_tier": "growth"},
         secret_hex,
     )
     init_ok = tenant.post(
@@ -182,7 +169,7 @@ def test_widget_session_init_identified_and_anonymous(
     )
 
     bad_token = generate_kyc_token(
-        {"user_id": "x", "tenant_id": public_id},
+        {"user_id": "x"},
         secret_hex,
     )
     b64, sig = bad_token.split(".", 1)
@@ -218,7 +205,7 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     public_id = cr.json()["public_id"]
 
     bad = generate_kyc_token(
-        {"user_id": "u", "tenant_id": public_id},
+        {"user_id": "u"},
         secret_hex,
     )
     b64, sig = bad.split(".", 1)
@@ -258,7 +245,6 @@ def test_widget_session_init_resumes_identified_session_and_patches_context(
     first_token = generate_kyc_token(
         {
             "user_id": "ext-42",
-            "tenant_id": public_id,
             "plan_tier": "growth",
         },
         secret_hex,
@@ -273,7 +259,6 @@ def test_widget_session_init_resumes_identified_session_and_patches_context(
     second_token = generate_kyc_token(
         {
             "user_id": "ext-42",
-            "tenant_id": public_id,
             "email": "person@example.com",
             "plan_tier": "enterprise",
         },
@@ -326,7 +311,7 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
     secret_hex = sk_resp.json()["secret_key"]
 
     id_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id},
+        {"user_id": "ext-42"},
         secret_hex,
     )
     r1 = tenant.post(
@@ -381,7 +366,7 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
     secret_hex = sk_resp.json()["secret_key"]
 
     id_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id},
+        {"user_id": "ext-42"},
         secret_hex,
     )
     r1 = tenant.post(
@@ -457,7 +442,7 @@ def test_widget_session_init_resumes_latest_eligible_identified_session(
     db_session.commit()
 
     id_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id},
+        {"user_id": "ext-42"},
         secret_hex,
     )
     r = tenant.post(
@@ -513,7 +498,7 @@ def test_widget_session_init_prefers_open_session_over_newer_closed_one(
     db_session.commit()
 
     id_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": public_id},
+        {"user_id": "ext-42"},
         secret_hex,
     )
     r = tenant.post(
@@ -549,16 +534,16 @@ def test_kyc_rotate_returns_new_secret(
     assert new_secret != old_secret
 
     tok_old = generate_kyc_token(
-        {"user_id": "u", "tenant_id": public_id},
+        {"user_id": "u"},
         old_secret,
     )
     tok_new = generate_kyc_token(
-        {"user_id": "u", "tenant_id": public_id},
+        {"user_id": "u"},
         new_secret,
     )
-    assert validate_kyc_token(tok_new, new_secret, public_id) is not None
-    assert validate_kyc_token(tok_old, new_secret, public_id) is None
-    assert validate_kyc_token(tok_old, old_secret, public_id) is not None
+    assert validate_kyc_token(tok_new, new_secret) is not None
+    assert validate_kyc_token(tok_old, new_secret) is None
+    assert validate_kyc_token(tok_old, old_secret) is not None
 
     overlap = tenant.post(
         "/widget/session/init",

@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.models import Client, TenantFaq, User
+from backend.models import Tenant, TenantFaq, User
 from backend.tenant_knowledge import faq_service
 from backend.tenant_knowledge.schemas import FaqCandidate
 
@@ -19,11 +19,11 @@ def _create_client(db_session: Session, *, email: str) -> uuid.UUID:
     )
     db_session.add(user)
     db_session.flush()
-    client = Client(user_id=user.id, name="FAQ Client", api_key="k" * 32)
-    db_session.add(client)
+    tenant = Tenant(name="FAQ Tenant", api_key="k" * 32)
+    db_session.add(tenant)
     db_session.commit()
-    db_session.refresh(client)
-    return client.id
+    db_session.refresh(tenant)
+    return tenant.id
 
 
 def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
@@ -31,7 +31,7 @@ def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
     mock_openai_client,
     monkeypatch,
 ) -> None:
-    client_id = _create_client(db_session, email="faq-service@example.com")
+    tenant_id = _create_client(db_session, email="faq-service@example.com")
     mock_openai_client.embeddings.create.reset_mock()
     dedupe_results = iter([False, True])
     monkeypatch.setattr(
@@ -42,7 +42,7 @@ def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
 
     faq_service.insert_new_faq_candidates(
         db=db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         faq_candidates=[
             FaqCandidate(
                 question="How do billing exports work?",
@@ -74,7 +74,7 @@ def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
         batch_id=uuid.uuid4(),
     )
 
-    rows = db_session.query(TenantFaq).filter(TenantFaq.tenant_id == client_id).all()
+    rows = db_session.query(TenantFaq).filter(TenantFaq.tenant_id == tenant_id).all()
 
     assert len(rows) == 1
     assert rows[0].question == "How do billing exports work?"

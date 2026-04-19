@@ -24,7 +24,7 @@ class AliasEntry:
 
 @dataclass
 class TenantProfile:
-    client_id: object  # use app-level uuid/str without importing models here
+    tenant_id: object  # use app-level uuid/str without importing models here
     product_name: str | None
     modules: list[str]
     glossary: list[GlossaryEntry]

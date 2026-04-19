@@ -10,24 +10,24 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
-from backend.clients.service import get_kyc_decrypted_keys_for_validation
-from backend.clients.widget_chat_gate import (
-    WidgetChatClientGateError,
-    get_client_eligible_for_widget_chat,
-)
+from backend.contact_sessions.service import start_user_session, touch_user_session
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import (
     limiter,
-    widget_client_rate_limit_key,
     widget_init_rate_limit_key,
     widget_public_rate_limit_key,
+    widget_tenant_rate_limit_key,
 )
 from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
-from backend.models import Chat, Client, EscalationTrigger, UserContext
-from backend.user_sessions.service import start_user_session, touch_user_session
+from backend.models import Chat, EscalationTrigger, Tenant, UserContext
+from backend.tenants.service import get_kyc_decrypted_keys_for_validation
+from backend.tenants.widget_chat_gate import (
+    WidgetChatTenantGateError,
+    get_tenant_eligible_for_widget_chat,
+)
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
     SESSION_INVALID_CODE,
@@ -67,7 +67,7 @@ def widget_health() -> dict[str, str]:
 
 
 def _resolve_widget_identity(
-    client: Client,
+    tenant: Tenant,
     identity_token: str | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """
@@ -76,13 +76,13 @@ def _resolve_widget_identity(
     """
     if not identity_token or not identity_token.strip():
         return None, None
-    keys = get_kyc_decrypted_keys_for_validation(client)
+    keys = get_kyc_decrypted_keys_for_validation(tenant)
     if not keys:
         return None, "no_secret_configured"
     last_reason = "bad_signature"
     for sk, _label in keys:
         raw_ctx, err = validate_kyc_token_detail(
-            identity_token.strip(), sk, client.public_id
+            identity_token.strip(), sk, tenant.public_id
         )
         if raw_ctx is not None:
             try:
@@ -105,15 +105,15 @@ def widget_session_init(
     """
     Start a widget session. Optional signed identity_token enables identified mode.
     """
-    client = (
-        db.query(Client)
-        .filter(Client.api_key == body.api_key.strip())
+    tenant = (
+        db.query(Tenant)
+        .filter(Tenant.api_key == body.api_key.strip())
         .first()
     )
-    if not client or not client.is_active:
+    if not tenant or not tenant.is_active:
         logger.info(
             "widget_session_init_rejected",
-            extra={"reason": "not_found" if not client else "inactive"},
+            extra={"reason": "not_found" if not tenant else "inactive"},
         )
         raise HTTPException(status_code=404, detail="Invalid API key")
 
@@ -121,11 +121,11 @@ def widget_session_init(
     mode: Literal["identified", "anonymous"] = "anonymous"
     locale = sanitize_locale(body.locale)
 
-    ctx, fail_reason = _resolve_widget_identity(client, body.identity_token)
+    ctx, fail_reason = _resolve_widget_identity(tenant, body.identity_token)
     if ctx is not None:
         resumable_chat = find_resumable_identified_chat(
             db,
-            client_id=client.id,
+            tenant_id=tenant.id,
             user_id=ctx["user_id"],
         )
         if resumable_chat is not None:
@@ -138,12 +138,12 @@ def widget_session_init(
             db.add(resumable_chat)
             touch_user_session(
                 db,
-                client_id=client.id,
+                tenant_id=tenant.id,
                 user_context=resumable_chat.user_context,
                 started_at=resumable_chat.created_at,
             )
             db.commit()
-            logger.info("kyc_session_resumed: client_id=%s", client.id)
+            logger.info("kyc_session_resumed: tenant_id=%s", tenant.id)
         else:
             merged = apply_identity_context_patch(
                 {"user_id": ctx["user_id"]},
@@ -151,7 +151,7 @@ def widget_session_init(
                 browser_locale=locale,
             )
             chat = Chat(
-                client_id=client.id,
+                tenant_id=tenant.id,
                 session_id=session_id,
                 user_context=merged,
             )
@@ -159,23 +159,23 @@ def widget_session_init(
             db.flush()
             start_user_session(
                 db,
-                client_id=client.id,
+                tenant_id=tenant.id,
                 user_context=merged,
                 started_at=chat.created_at,
             )
             db.commit()
             logger.info(
-                "kyc_session_resume_skipped: client_id=%s reason=no_resumable_session",
-                client.id,
+                "kyc_session_resume_skipped: tenant_id=%s reason=no_resumable_session",
+                tenant.id,
             )
-            logger.info("kyc_session_created: client_id=%s", client.id)
+            logger.info("kyc_session_created: tenant_id=%s", tenant.id)
         mode = "identified"
     elif body.identity_token and body.identity_token.strip():
         reason = fail_reason or "invalid_token"
         logger.info("kyc_validation_failed: reason=%s", reason)
     elif locale is not None:
         chat = Chat(
-            client_id=client.id,
+            tenant_id=tenant.id,
             session_id=session_id,
             user_context={"browser_locale": locale},
         )
@@ -188,12 +188,12 @@ def widget_session_init(
 @widget_router.post("/chat")
 @limiter.limit(
     settings.effective_widget_chat_per_client_rate,
-    key_func=widget_client_rate_limit_key,
+    key_func=widget_tenant_rate_limit_key,
 )
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
 def widget_chat(
     request: Request,
-    client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
+    tenant_id: Annotated[str, Query(description="Public tenant ID (ch_xyz)")],
     body: Annotated[WidgetChatRequest | None, Body()] = None,
     session_id: Annotated[str | None, Query(description="Optional session ID")] = None,
     locale: Annotated[
@@ -233,12 +233,12 @@ def widget_chat(
     locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
 
     try:
-        client = get_client_eligible_for_widget_chat(db, client_id)
-    except WidgetChatClientGateError as e:
-        if e.reason == WidgetChatClientGateError.NOT_FOUND:
-            raise HTTPException(status_code=404, detail="Client not found") from e
-        if e.reason == WidgetChatClientGateError.INACTIVE:
-            raise HTTPException(status_code=403, detail="Client is not active") from e
+        tenant = get_tenant_eligible_for_widget_chat(db, tenant_id)
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Tenant not found") from e
+        if e.reason == WidgetChatTenantGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
@@ -258,7 +258,7 @@ def widget_chat(
             ) from None
         existing_chat = (
             db.query(Chat)
-            .filter(Chat.client_id == client.id, Chat.session_id == sid)
+            .filter(Chat.tenant_id == tenant.id, Chat.session_id == sid)
             .first()
         )
         if existing_chat is None:
@@ -282,11 +282,11 @@ def widget_chat(
 
     try:
         outcome = process_chat_message(
-            client_id=client.id,
+            tenant_id=tenant.id,
             question=resolved_message,
             session_id=sid,
             db=db,
-            api_key=client.openai_api_key,
+            api_key=tenant.openai_api_key,
             user_context=None,
             browser_locale=locale_hint,
         )
@@ -310,18 +310,18 @@ def widget_chat(
 def widget_escalate(
     request: Request,
     body: ManualEscalateRequest,
-    client_id: Annotated[str, Query(description="Public client ID (ch_xyz)")],
+    tenant_id: Annotated[str, Query(description="Public tenant ID (ch_xyz)")],
     session_id: Annotated[str, Query(description="Chat session UUID")],
     db: Session = Depends(get_db),
 ) -> ManualEscalateResponse:
     """Manual escalation for embedded widget (public bot ID + session)."""
     try:
-        client = get_client_eligible_for_widget_chat(db, client_id)
-    except WidgetChatClientGateError as e:
-        if e.reason == WidgetChatClientGateError.NOT_FOUND:
-            raise HTTPException(status_code=404, detail="Client not found") from e
-        if e.reason == WidgetChatClientGateError.INACTIVE:
-            raise HTTPException(status_code=403, detail="Client is not active") from e
+        tenant = get_tenant_eligible_for_widget_chat(db, tenant_id)
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Tenant not found") from e
+        if e.reason == WidgetChatTenantGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
@@ -338,9 +338,9 @@ def widget_escalate(
     try:
         msg, tnum = perform_manual_escalation(
             db,
-            client,
+            tenant,
             sid,
-            api_key=client.openai_api_key,
+            api_key=tenant.openai_api_key,
             user_note=body.user_note,
             trigger=trig,
         )

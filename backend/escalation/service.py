@@ -12,12 +12,12 @@ from sqlalchemy.orm import Session
 
 from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact
+from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.email.service import send_email
 from backend.models import (
     Chat,
-    Client,
     EscalationPriority,
     EscalationStatus,
     EscalationTicket,
@@ -26,12 +26,12 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    Tenant,
     TenantProfile,
     User,
 )
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
-from backend.user_sessions.service import sync_user_session_identity
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +40,10 @@ ESCALATION_THRESHOLD = 0.45
 _CLARIFY_KEY = "escalation_followup_clarify"
 
 
-def _client_optional_entity_types(client: Client | None) -> set[str] | None:
-    if not client:
+def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
+    if not tenant:
         return None
-    raw = client.settings if isinstance(client.settings, dict) else None
+    raw = tenant.settings if isinstance(tenant.settings, dict) else None
     cfg = public_redaction_config_dict(raw)
     return set(cfg["optional_entity_types"])
 
@@ -137,9 +137,9 @@ def compute_priority(
 _TICKET_NUM_RE = re.compile(r"^ESC-(\d+)$", re.IGNORECASE)
 
 
-def generate_ticket_number(client_id: uuid.UUID, db: Session) -> str:
+def generate_ticket_number(tenant_id: uuid.UUID, db: Session) -> str:
     """
-    Generate next sequential ticket number for client.
+    Generate next sequential ticket number for tenant.
 
     Uses MAX(ticket_number) + 1. SELECT FOR UPDATE SKIP LOCKED is an advisory
     lock on PostgreSQL; SQLite (used in tests) ignores it gracefully.
@@ -148,7 +148,7 @@ def generate_ticket_number(client_id: uuid.UUID, db: Session) -> str:
     """
     rows = (
         db.query(EscalationTicket.ticket_number)
-        .filter(EscalationTicket.client_id == client_id)
+        .filter(EscalationTicket.tenant_id == tenant_id)
         .with_for_update(skip_locked=True)
         .all()
     )
@@ -179,12 +179,12 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
     return "\n".join(lines)
 
 
-def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Session) -> None:
-    user = db.query(User).filter(User.id == client.user_id).first()
-    support_config = public_support_config_dict(client.settings if isinstance(client.settings, dict) else None)
+def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Session) -> None:
+    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
     if not recipient:
-        logger.warning("No escalation notification email configured for client_id=%s", client.id)
+        logger.warning("No escalation notification email configured for tenant_id=%s", tenant.id)
         return
     base = settings.FRONTEND_URL.rstrip("/")
     body = (
@@ -204,7 +204,7 @@ def _notify_client_new_ticket(client: Client, ticket: EscalationTicket, db: Sess
 
 
 def create_escalation_ticket(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     primary_question: str,
     trigger: EscalationTrigger,
     db: Session,
@@ -220,11 +220,11 @@ def create_escalation_ticket(
 ) -> EscalationTicket:
     from sqlalchemy.exc import IntegrityError
 
-    client = db.query(Client).filter(Client.id == client_id).first()
-    if not client:
-        raise ValueError("client not found")
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    if not tenant:
+        raise ValueError("tenant not found")
     if optional_entity_types is None:
-        optional_entity_types = _client_optional_entity_types(client)
+        optional_entity_types = _tenant_optional_entity_types(tenant)
 
     summary: str | None = None
     if chat_id:
@@ -242,9 +242,9 @@ def create_escalation_ticket(
 
     ticket: EscalationTicket | None = None
     for attempt in range(3):
-        ticket_number = generate_ticket_number(client_id, db)
+        ticket_number = generate_ticket_number(tenant_id, db)
         ticket = EscalationTicket(
-            client_id=client_id,
+            tenant_id=tenant_id,
             ticket_number=ticket_number,
             primary_question=redaction.redacted_text[:8000],
             primary_question_original_encrypted=encrypt_value(primary_question[:8000]),
@@ -279,7 +279,7 @@ def create_escalation_ticket(
         for entity in redaction.entities_found:
             db.add(
                 PiiEvent(
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     chat_id=chat_id,
                     message_id=None,
                     direction=PiiEventDirection.escalation_ticket,
@@ -291,9 +291,9 @@ def create_escalation_ticket(
         db.refresh(ticket)
 
     try:
-        _notify_client_new_ticket(client, ticket, db)
+        _notify_tenant_new_ticket(tenant, ticket, db)
     except Exception as e:
-        logger.warning("notify client owner failed (ticket still created): %s", e)
+        logger.warning("notify tenant owner failed (ticket still created): %s", e)
 
     return ticket
 
@@ -330,7 +330,7 @@ def apply_collected_contact_email(
     db.add(chat)
     sync_user_session_identity(
         db,
-        client_id=chat.client_id,
+        tenant_id=chat.tenant_id,
         user_context=ctx,
     )
     db.commit()
@@ -338,13 +338,13 @@ def apply_collected_contact_email(
 
 def resolve_ticket(
     ticket_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     resolution_text: str,
     db: Session,
 ) -> EscalationTicket:
     ticket = (
         db.query(EscalationTicket)
-        .filter(EscalationTicket.id == ticket_id, EscalationTicket.client_id == client_id)
+        .filter(EscalationTicket.id == ticket_id, EscalationTicket.tenant_id == tenant_id)
         .first()
     )
     if not ticket:
@@ -362,12 +362,12 @@ def resolve_ticket(
 
 def delete_ticket_original_content(
     ticket_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> tuple[EscalationTicket | None, int]:
     ticket = (
         db.query(EscalationTicket)
-        .filter(EscalationTicket.id == ticket_id, EscalationTicket.client_id == client_id)
+        .filter(EscalationTicket.id == ticket_id, EscalationTicket.tenant_id == tenant_id)
         .first()
     )
     if not ticket:
@@ -446,7 +446,7 @@ def _clear_escalation_clarify_flag(chat: Chat) -> None:
 
 def perform_manual_escalation(
     db: Session,
-    client: Client,
+    tenant: Tenant,
     session_id: uuid.UUID,
     *,
     api_key: str,
@@ -462,16 +462,16 @@ def perform_manual_escalation(
 
     chat = (
         db.query(Chat)
-        .filter(Chat.session_id == session_id, Chat.client_id == client.id)
+        .filter(Chat.session_id == session_id, Chat.tenant_id == tenant.id)
         .first()
     )
     if not chat:
         raise ValueError("session not found")
 
     effective = dict(chat.user_context) if chat.user_context else {}
-    optional_entity_types = _client_optional_entity_types(client)
+    optional_entity_types = _tenant_optional_entity_types(tenant)
     ticket = create_escalation_ticket(
-        client.id,
+        tenant.id,
         user_note or "(manual escalation)",
         trigger,
         db,
@@ -488,10 +488,10 @@ def perform_manual_escalation(
     )
     msgs = transcript_messages_for_openai(chat)
     tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
     )
     support_config = public_support_config_dict(
-        client.settings if isinstance(client.settings, dict) else None
+        tenant.settings if isinstance(tenant.settings, dict) else None
     )
     language_context = resolve_language_context(
         current_turn_text=user_note or "[User requested support via the Talk to support action.]",

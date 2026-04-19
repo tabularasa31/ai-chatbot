@@ -13,9 +13,9 @@ def _norm_term(value: str) -> str:
     return " ".join(value.strip().split()).casefold()
 
 
-def load_client_profile(db: Session, client_id: uuid.UUID) -> TenantProfileModel | None:
-    """Return client profile row or None if missing."""
-    return db.get(TenantProfileModel, client_id)
+def load_client_profile(db: Session, tenant_id: uuid.UUID) -> TenantProfileModel | None:
+    """Return tenant profile row or None if missing."""
+    return db.get(TenantProfileModel, tenant_id)
 
 
 def _merge_modules(existing: list[str], incoming: Iterable[str]) -> list[str]:
@@ -115,7 +115,7 @@ def _merge_aliases(
 def merge_into_profile(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     product_name: str | None,
     product_name_confidence: float,
     modules: list[str],
@@ -128,17 +128,17 @@ def merge_into_profile(
     updated_at,
 ) -> TenantProfileModel:
     """
-    Merge extracted knowledge into the client profile row.
+    Merge extracted knowledge into the tenant profile row.
 
     Confidence gates follow the Phase 1 spec:
     - product_name overwritten only if new_conf >= 0.85 or old is empty
     - support_email overwritten only if new_conf >= 0.85
     - glossary updated by term; definition updated only if confidence improves
     """
-    row = load_client_profile(db, client_id)
+    row = load_client_profile(db, tenant_id)
     if row is None:
         row = TenantProfileModel(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             product_name=None,
             modules=[],
             glossary=[],

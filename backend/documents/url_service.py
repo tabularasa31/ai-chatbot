@@ -46,7 +46,6 @@ from backend.documents.quick_answers import (
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
-    Client,
     Document,
     DocumentStatus,
     DocumentType,
@@ -54,6 +53,7 @@ from backend.models import (
     QuickAnswer,
     SourceSchedule,
     SourceStatus,
+    Tenant,
     UrlSource,
     UrlSourceRun,
 )
@@ -144,8 +144,8 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
     return normalized, parsed.netloc.lower()
 
 
-def _count_client_documents(db: Session, client_id: uuid.UUID) -> int:
-    return db.query(Document).filter(Document.client_id == client_id).count()
+def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
+    return db.query(Document).filter(Document.tenant_id == tenant_id).count()
 
 
 def _count_source_documents(db: Session, source_id: uuid.UUID) -> int:
@@ -155,10 +155,10 @@ def _count_source_documents(db: Session, source_id: uuid.UUID) -> int:
 def _allowed_source_document_total(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     source_id: uuid.UUID | None = None,
 ) -> tuple[int, int]:
-    total_documents = _count_client_documents(db, client_id)
+    total_documents = _count_tenant_documents(db, tenant_id)
     source_documents = _count_source_documents(db, source_id) if source_id else 0
     documents_outside_source = max(0, total_documents - source_documents)
     allowed_total = max(0, KNOWLEDGE_DOCUMENT_CAPACITY - documents_outside_source)
@@ -168,12 +168,12 @@ def _allowed_source_document_total(
 def _capacity_warning(available_slots: int) -> str:
     if available_slots <= 0:
         return (
-            f"Knowledge capacity reached. This client already uses all "
+            f"Knowledge capacity reached. This tenant already uses all "
             f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
         )
     return (
         f"Knowledge capacity allows only {available_slots} more document"
-        f"{'' if available_slots == 1 else 's'} for this client."
+        f"{'' if available_slots == 1 else 's'} for this tenant."
     )
 
 
@@ -255,7 +255,7 @@ def _validate_public_hostname(hostname: str) -> None:
 
 
 def _request_with_safe_redirects(
-    client: httpx.Client,
+    http_client: httpx.Client,
     method: str,
     url: str,
     *,
@@ -268,7 +268,7 @@ def _request_with_safe_redirects(
         hostname = parsed.hostname.lower() if parsed.hostname else ""
         _validate_public_hostname(hostname)
         try:
-            response = client.request(method, current_url)
+            response = http_client.request(method, current_url)
         except httpx.TimeoutException as exc:
             _log_fetch(logging.WARNING, "Request timed out", context, method=method)
             raise HTTPException(
@@ -355,9 +355,9 @@ def _load_robots_warning(root_url: str) -> str | None:
     robots_url = urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
     rp = robotparser.RobotFileParser()
     context = FetchContext(stage="preflight:robots", url=robots_url)
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
         try:
-            response = _request_with_safe_redirects(client, "GET", robots_url, context=context)
+            response = _request_with_safe_redirects(http_client, "GET", robots_url, context=context)
         except HTTPException:
             return None
     if response.status_code >= 400 or not response.text.strip():
@@ -373,16 +373,16 @@ def _load_robots_warning(root_url: str) -> str | None:
 
 def _fetch_reachable_page(url: str, timeout_seconds: float) -> tuple[str, str | None]:
     context = FetchContext(stage="preflight:page", url=url)
-    with _http_client(timeout_seconds) as client:
-        response = _request_with_safe_redirects(client, "HEAD", url, context=context)
+    with _http_client(timeout_seconds) as http_client:
+        response = _request_with_safe_redirects(http_client, "HEAD", url, context=context)
         if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
-            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
 
         _raise_for_upstream_status(response, context)
 
         content_type = response.headers.get("content-type", "")
         if "text/html" not in content_type and response.request.method != "GET":
-            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
             _raise_for_upstream_status(response, context)
             content_type = response.headers.get("content-type", "")
 
@@ -430,7 +430,7 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
     def local_name(tag: str) -> str:
         return tag.rsplit("}", 1)[-1].lower()
 
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
         sitemaps_fetched = 0
         while queued and sitemaps_fetched < MAX_SITEMAPS_PER_SOURCE:
             candidate = queued.popleft()
@@ -440,7 +440,7 @@ def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
             sitemaps_fetched += 1
             context = FetchContext(stage="preflight:sitemap", url=candidate)
             try:
-                response = _request_with_safe_redirects(client, "GET", candidate, context=context)
+                response = _request_with_safe_redirects(http_client, "GET", candidate, context=context)
             except HTTPException:
                 continue
             if response.status_code >= 400 or not response.text.strip():
@@ -515,14 +515,14 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
         return ordered
 
     queue: deque[tuple[str, int]] = deque([(normalized_root, 0)])
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
         while queue and len(ordered) < page_cap:
             current_url, depth = queue.popleft()
             if depth >= MAX_DISCOVERY_DEPTH:
                 continue
             context = FetchContext(stage="crawl:discover", url=current_url)
             try:
-                response = _request_with_safe_redirects(client, "GET", current_url, context=context)
+                response = _request_with_safe_redirects(http_client, "GET", current_url, context=context)
             except HTTPException:
                 continue
             if response.status_code >= 400 or not _is_html_like(response):
@@ -548,24 +548,24 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
 
 def preflight_url_source(
     *,
-    client: Client,
+    tenant: Tenant,
     url: str,
     exclusions: list[str],
     db: Session,
 ) -> UrlPreflightResult:
     normalized_url, normalized_domain = _normalize_source_url(url)
-    _, remaining_capacity = _allowed_source_document_total(db, client_id=client.id)
+    _, remaining_capacity = _allowed_source_document_total(db, tenant_id=tenant.id)
     if remaining_capacity <= 0:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Knowledge capacity reached. This client already uses all "
+                f"Knowledge capacity reached. This tenant already uses all "
                 f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
             ),
         )
     duplicate = (
         db.query(UrlSource)
-        .filter(UrlSource.client_id == client.id)
+        .filter(UrlSource.tenant_id == tenant.id)
         .filter(UrlSource.normalized_domain == normalized_domain)
         .first()
     )
@@ -669,7 +669,7 @@ def _clean_schedule(schedule: str | None) -> SourceSchedule:
 
 def create_url_source(
     *,
-    client: Client,
+    tenant: Tenant,
     url: str,
     name: str | None,
     schedule: str | None,
@@ -677,14 +677,14 @@ def create_url_source(
     db: Session,
 ) -> tuple[UrlSource, UrlPreflightResult]:
     cleaned_exclusions = _clean_exclusions(exclusions)
-    preflight = preflight_url_source(client=client, url=url, exclusions=cleaned_exclusions, db=db)
+    preflight = preflight_url_source(tenant=tenant, url=url, exclusions=cleaned_exclusions, db=db)
     cleaned_schedule = _clean_schedule(schedule)
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name=(name or preflight.title or preflight.normalized_domain).strip()[:255],
         url=preflight.normalized_url,
         normalized_domain=preflight.normalized_domain,
-        status=SourceStatus.paused if not client.openai_api_key else SourceStatus.queued,
+        status=SourceStatus.paused if not tenant.openai_api_key else SourceStatus.queued,
         crawl_schedule=cleaned_schedule,
         exclusion_patterns=cleaned_exclusions or None,
         pages_found=preflight.estimated_pages,
@@ -692,7 +692,7 @@ def create_url_source(
         next_crawl_at=_schedule_next_run(cleaned_schedule),
         metadata_json={"auto_title": preflight.title},
     )
-    if not client.openai_api_key:
+    if not tenant.openai_api_key:
         source.error_message = "Indexing paused — check your OpenAI key."
     db.add(source)
     db.commit()
@@ -882,9 +882,9 @@ def _build_structured_openapi_chunks(
 
 def _fetch_openapi_source(url: str) -> StructuredSource | None:
     context = FetchContext(stage="crawl:structured", url=url)
-    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
+    with _http_client(FETCH_TIMEOUT_SECONDS) as http_client:
         try:
-            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
             _raise_for_upstream_status(response, context)
         except HTTPException as exc:
             _log_fetch(logging.INFO, "Skipping structured source after fetch failure", context, detail=exc.detail)
@@ -955,9 +955,9 @@ def _render_structured_openapi_chunks(
 
 def _fetch_page_html(url: str) -> str | None:
     context = FetchContext(stage="crawl:page", url=url)
-    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
+    with _http_client(FETCH_TIMEOUT_SECONDS) as http_client:
         try:
-            response = _request_with_safe_redirects(client, "GET", url, context=context)
+            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
             _raise_for_upstream_status(response, context)
         except HTTPException as exc:
             _log_fetch(logging.INFO, "Skipping page after fetch failure", context, detail=exc.detail)
@@ -977,11 +977,11 @@ def _fetch_page_html(url: str) -> str | None:
 def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[list[float]]:
     if not chunks:
         return []
-    client = get_openai_client(api_key)
+    oai = get_openai_client(api_key)
     vectors: list[list[float]] = []
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
-        response = client.embeddings.create(
+        response = oai.embeddings.create(
             model="text-embedding-3-small",
             input=[chunk["chunk_text"] for chunk in batch],
         )
@@ -1067,7 +1067,7 @@ def _upsert_page_document(
         doc = existing
     else:
         doc = Document(
-            client_id=source.client_id,
+            tenant_id=source.tenant_id,
             source_id=source.id,
             filename=page.title[:255],
             file_type=DocumentType.url,
@@ -1108,7 +1108,7 @@ def _upsert_page_document(
     doc.status = DocumentStatus.ready
     db.flush()
     db.commit()
-    invalidate_bm25_cache_for_tenant(source.client_id)
+    invalidate_bm25_cache_for_tenant(source.tenant_id)
     _run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         api_key=api_key,
@@ -1150,7 +1150,7 @@ def _upsert_structured_document(
         doc = existing
     else:
         doc = Document(
-            client_id=source.client_id,
+            tenant_id=source.tenant_id,
             source_id=source.id,
             filename=title[:255],
             file_type=DocumentType.swagger,
@@ -1207,7 +1207,7 @@ def _upsert_structured_document(
         doc.status = DocumentStatus.ready
         db.flush()
         db.commit()
-        invalidate_bm25_cache_for_tenant(source.client_id)
+        invalidate_bm25_cache_for_tenant(source.tenant_id)
         _run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
             api_key=api_key,
@@ -1225,24 +1225,24 @@ def _upsert_structured_document(
         raise HTTPException(status_code=500, detail="Structured source embedding failed") from None
 
 
-def list_knowledge_sources(client_id: uuid.UUID, db: Session) -> dict[str, Any]:
+def list_knowledge_sources(tenant_id: uuid.UUID, db: Session) -> dict[str, Any]:
     files = (
         db.query(Document)
-        .filter(Document.client_id == client_id)
+        .filter(Document.tenant_id == tenant_id)
         .filter(Document.source_id.is_(None))
         .order_by(Document.created_at.desc())
         .all()
     )
     url_sources = (
         db.query(UrlSource)
-        .filter(UrlSource.client_id == client_id)
+        .filter(UrlSource.tenant_id == tenant_id)
         .order_by(UrlSource.created_at.desc())
         .all()
     )
     return {"documents": files, "url_sources": url_sources}
 
 
-def get_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -> UrlSource:
+def get_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> UrlSource:
     source = (
         db.query(UrlSource)
         .options(
@@ -1251,7 +1251,7 @@ def get_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -> U
             selectinload(UrlSource.quick_answers),
         )
         .filter(UrlSource.id == source_id)
-        .filter(UrlSource.client_id == client_id)
+        .filter(UrlSource.tenant_id == tenant_id)
         .first()
     )
     if not source:
@@ -1262,13 +1262,13 @@ def get_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -> U
 def update_url_source(
     *,
     source_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     name: str | None,
     schedule: str | None,
     exclusions: list[str] | None,
     db: Session,
 ) -> UrlSource:
-    source = get_url_source(source_id, client_id, db)
+    source = get_url_source(source_id, tenant_id, db)
     if name is not None:
         source.name = name.strip()[:255] or None
     if schedule is not None:
@@ -1281,28 +1281,28 @@ def update_url_source(
     return source
 
 
-def delete_url_source(source_id: uuid.UUID, client_id: uuid.UUID, db: Session) -> None:
-    source = get_url_source(source_id, client_id, db)
+def delete_url_source(source_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> None:
+    source = get_url_source(source_id, tenant_id, db)
     db.delete(source)
     db.commit()
-    invalidate_bm25_cache_for_tenant(client_id)
+    invalidate_bm25_cache_for_tenant(tenant_id)
 
 
 def delete_source_document(
     *,
     source_id: uuid.UUID,
     document_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> None:
-    source = get_url_source(source_id, client_id, db)
+    source = get_url_source(source_id, tenant_id, db)
     doc = (
         db.query(Document)
         .options(selectinload(Document.embeddings))
         .filter(Document.id == document_id)
         .first()
     )
-    if not doc or doc.client_id != client_id or doc.source_id != source.id:
+    if not doc or doc.tenant_id != tenant_id or doc.source_id != source.id:
         raise HTTPException(status_code=404, detail="Page not found")
 
     _exclude_url_from_future_crawls(source, doc.source_url)
@@ -1310,16 +1310,16 @@ def delete_source_document(
     db.flush()
     _recalculate_source_counts(source, db)
     db.commit()
-    invalidate_bm25_cache_for_tenant(client_id)
+    invalidate_bm25_cache_for_tenant(tenant_id)
 
 
 def trigger_refresh(
     *,
     source_id: uuid.UUID,
-    client: Client,
+    tenant: Tenant,
     db: Session,
 ) -> UrlSource:
-    source = get_url_source(source_id, client.id, db)
+    source = get_url_source(source_id, tenant.id, db)
     now = _utcnow()
     last_refresh = source.last_refresh_requested_at
     if last_refresh is not None and last_refresh.tzinfo is None:
@@ -1332,8 +1332,8 @@ def trigger_refresh(
             detail=f"Refresh available in {minutes} min.",
         )
     source.last_refresh_requested_at = now
-    source.status = SourceStatus.paused if not client.openai_api_key else SourceStatus.queued
-    if not client.openai_api_key:
+    source.status = SourceStatus.paused if not tenant.openai_api_key else SourceStatus.queued
+    if not tenant.openai_api_key:
         source.error_message = "Indexing paused — check your OpenAI key."
     else:
         source.error_message = None
@@ -1381,7 +1381,7 @@ def _plan_crawl(source: UrlSource, db: Session) -> _CrawlPlan:
     existing_urls = {doc.source_url for doc in existing_docs if doc.source_url}
     allowed_total, remaining_capacity = _allowed_source_document_total(
         db,
-        client_id=source.client_id,
+        tenant_id=source.tenant_id,
         source_id=source.id,
     )
     discovered_urls = _discover_urls(
@@ -1519,7 +1519,7 @@ def _replace_quick_answers_for_source(
             continue
         db.add(
             QuickAnswer(
-                tenant_id=source.client_id,
+                tenant_id=source.tenant_id,
                 source_id=source.id,
                 key=candidate.key,
                 value=candidate.value,
@@ -1649,12 +1649,12 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
         _finalize_crawl(source, run, plan, result, started, db)
         if source.status == SourceStatus.ready:
             try:
-                run_mode_a_for_tenant_when_queue_empty_best_effort(source.client_id)
+                run_mode_a_for_tenant_when_queue_empty_best_effort(source.tenant_id)
             except Exception:
                 logger.warning(
                     "Gap Analyzer Mode A trigger failed for source_id=%s tenant_id=%s",
                     source.id,
-                    source.client_id,
+                    source.tenant_id,
                     exc_info=True,
                 )
     except HTTPException as exc:

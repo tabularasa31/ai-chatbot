@@ -12,7 +12,7 @@ from backend.documents.quick_answers import (
     _extract_support_email,
     _extract_trial_info,
 )
-from backend.models import Client, QuickAnswer, SourceSchedule, SourceStatus, UrlSource, User
+from backend.models import Tenant, QuickAnswer, SourceSchedule, SourceStatus, UrlSource, User
 from scripts.cleanup_quick_answers import run_cleanup
 
 
@@ -36,16 +36,15 @@ def _create_quick_answer(
     db_session.add(user)
     db_session.flush()
 
-    client = Client(
-        user_id=user.id,
-        name=f"Client {suffix}",
+    tenant = Tenant(
+                name=f"Tenant {suffix}",
         api_key=suffix[:32],
     )
-    db_session.add(client)
+    db_session.add(tenant)
     db_session.flush()
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -60,7 +59,7 @@ def _create_quick_answer(
     db_session.flush()
 
     answer = QuickAnswer(
-        tenant_id=client.id,
+        tenant_id=tenant.id,
         source_id=source.id,
         key=key,
         value=value,

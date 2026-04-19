@@ -24,7 +24,7 @@ import pytest
 
 from backend.models import (
     Chat,
-    Client,
+    Tenant,
     LogAnalysisState,
     Message,
     MessageEmbedding,
@@ -40,28 +40,27 @@ from backend.models import (
 @pytest.fixture()
 def client_row(db_session):
     user = User(
-        email="client@example.com",
+        email="tenant@example.com",
         password_hash="x",
         is_admin=False,
         is_verified=True,
     )
     db_session.add(user)
     db_session.flush()
-    client = Client(
-        user_id=user.id,
-        name="Test Tenant",
+    tenant = Tenant(
+                name="Test Tenant",
         api_key="test-api-key",
         public_id="test-public-id",
     )
-    db_session.add(client)
+    db_session.add(tenant)
     db_session.commit()
-    return client
+    return tenant
 
 
 @pytest.fixture()
 def chat_session(db_session, client_row):
     chat = Chat(
-        client_id=client_row.id,
+        tenant_id=client_row.id,
         session_id=uuid.uuid4(),
     )
     db_session.add(chat)
@@ -383,7 +382,7 @@ def test_faq_entry_has_explainability_fields(db_session, client_row, chat_sessio
 
 @pytest.mark.asyncio
 async def test_analysis_version_resets_watermark(db_session, client_row):
-    """Changing CURRENT_ANALYSIS_VERSION must reset watermark for the client."""
+    """Changing CURRENT_ANALYSIS_VERSION must reset watermark for the tenant."""
     from backend.jobs.analyze_chat_logs import (
         _get_or_create_state,
         run_job,
@@ -403,7 +402,7 @@ async def test_analysis_version_resets_watermark(db_session, client_row):
     with patch("backend.jobs.analyze_chat_logs._load_messages", return_value=[]), \
          patch("backend.jobs.analyze_chat_logs._finalize_job"):
         await run_job(
-            client_id=client_row.id,
+            tenant_id=client_row.id,
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),
@@ -435,7 +434,7 @@ async def test_is_running_released_on_failure(db_session, client_row):
         side_effect=RuntimeError("Boom"),
     ):
         await run_job(
-            client_id=client_row.id,
+            tenant_id=client_row.id,
             api_key="sk-test",
             db=db_session,
             job_start=datetime.now(timezone.utc),

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from backend.models import Client, TenantProfile, User
+from backend.models import Tenant, TenantProfile, User
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -31,22 +31,21 @@ def client_with_profile(db_session):
     )
     db_session.add(user)
     db_session.flush()
-    client = Client(
-        user_id=user.id,
-        name="Alias Tenant",
+    tenant = Tenant(
+                name="Alias Tenant",
         api_key="test-key",
         public_id="alias-pub-id",
     )
-    db_session.add(client)
+    db_session.add(tenant)
     db_session.flush()
     profile = TenantProfile(
-        tenant_id=client.id,
+        tenant_id=tenant.id,
         product_name="TestProduct",
         aliases=[],
     )
     db_session.add(profile)
     db_session.commit()
-    return client, profile
+    return tenant, profile
 
 
 # ── test_alias_pre_filter_size ────────────────────────────────────────────────
@@ -188,7 +187,7 @@ def test_alias_confidence_increments(db_session, client_with_profile):
         _merge_aliases_into_profile,
     )
 
-    client, profile = client_with_profile
+    tenant, profile = client_with_profile
 
     alias = AliasEntry(
         user_phrase="cancel subscription",
@@ -196,26 +195,26 @@ def test_alias_confidence_increments(db_session, client_with_profile):
     )
 
     # First insertion → confidence = 0.7
-    count = _merge_aliases_into_profile(db_session, client.id, [alias])
+    count = _merge_aliases_into_profile(db_session, tenant.id, [alias])
     assert count == 1
     db_session.refresh(profile)
     entry = profile.aliases[0]
     assert abs(entry["confidence"] - ALIAS_BASE_CONFIDENCE) < 0.001
 
     # Second insertion → confidence = 0.8
-    count = _merge_aliases_into_profile(db_session, client.id, [alias])
+    count = _merge_aliases_into_profile(db_session, tenant.id, [alias])
     assert count == 1
     db_session.refresh(profile)
     assert len(profile.aliases) == 1, "Should not create duplicate"
     assert abs(profile.aliases[0]["confidence"] - 0.8) < 0.001
 
     # Third insertion → confidence = 0.9 (max)
-    count = _merge_aliases_into_profile(db_session, client.id, [alias])
+    count = _merge_aliases_into_profile(db_session, tenant.id, [alias])
     db_session.refresh(profile)
     assert abs(profile.aliases[0]["confidence"] - ALIAS_CONFIDENCE_MAX) < 0.001
 
     # Fourth insertion → stays at max 0.9
-    count = _merge_aliases_into_profile(db_session, client.id, [alias])
+    count = _merge_aliases_into_profile(db_session, tenant.id, [alias])
     db_session.refresh(profile)
     assert abs(profile.aliases[0]["confidence"] - ALIAS_CONFIDENCE_MAX) < 0.001
 
@@ -226,12 +225,12 @@ def test_no_duplicate_alias(db_session, client_with_profile):
     """Same alias phrase must not create a duplicate entry."""
     from backend.jobs.alias_extractor import AliasEntry, _merge_aliases_into_profile
 
-    client, profile = client_with_profile
+    tenant, profile = client_with_profile
 
     alias = AliasEntry(user_phrase="my account", canonical_term="account")
-    _merge_aliases_into_profile(db_session, client.id, [alias])
-    _merge_aliases_into_profile(db_session, client.id, [alias])
-    _merge_aliases_into_profile(db_session, client.id, [alias])
+    _merge_aliases_into_profile(db_session, tenant.id, [alias])
+    _merge_aliases_into_profile(db_session, tenant.id, [alias])
+    _merge_aliases_into_profile(db_session, tenant.id, [alias])
 
     db_session.refresh(profile)
     assert len(profile.aliases) == 1, "Alias must not be duplicated"
@@ -244,7 +243,7 @@ async def test_extract_and_merge_aliases_integration(db_session, client_with_pro
     """End-to-end: qualifying cluster → LLM call → alias merged into profile."""
     from backend.jobs.alias_extractor import extract_and_merge_aliases
 
-    client, profile = client_with_profile
+    tenant, profile = client_with_profile
 
     mock_llm_response = MagicMock()
     mock_llm_response.choices = [
@@ -272,7 +271,7 @@ async def test_extract_and_merge_aliases_integration(db_session, client_with_pro
          patch("backend.jobs.alias_extractor.should_extract_aliases", return_value=True):
         count = await extract_and_merge_aliases(
             db=db_session,
-            client_id=client.id,
+            tenant_id=tenant.id,
             cluster_questions_list=questions_list,
             api_key="sk-test",
         )

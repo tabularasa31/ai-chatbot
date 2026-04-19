@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.service import RetrievalContext, process_chat_message
 from backend.guards.reject_response import RejectReason, build_reject_response
-from backend.models import Client, TenantProfile
+from backend.models import Tenant, TenantProfile
 from backend.search.service import build_reliability_assessment
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -23,28 +23,28 @@ def _create_client(
     db: Session,
     *,
     email: str,
-    name: str = "Test Client",
-) -> tuple[Client, str]:
+    name: str = "Test Tenant",
+) -> tuple[Tenant, str]:
     token = register_and_verify_user(http, db, email=email)
-    cl_resp = http.post("/clients", headers={"Authorization": f"Bearer {token}"}, json={"name": name})
+    cl_resp = http.post("/tenants", headers={"Authorization": f"Bearer {token}"}, json={"name": name})
     assert cl_resp.status_code in (200, 201)
     set_client_openai_key(http, token)
     api_key = cl_resp.json()["api_key"]
-    client_row = db.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    client_row = db.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
     return client_row, api_key
 
 
 def test_injection_rejects_before_rag(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cl_row, api_key = _create_client(client, db_session, email="inj@example.com")
+    cl_row, api_key = _create_client(tenant, db_session, email="inj@example.com")
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=True, level=1, method="structural", pattern="x", score=None,
         ),
     )
@@ -77,15 +77,15 @@ def test_injection_rejects_before_rag(
 
 
 def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cl_row, api_key = _create_client(client, db_session, email="lowmix@example.com")
+    cl_row, api_key = _create_client(tenant, db_session, email="lowmix@example.com")
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -138,15 +138,15 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
 
 
 def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cl_row, api_key = _create_client(client, db_session, email="lownone@example.com")
+    cl_row, api_key = _create_client(tenant, db_session, email="lownone@example.com")
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -194,18 +194,18 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
 
 
 def test_relevance_checker_timeout_bounded_by_executor_shutdown(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Reduce timeout for a fast unit test.
     monkeypatch.setattr("backend.guards.relevance_checker.TIMEOUT_SECONDS", 0.05)
 
-    cl_row, api_key = _create_client(client, db_session, email="reltime@example.com")
-    client_id = cl_row.id
+    cl_row, api_key = _create_client(tenant, db_session, email="reltime@example.com")
+    tenant_id = cl_row.id
 
     profile = TenantProfile(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         product_name="Product",
         modules=["ModA"],
         glossary=[],
@@ -235,7 +235,7 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
 
     start = time.monotonic()
     relevant, reason, _profile = check_relevance_precheck(
-        client_id=client_id,
+        tenant_id=tenant_id,
         user_question="hello",
         db=db_session,
         api_key=api_key,

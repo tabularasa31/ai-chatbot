@@ -125,8 +125,8 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 
 
 @pytest.fixture(scope="function")
-def client(engine: Engine, db_session: Session) -> Generator[TestClient, None, None]:
-    """Test client with auth routes, using test database."""
+def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, None]:
+    """Test tenant with auth routes, using test database."""
     from backend.core import db as core_db
     from backend.core.db import get_db
     from backend.main import app
@@ -311,9 +311,9 @@ def _reset_rate_limiter_state():
 
 
 def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-test") -> None:
-    """Set OpenAI API key for current user's client. Call after creating client."""
+    """Set OpenAI API key for current user's tenant. Call after creating tenant."""
     r = test_client.patch(
-        "/clients/me",
+        "/tenants/me",
         headers={"Authorization": f"Bearer {token}"},
         json={"openai_api_key": key},
     )

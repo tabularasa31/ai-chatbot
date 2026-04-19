@@ -34,23 +34,23 @@ from backend.chat.service import (
     record_gap_feedback_for_message,
     run_debug,
 )
-from backend.clients.service import get_client_by_api_key, get_client_by_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
     Chat,
-    Client,
     EscalationTrigger,
     Message,
     MessageFeedback,
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    Tenant,
     User,
 )
 from backend.privacy_schemas import DeletedCountResponse
+from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 
 logger = logging.getLogger(__name__)
 
@@ -117,16 +117,16 @@ def _resolve_debug_client(
     *,
     db: Session,
     current_user: User,
-    bot_id: str,
-) -> Client:
-    client = (
-        db.query(Client)
-        .filter(Client.public_id == bot_id, Client.user_id == current_user.id)
+    tenant_id: str,
+) -> Tenant:
+    tenant = (
+        db.query(Tenant)
+        .filter(Tenant.public_id == tenant_id, Tenant.id == current_user.tenant_id)
         .first()
     )
-    if not client:
+    if not tenant:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return client
+    return tenant
 
 
 def _require_original_access(current_user: User) -> None:
@@ -152,10 +152,10 @@ def chat(
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    client = get_client_by_api_key(x_api_key, db)
-    if not client:
+    tenant = get_tenant_by_api_key(x_api_key, db)
+    if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if not client.openai_api_key:
+    if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
@@ -165,11 +165,11 @@ def chat(
 
     try:
         outcome = process_chat_message(
-            client_id=client.id,
+            tenant_id=tenant.id,
             question=body.question,
             session_id=session_id,
             db=db,
-            api_key=client.openai_api_key,
+            api_key=tenant.openai_api_key,
             browser_locale=x_browser_locale,
         )
     except ValueError as exc:
@@ -196,14 +196,14 @@ def chat_debug(
     body: DebugRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    bot_id: Annotated[str, Query(min_length=1)],
+    tenant_id: Annotated[str, Query(min_length=1)],
 ) -> ChatDebugResponse:
     """
     Debug endpoint: run RAG pipeline without persisting to DB.
     JWT auth required. Returns answer + retrieval debug info.
     """
-    client = _resolve_debug_client(db=db, current_user=current_user, bot_id=bot_id)
-    if not client.openai_api_key:
+    tenant = _resolve_debug_client(db=db, current_user=current_user, tenant_id=tenant_id)
+    if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
@@ -211,10 +211,10 @@ def chat_debug(
 
     try:
         answer, tokens_used, debug_dict = run_debug(
-            client_id=client.id,
+            tenant_id=tenant.id,
             question=body.question,
             db=db,
-            api_key=client.openai_api_key,
+            api_key=tenant.openai_api_key,
         )
     except APIError:
         raise HTTPException(
@@ -297,10 +297,10 @@ def chat_escalate(
 ) -> ManualEscalateResponse:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    client = get_client_by_api_key(x_api_key, db)
-    if not client:
+    tenant = get_tenant_by_api_key(x_api_key, db)
+    if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    if not client.openai_api_key:
+    if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
@@ -313,9 +313,9 @@ def chat_escalate(
     try:
         msg, tnum = perform_manual_escalation(
             db,
-            client,
+            tenant,
             session_id,
-            api_key=client.openai_api_key,
+            api_key=tenant.openai_api_key,
             user_note=body.user_note,
             trigger=trig,
         )
@@ -332,14 +332,14 @@ def get_sessions(
     db: Annotated[Session, Depends(get_db)],
 ) -> ChatSessionListResponse:
     """
-    List all chat sessions for the authenticated client (inbox-style).
+    List all chat sessions for the authenticated tenant (inbox-style).
     JWT auth required. Returns sessions sorted by last_activity DESC.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    summaries = list_chat_sessions(client.id, db)
+    summaries = list_chat_sessions(tenant.id, db)
     return ChatSessionListResponse(
         sessions=[
             ChatSessionSummaryResponse(
@@ -365,13 +365,13 @@ def get_session_logs_route(
     Get full message log for a session (read-only).
     JWT auth required. Returns 404 if session not found or not owner.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     if include_original:
         _require_original_access(current_user)
 
-    logs = get_session_logs(session_id, client.id, db, include_original=include_original)
+    logs = get_session_logs(session_id, tenant.id, db, include_original=include_original)
     if logs is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if include_original:
@@ -380,7 +380,7 @@ def get_session_logs_route(
                 continue
             db.add(
                 PiiEvent(
-                    client_id=client.id,
+                    tenant_id=tenant.id,
                     chat_id=None,
                     message_id=msg_id,
                     actor_user_id=current_user.id,
@@ -416,17 +416,17 @@ def delete_session_original_route(
     current_user: Annotated[User, Depends(require_admin_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> DeletedCountResponse:
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    chat, deleted_count = delete_session_original_content(session_id, client.id, db)
+    chat, deleted_count = delete_session_original_content(session_id, tenant.id, db)
     if not chat:
         raise HTTPException(status_code=404, detail="Session not found")
     if deleted_count:
         db.add(
             PiiEvent(
-                client_id=client.id,
+                tenant_id=tenant.id,
                 chat_id=chat.id,
                 message_id=None,
                 actor_user_id=current_user.id,
@@ -454,9 +454,9 @@ def set_message_feedback(
     """
     from sqlalchemy.orm import joinedload
 
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     message = (
         db.query(Message)
@@ -464,7 +464,7 @@ def set_message_feedback(
         .filter(Message.id == message_id)
         .first()
     )
-    if not message or message.chat.client_id != client.id:
+    if not message or message.chat.tenant_id != tenant.id:
         raise HTTPException(status_code=404, detail="Message not found")
     if message.role != MessageRole.assistant:
         raise HTTPException(
@@ -479,7 +479,7 @@ def set_message_feedback(
     try:
         record_gap_feedback_for_message(
             db=db,
-            tenant_id=client.id,
+            tenant_id=tenant.id,
             assistant_message_id=message.id,
             feedback_value=body.feedback.value,
         )
@@ -488,7 +488,7 @@ def set_message_feedback(
         db.rollback()
         logger.warning(
             "gap_analyzer_feedback_sync_failed: tenant_id=%s assistant_message_id=%s feedback=%s",
-            client.id,
+            tenant.id,
             message.id,
             body.feedback.value,
             exc_info=True,
@@ -509,21 +509,21 @@ def list_bad_answers(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> BadAnswerListResponse:
     """
-    List assistant messages with feedback=down for the authenticated client.
+    List assistant messages with feedback=down for the authenticated tenant.
     JWT auth required. Returns question (previous user msg), answer, ideal_answer.
     """
     from sqlalchemy.orm import joinedload
 
-    # N+1 fix: single query loads all client messages; prev user found in-memory (no per-message DB query)
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    # N+1 fix: single query loads all tenant messages; prev user found in-memory (no per-message DB query)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     all_messages = (
         db.query(Message)
         .join(Chat, Message.chat_id == Chat.id)
         .options(joinedload(Message.chat))
-        .filter(Chat.client_id == client.id)
+        .filter(Chat.tenant_id == tenant.id)
         .order_by(Message.chat_id, Message.created_at)
         .all()
     )
@@ -571,11 +571,11 @@ def get_history(
 
     Returns 404 if session not found or not owner.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    messages = get_chat_history(session_id, client.id, db)
+    messages = get_chat_history(session_id, tenant.id, db)
     if not messages:
         raise HTTPException(status_code=404, detail="Session not found")
 

@@ -88,19 +88,19 @@ def test_chunk_text_oversized_single_sentence_stays_one_chunk() -> None:
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_success(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Mock OpenAI, create embeddings for ready doc → chunks saved."""
-    token = register_and_verify_user(client, db_session, email="emb@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="emb@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Emb Client"},
+        json={"name": "Emb Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# Test\n\n" + b"Lorem ipsum. " * 50  # enough for multiple chunks
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("emb.md", md_content, "text/markdown")},
@@ -117,7 +117,7 @@ def test_create_embeddings_success(
     )
     mock_get_openai.return_value = mock_client
 
-    response = client.post(
+    response = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -127,7 +127,7 @@ def test_create_embeddings_success(
     assert data["status"] == "embedding"
 
     # Background task ran synchronously; verify chunks were created via the list endpoint
-    list_resp = client.get(
+    list_resp = tenant.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -158,18 +158,18 @@ def test_create_embeddings_success(
 
 
 def test_create_embeddings_document_not_found(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
     """404 if doc doesn't exist."""
-    token = register_and_verify_user(client, db_session, email="nf@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="nf@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "NF Client"},
+        json={"name": "NF Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     fake_id = str(uuid.uuid4())
-    response = client.post(
+    response = tenant.post(
         f"/embeddings/documents/{fake_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -179,16 +179,16 @@ def test_create_embeddings_document_not_found(
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_swagger_uses_endpoint_metadata(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="swagger-emb@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="swagger-emb@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Swagger Emb Client"},
+        json={"name": "Swagger Emb Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     swagger_content = b"""
 openapi: 3.0.0
 info:
@@ -213,7 +213,7 @@ paths:
         "201":
           description: Created
 """
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("team-api.yaml", swagger_content, "application/yaml")},
@@ -224,7 +224,7 @@ paths:
     mock_client.embeddings.create.return_value = Mock(data=[Mock(embedding=[0.1] * 1536)])
     mock_get_openai.return_value = mock_client
 
-    response = client.post(
+    response = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -483,23 +483,23 @@ components:
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_document_not_ready(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """400 if doc status=processing."""
     from backend.models import Document, DocumentStatus, DocumentType
 
-    token = register_and_verify_user(client, db_session, email="proc@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="proc@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Proc Client"},
+        json={"name": "Proc Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = cl_resp.json()["id"]
+    set_client_openai_key(tenant, token)
+    tenant_id = cl_resp.json()["id"]
 
     doc = Document(
-        client_id=uuid.UUID(client_id),
+        tenant_id=uuid.UUID(tenant_id),
         filename="proc.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.processing,
@@ -510,7 +510,7 @@ def test_create_embeddings_document_not_ready(
     db_session.refresh(doc)
     doc_id = str(doc.id)
 
-    response = client.post(
+    response = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -521,19 +521,19 @@ def test_create_embeddings_document_not_ready(
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_openai_error(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """OpenAI raises exception → return 503."""
-    token = register_and_verify_user(client, db_session, email="err@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="err@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Err Client"},
+        json={"name": "Err Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# Test\n\nContent here."
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("err.md", md_content, "text/markdown")},
@@ -544,13 +544,13 @@ def test_create_embeddings_openai_error(
     mock_client.embeddings.create.side_effect = Exception("OpenAI API error")
     mock_get_openai.return_value = mock_client
 
-    response = client.post(
+    response = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 202
     # Background task ran synchronously and set doc status to "error" after OpenAI failure
-    doc_resp = client.get(
+    doc_resp = tenant.get(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -561,19 +561,19 @@ def test_create_embeddings_openai_error(
 @patch("backend.embeddings.service.get_openai_client")
 def test_create_embeddings_reruns_delete_old(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Call twice → old embeddings replaced."""
-    token = register_and_verify_user(client, db_session, email="rerun@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="rerun@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Rerun Client"},
+        json={"name": "Rerun Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# Doc\n\n" + b"x" * 600
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("rerun.md", md_content, "text/markdown")},
@@ -587,18 +587,18 @@ def test_create_embeddings_reruns_delete_old(
     )
     mock_get_openai.return_value = mock_client
 
-    r1 = client.post(
+    r1 = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r1.status_code == 202
 
-    r2 = client.post(
+    r2 = tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r2.status_code == 202
-    list_resp = client.get(
+    list_resp = tenant.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -608,19 +608,19 @@ def test_create_embeddings_reruns_delete_old(
 @patch("backend.embeddings.service.get_openai_client")
 def test_get_embeddings_success(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Get embeddings list for document."""
-    token = register_and_verify_user(client, db_session, email="get@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="get@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Get Client"},
+        json={"name": "Get Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# Get\n\nContent for embeddings."
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("get.md", md_content, "text/markdown")},
@@ -633,12 +633,12 @@ def test_get_embeddings_success(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
     )
     mock_get_openai.return_value = mock_client
-    client.post(
+    tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    response = client.get(
+    response = tenant.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -657,19 +657,19 @@ def test_get_embeddings_success(
 @patch("backend.embeddings.service.get_openai_client")
 def test_get_embeddings_wrong_client(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """User B can't see user A's embeddings → 404."""
-    token_a = register_and_verify_user(client, db_session, email="ga@example.com")
-    client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="ga@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Client"},
+        json={"name": "User A Tenant"},
     )
-    set_client_openai_key(client, token_a)
+    set_client_openai_key(tenant, token_a)
     md_content = b"# Secret"
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_a}"},
         files={"file": ("secret.md", md_content, "text/markdown")},
@@ -682,14 +682,14 @@ def test_get_embeddings_wrong_client(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
     )
     mock_get_openai.return_value = mock_client
-    client.post(
+    tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token_a}"},
     )
 
-    token_b = register_and_verify_user(client, db_session, email="gb@example.com")
+    token_b = register_and_verify_user(tenant, db_session, email="gb@example.com")
 
-    response = client.get(
+    response = tenant.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
@@ -699,19 +699,19 @@ def test_get_embeddings_wrong_client(
 @patch("backend.embeddings.service.get_openai_client")
 def test_delete_embeddings_success(
     mock_get_openai: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Delete all embeddings → returns count."""
-    token = register_and_verify_user(client, db_session, email="del@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="del@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Del Emb Client"},
+        json={"name": "Del Emb Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     md_content = b"# To delete\n\nContent."
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("del.md", md_content, "text/markdown")},
@@ -724,12 +724,12 @@ def test_delete_embeddings_success(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
     )
     mock_get_openai.return_value = mock_client
-    client.post(
+    tenant.post(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    response = client.delete(
+    response = tenant.delete(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -737,7 +737,7 @@ def test_delete_embeddings_success(
     data = response.json()
     assert data["deleted"] == len(chunks)
 
-    list_resp = client.get(
+    list_resp = tenant.get(
         f"/embeddings/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )

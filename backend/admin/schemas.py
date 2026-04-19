@@ -14,8 +14,8 @@ class AdminMetricsSummary(BaseModel):
     """Platform-wide metrics summary."""
 
     total_users: int
-    total_clients: int
-    active_clients: int
+    total_tenants: int
+    active_tenants: int
     total_documents: int
     total_chat_sessions: int
     total_messages_user: int
@@ -23,10 +23,10 @@ class AdminMetricsSummary(BaseModel):
     total_tokens_chat: int
 
 
-class AdminClientMetricsItem(BaseModel):
-    """Per-client metrics row."""
+class AdminTenantMetricsItem(BaseModel):
+    """Per-tenant metrics row."""
 
-    client_id: UUID
+    tenant_id: UUID
     public_id: str
     owner_email: str | None
     users_count: int
@@ -39,15 +39,15 @@ class AdminClientMetricsItem(BaseModel):
     has_openai_key: bool
 
 
-class AdminClientMetricsList(BaseModel):
-    """List of per-client metrics."""
+class AdminTenantMetricsList(BaseModel):
+    """List of per-tenant metrics."""
 
-    items: list[AdminClientMetricsItem]
+    items: list[AdminTenantMetricsItem]
 
 
 class AdminPiiEventItem(BaseModel):
     id: UUID
-    client_id: UUID
+    tenant_id: UUID
     chat_id: UUID | None = None
     message_id: UUID | None = None
     actor_user_id: UUID | None = None

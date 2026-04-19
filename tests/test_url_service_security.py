@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.clients.service import create_client
+from backend.tenants.service import create_tenant
 from backend.core.security import hash_password
 from backend.documents import url_service
 from backend.documents.parsers import build_openapi_ingestion_payload
@@ -125,10 +125,10 @@ def test_request_with_safe_redirects_blocks_local_redirect(
     monkeypatch.setattr(url_service.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
-    with httpx.Client(transport=transport, follow_redirects=False, trust_env=False) as client:
+    with httpx.Client(transport=transport, follow_redirects=False, trust_env=False) as tenant:
         with pytest.raises(HTTPException) as exc_info:
             url_service._request_with_safe_redirects(
-                client,
+                tenant,
                 "GET",
                 "https://docs.example.com/start",
                 context=url_service.FetchContext(stage="test", url="https://docs.example.com/start"),
@@ -262,7 +262,7 @@ def test_discover_urls_respects_page_cap(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(
         url_service,
         "_request_with_safe_redirects",
-        lambda client, method, url, context: httpx.Response(
+        lambda tenant, method, url, context: httpx.Response(
             200,
             headers={"content-type": "text/html"},
             text="<html></html>",
@@ -304,7 +304,7 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
 
-    def fake_request(client, method: str, url: str, context):
+    def fake_request(tenant, method: str, url: str, context):
         assert method == "GET"
         return httpx.Response(
             200,
@@ -354,7 +354,7 @@ def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
 
-    def fake_request(client, method: str, url: str, context):
+    def fake_request(tenant, method: str, url: str, context):
         requested_urls.append(url)
         return httpx.Response(
             200,
@@ -383,7 +383,7 @@ def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPat
     markdown = "# Docs\n\nThis page is served as markdown."
     monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
 
-    def fake_request(client, method: str, url: str, context):
+    def fake_request(tenant, method: str, url: str, context):
         assert method == "GET"
         return httpx.Response(
             200,
@@ -440,10 +440,10 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     )
     db_session.add(user)
     db_session.flush()
-    client = create_client(user.id, "Client", db_session)
+    tenant = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -455,7 +455,7 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     db_session.flush()
 
     document = Document(
-        client_id=client.id,
+        tenant_id=tenant.id,
         source_id=source.id,
         filename="Existing",
         file_type=DocumentType.url,
@@ -517,10 +517,10 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     )
     db_session.add(user)
     db_session.flush()
-    client = create_client(user.id, "Client", db_session)
+    tenant = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -532,7 +532,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     db_session.flush()
 
     document = Document(
-        client_id=client.id,
+        tenant_id=tenant.id,
         source_id=source.id,
         filename="Existing",
         file_type=DocumentType.url,
@@ -589,10 +589,10 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     )
     session.add(user)
     session.flush()
-    client = create_client(user.id, "Client", session)
+    tenant = create_tenant(user.id, "Tenant", session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -655,10 +655,10 @@ def test_crawl_url_source_persists_quick_answers(
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    client = create_client(user.id, "Quick Answers Client", db_session)
+    tenant = create_tenant(user.id, "Quick Answers Tenant", db_session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -744,10 +744,10 @@ def test_upsert_structured_document_skips_reembedding_when_hash_matches(
     )
     db_session.add(user)
     db_session.flush()
-    client = create_client(user.id, "Client", db_session)
+    tenant = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="API Docs",
         url="https://docs.example.com/openapi.yaml",
         normalized_domain="docs.example.com",
@@ -775,7 +775,7 @@ paths:
     )
 
     document = Document(
-        client_id=client.id,
+        tenant_id=tenant.id,
         source_id=source.id,
         filename="Existing API",
         file_type=DocumentType.swagger,
@@ -857,10 +857,10 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     )
     session.add(user)
     session.flush()
-    client = create_client(user.id, "Client", session)
+    tenant = create_tenant(user.id, "Tenant", session)
 
     source = UrlSource(
-        client_id=client.id,
+        tenant_id=tenant.id,
         name="API Docs",
         url="https://docs.example.com/openapi.json",
         normalized_domain="docs.example.com",

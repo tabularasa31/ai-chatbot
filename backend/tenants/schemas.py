@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
-class CreateClientRequest(BaseModel):
+class CreateTenantRequest(BaseModel):
     """Request body for creating a client."""
 
     name: str
@@ -25,8 +25,8 @@ class CreateClientRequest(BaseModel):
         return v
 
 
-class ClientResponse(BaseModel):
-    """Client data in API responses."""
+class TenantResponse(BaseModel):
+    """Tenant data in API responses."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -39,30 +39,30 @@ class ClientResponse(BaseModel):
     updated_at: datetime
 
 
-class ClientMeResponse(ClientResponse):
+class TenantMeResponse(TenantResponse):
     """Extended client response for /clients/me with user context."""
 
     is_admin: bool
     is_verified: bool
 
 
-class UpdateClientRequest(BaseModel):
+class UpdateTenantRequest(BaseModel):
     """Request body for updating a client."""
 
     name: str | None = None
     openai_api_key: str | None = None  # None = remove key
 
 
-class ClientListResponse(BaseModel):
+class TenantListResponse(BaseModel):
     """List of clients in API responses."""
 
-    clients: list[ClientResponse]
+    clients: list[TenantResponse]
 
 
 class ValidateApiKeyResponse(BaseModel):
     """Response for API key validation (public endpoint)."""
 
-    client_id: uuid.UUID
+    tenant_id: uuid.UUID
     name: str
 
 
@@ -87,7 +87,7 @@ RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
 
 class DisclosureConfigResponse(BaseModel):
-    """Client-wide bot response detail level (all end-users)."""
+    """Tenant-wide bot response detail level (all end-users)."""
 
     level: DisclosureLevelLiteral
 
@@ -99,7 +99,7 @@ class UpdateDisclosureConfigRequest(BaseModel):
 
 
 class PrivacyConfigResponse(BaseModel):
-    """Client-wide regex redaction settings."""
+    """Tenant-wide regex redaction settings."""
 
     optional_entity_types: list[RedactionEntityLiteral]
 
@@ -111,7 +111,7 @@ class UpdatePrivacyConfigRequest(BaseModel):
 
 
 class SupportSettingsResponse(BaseModel):
-    """Client-wide support inbox settings."""
+    """Tenant-wide support inbox settings."""
 
     l2_email: str | None = None
     escalation_language: str | None = None

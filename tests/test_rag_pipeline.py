@@ -13,7 +13,7 @@ from backend.chat.service import (
     process_chat_message,
 )
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
-from backend.models import Client, Document, DocumentStatus, DocumentType, Embedding
+from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
 from backend.search.service import build_reliability_assessment
 
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -24,17 +24,17 @@ def _create_client(
     db: Session,
     *,
     email: str,
-) -> tuple[Client, str]:
+) -> tuple[Tenant, str]:
     token = register_and_verify_user(http, db, email=email)
     cl_resp = http.post(
-        "/clients",
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "RAG Test Client"},
+        json={"name": "RAG Test Tenant"},
     )
     assert cl_resp.status_code in (200, 201), cl_resp.text
     set_client_openai_key(http, token)
     api_key = cl_resp.json()["api_key"]
-    client_row = db.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    client_row = db.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
     return client_row, api_key
 
@@ -42,12 +42,12 @@ def _create_client(
 def _insert_single_chunk(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     chunk_text: str = "Reset password help",
     vector: list[float] | None = None,
 ) -> None:
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="rag.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -109,16 +109,16 @@ class _FakeTrace:
 
 def test_embedding_once(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cl_row, api_key = _create_client(client, db_session, email="embed-once@example.com")
-    _insert_single_chunk(db_session, client_id=cl_row.id)
+    cl_row, api_key = _create_client(tenant, db_session, email="embed-once@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -161,7 +161,7 @@ def test_embedding_once(
 
 def test_faq_context_in_prompt(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,12 +172,12 @@ def test_faq_context_in_prompt(
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
 
-    cl_row, api_key = _create_client(client, db_session, email="faq-prompt@example.com")
-    _insert_single_chunk(db_session, client_id=cl_row.id, chunk_text="Some docs chunk.")
+    cl_row, api_key = _create_client(tenant, db_session, email="faq-prompt@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id, chunk_text="Some docs chunk.")
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -248,19 +248,19 @@ def test_faq_context_in_prompt(
 
 
 def test_langfuse_faq_match_span(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
 
-    cl_row, api_key = _create_client(client, db_session, email="faq-span@example.com")
-    _insert_single_chunk(db_session, client_id=cl_row.id)
+    cl_row, api_key = _create_client(tenant, db_session, email="faq-span@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -328,7 +328,7 @@ def test_langfuse_faq_match_span(
     metadata = spans[-1].end_calls[-1].get("metadata")
     assert isinstance(metadata, dict)
     assert metadata["strategy"] == "faq_context"
-    assert metadata["client_id"] == str(cl_row.id)
+    assert metadata["tenant_id"] == str(cl_row.id)
     assert metadata["top_score"] == 0.81
     assert metadata["selected_score"] == 0.81
     assert metadata["faq_ids"] == [str(faq_item.id)]
@@ -341,19 +341,19 @@ def test_langfuse_faq_match_span(
 
 
 def test_upstream_query_embedding_span_present_with_precomputed_path(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
 
-    cl_row, api_key = _create_client(client, db_session, email="embed-span@example.com")
-    _insert_single_chunk(db_session, client_id=cl_row.id)
+    cl_row, api_key = _create_client(tenant, db_session, email="embed-span@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -413,15 +413,15 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
 
 
 def test_faq_direct_skips_retrieval_and_generation(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cl_row, api_key = _create_client(client, db_session, email="faq-direct@example.com")
+    cl_row, api_key = _create_client(tenant, db_session, email="faq-direct@example.com")
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -477,19 +477,19 @@ def test_faq_direct_skips_retrieval_and_generation(
 
 
 def test_guard_error_degrades_to_context(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_trace = _FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **_: fake_trace)
 
-    cl_row, api_key = _create_client(client, db_session, email="guard-error@example.com")
-    _insert_single_chunk(db_session, client_id=cl_row.id)
+    cl_row, api_key = _create_client(tenant, db_session, email="guard-error@example.com")
+    _insert_single_chunk(db_session, tenant_id=cl_row.id)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, client_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )

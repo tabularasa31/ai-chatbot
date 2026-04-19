@@ -18,7 +18,7 @@ from backend.gap_analyzer.repository import (
     invalidate_bm25_cache_for_tenant,
 )
 from backend.models import (
-    Client,
+    Tenant,
     Document,
     Embedding,
     GapAnalyzerJob,
@@ -36,36 +36,36 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
 def _create_client_and_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     *,
     email: str,
     name: str,
 ) -> tuple[str, uuid.UUID]:
-    token = register_and_verify_user(client, db_session, email=email)
-    response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email=email)
+    response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": name},
     )
     assert response.status_code == 201, response.json()
-    client_id = uuid.UUID(response.json()["id"])
-    set_client_openai_key(client, token)
-    return token, client_id
+    tenant_id = uuid.UUID(response.json()["id"])
+    set_client_openai_key(tenant, token)
+    return token, tenant_id
 
 
 def test_gap_analyzer_list_returns_summary_and_two_sections(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-list@example.com",
-        name="Gap Phase 5 List Client",
+        name="Gap Phase 5 List Tenant",
     )
     mode_a_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Billing exports",
         coverage_score=0.2,
         status=GapDocTopicStatus.active,
@@ -73,7 +73,7 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
         extracted_at=datetime.now(timezone.utc),
     )
     mode_b_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         question_count=2,
         aggregate_signal_weight=3.5,
@@ -88,28 +88,28 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     db_session.add_all(
         [
             GapQuestion(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 question_text="How do invoice exports work?",
                 cluster_id=mode_b_cluster.id,
                 gap_signal_weight=2.0,
                 created_at=now.replace(microsecond=1),
             ),
             GapQuestion(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 question_text="Can finance export invoices by month?",
                 cluster_id=mode_b_cluster.id,
                 gap_signal_weight=2.0,
                 created_at=now.replace(microsecond=2),
             ),
             GapQuestion(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 question_text="Where do invoice export files appear?",
                 cluster_id=mode_b_cluster.id,
                 gap_signal_weight=2.0,
                 created_at=now.replace(microsecond=3),
             ),
             GapQuestion(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 question_text="Are invoice exports available in CSV?",
                 cluster_id=mode_b_cluster.id,
                 gap_signal_weight=2.0,
@@ -119,7 +119,7 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     )
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -140,24 +140,24 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
 
 
 def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase6-linked-active@example.com",
-        name="Gap Phase 6 Linked Active Client",
+        name="Gap Phase 6 Linked Active Tenant",
     )
     topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Billing exports",
         coverage_score=0.2,
         status=GapDocTopicStatus.active,
         extracted_at=datetime.now(timezone.utc),
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         question_count=1,
         aggregate_signal_weight=4.0,
@@ -172,7 +172,7 @@ def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
     db_session.add_all([topic, cluster])
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -187,24 +187,24 @@ def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
 
 
 def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase6-linked-dismissed@example.com",
-        name="Gap Phase 6 Linked Dismissed Client",
+        name="Gap Phase 6 Linked Dismissed Tenant",
     )
     topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Billing exports",
         coverage_score=0.2,
         status=GapDocTopicStatus.active,
         extracted_at=datetime.now(timezone.utc),
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         question_count=1,
         aggregate_signal_weight=4.0,
@@ -219,7 +219,7 @@ def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
     db_session.add_all([topic, cluster])
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer?mode_b_status=dismissed",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -233,17 +233,17 @@ def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
 
 
 def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-dismiss@example.com",
-        name="Gap Phase 5 Dismiss Client",
+        name="Gap Phase 5 Dismiss Tenant",
     )
     topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="SAML setup",
         coverage_score=0.1,
         status=GapDocTopicStatus.active,
@@ -253,7 +253,7 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
     db_session.commit()
     db_session.refresh(topic)
 
-    dismiss_response = client.post(
+    dismiss_response = tenant.post(
         f"/gap-analyzer/mode_a/{topic.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
@@ -261,21 +261,21 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
     assert dismiss_response.status_code == 200, dismiss_response.text
     assert dismiss_response.json()["status"] == "dismissed"
 
-    dismissed_list = client.get(
+    dismissed_list = tenant.get(
         "/gap-analyzer?mode_a_status=dismissed",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert dismissed_list.status_code == 200, dismissed_list.text
     assert dismissed_list.json()["mode_a_items"][0]["status"] == "dismissed"
 
-    reactivate_response = client.post(
+    reactivate_response = tenant.post(
         f"/gap-analyzer/mode_a/{topic.id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert reactivate_response.status_code == 200, reactivate_response.text
     assert reactivate_response.json()["status"] == "active"
 
-    active_list = client.get(
+    active_list = tenant.get(
         "/gap-analyzer",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -284,17 +284,17 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
 
 
 def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-modeb-dismiss@example.com",
-        name="Gap Phase 5 Mode B Dismiss Client",
+        name="Gap Phase 5 Mode B Dismiss Tenant",
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Webhook retry policy",
         question_count=2,
         aggregate_signal_weight=4.0,
@@ -306,7 +306,7 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
     db_session.commit()
     db_session.refresh(cluster)
 
-    dismiss_response = client.post(
+    dismiss_response = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
@@ -314,21 +314,21 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
     assert dismiss_response.status_code == 200, dismiss_response.text
     assert dismiss_response.json()["status"] == "dismissed"
 
-    dismissed_list = client.get(
+    dismissed_list = tenant.get(
         "/gap-analyzer?mode_b_status=dismissed",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert dismissed_list.status_code == 200, dismissed_list.text
     assert dismissed_list.json()["mode_b_items"][0]["status"] == "dismissed"
 
-    reactivate_response = client.post(
+    reactivate_response = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert reactivate_response.status_code == 200, reactivate_response.text
     assert reactivate_response.json()["status"] == "active"
 
-    active_list = client.get(
+    active_list = tenant.get(
         "/gap-analyzer?mode_b_status=active",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -337,17 +337,17 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
 
 
 def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-repeat-dismiss@example.com",
-        name="Gap Phase 5 Repeat Dismiss Client",
+        name="Gap Phase 5 Repeat Dismiss Tenant",
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Webhook signatures",
         question_count=1,
         aggregate_signal_weight=2.0,
@@ -358,12 +358,12 @@ def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
     db_session.commit()
     db_session.refresh(cluster)
 
-    first = client.post(
+    first = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
-    second = client.post(
+    second = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
@@ -376,27 +376,27 @@ def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
 
 
 def test_gap_analyzer_returns_not_found_for_missing_mode_b_cluster_actions(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-missing-cluster@example.com",
-        name="Gap Phase 5 Missing Cluster Client",
+        name="Gap Phase 5 Missing Cluster Tenant",
     )
     missing_cluster_id = uuid.uuid4()
 
-    dismiss_response = client.post(
+    dismiss_response = tenant.post(
         f"/gap-analyzer/mode_b/{missing_cluster_id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
-    reactivate_response = client.post(
+    reactivate_response = tenant.post(
         f"/gap-analyzer/mode_b/{missing_cluster_id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
-    draft_response = client.post(
+    draft_response = tenant.post(
         f"/gap-analyzer/mode_b/{missing_cluster_id}/draft",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -410,14 +410,14 @@ def test_gap_analyzer_returns_not_found_for_missing_mode_b_cluster_actions(
 
 
 def test_gap_analyzer_filters_and_sorts_mode_b_items(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-modeb-filters@example.com",
-        name="Gap Phase 5 Mode B Filters Client",
+        name="Gap Phase 5 Mode B Filters Tenant",
     )
     now = datetime.now(timezone.utc)
     oldest = now.replace(microsecond=1)
@@ -426,7 +426,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
     db_session.add_all(
         [
             GapCluster(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 label="CSV export retention",
                 question_count=1,
                 aggregate_signal_weight=2.5,
@@ -435,7 +435,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
                 last_computed_at=middle,
             ),
             GapCluster(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 label="Audit log webhooks",
                 question_count=1,
                 aggregate_signal_weight=6.0,
@@ -444,7 +444,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
                 last_computed_at=oldest,
             ),
             GapCluster(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 label="SAML metadata refresh",
                 question_count=1,
                 aggregate_signal_weight=1.0,
@@ -456,14 +456,14 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
     )
     db_session.commit()
 
-    closed_only = client.get(
+    closed_only = tenant.get(
         "/gap-analyzer?mode_b_status=closed",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert closed_only.status_code == 200, closed_only.text
     assert [item["label"] for item in closed_only.json()["mode_b_items"]] == ["SAML metadata refresh"]
 
-    signal_sorted = client.get(
+    signal_sorted = tenant.get(
         "/gap-analyzer?mode_b_sort=signal_desc",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -473,7 +473,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
         "CSV export retention",
     ]
 
-    newest_sorted = client.get(
+    newest_sorted = tenant.get(
         "/gap-analyzer?mode_b_status=all&mode_b_sort=newest",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -486,17 +486,17 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
 
 
 def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-draft@example.com",
-        name="Gap Phase 5 Draft Client",
+        name="Gap Phase 5 Draft Tenant",
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice exports for finance",
         question_count=1,
         aggregate_signal_weight=2.0,
@@ -507,7 +507,7 @@ def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     db_session.flush()
     db_session.add(
         GapQuestion(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             question_text="How do invoice exports work for finance?",
             cluster_id=cluster.id,
             gap_signal_weight=2.0,
@@ -516,7 +516,7 @@ def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     db_session.commit()
     db_session.refresh(cluster)
 
-    response = client.post(
+    response = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/draft",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -651,18 +651,18 @@ def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
 
 
 def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-summary@example.com",
-        name="Gap Phase 5 Summary Client",
+        name="Gap Phase 5 Summary Tenant",
     )
     db_session.add(
         GapDocTopic(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             topic_label="SAML setup",
             coverage_score=0.2,
             status=GapDocTopicStatus.active,
@@ -672,7 +672,7 @@ def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
     )
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -686,15 +686,15 @@ def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
 
 
 def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-summary-lightweight@example.com",
-        name="Gap Phase 5 Summary Lightweight Client",
+        name="Gap Phase 5 Summary Lightweight Tenant",
     )
     summary = {
         "total_active": 7,
@@ -718,7 +718,7 @@ def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
         lambda *, db: (_ for _ in ()).throw(AssertionError("summary route should not build full gap payload")),
     )
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -728,17 +728,17 @@ def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
 
 
 def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linked_mode_b(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-summary-linked@example.com",
-        name="Gap Phase 5 Summary Linked Client",
+        name="Gap Phase 5 Summary Linked Tenant",
     )
     topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Billing exports",
         coverage_score=0.2,
         status=GapDocTopicStatus.active,
@@ -746,7 +746,7 @@ def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linke
         extracted_at=datetime.now(timezone.utc),
     )
     cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="How do invoice exports work?",
         question_count=2,
         aggregate_signal_weight=3.0,
@@ -762,7 +762,7 @@ def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linke
     db_session.add_all([topic, cluster])
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -775,14 +775,14 @@ def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linke
 
 
 def test_gap_analyzer_refresh_gap_job_lease_extends_expiration(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     _token, tenant_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-refresh-lease@example.com",
-        name="Gap Phase 5 Refresh Lease Client",
+        name="Gap Phase 5 Refresh Lease Tenant",
     )
     job = GapAnalyzerJob(
         tenant_id=tenant_id,
@@ -840,29 +840,29 @@ def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown
 
 
 def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-bm25-stream@example.com",
-        name="Gap Phase 5 BM25 Stream Client",
+        name="Gap Phase 5 BM25 Stream Tenant",
     )
     title_document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="Invoice Exports",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
     )
     body_document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
     )
     filler_document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="faq.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -892,12 +892,12 @@ def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     title_match = repository.bm25_match_for_tenant(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         query_text="invoice exports",
         excluded_file_types=(),
     )
     body_match = repository.bm25_match_for_tenant(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         query_text="billing workflows",
         excluded_file_types=(),
     )
@@ -911,17 +911,17 @@ def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
 
 
 def test_gap_analyzer_repository_bm25_match_allows_single_term_queries(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-bm25-single-term@example.com",
-        name="Gap Phase 5 BM25 Single Term Client",
+        name="Gap Phase 5 BM25 Single Term Tenant",
     )
     document = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -939,7 +939,7 @@ def test_gap_analyzer_repository_bm25_match_allows_single_term_queries(
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     match = repository.bm25_match_for_tenant(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         query_text="billing",
         excluded_file_types=(),
     )
@@ -984,11 +984,11 @@ def test_gap_analyzer_repository_bm25_cache_reuses_corpus_until_invalidated(
     )
     db_session.add(user)
     db_session.flush()
-    client_record = Client(user_id=user.id, name="Gap BM25 Cache", api_key="k" * 32)
+    client_record = Tenant(name="Gap BM25 Cache", api_key="k" * 32)
     db_session.add(client_record)
     db_session.flush()
     document = Document(
-        client_id=client_record.id,
+        tenant_id=client_record.id,
         filename="guide.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1043,17 +1043,17 @@ def test_gap_analyzer_repository_bm25_cache_reuses_corpus_until_invalidated(
 
 
 def test_gap_analyzer_fail_gap_job_truncates_to_tail(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-job-error@example.com",
-        name="Gap Phase 5 Job Error Client",
+        name="Gap Phase 5 Job Error Tenant",
     )
     job = GapAnalyzerJob(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         job_kind="mode_a",
         status="in_progress",
         trigger="manual",
@@ -1066,7 +1066,7 @@ def test_gap_analyzer_fail_gap_job_truncates_to_tail(
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     error_message = "head\n" + ("middle\n" * 1000) + "ValueError: final failure"
-    repository.fail_gap_job(job_id=job.id, tenant_id=client_id, error_message=error_message)
+    repository.fail_gap_job(job_id=job.id, tenant_id=tenant_id, error_message=error_message)
     db_session.commit()
     db_session.refresh(job)
 
@@ -1077,17 +1077,17 @@ def test_gap_analyzer_fail_gap_job_truncates_to_tail(
 
 
 def test_complete_gap_job_ignores_other_tenant(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     _, tenant_a = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-complete-a@example.com",
         name="Gap Phase 5 Complete A",
     )
     _, tenant_b = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-complete-b@example.com",
         name="Gap Phase 5 Complete B",
@@ -1122,17 +1122,17 @@ def test_complete_gap_job_ignores_other_tenant(
 
 
 def test_fail_gap_job_ignores_other_tenant(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     _, tenant_a = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-fail-a@example.com",
         name="Gap Phase 5 Fail A",
     )
     _, tenant_b = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-fail-b@example.com",
         name="Gap Phase 5 Fail B",
@@ -1173,19 +1173,19 @@ def test_fail_gap_job_ignores_other_tenant(
 
 
 def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase5-inactive@example.com",
-        name="Gap Phase 5 Inactive Client",
+        name="Gap Phase 5 Inactive Tenant",
     )
     db_session.add_all(
         [
             GapCluster(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 label="Legacy exports",
                 question_count=1,
                 aggregate_signal_weight=1.0,
@@ -1194,7 +1194,7 @@ def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
                 last_computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             ),
             GapCluster(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 label="Fresh dismissed cluster",
                 question_count=1,
                 aggregate_signal_weight=1.0,
@@ -1206,7 +1206,7 @@ def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
     )
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer?mode_b_status=inactive",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1218,15 +1218,15 @@ def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
 
 
 def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        client,
+        tenant,
         db_session,
         email="gap-phase5-recalc@example.com",
-        name="Gap Phase 5 Recalc Client",
+        name="Gap Phase 5 Recalc Tenant",
     )
     runner_calls: list[str] = []
     monkeypatch.setattr(
@@ -1234,7 +1234,7 @@ def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
         lambda: runner_calls.append("started"),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/gap-analyzer/recalculate?mode=both",
         headers={"Authorization": f"Bearer {token}"},
     )

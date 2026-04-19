@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
-    _notify_client_new_ticket,
+    _notify_tenant_new_ticket,
     _set_escalation_clarify_flag,
     apply_collected_contact_email,
     compute_priority,
@@ -26,14 +26,14 @@ from backend.escalation.service import (
 )
 from backend.models import (
     Chat,
-    Client,
+    Tenant,
     EscalationPriority,
     EscalationTicket,
     EscalationTrigger,
     EscalationStatus,
     Message,
     MessageRole,
-    UserSession,
+    ContactSession,
     User,
 )
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -96,22 +96,22 @@ def test_parse_contact_email() -> None:
 
 
 def test_generate_ticket_number_sequential(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-seq@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-seq@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Esc Seq"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    assert generate_ticket_number(client_id, db_session) == "ESC-0001"
+    assert generate_ticket_number(tenant_id, db_session) == "ESC-0001"
 
     t = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="test",
         trigger=EscalationTrigger.low_similarity,
@@ -120,11 +120,11 @@ def test_generate_ticket_number_sequential(
     db_session.add(t)
     db_session.commit()
 
-    assert generate_ticket_number(client_id, db_session) == "ESC-0002"
+    assert generate_ticket_number(tenant_id, db_session) == "ESC-0002"
 
 
 def test_generate_ticket_number_concurrent_reads_return_same(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Two reads before any commit both return ESC-0001.
@@ -133,34 +133,34 @@ def test_generate_ticket_number_concurrent_reads_return_same(
     on its own. The retry loop in create_escalation_ticket is responsible for
     handling the resulting IntegrityError.
     """
-    token = register_and_verify_user(client, db_session, email="esc-concurrent@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-concurrent@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Concurrent Client"},
+        json={"name": "Concurrent Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    first = generate_ticket_number(client_id, db_session)
-    second = generate_ticket_number(client_id, db_session)
+    first = generate_ticket_number(tenant_id, db_session)
+    second = generate_ticket_number(tenant_id, db_session)
     assert first == "ESC-0001"
     assert second == "ESC-0001"
 
 
 def test_create_escalation_ticket_retries_on_integrity_error(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """create_escalation_ticket retries once when the first commit raises IntegrityError."""
-    token = register_and_verify_user(client, db_session, email="esc-retry@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-retry@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Retry Client"},
+        json={"name": "Retry Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     real_commit = db_session.commit
     call_count = [0]
@@ -173,7 +173,7 @@ def test_create_escalation_ticket_retries_on_integrity_error(
 
     with patch.object(db_session, "commit", side_effect=commit_once_then_succeed):
         ticket = create_escalation_ticket(
-            client_id,
+            tenant_id,
             "test retry question",
             EscalationTrigger.low_similarity,
             db_session,
@@ -184,20 +184,20 @@ def test_create_escalation_ticket_retries_on_integrity_error(
 
 
 def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-redact@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-redact@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Redaction Client"},
+        json={"name": "Redaction Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = create_escalation_ticket(
-        client_id,
+        tenant_id,
         "my email is user@example.com",
         EscalationTrigger.low_similarity,
         db_session,
@@ -209,18 +209,18 @@ def test_create_escalation_ticket_stores_redacted_and_encrypted_question(
 
 
 def test_create_escalation_ticket_raises_after_max_retries(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """After 3 failed commit attempts create_escalation_ticket re-raises IntegrityError."""
-    token = register_and_verify_user(client, db_session, email="esc-maxretry@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-maxretry@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Max Retry Client"},
+        json={"name": "Max Retry Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     def always_integrity_error():
         raise SAIntegrityError("stmt", {}, Exception("unique constraint violation"))
@@ -228,7 +228,7 @@ def test_create_escalation_ticket_raises_after_max_retries(
     with patch.object(db_session, "commit", side_effect=always_integrity_error):
         with pytest.raises(SAIntegrityError):
             create_escalation_ticket(
-                client_id,
+                tenant_id,
                 "test max retry question",
                 EscalationTrigger.low_similarity,
                 db_session,
@@ -242,12 +242,12 @@ def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    cl = Client(user_id=user.id, name="Clarify Client", api_key="clarify-key")
+    cl = Tenant(name="Clarify Tenant", api_key="clarify-key")
     db_session.add(cl)
     db_session.commit()
     db_session.refresh(cl)
 
-    chat = Chat(client_id=cl.id, session_id=uuid.uuid4(), user_context={})
+    chat = Chat(tenant_id=cl.id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -260,23 +260,23 @@ def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
 
 
 def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="apply-email@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="apply-email@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Apply Email Client"},
+        json={"name": "Apply Email Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-123", "email": None},
         escalation_followup_pending=False,
@@ -286,7 +286,7 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="need support",
         trigger=EscalationTrigger.user_request,
@@ -302,7 +302,7 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     db_session.add(chat)
     db_session.commit()
 
-    row = UserSession(client_id=client_id, user_id="u-123", email=None)
+    row = ContactSession(tenant_id=tenant_id, contact_id="u-123", email=None)
     db_session.add(row)
     db_session.commit()
 
@@ -319,20 +319,20 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
 
 
 def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="apply-email-rollback@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="apply-email-rollback@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Apply Email Rollback Client"},
+        json={"name": "Apply Email Rollback Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-rollback", "email": None},
         escalation_followup_pending=False,
@@ -342,7 +342,7 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0002",
         primary_question="need support",
         trigger=EscalationTrigger.user_request,
@@ -374,31 +374,31 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     assert chat.escalation_followup_pending is False
 
 
-def test_notify_client_new_ticket_uses_l2_email_when_configured(
-    client: TestClient,
+def test_notify_tenant_new_ticket_uses_l2_email_when_configured(
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="owner-l2@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="owner-l2@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "L2 Client"},
+        json={"name": "L2 Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    support_resp = client.put(
-        "/clients/me/support-settings",
+    support_resp = tenant.put(
+        "/tenants/me/support-settings",
         headers={"Authorization": f"Bearer {token}"},
         json={"l2_email": "l2@example.com"},
     )
     assert support_resp.status_code == 200
 
-    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0010",
         primary_question="need help",
         trigger=EscalationTrigger.user_request,
@@ -409,30 +409,30 @@ def test_notify_client_new_ticket_uses_l2_email_when_configured(
     db_session.refresh(ticket)
 
     with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_client_new_ticket(cl, ticket, db_session)
+        _notify_tenant_new_ticket(cl, ticket, db_session)
 
     send_email_mock.assert_called_once()
     assert send_email_mock.call_args.args[0] == "l2@example.com"
 
 
-def test_notify_client_new_ticket_falls_back_to_owner_email(
-    client: TestClient,
+def test_notify_tenant_new_ticket_falls_back_to_owner_email(
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="owner-only@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="owner-only@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Owner Fallback Client"},
+        json={"name": "Owner Fallback Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0011",
         primary_question="need help",
         trigger=EscalationTrigger.user_request,
@@ -443,32 +443,32 @@ def test_notify_client_new_ticket_falls_back_to_owner_email(
     db_session.refresh(ticket)
 
     with patch("backend.escalation.service.send_email") as send_email_mock:
-        _notify_client_new_ticket(cl, ticket, db_session)
+        _notify_tenant_new_ticket(cl, ticket, db_session)
 
     send_email_mock.assert_called_once()
     assert send_email_mock.call_args.args[0] == "owner-only@example.com"
 
 
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="manual-missing@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-missing@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual Missing Email"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    set_client_openai_key(client, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={"email": None})
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={"email": None})
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
 
-    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
     msg, tnum = perform_manual_escalation(
         db_session,
@@ -494,21 +494,21 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
 
 
 def test_perform_manual_escalation_sets_followup_when_email_known(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="manual-known@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-known@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual Known Email"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    set_client_openai_key(client, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"email": "known@example.com"},
     )
@@ -516,7 +516,7 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     db_session.commit()
     db_session.refresh(chat)
 
-    cl = db_session.query(Client).filter(Client.id == client_id).first()
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
     _msg, tnum = perform_manual_escalation(
         db_session,
@@ -536,26 +536,26 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
 
 
 def test_escalation_api_returns_safe_question_by_default(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-api@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-api@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API Client"},
+        json={"name": "Esc API Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = create_escalation_ticket(
-        client_id,
+        tenant_id,
         "contact me at user@example.com",
         EscalationTrigger.user_request,
         db_session,
     )
 
-    resp = client.get(
+    resp = tenant.get(
         f"/escalations/{ticket.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -567,20 +567,20 @@ def test_escalation_api_returns_safe_question_by_default(
 
 
 def test_escalation_api_can_include_original_question(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-api-orig@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-api-orig@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API Orig Client"},
+        json={"name": "Esc API Orig Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = create_escalation_ticket(
-        client_id,
+        tenant_id,
         "contact me at user@example.com",
         EscalationTrigger.user_request,
         db_session,
@@ -591,7 +591,7 @@ def test_escalation_api_can_include_original_question(
     db_session.add(user)
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         f"/escalations/{ticket.id}?include_original=true",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -602,26 +602,26 @@ def test_escalation_api_can_include_original_question(
 
 
 def test_escalation_api_include_original_requires_admin(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-api-no-admin@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-api-no-admin@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc API No Admin Client"},
+        json={"name": "Esc API No Admin Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = create_escalation_ticket(
-        client_id,
+        tenant_id,
         "contact me at user@example.com",
         EscalationTrigger.user_request,
         db_session,
     )
 
-    resp = client.get(
+    resp = tenant.get(
         f"/escalations/{ticket.id}?include_original=true",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -629,26 +629,26 @@ def test_escalation_api_include_original_requires_admin(
 
 
 def test_delete_escalation_original_requires_admin_and_removes_original(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="esc-delete@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-delete@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc Delete Client"},
+        json={"name": "Esc Delete Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = create_escalation_ticket(
-        client_id,
+        tenant_id,
         "contact me at user@example.com",
         EscalationTrigger.user_request,
         db_session,
     )
 
-    denied = client.post(
+    denied = tenant.post(
         f"/escalations/{ticket.id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -660,7 +660,7 @@ def test_delete_escalation_original_requires_admin_and_removes_original(
     db_session.add(user)
     db_session.commit()
 
-    resp = client.post(
+    resp = tenant.post(
         f"/escalations/{ticket.id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -673,22 +673,22 @@ def test_delete_escalation_original_requires_admin_and_removes_original(
 
 
 def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missing(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.core.crypto import encrypt_value
 
-    token = register_and_verify_user(client, db_session, email="esc-delete-empty@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="esc-delete-empty@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Esc Delete Empty Client"},
+        json={"name": "Esc Delete Empty Tenant"},
     )
     assert cl_resp.status_code == 201
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="secret@example.com",
         primary_question_original_encrypted=encrypt_value("secret@example.com"),
@@ -706,7 +706,7 @@ def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missin
     db_session.add(user)
     db_session.commit()
 
-    resp = client.post(
+    resp = tenant.post(
         f"/escalations/{ticket.id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )

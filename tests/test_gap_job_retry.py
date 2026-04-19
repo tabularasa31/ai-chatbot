@@ -14,7 +14,7 @@ from backend.gap_analyzer._repo.job_retry import (
     retry_delay_for_kind,
 )
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.models import Client, GapAnalyzerJob, User
+from backend.models import Tenant, GapAnalyzerJob, User
 
 
 def _create_client(db_session: Session) -> uuid.UUID:
@@ -25,14 +25,13 @@ def _create_client(db_session: Session) -> uuid.UUID:
     )
     db_session.add(user)
     db_session.flush()
-    client = Client(
-        user_id=user.id,
-        name="Retry Tenant",
+    tenant = Tenant(
+                name="Retry Tenant",
         api_key=uuid.uuid4().hex[:32],
     )
-    db_session.add(client)
+    db_session.add(tenant)
     db_session.commit()
-    return client.id
+    return tenant.id
 
 
 def _create_job(

@@ -363,14 +363,14 @@ def _make_pipeline_result_for_language(response_language: str) -> ChatPipelineRe
     )
 
 
-def _chat_test_setup(client: TestClient, db_session: Session, email: str) -> tuple[uuid.UUID, str]:
-    token = register_and_verify_user(client, db_session, email=email)
-    create_resp = client.post(
-        "/clients",
+def _chat_test_setup(tenant: TestClient, db_session: Session, email: str) -> tuple[uuid.UUID, str]:
+    token = register_and_verify_user(tenant, db_session, email=email)
+    create_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Sticky Language Client"},
+        json={"name": "Sticky Language Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     return uuid.UUID(create_resp.json()["id"]), create_resp.json()["api_key"]
 
 
@@ -402,11 +402,11 @@ def _patch_process_chat_dependencies(
 
 
 def test_chat_persists_last_response_language(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client_id, api_key = _chat_test_setup(client, db_session, "sticky-persist@example.com")
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-persist@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
@@ -414,7 +414,7 @@ def test_chat_persists_last_response_language(
     )
 
     outcome = process_chat_message(
-        client_id,
+        tenant_id,
         "Нужна помощь",
         session_id,
         db_session,
@@ -427,11 +427,11 @@ def test_chat_persists_last_response_language(
 
 
 def test_chat_sticky_survives_outlier_turn(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client_id, api_key = _chat_test_setup(client, db_session, "sticky-outlier@example.com")
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-outlier@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
@@ -441,9 +441,9 @@ def test_chat_sticky_survives_outlier_turn(
         },
     )
 
-    first = process_chat_message(client_id, "Привет", session_id, db_session, api_key=api_key)
+    first = process_chat_message(tenant_id, "Привет", session_id, db_session, api_key=api_key)
     second = process_chat_message(
-        client_id,
+        tenant_id,
         "Traceback: ValueError",
         session_id,
         db_session,
@@ -457,11 +457,11 @@ def test_chat_sticky_survives_outlier_turn(
 
 
 def test_chat_switches_language_after_two_consistent_turns(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client_id, api_key = _chat_test_setup(client, db_session, "sticky-switch@example.com")
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-switch@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
@@ -472,9 +472,9 @@ def test_chat_switches_language_after_two_consistent_turns(
         },
     )
 
-    first = process_chat_message(client_id, "Hello there", session_id, db_session, api_key=api_key)
-    second = process_chat_message(client_id, "Как дела", session_id, db_session, api_key=api_key)
-    third = process_chat_message(client_id, "Нужна помощь", session_id, db_session, api_key=api_key)
+    first = process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+    second = process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
+    third = process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
 
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
     assert first.text == "lang=en"
@@ -484,12 +484,12 @@ def test_chat_switches_language_after_two_consistent_turns(
 
 
 def test_chat_logs_response_language_changed_on_switch(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    client_id, api_key = _chat_test_setup(client, db_session, "sticky-log@example.com")
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-log@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
@@ -501,9 +501,9 @@ def test_chat_logs_response_language_changed_on_switch(
     )
 
     with caplog.at_level("INFO"):
-        process_chat_message(client_id, "Hello there", session_id, db_session, api_key=api_key)
-        process_chat_message(client_id, "Как дела", session_id, db_session, api_key=api_key)
-        process_chat_message(client_id, "Нужна помощь", session_id, db_session, api_key=api_key)
+        process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+        process_chat_message(tenant_id, "Как дела", session_id, db_session, api_key=api_key)
+        process_chat_message(tenant_id, "Нужна помощь", session_id, db_session, api_key=api_key)
 
     records = [record for record in caplog.records if record.msg == "response_language_changed"]
     assert any(
@@ -515,12 +515,12 @@ def test_chat_logs_response_language_changed_on_switch(
 
 
 def test_chat_logs_escalation_override_reason(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    client_id, api_key = _chat_test_setup(client, db_session, "sticky-escalate@example.com")
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-escalate@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
         monkeypatch,
@@ -548,7 +548,7 @@ def test_chat_logs_escalation_override_reason(
     monkeypatch.setattr("backend.chat.service.run_chat_pipeline", _escalating_pipeline)
     def _create_ticket(*args, **kwargs) -> EscalationTicket:
         ticket = EscalationTicket(
-            client_id=client_id,
+            tenant_id=tenant_id,
             ticket_number="ESC-TEST",
             primary_question="Как сбросить пароль",
             trigger=EscalationTrigger.user_request,
@@ -569,7 +569,7 @@ def test_chat_logs_escalation_override_reason(
 
     with caplog.at_level("INFO"):
         process_chat_message(
-            client_id,
+            tenant_id,
             "Как сбросить пароль",
             session_id,
             db_session,
@@ -585,11 +585,11 @@ def test_chat_logs_escalation_override_reason(
 
 
 def test_load_recent_user_turn_texts_without_duplicating_current(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    client_id, _api_key = _chat_test_setup(client, db_session, "sticky-history@example.com")
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id, _api_key = _chat_test_setup(tenant, db_session, "sticky-history@example.com")
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.flush()
     base_time = datetime.now(UTC)
@@ -626,11 +626,11 @@ def test_load_recent_user_turn_texts_without_duplicating_current(
 
 
 def test_load_recent_user_turn_texts_prefers_decrypted_original(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    client_id, _api_key = _chat_test_setup(client, db_session, "sticky-history-original@example.com")
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id, _api_key = _chat_test_setup(tenant, db_session, "sticky-history-original@example.com")
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.flush()
     db_session.add(

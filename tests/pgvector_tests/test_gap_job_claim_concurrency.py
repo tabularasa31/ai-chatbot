@@ -19,10 +19,10 @@ def test_claim_next_gap_job_claims_unique_jobs_without_double_attempts(
     pg_db_session: Session,
 ) -> None:
     user = _create_user(pg_db_session, email="gap-job-claim-concurrency@example.com")
-    client = _create_client(pg_db_session, user, name="Gap Job Claim Concurrency")
+    tenant = _create_client(pg_db_session, user, name="Gap Job Claim Concurrency")
     jobs = [
         GapAnalyzerJob(
-            tenant_id=client.id,
+            tenant_id=tenant.id,
             job_kind=GapJobKind.mode_a.value,
             status="queued",
             trigger=f"test-{index}",
@@ -65,7 +65,7 @@ def test_claim_next_gap_job_claims_unique_jobs_without_double_attempts(
     pg_db_session.expire_all()
     refreshed_jobs = (
         pg_db_session.query(GapAnalyzerJob)
-        .filter(GapAnalyzerJob.tenant_id == client.id)
+        .filter(GapAnalyzerJob.tenant_id == tenant.id)
         .order_by(GapAnalyzerJob.created_at.asc(), GapAnalyzerJob.id.asc())
         .all()
     )

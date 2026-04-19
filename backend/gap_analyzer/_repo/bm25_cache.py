@@ -127,7 +127,7 @@ class _Bm25CacheOps:
                 Document.file_type,
             )
             .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.client_id == tenant_id)
+            .filter(Document.tenant_id == tenant_id)
             .filter(Document.status == "ready")
             .filter(Embedding.chunk_text.isnot(None))
             .order_by(Document.id.asc(), Embedding.id.asc())

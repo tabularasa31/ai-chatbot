@@ -9,22 +9,22 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Chat, Client, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
+from backend.models import Chat, Tenant, Document, DocumentStatus, DocumentType, Embedding, Message, MessageRole, PiiEvent, PiiEventDirection, User
 from backend.scripts.cleanup_pii_events import run as cleanup_pii_events_run
 
 from tests.conftest import register_and_verify_user
 
 
-def test_admin_metrics_summary_requires_admin(client: TestClient, db_session: Session) -> None:
+def test_admin_metrics_summary_requires_admin(tenant: TestClient, db_session: Session) -> None:
     """Non-admin JWT → 403. Admin JWT → 200."""
-    token = register_and_verify_user(client, db_session, email="nonadmin@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="nonadmin@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Non Admin Client"},
+        json={"name": "Non Admin Tenant"},
     )
 
-    resp = client.get(
+    resp = tenant.get(
         "/admin/metrics/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -35,24 +35,24 @@ def test_admin_metrics_summary_requires_admin(client: TestClient, db_session: Se
     user.is_admin = True
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         "/admin/metrics/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
 
 
-def test_admin_metrics_clients_requires_admin(client: TestClient, db_session: Session) -> None:
+def test_admin_metrics_clients_requires_admin(tenant: TestClient, db_session: Session) -> None:
     """Non-admin JWT → 403. Admin JWT → 200."""
-    token = register_and_verify_user(client, db_session, email="nonadmin2@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="nonadmin2@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Non Admin Client 2"},
+        json={"name": "Non Admin Tenant 2"},
     )
 
-    resp = client.get(
-        "/admin/metrics/clients",
+    resp = tenant.get(
+        "/admin/metrics/tenants",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 403
@@ -62,22 +62,22 @@ def test_admin_metrics_clients_requires_admin(client: TestClient, db_session: Se
     user.is_admin = True
     db_session.commit()
 
-    resp = client.get(
-        "/admin/metrics/clients",
+    resp = tenant.get(
+        "/admin/metrics/tenants",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
 
 
-def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -> None:
+def test_admin_metrics_summary_values(tenant: TestClient, db_session: Session) -> None:
     """Summary counts match created fixtures."""
-    token = register_and_verify_user(client, db_session, email="admin@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="admin@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Admin Client"},
+        json={"name": "Admin Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     user = db_session.query(User).filter(User.email == "admin@example.com").first()
     assert user is not None
@@ -85,7 +85,7 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     db_session.commit()
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="test.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -104,7 +104,7 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     db_session.commit()
 
     sess_id = uuid.uuid4()
-    chat = Chat(client_id=client_id, session_id=sess_id)
+    chat = Chat(tenant_id=tenant_id, session_id=sess_id)
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -117,15 +117,15 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     db_session.add_all([msg1, msg2])
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         "/admin/metrics/summary",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
     data = resp.json()
     assert data["total_users"] >= 1
-    assert data["total_clients"] >= 1
-    assert data["active_clients"] >= 1
+    assert data["total_tenants"] >= 1
+    assert data["active_tenants"] >= 1
     assert data["total_documents"] >= 1
     assert data["total_chat_sessions"] >= 1
     assert data["total_messages_user"] >= 1
@@ -133,16 +133,16 @@ def test_admin_metrics_summary_values(client: TestClient, db_session: Session) -
     assert data["total_tokens_chat"] == 250
 
 
-def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -> None:
-    """Per-client row reflects correct counts."""
-    token = register_and_verify_user(client, db_session, email="admin2@example.com")
-    cl_resp = client.post(
-        "/clients",
+def test_admin_metrics_clients_values(tenant: TestClient, db_session: Session) -> None:
+    """Per-tenant row reflects correct counts."""
+    token = register_and_verify_user(tenant, db_session, email="admin2@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Metrics Client"},
+        json={"name": "Metrics Tenant"},
     )
     cl_data = cl_resp.json()
-    client_id = uuid.UUID(cl_data["id"])
+    tenant_id = uuid.UUID(cl_data["id"])
     public_id = cl_data["public_id"]
 
     user = db_session.query(User).filter(User.email == "admin2@example.com").first()
@@ -151,7 +151,7 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     db_session.commit()
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="test.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -170,7 +170,7 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     db_session.commit()
 
     sess_id = uuid.uuid4()
-    chat = Chat(client_id=client_id, session_id=sess_id)
+    chat = Chat(tenant_id=tenant_id, session_id=sess_id)
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -183,14 +183,14 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
     db_session.add_all([msg1, msg2])
     db_session.commit()
 
-    resp = client.get(
-        "/admin/metrics/clients",
+    resp = tenant.get(
+        "/admin/metrics/tenants",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
     data = resp.json()
     items = data["items"]
-    our = next((i for i in items if i["client_id"] == str(client_id)), None)
+    our = next((i for i in items if i["tenant_id"] == str(tenant_id)), None)
     assert our is not None
     assert our["public_id"] == public_id
     assert our["owner_email"] == "admin2@example.com"
@@ -205,54 +205,54 @@ def test_admin_metrics_clients_values(client: TestClient, db_session: Session) -
 
 
 def test_admin_metrics_clients_users_count_by_client_id(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
-    """users_count reflects users with client_id, not just owner (user_id)."""
-    token = register_and_verify_user(client, db_session, email="admin3@example.com")
-    cl_resp = client.post(
-        "/clients",
+    """users_count reflects users with tenant_id, not just owner (user_id)."""
+    token = register_and_verify_user(tenant, db_session, email="admin3@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Multi-User Client"},
+        json={"name": "Multi-User Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     user = db_session.query(User).filter(User.email == "admin3@example.com").first()
     assert user is not None
     user.is_admin = True
     db_session.commit()
 
-    # Owner has client_id set by create_client. Add a second user with same client_id.
+    # Owner has tenant_id set by create_tenant. Add a second user with same tenant_id.
     from backend.auth.service import hash_password
 
     user2 = User(
         email="member@example.com",
         password_hash=hash_password("SecurePass1!"),
-        client_id=client_id,
+        tenant_id=tenant_id,
     )
     db_session.add(user2)
     db_session.commit()
 
-    resp = client.get(
-        "/admin/metrics/clients",
+    resp = tenant.get(
+        "/admin/metrics/tenants",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200
     items = resp.json()["items"]
-    our = next((i for i in items if i["client_id"] == str(client_id)), None)
+    our = next((i for i in items if i["tenant_id"] == str(tenant_id)), None)
     assert our is not None
     assert our["users_count"] == 2
 
 
-def test_clients_me_includes_is_admin(client: TestClient, db_session: Session) -> None:
-    """GET /clients/me returns is_admin from user."""
-    token = register_and_verify_user(client, db_session, email="meadmin@example.com")
-    client.post(
-        "/clients",
+def test_clients_me_includes_is_admin(tenant: TestClient, db_session: Session) -> None:
+    """GET /tenants/me returns is_admin from user."""
+    token = register_and_verify_user(tenant, db_session, email="meadmin@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Me Admin Client"},
+        json={"name": "Me Admin Tenant"},
     )
 
-    resp = client.get("/clients/me", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/tenants/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert "is_admin" in data
@@ -263,20 +263,20 @@ def test_clients_me_includes_is_admin(client: TestClient, db_session: Session) -
     user.is_admin = True
     db_session.commit()
 
-    resp = client.get("/clients/me", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/tenants/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["is_admin"] is True
 
 
-def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(client, db_session, email="pii-admin@example.com")
-    cl_resp = client.post(
-        "/clients",
+def test_admin_pii_events_list_and_cleanup(tenant: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(tenant, db_session, email="pii-admin@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "PII Admin Client"},
+        json={"name": "PII Admin Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     user = db_session.query(User).filter(User.email == "pii-admin@example.com").first()
     assert user is not None
@@ -284,7 +284,7 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
     db_session.commit()
 
     old_event = PiiEvent(
-        client_id=client_id,
+        tenant_id=tenant_id,
         actor_user_id=user.id,
         direction=PiiEventDirection.original_view,
         entity_type="ORIGINAL_VIEW",
@@ -293,7 +293,7 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
         created_at=datetime.now(timezone.utc) - timedelta(days=400),
     )
     fresh_event = PiiEvent(
-        client_id=client_id,
+        tenant_id=tenant_id,
         actor_user_id=user.id,
         direction=PiiEventDirection.original_delete,
         entity_type="ORIGINAL_DELETE",
@@ -306,7 +306,7 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
     old_event_id = str(old_event.id)
     fresh_event_id = str(fresh_event.id)
 
-    list_resp = client.get(
+    list_resp = tenant.get(
         "/admin/privacy/pii-events?direction=original_delete",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -316,7 +316,7 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
     assert items[0]["direction"] == "original_delete"
     assert items[0]["actor_user_id"] == str(user.id)
 
-    cleanup_resp = client.delete(
+    cleanup_resp = tenant.delete(
         "/admin/privacy/pii-events/retention?retention_days=365",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -329,14 +329,14 @@ def test_admin_pii_events_list_and_cleanup(client: TestClient, db_session: Sessi
 
 
 def test_admin_pii_events_reject_invalid_pagination_and_since_days(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="pii-params@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pii-params@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "PII Params Client"},
+        json={"name": "PII Params Tenant"},
     )
 
     user = db_session.query(User).filter(User.email == "pii-params@example.com").first()
@@ -349,19 +349,19 @@ def test_admin_pii_events_reject_invalid_pagination_and_since_days(
         "/admin/privacy/pii-events?offset=-1",
         "/admin/privacy/pii-events?since_days=0",
     ):
-        resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+        resp = tenant.get(url, headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 422
 
 
 def test_admin_pii_events_cleanup_rejects_zero_retention(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="pii-cleanup-guard@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pii-cleanup-guard@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "PII Cleanup Guard Client"},
+        json={"name": "PII Cleanup Guard Tenant"},
     )
 
     user = db_session.query(User).filter(User.email == "pii-cleanup-guard@example.com").first()
@@ -369,7 +369,7 @@ def test_admin_pii_events_cleanup_rejects_zero_retention(
     user.is_admin = True
     db_session.commit()
 
-    resp = client.delete(
+    resp = tenant.delete(
         "/admin/privacy/pii-events/retention?retention_days=0",
         headers={"Authorization": f"Bearer {token}"},
     )

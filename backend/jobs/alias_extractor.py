@@ -91,14 +91,14 @@ async def _call_alias_llm(
     api_key: str,
 ) -> list[AliasEntry]:
     """Call LLM to extract aliases. Throttled by semaphore (max 3 parallel)."""
-    client = get_openai_client(api_key)
+    oai = get_openai_client(api_key)
     user_content = "Questions:\n" + "\n".join(cluster_questions)
 
     async with _get_semaphore():
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: client.chat.completions.create(
+            lambda: oai.chat.completions.create(
                 model=ALIAS_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": ALIAS_SYSTEM_PROMPT},
@@ -126,12 +126,12 @@ async def _call_alias_llm(
 
 # ── Confidence management ─────────────────────────────────────────────────────
 
-def _get_client_aliases(db: Session, client_id: uuid.UUID) -> dict[str, float]:
-    """Return {lower(user_phrase): confidence} for existing client aliases."""
+def _get_client_aliases(db: Session, tenant_id: uuid.UUID) -> dict[str, float]:
+    """Return {lower(user_phrase): confidence} for existing tenant aliases."""
     from backend.models import TenantProfile
 
     profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
     )
     if profile is None or not profile.aliases:
         return {}
@@ -148,7 +148,7 @@ def _get_client_aliases(db: Session, client_id: uuid.UUID) -> dict[str, float]:
 
 def _merge_aliases_into_profile(
     db: Session,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     new_aliases: list[AliasEntry],
 ) -> int:
     """Upsert aliases into TenantProfile.aliases. Returns count of changes."""
@@ -158,10 +158,10 @@ def _merge_aliases_into_profile(
         return 0
 
     profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
     )
     if profile is None:
-        logger.debug("No TenantProfile for client %s — skipping alias merge", client_id)
+        logger.debug("No TenantProfile for tenant %s — skipping alias merge", tenant_id)
         return 0
 
     existing_list: list[dict] = list(profile.aliases or [])
@@ -207,7 +207,7 @@ def _merge_aliases_into_profile(
 async def extract_and_merge_aliases(
     *,
     db: Session,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     cluster_questions_list: list[list[str]],
     api_key: str,
 ) -> int:
@@ -234,4 +234,4 @@ async def extract_and_merge_aliases(
     if not all_new:
         return 0
 
-    return _merge_aliases_into_profile(db, client_id, all_new)
+    return _merge_aliases_into_profile(db, tenant_id, all_new)

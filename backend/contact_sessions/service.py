@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.models import UserSession
+from backend.models import ContactSession
 
 _TRACKED_IDENTITY_FIELDS = (
     "email",
@@ -31,13 +31,13 @@ def _clean_optional_text(value: Any) -> str | None:
     return text or None
 
 
-def _extract_user_id(user_context: dict[str, Any] | None) -> str | None:
+def _extract_contact_id(user_context: dict[str, Any] | None) -> str | None:
     if not user_context:
         return None
     return _clean_optional_text(user_context.get("user_id"))
 
 
-def _apply_identity_fields(row: UserSession, user_context: dict[str, Any]) -> None:
+def _apply_identity_fields(row: ContactSession, user_context: dict[str, Any]) -> None:
     """Patch best-known identity fields without clearing prior non-empty values.
 
     Missing keys in a fresh payload do not erase previously stored values. This keeps the
@@ -53,17 +53,17 @@ def _apply_identity_fields(row: UserSession, user_context: dict[str, Any]) -> No
 def get_active_user_session(
     db: Session,
     *,
-    client_id: uuid.UUID,
-    user_id: str,
-) -> UserSession | None:
+    tenant_id: uuid.UUID,
+    contact_id: str,
+) -> ContactSession | None:
     return (
-        db.query(UserSession)
+        db.query(ContactSession)
         .filter(
-            UserSession.client_id == client_id,
-            UserSession.user_id == user_id,
-            UserSession.session_ended_at.is_(None),
+            ContactSession.tenant_id == tenant_id,
+            ContactSession.contact_id == contact_id,
+            ContactSession.session_ended_at.is_(None),
         )
-        .order_by(UserSession.session_started_at.desc())
+        .order_by(ContactSession.session_started_at.desc())
         .first()
     )
 
@@ -71,24 +71,24 @@ def get_active_user_session(
 def _close_active_user_sessions(
     db: Session,
     *,
-    client_id: uuid.UUID,
-    user_id: str,
+    tenant_id: uuid.UUID,
+    contact_id: str,
     ended_at: datetime,
 ) -> None:
     rows = (
-        db.query(UserSession)
+        db.query(ContactSession)
         .filter(
-            UserSession.client_id == client_id,
-            UserSession.user_id == user_id,
-            UserSession.session_ended_at.is_(None),
+            ContactSession.tenant_id == tenant_id,
+            ContactSession.contact_id == contact_id,
+            ContactSession.session_ended_at.is_(None),
         )
         .all()
     )
     if len(rows) > 1:
         logger.warning(
-            "multiple_active_user_sessions_detected: client_id=%s user_id=%s count=%s",
-            client_id,
-            user_id,
+            "multiple_active_user_sessions_detected: tenant_id=%s contact_id=%s count=%s",
+            tenant_id,
+            contact_id,
             len(rows),
         )
     for row in rows:
@@ -99,14 +99,14 @@ def _close_active_user_sessions(
 def _create_user_session_row(
     db: Session,
     *,
-    client_id: uuid.UUID,
-    user_id: str,
+    tenant_id: uuid.UUID,
+    contact_id: str,
     user_context: dict[str, Any] | None,
     started_at: datetime,
-) -> UserSession:
-    row = UserSession(
-        client_id=client_id,
-        user_id=user_id,
+) -> ContactSession:
+    row = ContactSession(
+        tenant_id=tenant_id,
+        contact_id=contact_id,
         session_started_at=started_at,
         conversation_turns=0,
     )
@@ -119,66 +119,66 @@ def _create_user_session_row(
 def start_user_session(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     started_at: datetime | None = None,
-) -> UserSession | None:
-    """Start a new active session for ``(client_id, user_id)``.
+) -> ContactSession | None:
+    """Start a new active session for ``(tenant_id, contact_id)``.
 
     Closes any existing active sessions and inserts a new row.
 
     Concurrency: the partial unique index
     ``uq_user_sessions_client_user_active`` prevents two active rows per
-    ``(client_id, user_id)``. Insert conflicts are isolated behind a
+    ``(tenant_id, contact_id)``. Insert conflicts are isolated behind a
     SAVEPOINT and resolved by returning the row created by the winner.
 
     Thread safety: callers must own the SQLAlchemy Session and must not
     share one Session across threads. Use a fresh ``SessionLocal`` per
     concurrent caller.
     """
-    user_id = _extract_user_id(user_context)
-    if not user_id:
+    contact_id = _extract_contact_id(user_context)
+    if not contact_id:
         return None
     started = started_at or _now_utc()
     try:
         with db.begin_nested():
             _close_active_user_sessions(
                 db,
-                client_id=client_id,
-                user_id=user_id,
+                tenant_id=tenant_id,
+                contact_id=contact_id,
                 ended_at=started,
             )
             return _create_user_session_row(
                 db,
-                client_id=client_id,
-                user_id=user_id,
+                tenant_id=tenant_id,
+                contact_id=contact_id,
                 user_context=user_context,
                 started_at=started,
             )
     except IntegrityError:
         logger.info(
-            "user_session_start_race_recovered: client_id=%s user_id=%s",
-            client_id,
-            user_id,
+            "user_session_start_race_recovered: tenant_id=%s contact_id=%s",
+            tenant_id,
+            contact_id,
         )
-        return get_active_user_session(db, client_id=client_id, user_id=user_id)
+        return get_active_user_session(db, tenant_id=tenant_id, contact_id=contact_id)
 
 
 def touch_user_session(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     started_at: datetime | None = None,
-) -> UserSession | None:
-    user_id = _extract_user_id(user_context)
-    if not user_id:
+) -> ContactSession | None:
+    contact_id = _extract_contact_id(user_context)
+    if not contact_id:
         return None
-    row = get_active_user_session(db, client_id=client_id, user_id=user_id)
+    row = get_active_user_session(db, tenant_id=tenant_id, contact_id=contact_id)
     if row is None:
         return start_user_session(
             db,
-            client_id=client_id,
+            tenant_id=tenant_id,
             user_context=user_context,
             started_at=started_at,
         )
@@ -191,20 +191,20 @@ def touch_user_session(
 def record_user_session_turn(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
     ended_at: datetime | None = None,
-) -> UserSession | None:
-    user_id = _extract_user_id(user_context)
-    if not user_id:
+) -> ContactSession | None:
+    contact_id = _extract_contact_id(user_context)
+    if not contact_id:
         return None
     if ended_at is not None:
-        row = get_active_user_session(db, client_id=client_id, user_id=user_id)
+        row = get_active_user_session(db, tenant_id=tenant_id, contact_id=contact_id)
         if row is None:
             return None
         _apply_identity_fields(row, user_context or {})
     else:
-        row = touch_user_session(db, client_id=client_id, user_context=user_context)
+        row = touch_user_session(db, tenant_id=tenant_id, user_context=user_context)
     if row is None:
         return None
     row.conversation_turns = int(row.conversation_turns or 0) + 1
@@ -218,7 +218,7 @@ def record_user_session_turn(
 def sync_user_session_identity(
     db: Session,
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_context: dict[str, Any] | None,
-) -> UserSession | None:
-    return touch_user_session(db, client_id=client_id, user_context=user_context)
+) -> ContactSession | None:
+    return touch_user_session(db, tenant_id=tenant_id, user_context=user_context)

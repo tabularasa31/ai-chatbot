@@ -18,37 +18,37 @@ def _vector(*values: float) -> list[float]:
 
 
 def _create_client_and_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     *,
     email: str,
     name: str,
 ) -> tuple[str, uuid.UUID]:
-    token = register_and_verify_user(client, db_session, email=email)
-    response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email=email)
+    response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": name},
     )
     assert response.status_code == 201, response.json()
-    client_id = uuid.UUID(response.json()["id"])
-    set_client_openai_key(client, token)
-    return token, client_id
+    tenant_id = uuid.UUID(response.json()["id"])
+    set_client_openai_key(tenant, token)
+    return token, tenant_id
 
 
 def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase6b-recluster@example.com",
-        name="Gap Phase 6B Reclustering Client",
+        name="Gap Phase 6B Reclustering Tenant",
     )
     now = datetime.now(timezone.utc)
     active_cluster_a = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice exports",
         centroid=_vector(1.0, 0.0, 0.0),
         question_count=1,
@@ -60,7 +60,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
         last_computed_at=now - timedelta(days=8),
     )
     active_cluster_b = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice export workflow",
         centroid=_vector(0.99, 0.01, 0.0),
         question_count=2,
@@ -72,7 +72,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
         last_computed_at=now - timedelta(days=3),
     )
     dismissed_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Legacy exports",
         centroid=_vector(0.0, 1.0, 0.0),
         question_count=1,
@@ -91,7 +91,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
     dismissed_cluster_id = dismissed_cluster.id
 
     old_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="Can I export invoices by month?",
         embedding=_vector(1.0, 0.0, 0.0),
         cluster_id=active_cluster_a_id,
@@ -99,7 +99,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
         created_at=now - timedelta(days=45),
     )
     recent_question_a = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=_vector(1.0, 0.0, 0.0),
         cluster_id=active_cluster_a_id,
@@ -107,7 +107,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
         created_at=now - timedelta(days=6),
     )
     recent_question_b = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="Where is the invoice export workflow documented?",
         embedding=_vector(0.99, 0.01, 0.0),
         cluster_id=active_cluster_b_id,
@@ -115,7 +115,7 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
         created_at=now - timedelta(days=2),
     )
     dismissed_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="Legacy export schedule",
         embedding=_vector(0.0, 1.0, 0.0),
         cluster_id=dismissed_cluster_id,
@@ -126,13 +126,13 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    result = orchestrator.run_mode_b_weekly_reclustering(client_id)
+    result = orchestrator.run_mode_b_weekly_reclustering(tenant_id)
 
-    assert result.tenant_id == client_id
+    assert result.tenant_id == tenant_id
 
     clusters = (
         db_session.query(GapCluster)
-        .filter(GapCluster.tenant_id == client_id)
+        .filter(GapCluster.tenant_id == tenant_id)
         .order_by(GapCluster.created_at.asc(), GapCluster.id.asc())
         .all()
     )
@@ -157,31 +157,31 @@ def test_run_mode_b_weekly_reclustering_merges_recent_duplicate_clusters(
 
 
 def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token, client_id = _create_client_and_token(
-        client,
+    token, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase6b-archive@example.com",
-        name="Gap Phase 6B Archive Client",
+        name="Gap Phase 6B Archive Tenant",
     )
     active_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Billing exports",
         coverage_score=0.2,
         status=GapDocTopicStatus.active,
         extracted_at=datetime.now(timezone.utc),
     )
     dismissed_topic = GapDocTopic(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         topic_label="Legacy billing exports",
         coverage_score=0.3,
         status=GapDocTopicStatus.active,
         extracted_at=datetime.now(timezone.utc),
     )
     active_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice export workflow",
         question_count=1,
         aggregate_signal_weight=2.0,
@@ -190,7 +190,7 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
         last_computed_at=datetime.now(timezone.utc),
     )
     closed_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="SAML metadata refresh",
         question_count=1,
         aggregate_signal_weight=1.0,
@@ -199,7 +199,7 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
         last_computed_at=datetime.now(timezone.utc),
     )
     dismissed_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Legacy invoice exports",
         question_count=1,
         aggregate_signal_weight=3.0,
@@ -214,13 +214,13 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
     db_session.add_all([active_topic, dismissed_cluster])
     db_session.commit()
 
-    client.post(
+    tenant.post(
         f"/gap-analyzer/mode_a/{dismissed_topic.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
 
-    response = client.get(
+    response = tenant.get(
         "/gap-analyzer?mode_a_status=archived&mode_b_status=archived",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -234,7 +234,7 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
     }
     assert all(item["status"] in {"closed", "dismissed"} for item in data["mode_b_items"])
 
-    mixed_response = client.get(
+    mixed_response = tenant.get(
         "/gap-analyzer?mode_a_status=all&mode_b_status=archived",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -248,18 +248,18 @@ def test_gap_analyzer_archived_filters_preserve_source_specific_archive_truth(
 
 
 def test_run_mode_b_weekly_reclustering_preserves_clusters_with_blank_unembedded_questions(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    _, client_id = _create_client_and_token(
-        client,
+    _, tenant_id = _create_client_and_token(
+        tenant,
         db_session,
         email="gap-phase6b-blank@example.com",
-        name="Gap Phase 6B Blank Question Client",
+        name="Gap Phase 6B Blank Question Tenant",
     )
     now = datetime.now(timezone.utc)
     protected_cluster = GapCluster(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         label="Invoice exports",
         centroid=_vector(1.0, 0.0, 0.0),
         question_count=2,
@@ -275,7 +275,7 @@ def test_run_mode_b_weekly_reclustering_preserves_clusters_with_blank_unembedded
     protected_cluster_id = protected_cluster.id
 
     blank_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="",
         embedding=None,
         cluster_id=protected_cluster_id,
@@ -283,7 +283,7 @@ def test_run_mode_b_weekly_reclustering_preserves_clusters_with_blank_unembedded
         created_at=now - timedelta(days=1),
     )
     valid_question = GapQuestion(
-        tenant_id=client_id,
+        tenant_id=tenant_id,
         question_text="How do invoice exports work?",
         embedding=_vector(1.0, 0.0, 0.0),
         cluster_id=protected_cluster_id,
@@ -294,9 +294,9 @@ def test_run_mode_b_weekly_reclustering_preserves_clusters_with_blank_unembedded
     db_session.commit()
 
     orchestrator = GapAnalyzerOrchestrator(repository=SqlAlchemyGapAnalyzerRepository(db_session))
-    result = orchestrator.run_mode_b_weekly_reclustering(client_id)
+    result = orchestrator.run_mode_b_weekly_reclustering(tenant_id)
 
-    assert result.tenant_id == client_id
+    assert result.tenant_id == tenant_id
     assert db_session.get(GapCluster, protected_cluster_id) is not None
 
     db_session.refresh(blank_question)

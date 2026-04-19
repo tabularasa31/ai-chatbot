@@ -42,7 +42,7 @@ def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -78,7 +78,7 @@ def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -114,7 +114,7 @@ def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -167,7 +167,7 @@ def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="reset password",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -197,7 +197,7 @@ def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) ->
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="Something else",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -230,7 +230,7 @@ def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) 
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="How do I reset my password?",
         question_embedding=[0.1] * 1536,
         db=Mock(),
@@ -271,7 +271,7 @@ def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.Monke
     )
 
     result = match_faq(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="How can I reset password?",
         question_embedding=[0.1] * 1536,
         db=Mock(),

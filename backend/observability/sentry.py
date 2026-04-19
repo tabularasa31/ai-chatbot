@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 _initialized = False
-_dedup_window_seconds = 60.0
+_DEDUP_WINDOW_SECONDS = 60.0
+_DEDUP_MAX_CACHE_SIZE = 1024
 _recent_fingerprints: dict[tuple[str, str], float] = {}
 
 
@@ -34,14 +35,18 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
     key = (str(error_kind), str(tenant_id))
     now = time.monotonic()
     last = _recent_fingerprints.get(key)
-    if last is not None and (now - last) < _dedup_window_seconds:
+    if last is not None and (now - last) < _DEDUP_WINDOW_SECONDS:
         return None
     _recent_fingerprints[key] = now
-    if len(_recent_fingerprints) > 1024:
-        cutoff = now - _dedup_window_seconds
+    if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
+        cutoff = now - _DEDUP_WINDOW_SECONDS
         for k, ts in list(_recent_fingerprints.items()):
             if ts < cutoff:
                 _recent_fingerprints.pop(k, None)
+        # Hard cap: if a sustained storm leaves the cache full of
+        # in-window entries, drop everything to prevent unbounded growth.
+        if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
+            _recent_fingerprints.clear()
     return event
 
 

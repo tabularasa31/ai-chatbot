@@ -290,6 +290,7 @@ def widget_chat(
             user_context=None,
             browser_locale=locale_hint,
             disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
+            bot_public_id=getattr(_bot, "public_id", None),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

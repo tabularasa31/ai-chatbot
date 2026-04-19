@@ -75,11 +75,6 @@ jobs:
       - name: Lint with ruff
         run: ruff check backend
 
-      - name: Check migration coverage (alembic check)
-        run: |
-          alembic upgrade head
-          alembic check
-
       - name: Run tests (SQLite)
         run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
 

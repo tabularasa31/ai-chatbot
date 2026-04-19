@@ -7,6 +7,7 @@ off (no user, no default body), defers all tracing to Langfuse.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -19,6 +20,10 @@ _initialized = False
 _DEDUP_WINDOW_SECONDS = 60.0
 _DEDUP_MAX_CACHE_SIZE = 1024
 _recent_fingerprints: dict[tuple[str, str], float] = {}
+# Sentry calls before_send from the request thread (and from background
+# threads via the LoggingIntegration), so all reads/writes of the
+# fingerprint cache must be serialized.
+_dedup_lock = threading.Lock()
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
@@ -34,24 +39,26 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         return event
     key = (str(error_kind), str(tenant_id))
     now = time.monotonic()
-    last = _recent_fingerprints.get(key)
-    if last is not None and (now - last) < _DEDUP_WINDOW_SECONDS:
-        return None
-    _recent_fingerprints[key] = now
-    if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
-        cutoff = now - _DEDUP_WINDOW_SECONDS
-        for k, ts in list(_recent_fingerprints.items()):
-            if ts < cutoff:
-                _recent_fingerprints.pop(k, None)
-        # Sustained high-cardinality storm: evict the oldest in-window entries
-        # instead of clearing everything. Wholesale clear would re-admit every
-        # known fingerprint to Sentry exactly when dedup matters most.
+    with _dedup_lock:
+        last = _recent_fingerprints.get(key)
+        if last is not None and (now - last) < _DEDUP_WINDOW_SECONDS:
+            return None
+        _recent_fingerprints[key] = now
         if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
-            overflow = len(_recent_fingerprints) - _DEDUP_MAX_CACHE_SIZE
-            for k, _ in sorted(
-                _recent_fingerprints.items(), key=lambda item: item[1]
-            )[:overflow]:
-                _recent_fingerprints.pop(k, None)
+            cutoff = now - _DEDUP_WINDOW_SECONDS
+            for k, ts in list(_recent_fingerprints.items()):
+                if ts < cutoff:
+                    _recent_fingerprints.pop(k, None)
+            # Sustained high-cardinality storm: evict the oldest in-window
+            # entries instead of clearing everything. Wholesale clear would
+            # re-admit every known fingerprint to Sentry exactly when dedup
+            # matters most.
+            if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
+                overflow = len(_recent_fingerprints) - _DEDUP_MAX_CACHE_SIZE
+                for k, _ in sorted(
+                    _recent_fingerprints.items(), key=lambda item: item[1]
+                )[:overflow]:
+                    _recent_fingerprints.pop(k, None)
     return event
 
 
@@ -106,4 +113,5 @@ def shutdown_sentry() -> None:
         logger.exception("Sentry flush failed")
     finally:
         _initialized = False
-        _recent_fingerprints.clear()
+        with _dedup_lock:
+            _recent_fingerprints.clear()

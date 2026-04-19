@@ -681,7 +681,7 @@ def run_chat_pipeline(
     chat_id: str | None = None,
 ) -> ChatPipelineResult:
     """
-    Pure RAG pipeline — no DB writes, no escalation actions, no observability side effects.
+    Pure RAG pipeline — no DB writes, no escalation actions, no Langfuse trace mutations.
 
     Invariant stage order:
       1. detect_prompt_injection  → guard_reject(injection)
@@ -694,9 +694,13 @@ def run_chat_pipeline(
       8. validate_answer          → optional fallback(insufficient_confidence)
       9. should_escalate          (compute only, no ticket creation)
 
-    Never writes to DB, never creates/modifies Chat/Message,
-    never triggers escalation actions, never increments metrics,
-    never pushes events to queues, never warms caches, never writes audit/observability.
+    Never writes to DB, never creates/modifies Chat/Message, never triggers
+    escalation actions, never pushes events to queues, never warms caches.
+
+    Telemetry exception: when tenant_public_id / bot_public_id / chat_id are
+    supplied, fire-and-forget product-analytics events (e.g. quick_answer.lookup)
+    are emitted via the PostHog facade. These are best-effort and wrapped so
+    a telemetry failure cannot affect the returned result.
     """
     if language_context is None:
         # Fallback resolver for standalone / test invocations where process_chat_message

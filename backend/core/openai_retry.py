@@ -14,6 +14,7 @@ from backend.core.openai_errors import (
     OpenAIFailureKind,
     classify_openai_error,
 )
+from backend.observability.metrics import capture_event
 
 T = TypeVar("T")
 
@@ -28,6 +29,9 @@ _USER_BUDGET_HEADROOM_SECONDS = 0.05
 def call_openai_with_retry(
     operation: str,
     fn: Callable[[], T],
+    *,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
 ) -> T:
     started = time.monotonic()
     max_attempts = settings.openai_user_retry_max_attempts
@@ -50,9 +54,27 @@ def call_openai_with_retry(
                 and classified.retry_after_seconds > total_budget
             ):
                 _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="rate_limit_over_budget",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                )
                 raise
             if attempt >= max_attempts or remaining <= 0:
                 _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="max_attempts" if attempt >= max_attempts else "budget_exhausted",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                )
                 raise
 
             delay = _delay_for_user(
@@ -62,6 +84,15 @@ def call_openai_with_retry(
             )
             if delay > remaining:
                 _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="delay_over_remaining",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                )
                 raise
 
             delay = min(delay, max(remaining - _USER_BUDGET_HEADROOM_SECONDS, 0.0))
@@ -74,6 +105,16 @@ def call_openai_with_retry(
                     "kind": classified.kind.value,
                     "status_code": classified.status_code,
                 },
+            )
+            _emit_retry_attempt(
+                operation=operation,
+                attempt=attempt,
+                delay_seconds=delay,
+                elapsed=elapsed,
+                remaining=remaining,
+                classified=classified,
+                tenant_id=tenant_id,
+                bot_id=bot_id,
             )
             time.sleep(delay)
             last_exc = exc
@@ -120,3 +161,67 @@ def _log_retry_exhausted(
             "status_code": classified.status_code,
         },
     )
+
+
+def _retry_distinct_id(tenant_id: str | None, bot_id: str | None) -> str:
+    return bot_id or tenant_id or "system"
+
+
+def _emit_retry_attempt(
+    *,
+    operation: str,
+    attempt: int,
+    delay_seconds: float,
+    elapsed: float,
+    remaining: float,
+    classified: ClassifiedError,
+    tenant_id: str | None,
+    bot_id: str | None,
+) -> None:
+    try:
+        capture_event(
+            "openai_retry.attempt",
+            distinct_id=_retry_distinct_id(tenant_id, bot_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "operation": operation,
+                "attempt": attempt,
+                "failure_kind": classified.kind.value,
+                "status_code": classified.status_code,
+                "delay_ms": int(delay_seconds * 1000),
+                "elapsed_ms": int(elapsed * 1000),
+                "remaining_budget_ms": max(int(remaining * 1000), 0),
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit openai_retry.attempt event", exc_info=True)
+
+
+def _emit_retry_exhausted(
+    *,
+    operation: str,
+    attempt: int,
+    elapsed: float,
+    classified: ClassifiedError,
+    reason: str,
+    tenant_id: str | None,
+    bot_id: str | None,
+) -> None:
+    try:
+        capture_event(
+            "openai_retry.exhausted",
+            distinct_id=_retry_distinct_id(tenant_id, bot_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "operation": operation,
+                "final_attempt": attempt,
+                "failure_kind": classified.kind.value,
+                "status_code": classified.status_code,
+                "elapsed_ms": int(elapsed * 1000),
+                "reason": reason,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit openai_retry.exhausted event", exc_info=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import warnings
 from collections import defaultdict
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from functools import lru_cache
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
+from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +86,55 @@ class LocalizationResult:
 
 def _threshold() -> float:
     return float(settings.language_detection_reliability_threshold)
+
+
+_RESOLUTION_REASON_TO_SOURCE = {
+    "bootstrap_user_locale": "default",
+    "browser_locale": "default",
+    "bootstrap_default_english": "default",
+    "sticky_no_signal": "sticky",
+    "sticky_retained": "sticky",
+    "sticky_switched": "sticky",
+    "detected": "detector",
+    "detector_unknown": "detector",
+    "detector_unreliable": "detector",
+    "detector_failure": "detector",
+}
+
+
+def _metrics_distinct_id(
+    bot_id: str | None,
+    tenant_id: str | None,
+) -> str:
+    return bot_id or tenant_id or "unknown"
+
+
+def _emit_language_resolved_event(
+    *,
+    context: ResolvedLanguageContext,
+    text_length: int,
+    tenant_id: str | None,
+    bot_id: str | None,
+    chat_id: str | None,
+) -> None:
+    capture_event(
+        "language.resolved",
+        distinct_id=_metrics_distinct_id(bot_id, tenant_id),
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        properties={
+            "detected": context.detected_language,
+            "final": context.response_language,
+            "source": _RESOLUTION_REASON_TO_SOURCE.get(
+                context.response_language_resolution_reason,
+                "default",
+            ),
+            "resolution_reason": context.response_language_resolution_reason,
+            "confidence": context.confidence,
+            "text_length": text_length,
+            "chat_id": chat_id,
+        },
+    )
 
 
 def log_llm_tokens(
@@ -297,6 +348,44 @@ def resolve_language_context(
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
+) -> ResolvedLanguageContext:
+    context = _resolve_language_context_inner(
+        current_turn_text=current_turn_text,
+        is_bootstrap_turn=is_bootstrap_turn,
+        bootstrap_user_locale=bootstrap_user_locale,
+        browser_locale=browser_locale,
+        tenant_escalation_language=tenant_escalation_language,
+        previous_response_language=previous_response_language,
+        recent_user_turn_texts=recent_user_turn_texts,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+    )
+    _emit_language_resolved_event(
+        context=context,
+        text_length=len(current_turn_text or ""),
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+    )
+    return context
+
+
+def _resolve_language_context_inner(
+    *,
+    current_turn_text: str | None,
+    is_bootstrap_turn: bool,
+    bootstrap_user_locale: str | None,
+    browser_locale: str | None,
+    tenant_escalation_language: str | None,
+    previous_response_language: str | None = None,
+    recent_user_turn_texts: list[str] | None = None,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> ResolvedLanguageContext:
     escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
     escalation_language_source = "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
@@ -337,6 +426,17 @@ def resolve_language_context(
     try:
         detection = detect_language(current_turn_text)
     except LangDetectError:
+        capture_event(
+            "language.detect_fallback",
+            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "reason": "langdetect_error",
+                "text_length": len(current_turn_text or ""),
+                "chat_id": chat_id,
+            },
+        )
         return ResolvedLanguageContext(
             detected_language="unknown",
             confidence=0.0,
@@ -345,6 +445,19 @@ def resolve_language_context(
             response_language_resolution_reason="detector_failure",
             escalation_language=escalation_language,
             escalation_language_source=escalation_language_source,
+        )
+
+    if detection.detected_language == "unknown":
+        capture_event(
+            "language.detect_fallback",
+            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "reason": "detector_returned_unknown",
+                "text_length": len(current_turn_text or ""),
+                "chat_id": chat_id,
+            },
         )
 
     recent_turns = [text for text in (recent_user_turn_texts or [current_turn_text or ""]) if str(text or "").strip()]
@@ -392,6 +505,19 @@ def resolve_language_context(
     resolution_reason = "detected"
     if previous_root and previous_root != winner:
         resolution_reason = "sticky_switched"
+        capture_event(
+            "language.switched",
+            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "from": previous_response_language,
+                "to": winner,
+                "window_weights": votes,
+                "margin": votes.get(winner, 0) - votes.get(previous_root, 0),
+                "chat_id": chat_id,
+            },
+        )
     response_language = winner
     for text in recent_turns[:STICKY_WINDOW]:
         try:
@@ -420,6 +546,9 @@ def localize_text_result(
     response_language: str,
     api_key: str | None,
     operation: str = "localize",
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> LocalizationResult:
     if not canonical_text.strip():
         return LocalizationResult(text=canonical_text, tokens_used=0)
@@ -438,6 +567,9 @@ def localize_text_result(
         target_language=normalized_target,
         api_key=api_key,
         operation=operation,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
     )
 
 
@@ -520,6 +652,9 @@ def localize_text_to_language_result(
     api_key: str | None,
     fallback_locale: str | None = None,
     operation: str = "localize_to_language",
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> LocalizationResult:
     if not canonical_text.strip():
         return LocalizationResult(text=canonical_text, tokens_used=0)
@@ -544,6 +679,9 @@ def localize_text_to_language_result(
         target_language=normalized_target,
         api_key=api_key,
         operation=operation,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
     )
 
 
@@ -553,12 +691,18 @@ def localize_text_to_language(
     target_language: str | None,
     api_key: str | None,
     fallback_locale: str | None = None,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> str:
     return localize_text_to_language_result(
         canonical_text=canonical_text,
         target_language=target_language,
         api_key=api_key,
         fallback_locale=fallback_locale,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
     ).text
 
 
@@ -568,6 +712,9 @@ def localize_text_to_question_language_result(
     question: str | None,
     api_key: str | None,
     fallback_locale: str | None = None,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> LocalizationResult:
     warnings.warn(
         "localize_text_to_question_language_result is deprecated; resolve language via "
@@ -586,6 +733,9 @@ def localize_text_to_question_language_result(
         target_language=target_language,
         api_key=api_key,
         fallback_locale=fallback_locale,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
     )
 
 
@@ -605,7 +755,11 @@ def _invoke_localize_llm(
     target_language: str,
     api_key: str | None,
     operation: str,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
 ) -> LocalizationResult:
+    started_at = time.monotonic()
     try:
         client = get_openai_client(api_key)
         response = call_openai_with_retry(
@@ -635,7 +789,58 @@ def _invoke_localize_llm(
         if not response.choices:
             return LocalizationResult(text=canonical_text, tokens_used=tokens_used)
         localized = (response.choices[0].message.content or "").strip()
-        return LocalizationResult(text=localized or canonical_text, tokens_used=tokens_used)
+        output_text = localized or canonical_text
+        _emit_localized_event_safely(
+            canonical_text=canonical_text,
+            output_text=output_text,
+            target_language=target_language,
+            operation=operation,
+            started_at=started_at,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            chat_id=chat_id,
+        )
+        return LocalizationResult(text=output_text, tokens_used=tokens_used)
     except Exception as exc:
         logger.warning("Localization failed; using canonical text: %s", exc)
         return LocalizationResult(text=canonical_text, tokens_used=0)
+
+
+def _emit_localized_event_safely(
+    *,
+    canonical_text: str,
+    output_text: str,
+    target_language: str,
+    operation: str,
+    started_at: float,
+    tenant_id: str | None,
+    bot_id: str | None,
+    chat_id: str | None,
+) -> None:
+    # Skip when neither identifier is known — emitting would collapse all
+    # such events under distinct_id="unknown" and pollute per-tenant rollups.
+    # Real production callers gain identifiers in a follow-up PR.
+    if tenant_id is None and bot_id is None:
+        return
+    try:
+        try:
+            source_lang = detect_language(canonical_text).detected_language
+        except Exception:
+            source_lang = "unknown"
+        capture_event(
+            "language.localized",
+            distinct_id=_metrics_distinct_id(bot_id, tenant_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "source_lang": source_lang,
+                "target_lang": target_language,
+                "input_chars": len(canonical_text),
+                "output_chars": len(output_text),
+                "latency_ms": int((time.monotonic() - started_at) * 1000),
+                "operation": operation,
+                "chat_id": chat_id,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit language.localized event", exc_info=True)

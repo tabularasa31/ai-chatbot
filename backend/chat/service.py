@@ -502,6 +502,8 @@ def _resolve_chat_language_context(
         ),
         previous_response_language=previous_response_language,
         recent_user_turn_texts=recent_user_turn_texts,
+        tenant_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
+        chat_id=str(chat.id) if chat is not None else None,
     )
 
 

@@ -49,7 +49,7 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
             overflow = len(_recent_fingerprints) - _DEDUP_MAX_CACHE_SIZE
             for k, _ in sorted(
-                _recent_fingerprints.items(), key=lambda item: item[1]
+                list(_recent_fingerprints.items()), key=lambda item: item[1]
             )[:overflow]:
                 _recent_fingerprints.pop(k, None)
     return event

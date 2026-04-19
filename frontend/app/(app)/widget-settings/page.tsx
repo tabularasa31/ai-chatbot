@@ -22,7 +22,7 @@ export default function WidgetSettingsPage() {
         api.bots.list(),
       ]);
       setStatus(s);
-      setDefaultBot(bots[0] ?? null);
+      setDefaultBot(bots.find((b) => b.is_active) ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {

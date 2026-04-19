@@ -45,7 +45,7 @@ def widget_public_rate_limit_key(request: Request) -> str:
     return f"{bot_id[:32]}|{ip}"
 
 
-def widget_tenant_rate_limit_key(request: Request) -> str:
+def widget_bot_rate_limit_key(request: Request) -> str:
     """Global widget rate-limit identity per bot_id."""
     bot_id = (
         request.query_params.get("bot_id")

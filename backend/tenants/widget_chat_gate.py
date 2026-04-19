@@ -47,12 +47,15 @@ def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple
     Raises:
         WidgetChatTenantGateError: NOT_FOUND | INACTIVE | NO_OPENAI
     """
-    bot = db.query(Bot).filter(Bot.public_id == bot_public_id).first()
-    if not bot or not bot.is_active:
+    result = (
+        db.query(Bot, Tenant)
+        .join(Tenant, Bot.tenant_id == Tenant.id)
+        .filter(Bot.public_id == bot_public_id)
+        .first()
+    )
+    if not result or not result[0].is_active:
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
-    tenant = db.query(Tenant).filter(Tenant.id == bot.tenant_id).first()
-    if not tenant:
-        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
+    bot, tenant = result
     if not tenant.is_active:
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
     key = tenant.openai_api_key

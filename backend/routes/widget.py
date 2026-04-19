@@ -15,9 +15,9 @@ from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import (
     limiter,
+    widget_bot_rate_limit_key,
     widget_init_rate_limit_key,
     widget_public_rate_limit_key,
-    widget_tenant_rate_limit_key,
 )
 from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
@@ -188,7 +188,7 @@ def widget_session_init(
 @widget_router.post("/chat")
 @limiter.limit(
     settings.effective_widget_chat_per_client_rate,
-    key_func=widget_tenant_rate_limit_key,
+    key_func=widget_bot_rate_limit_key,
 )
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
 def widget_chat(

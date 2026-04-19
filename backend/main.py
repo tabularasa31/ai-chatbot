@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
+from backend.bots.routes import bots_router
 from backend.chat.routes import chat_router
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
@@ -102,6 +103,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router)
+app.include_router(bots_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")

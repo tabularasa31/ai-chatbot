@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type BotResponse, type TenantMeResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
+import { api, type BotResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function WidgetSettingsPage() {
-  const [tenantInfo, setTenantInfo] = useState<TenantMeResponse | null>(null);
   const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
   const [status, setStatus] = useState<KycStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -18,13 +17,11 @@ export default function WidgetSettingsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [s, c, bots] = await Promise.all([
+      const [s, bots] = await Promise.all([
         api.kyc.getStatus(),
-        api.clients.getMe(),
         api.bots.list(),
       ]);
       setStatus(s);
-      setTenantInfo(c);
       setDefaultBot(bots[0] ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");

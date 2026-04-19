@@ -263,13 +263,13 @@ async def _generate_embeddings(
     if not missing:
         return
 
-    tenant = get_openai_client(api_key)
+    oai = get_openai_client(api_key)
     batch_size = settings.embedding_batch_size
     delay = settings.embedding_batch_delay_sec
 
     for i in range(0, len(missing), batch_size):
         batch = missing[i: i + batch_size]
-        resp = tenant.embeddings.create(
+        resp = oai.embeddings.create(
             model=EMBEDDING_MODEL,
             input=[m.content for m in batch],
         )
@@ -377,13 +377,13 @@ def _create_faq_candidate(
     api_key: str,
 ) -> bool:
     """Embed question, dedup, then insert. Returns True if created."""
-    tenant = get_openai_client(api_key)
+    oai = get_openai_client(api_key)
     question = representative.content.strip()
     answer = (best_member.answer or "").strip()
     if not question or not answer:
         return False
 
-    resp = tenant.embeddings.create(model=EMBEDDING_MODEL, input=question)
+    resp = oai.embeddings.create(model=EMBEDDING_MODEL, input=question)
     q_emb = resp.data[0].embedding
 
     existing = _find_existing_faq(db, tenant_id, q_emb)

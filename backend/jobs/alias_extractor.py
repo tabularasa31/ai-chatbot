@@ -91,14 +91,14 @@ async def _call_alias_llm(
     api_key: str,
 ) -> list[AliasEntry]:
     """Call LLM to extract aliases. Throttled by semaphore (max 3 parallel)."""
-    tenant = get_openai_client(api_key)
+    oai = get_openai_client(api_key)
     user_content = "Questions:\n" + "\n".join(cluster_questions)
 
     async with _get_semaphore():
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
-            lambda: tenant.chat.completions.create(
+            lambda: oai.chat.completions.create(
                 model=ALIAS_LLM_MODEL,
                 messages=[
                     {"role": "system", "content": ALIAS_SYSTEM_PROMPT},

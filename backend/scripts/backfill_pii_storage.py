@@ -11,16 +11,16 @@ from sqlalchemy.orm import Session
 
 
 def _message_optional_entity_types(message: Message) -> set[str] | None:
-    if not message.chat or not message.chat.client or not isinstance(message.chat.client.settings, dict):
+    if not message.chat or not message.chat.tenant or not isinstance(message.chat.tenant.settings, dict):
         return None
-    cfg = public_redaction_config_dict(message.chat.client.settings)
+    cfg = public_redaction_config_dict(message.chat.tenant.settings)
     return set(cfg["optional_entity_types"])
 
 
 def _ticket_optional_entity_types(ticket: EscalationTicket) -> set[str] | None:
-    if not ticket.client or not isinstance(ticket.client.settings, dict):
+    if not ticket.tenant or not isinstance(ticket.tenant.settings, dict):
         return None
-    cfg = public_redaction_config_dict(ticket.client.settings)
+    cfg = public_redaction_config_dict(ticket.tenant.settings)
     return set(cfg["optional_entity_types"])
 
 

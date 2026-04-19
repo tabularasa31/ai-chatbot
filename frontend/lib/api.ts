@@ -460,7 +460,7 @@ export const api = {
   },
   clients: {
     async create(name: string) {
-      const res = await authFetch(`${BASE_URL}/clients`, {
+      const res = await authFetch(`${BASE_URL}/tenants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -470,13 +470,13 @@ export const api = {
       return data as TenantResponse;
     },
     async getMe() {
-      const res = await authFetch(`${BASE_URL}/clients/me`);
+      const res = await authFetch(`${BASE_URL}/tenants/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
       return data as TenantMeResponse;
     },
     async update(data: { name?: string; openai_api_key?: string | null }) {
-      const res = await authFetch(`${BASE_URL}/clients/me`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -488,7 +488,7 @@ export const api = {
   },
   kyc: {
     async generateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/secret`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/secret`, {
         method: "POST",
       });
       const data = await res.json();
@@ -496,13 +496,13 @@ export const api = {
       return data as KycSecretResponse;
     },
     async getStatus(): Promise<KycStatusResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/status`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/status`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get KYC status"));
       return data as KycStatusResponse;
     },
     async rotateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/rotate`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/rotate`, {
         method: "POST",
       });
       const data = await res.json();
@@ -512,13 +512,13 @@ export const api = {
   },
   disclosure: {
     async get(): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
       return data as DisclosureConfigResponse;
     },
     async update(config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -530,13 +530,13 @@ export const api = {
   },
   support: {
     async get(): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
       return data as SupportSettingsResponse;
     },
     async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -1001,7 +1001,7 @@ export const api = {
       return res.json();
     },
     async getTenants(): Promise<AdminTenantMetricsItem[]> {
-      const res = await authFetch(`${BASE_URL}/admin/metrics/clients`);
+      const res = await authFetch(`${BASE_URL}/admin/metrics/tenants`);
       if (!res.ok) throw new Error("Failed to load admin client metrics");
       const data = await res.json();
       return data.items;

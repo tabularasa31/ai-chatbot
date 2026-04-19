@@ -71,6 +71,8 @@ def upgrade() -> None:
             "uq_user_sessions_tenant_user_active",
             ["tenant_id", "user_id"],
             unique=True,
+            postgresql_where="session_ended_at IS NULL",
+            sqlite_where="session_ended_at IS NULL",
         )
 
 
@@ -83,6 +85,8 @@ def downgrade() -> None:
             "uq_user_sessions_client_user_active",
             ["tenant_id", "user_id"],
             unique=True,
+            postgresql_where="session_ended_at IS NULL",
+            sqlite_where="session_ended_at IS NULL",
         )
 
     with op.batch_alter_table("eval_sessions") as batch_op:

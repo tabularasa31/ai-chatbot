@@ -123,18 +123,18 @@ def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
 
 
 def test_quick_answers_context_returns_structured_lines(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="quick-answer-docs@example.com")
-    create_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="quick-answer-docs@example.com")
+    create_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Quick Answer Docs"},
     )
-    client_id = uuid.UUID(create_resp.json()["id"])
+    tenant_id = uuid.UUID(create_resp.json()["id"])
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -149,7 +149,7 @@ def test_quick_answers_context_returns_structured_lines(
     db_session.flush()
     db_session.add(
         QuickAnswer(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source_id=source.id,
             key="documentation_url",
             value="https://docs.example.com/",
@@ -159,7 +159,7 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.add(
         QuickAnswer(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source_id=source.id,
             key="support_email",
             value="help@example.com",
@@ -169,7 +169,7 @@ def test_quick_answers_context_returns_structured_lines(
     )
     db_session.commit()
 
-    answer = _quick_answers_context(client_id, "Where is your documentation?", db_session)
+    answer = _quick_answers_context(tenant_id, "Where is your documentation?", db_session)
 
     assert answer == ["Documentation: https://docs.example.com/"]
 
@@ -190,18 +190,18 @@ def test_quick_answer_keys_for_question_filters_by_topic() -> None:
 
 
 def test_quick_answers_context_prefers_higher_quality_documentation_source_over_newer_fallback(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="quick-answer-quality@example.com")
-    create_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="quick-answer-quality@example.com")
+    create_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Quick Answer Quality"},
     )
-    client_id = uuid.UUID(create_resp.json()["id"])
+    tenant_id = uuid.UUID(create_resp.json()["id"])
     docs_source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Documentation",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -213,7 +213,7 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
         metadata_json={},
     )
     blog_source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Blog",
         url="https://example.com/blog/start",
         normalized_domain="example.com",
@@ -228,7 +228,7 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     db_session.flush()
     db_session.add(
         QuickAnswer(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source_id=docs_source.id,
             key="documentation_url",
             value="https://docs.example.com/guide",
@@ -238,7 +238,7 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.add(
         QuickAnswer(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source_id=blog_source.id,
             key="documentation_url",
             value="https://example.com/blog/start",
@@ -248,7 +248,7 @@ def test_quick_answers_context_prefers_higher_quality_documentation_source_over_
     )
     db_session.commit()
 
-    answer = _quick_answers_context(client_id, "Where is the documentation?", db_session)
+    answer = _quick_answers_context(tenant_id, "Where is the documentation?", db_session)
 
     assert answer == ["Documentation: https://docs.example.com/guide"]
 
@@ -469,11 +469,11 @@ def test_generate_answer_ends_generation_on_openai_error(mock_openai_client: Moc
 
 
 def test_process_chat_message_ends_followup_span_on_exception(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Chat, Client, EscalationTicket, EscalationTrigger, EscalationStatus
+    from backend.models import Chat, Tenant, EscalationTicket, EscalationTrigger, EscalationStatus
 
     class FakeSpan:
         def __init__(self) -> None:
@@ -494,18 +494,18 @@ def test_process_chat_message_ends_followup_span_on_exception(
         def update(self, **kwargs: object) -> None:
             return None
 
-    token = register_and_verify_user(client, db_session, email="trace-followup@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="trace-followup@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Trace Client"},
+        json={"name": "Trace Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     chat = Chat(
-        client_id=client_row.id,
+        tenant_id=client_row.id,
         session_id=uuid.uuid4(),
         user_context={},
         escalation_followup_pending=True,
@@ -515,7 +515,7 @@ def test_process_chat_message_ends_followup_span_on_exception(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_row.id,
+        tenant_id=client_row.id,
         ticket_number="ESC-0001",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -552,11 +552,11 @@ def test_process_chat_message_ends_followup_span_on_exception(
 
 
 def test_process_chat_message_adds_variant_summary_to_trace(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Client
+    from backend.models import Tenant
     from backend.search.service import ContradictionPair, build_reliability_assessment
 
     class FakeSpan:
@@ -576,14 +576,14 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         def promote(self, **kwargs: object) -> None:
             return None
 
-    token = register_and_verify_user(client, db_session, email="trace-chat@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="trace-chat@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Trace Chat Client"},
+        json={"name": "Trace Chat Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     fake_trace = FakeTrace()
@@ -710,24 +710,24 @@ def test_process_chat_message_adds_variant_summary_to_trace(
 
 def test_chat_success(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Valid api_key + question → get answer back."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="chat@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="chat@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Chat Client"},
+        json={"name": "Chat Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="chat.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -751,7 +751,7 @@ def test_chat_success(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=50)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "What is the answer?"},
@@ -767,24 +767,24 @@ def test_chat_success(
 
 def test_chat_creates_messages_in_db(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """After chat, messages saved to DB."""
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    token = register_and_verify_user(client, db_session, email="msg@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="msg@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Msg Client"},
+        json={"name": "Msg Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="msg.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -808,7 +808,7 @@ def test_chat_creates_messages_in_db(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Hello"},
@@ -829,9 +829,9 @@ def test_chat_creates_messages_in_db(
     assert user_message.content_redacted == "Hello"
 
 
-def test_chat_invalid_api_key(client: TestClient) -> None:
+def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": "invalid-key-12345"},
         json={"question": "Hello"},
@@ -840,25 +840,25 @@ def test_chat_invalid_api_key(client: TestClient) -> None:
     assert "Invalid API key" in response.json()["detail"]
 
 
-def test_chat_missing_api_key(client: TestClient) -> None:
+def test_chat_missing_api_key(tenant: TestClient) -> None:
     """No X-API-Key header → 401."""
-    response = client.post(
+    response = tenant.post(
         "/chat",
         json={"question": "Hello"},
     )
     assert response.status_code == 401
 
 
-def test_chat_without_openai_key(client: TestClient, db_session: Session) -> None:
-    """400 if client has no OpenAI API key configured."""
-    token = register_and_verify_user(client, db_session, email="nokey@example.com")
-    cl_resp = client.post(
-        "/clients",
+def test_chat_without_openai_key(tenant: TestClient, db_session: Session) -> None:
+    """400 if tenant has no OpenAI API key configured."""
+    token = register_and_verify_user(tenant, db_session, email="nokey@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "No Key Client"},
+        json={"name": "No Key Tenant"},
     )
     api_key = cl_resp.json()["api_key"]
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Hello"},
@@ -868,20 +868,20 @@ def test_chat_without_openai_key(client: TestClient, db_session: Session) -> Non
 
 
 def test_chat_empty_question_returns_default_greeting(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Empty first message returns the default greeting."""
-    token = register_and_verify_user(client, db_session, email="empty@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="empty@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Client"},
+        json={"name": "Empty Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": ""},
@@ -889,7 +889,7 @@ def test_chat_empty_question_returns_default_greeting(
     assert response.status_code == 200
     data = response.json()
     assert data["text"] == (
-        "I'm the Empty Client assistant and can help with documentation, "
+        "I'm the Empty Tenant assistant and can help with documentation, "
         "product setup, integrations, and finding the right information. Ask your question."
     )
     assert data["source_documents"] == []
@@ -897,28 +897,28 @@ def test_chat_empty_question_returns_default_greeting(
 
 
 def test_chat_empty_question_uses_browser_locale_for_greeting(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="empty-locale@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="empty-locale@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Greeting Locale Client"},
+        json={"name": "Greeting Locale Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
 
     monkeypatch.setattr(
         "backend.chat.service.localize_text_to_language_result",
         lambda **kwargs: LocalizationResult(
-            text="Je suis l'assistant Greeting Locale Client. Posez votre question.",
+            text="Je suis l'assistant Greeting Locale Tenant. Posez votre question.",
             tokens_used=9,
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key, "X-Browser-Locale": "fr-FR"},
         json={"question": ""},
@@ -926,24 +926,24 @@ def test_chat_empty_question_uses_browser_locale_for_greeting(
 
     assert response.status_code == 200
     data = response.json()
-    assert data["text"] == "Je suis l'assistant Greeting Locale Client. Posez votre question."
+    assert data["text"] == "Je suis l'assistant Greeting Locale Tenant. Posez votre question."
     assert data["tokens_used"] == 9
 
 
 def test_chat_empty_followup_after_started_session_is_rejected(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="empty-followup@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="empty-followup@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Followup Client"},
+        json={"name": "Empty Followup Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
 
-    first = client.post(
+    first = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": ""},
@@ -951,7 +951,7 @@ def test_chat_empty_followup_after_started_session_is_rejected(
     assert first.status_code == 200
     session_id = first.json()["session_id"]
 
-    second = client.post(
+    second = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "", "session_id": session_id},
@@ -961,21 +961,21 @@ def test_chat_empty_followup_after_started_session_is_rejected(
 
 
 def test_chat_no_embeddings(
-    mock_openai_client: Mock, client: TestClient, db_session: Session
+    mock_openai_client: Mock, tenant: TestClient, db_session: Session
 ) -> None:
     """No docs uploaded → answer is 'I don't have information'."""
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
-    token = register_and_verify_user(client, db_session, email="noemb@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="noemb@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "No Emb Client"},
+        json={"name": "No Emb Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Anything"},
@@ -994,24 +994,24 @@ def test_chat_no_embeddings(
 
 def test_chat_uses_context(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Mock search returns chunk, verify it's in prompt."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="ctx@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="ctx@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Ctx Client"},
+        json={"name": "Ctx Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="ctx.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1038,7 +1038,7 @@ def test_chat_uses_context(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "What is the secret?"},
@@ -1053,17 +1053,17 @@ def test_chat_uses_context(
 
 
 def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="hybridsafe@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="hybridsafe@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Hybrid Safe Client"},
+        json={"name": "Hybrid Safe Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
     doc_id = uuid.uuid4()
 
@@ -1093,7 +1093,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
 
     monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _unexpected_ticket)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "сколько максимум документов можно загрузить?"},
@@ -1140,7 +1140,7 @@ def test_retrieve_context_propagates_reliability_cap_reason(
         bind = FakeBind()
 
     context = retrieve_context(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="reset password",
         db=FakeDB(),
         api_key="sk-test",
@@ -1183,7 +1183,7 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
         bind = FakeBind()
 
     context = retrieve_context(
-        client_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
         question="secret number",
         db=FakeDB(),
         api_key="sk-test",
@@ -1197,25 +1197,25 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
 
 def test_chat_session_continuity(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Two messages with same session_id → same chat in DB."""
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    token = register_and_verify_user(client, db_session, email="cont@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="cont@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Cont Client"},
+        json={"name": "Cont Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     session_id = str(uuid.uuid4())
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="cont.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1239,7 +1239,7 @@ def test_chat_session_continuity(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    r1 = client.post(
+    r1 = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Q1", "session_id": session_id},
@@ -1249,7 +1249,7 @@ def test_chat_session_continuity(
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="A2"))
     ]
-    r2 = client.post(
+    r2 = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Q2", "session_id": session_id},
@@ -1266,24 +1266,24 @@ def test_chat_session_continuity(
 
 def test_chat_new_session_auto_generated(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """No session_id → auto-generated UUID returned."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="auto@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="auto@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Auto Client"},
+        json={"name": "Auto Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="auto.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1307,7 +1307,7 @@ def test_chat_new_session_auto_generated(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Hi"},
@@ -1319,24 +1319,24 @@ def test_chat_new_session_auto_generated(
 
 def test_get_history_success(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Get chat history after conversation."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="hist@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="hist@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Hist Client"},
+        json={"name": "Hist Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="hist.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1360,14 +1360,14 @@ def test_get_history_success(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    chat_resp = client.post(
+    chat_resp = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Hello"},
     )
     session_id = chat_resp.json()["session_id"]
 
-    hist_resp = client.get(
+    hist_resp = tenant.get(
         f"/chat/history/{session_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1383,25 +1383,25 @@ def test_get_history_success(
 
 def test_get_history_wrong_user(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """User B tries to get user A's session → 404."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token_a = register_and_verify_user(client, db_session, email="userA@example.com")
-    cl_a = client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="userA@example.com")
+    cl_a = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
-    set_client_openai_key(client, token_a)
+    set_client_openai_key(tenant, token_a)
     api_key_a = cl_a.json()["api_key"]
     client_id_a = uuid.UUID(cl_a.json()["id"])
     session_id = str(uuid.uuid4())
 
     doc = Document(
-        client_id=client_id_a,
+        tenant_id=client_id_a,
         filename="a.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -1425,30 +1425,30 @@ def test_get_history_wrong_user(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=1)
 
-    client.post(
+    tenant.post(
         "/chat",
         headers={"X-API-Key": api_key_a},
         json={"question": "Hi", "session_id": session_id},
     )
 
-    token_b = register_and_verify_user(client, db_session, email="userB@example.com")
-    client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="userB@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
 
-    hist_resp = client.get(
+    hist_resp = tenant.get(
         f"/chat/history/{session_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert hist_resp.status_code == 404
 
 
-def test_get_history_unauthenticated(client: TestClient) -> None:
+def test_get_history_unauthenticated(tenant: TestClient) -> None:
     """No JWT → 401."""
     session_id = str(uuid.uuid4())
-    response = client.get(f"/chat/history/{session_id}")
+    response = tenant.get(f"/chat/history/{session_id}")
     assert response.status_code == 401
 
 
@@ -1457,25 +1457,25 @@ def test_get_history_unauthenticated(client: TestClient) -> None:
 
 def test_get_sessions_returns_only_own_client_sessions(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """GET /chat/sessions returns only sessions for the authenticated client."""
+    """GET /chat/sessions returns only sessions for the authenticated tenant."""
     from backend.models import Chat, Message, MessageRole
 
     token_a = register_and_verify_user(
-        client, db_session, email="sessions_a@example.com"
+        tenant, db_session, email="sessions_a@example.com"
     )
-    cl_a = client.post(
-        "/clients",
+    cl_a = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
-    set_client_openai_key(client, token_a)
+    set_client_openai_key(tenant, token_a)
     client_id_a = uuid.UUID(cl_a.json()["id"])
 
-    # Create chat + messages for client A
-    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    # Create chat + messages for tenant A
+    chat_a = Chat(tenant_id=client_id_a, session_id=uuid.uuid4())
     db_session.add(chat_a)
     db_session.commit()
     db_session.refresh(chat_a)
@@ -1484,21 +1484,21 @@ def test_get_sessions_returns_only_own_client_sessions(
     db_session.add_all([msg1, msg2])
     db_session.commit()
 
-    # Create user B and client B with their own session
+    # Create user B and tenant B with their own session
     token_b = register_and_verify_user(
-        client, db_session, email="sessions_b@example.com"
+        tenant, db_session, email="sessions_b@example.com"
     )
-    cl_b = client.post(
-        "/clients",
+    cl_b = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
     client_id_b = uuid.UUID(cl_b.json()["id"])
-    chat_b = Chat(client_id=client_id_b, session_id=uuid.uuid4())
+    chat_b = Chat(tenant_id=client_id_b, session_id=uuid.uuid4())
     db_session.add(chat_b)
     db_session.commit()
 
-    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token_a}"})
+    resp = tenant.get("/chat/sessions", headers={"Authorization": f"Bearer {token_a}"})
     assert resp.status_code == 200
     data = resp.json()
     assert "sessions" in data
@@ -1511,7 +1511,7 @@ def test_get_sessions_returns_only_own_client_sessions(
 
 def test_get_sessions_sorted_by_last_activity_desc(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """GET /chat/sessions returns sessions sorted by last_activity DESC."""
@@ -1519,18 +1519,18 @@ def test_get_sessions_sorted_by_last_activity_desc(
     from backend.models import Chat, Message, MessageRole
 
     token = register_and_verify_user(
-        client, db_session, email="sessions_sort@example.com"
+        tenant, db_session, email="sessions_sort@example.com"
     )
-    cl = client.post(
-        "/clients",
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Sort Client"},
+        json={"name": "Sort Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
     base_time = datetime.now(timezone.utc)
-    chat1 = Chat(client_id=client_id, session_id=uuid.uuid4())
-    chat2 = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat1 = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
+    chat2 = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add_all([chat1, chat2])
     db_session.commit()
     db_session.refresh(chat1)
@@ -1554,7 +1554,7 @@ def test_get_sessions_sorted_by_last_activity_desc(
     )
     db_session.commit()
 
-    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["sessions"]) == 2
@@ -1567,23 +1567,23 @@ def test_get_sessions_sorted_by_last_activity_desc(
 
 def test_get_sessions_last_answer_preview_truncated(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """last_answer_preview is truncated to ~120 chars with ... if longer."""
     from backend.models import Chat, Message, MessageRole
 
     token = register_and_verify_user(
-        client, db_session, email="sessions_preview@example.com"
+        tenant, db_session, email="sessions_preview@example.com"
     )
-    cl = client.post(
-        "/clients",
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Preview Client"},
+        json={"name": "Preview Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1593,7 +1593,7 @@ def test_get_sessions_last_answer_preview_truncated(
     db_session.add_all([m1, m2])
     db_session.commit()
 
-    resp = client.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/chat/sessions", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["sessions"]) == 1
@@ -1605,22 +1605,22 @@ def test_get_sessions_last_answer_preview_truncated(
 
 def test_get_session_logs_success(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """GET /chat/logs/session/{id} returns full message list for valid session."""
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="logs@example.com")
-    cl = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs@example.com")
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs Client"},
+        json={"name": "Logs Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1629,7 +1629,7 @@ def test_get_session_logs_success(
     db_session.add_all([m1, m2])
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         f"/chat/logs/session/{chat.session_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1649,22 +1649,22 @@ def test_get_session_logs_success(
 
 def test_get_session_logs_can_include_original_for_authenticated_owner(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.chat.pii import redact
     from backend.core.crypto import encrypt_value
     from backend.models import Chat, Message, MessageRole, User
 
-    token = register_and_verify_user(client, db_session, email="logs-original@example.com")
-    cl = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs-original@example.com")
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs Original Client"},
+        json={"name": "Logs Original Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1683,7 +1683,7 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
     db_session.add(user)
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         f"/chat/logs/session/{chat.session_id}?include_original=true",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1696,27 +1696,27 @@ def test_get_session_logs_can_include_original_for_authenticated_owner(
 
 def test_get_session_logs_include_original_requires_admin(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="logs-no-admin@example.com")
-    cl = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs-no-admin@example.com")
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs No Admin Client"},
+        json={"name": "Logs No Admin Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
     db_session.add(Message(chat_id=chat.id, role=MessageRole.user, content="Hello"))
     db_session.commit()
 
-    resp = client.get(
+    resp = tenant.get(
         f"/chat/logs/session/{chat.session_id}?include_original=true",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1725,22 +1725,22 @@ def test_get_session_logs_include_original_requires_admin(
 
 def test_delete_session_original_requires_admin_and_removes_original(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.chat.pii import redact
     from backend.core.crypto import encrypt_value
     from backend.models import Chat, Message, MessageRole, User
 
-    token = register_and_verify_user(client, db_session, email="logs-delete@example.com")
-    cl = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs-delete@example.com")
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs Delete Client"},
+        json={"name": "Logs Delete Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1754,7 +1754,7 @@ def test_delete_session_original_requires_admin_and_removes_original(
     db_session.add(msg)
     db_session.commit()
 
-    denied = client.post(
+    denied = tenant.post(
         f"/chat/logs/session/{chat.session_id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1766,7 +1766,7 @@ def test_delete_session_original_requires_admin_and_removes_original(
     db_session.add(user)
     db_session.commit()
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/logs/session/{chat.session_id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1780,21 +1780,21 @@ def test_delete_session_original_requires_admin_and_removes_original(
 
 def test_delete_session_original_clears_legacy_plaintext_when_redacted_missing(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.core.crypto import encrypt_value
     from backend.models import Chat, Message, MessageRole, User
 
-    token = register_and_verify_user(client, db_session, email="logs-delete-empty@example.com")
-    cl = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs-delete-empty@example.com")
+    cl = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Logs Delete Empty Client"},
+        json={"name": "Logs Delete Empty Tenant"},
     )
-    client_id = uuid.UUID(cl.json()["id"])
+    tenant_id = uuid.UUID(cl.json()["id"])
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1814,7 +1814,7 @@ def test_delete_session_original_clears_legacy_plaintext_when_redacted_missing(
     db_session.add(user)
     db_session.commit()
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/logs/session/{chat.session_id}/delete-original",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1827,20 +1827,20 @@ def test_delete_session_original_clears_legacy_plaintext_when_redacted_missing(
 
 def test_get_session_logs_404_wrong_client(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """GET /chat/logs/session/{id} returns 404 if session belongs to another client."""
+    """GET /chat/logs/session/{id} returns 404 if session belongs to another tenant."""
     from backend.models import Chat, Message, MessageRole
 
-    token_a = register_and_verify_user(client, db_session, email="logsa@example.com")
-    cl_a = client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="logsa@example.com")
+    cl_a = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
     client_id_a = uuid.UUID(cl_a.json()["id"])
-    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    chat_a = Chat(tenant_id=client_id_a, session_id=uuid.uuid4())
     db_session.add(chat_a)
     db_session.commit()
     db_session.refresh(chat_a)
@@ -1848,14 +1848,14 @@ def test_get_session_logs_404_wrong_client(
     db_session.add(m)
     db_session.commit()
 
-    token_b = register_and_verify_user(client, db_session, email="logsb@example.com")
-    client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="logsb@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
 
-    resp = client.get(
+    resp = tenant.get(
         f"/chat/logs/session/{chat_a.session_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
@@ -1863,32 +1863,32 @@ def test_get_session_logs_404_wrong_client(
 
 
 def test_get_session_logs_404_nonexistent(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
     """GET /chat/logs/session/{id} returns 404 for nonexistent session."""
-    token = register_and_verify_user(client, db_session, email="logs404@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="logs404@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Client"},
+        json={"name": "Tenant"},
     )
     fake_id = uuid.uuid4()
-    resp = client.get(
+    resp = tenant.get(
         f"/chat/logs/session/{fake_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 404
 
 
-def test_get_sessions_requires_auth(client: TestClient) -> None:
+def test_get_sessions_requires_auth(tenant: TestClient) -> None:
     """GET /chat/sessions requires JWT."""
-    resp = client.get("/chat/sessions")
+    resp = tenant.get("/chat/sessions")
     assert resp.status_code == 401
 
 
-def test_get_session_logs_requires_auth(client: TestClient) -> None:
+def test_get_session_logs_requires_auth(tenant: TestClient) -> None:
     """GET /chat/logs/session/{id} requires JWT."""
-    resp = client.get(f"/chat/logs/session/{uuid.uuid4()}")
+    resp = tenant.get(f"/chat/logs/session/{uuid.uuid4()}")
     assert resp.status_code == 401
 
 
@@ -1896,20 +1896,20 @@ def test_get_session_logs_requires_auth(client: TestClient) -> None:
 
 
 def test_set_message_feedback_success_up(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Can set feedback=up on assistant message."""
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="fbup@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fbup@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fb Client"},
+        json={"name": "Fb Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1918,7 +1918,7 @@ def test_set_message_feedback_success_up(
     db_session.commit()
     db_session.refresh(msg)
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "up"},
@@ -1931,20 +1931,20 @@ def test_set_message_feedback_success_up(
 
 
 def test_set_message_feedback_success_down(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Can set feedback=down with ideal_answer on assistant message."""
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="fbdown@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fbdown@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fb Down Client"},
+        json={"name": "Fb Down Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1953,7 +1953,7 @@ def test_set_message_feedback_success_down(
     db_session.commit()
     db_session.refresh(msg)
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "down", "ideal_answer": "This is the ideal answer."},
@@ -1965,21 +1965,21 @@ def test_set_message_feedback_success_down(
 
 
 def test_set_message_feedback_survives_gap_analyzer_sync_failure(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Primary feedback save should survive best-effort Gap Analyzer failure."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="fb-gap-fail@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fb-gap-fail@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fb Gap Fail Client"},
+        json={"name": "Fb Gap Fail Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -1993,7 +1993,7 @@ def test_set_message_feedback_survives_gap_analyzer_sync_failure(
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("gap sync failed")),
     )
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "down", "ideal_answer": "This is the ideal answer."},
@@ -2006,20 +2006,20 @@ def test_set_message_feedback_survives_gap_analyzer_sync_failure(
 
 
 def test_set_message_feedback_rejects_user_message(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """400 if trying to set feedback on user message."""
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="fbuser@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fbuser@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fb User Client"},
+        json={"name": "Fb User Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -2028,7 +2028,7 @@ def test_set_message_feedback_rejects_user_message(
     db_session.commit()
     db_session.refresh(msg)
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "down"},
@@ -2038,19 +2038,19 @@ def test_set_message_feedback_rejects_user_message(
 
 
 def test_set_message_feedback_requires_auth(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
     """401 without JWT."""
     from backend.models import Chat, Message, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="fbauth@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="fbauth@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Fb Auth Client"},
+        json={"name": "Fb Auth Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -2059,7 +2059,7 @@ def test_set_message_feedback_requires_auth(
     db_session.commit()
     db_session.refresh(msg)
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         json={"feedback": "up"},
     )
@@ -2067,20 +2067,20 @@ def test_set_message_feedback_requires_auth(
 
 
 def test_set_message_feedback_wrong_client(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """404 if trying to set feedback for message from another client."""
+    """404 if trying to set feedback for message from another tenant."""
     from backend.models import Chat, Message, MessageRole
 
-    token_a = register_and_verify_user(client, db_session, email="fbwca@example.com")
-    cl_a = client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="fbwca@example.com")
+    cl_a = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
     client_id_a = uuid.UUID(cl_a.json()["id"])
-    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    chat_a = Chat(tenant_id=client_id_a, session_id=uuid.uuid4())
     db_session.add(chat_a)
     db_session.commit()
     db_session.refresh(chat_a)
@@ -2089,14 +2089,14 @@ def test_set_message_feedback_wrong_client(
     db_session.commit()
     db_session.refresh(msg)
 
-    token_b = register_and_verify_user(client, db_session, email="fbwcb@example.com")
-    client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="fbwcb@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
 
-    resp = client.post(
+    resp = tenant.post(
         f"/chat/messages/{msg.id}/feedback",
         headers={"Authorization": f"Bearer {token_b}"},
         json={"feedback": "down"},
@@ -2105,36 +2105,36 @@ def test_set_message_feedback_wrong_client(
 
 
 def test_list_bad_answers_empty(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
-    """Return empty items for new client."""
-    token = register_and_verify_user(client, db_session, email="badempty@example.com")
-    client.post(
-        "/clients",
+    """Return empty items for new tenant."""
+    token = register_and_verify_user(tenant, db_session, email="badempty@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Client"},
+        json={"name": "Empty Tenant"},
     )
-    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["items"]) == 0
 
 
 def test_list_bad_answers_returns_items_for_client(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Create chat with user & assistant messages, mark some as down, ensure /chat/bad-answers returns them."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    token = register_and_verify_user(client, db_session, email="baditems@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="baditems@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bad Items Client"},
+        json={"name": "Bad Items Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4())
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4())
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -2144,7 +2144,7 @@ def test_list_bad_answers_returns_items_for_client(
     db_session.commit()
     db_session.refresh(m2)
 
-    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
     assert len(data["items"]) == 1
@@ -2156,31 +2156,31 @@ def test_list_bad_answers_returns_items_for_client(
     assert item["ideal_answer"] is None
 
     # Set ideal_answer
-    client.post(
+    tenant.post(
         f"/chat/messages/{m2.id}/feedback",
         headers={"Authorization": f"Bearer {token}"},
         json={"feedback": "down", "ideal_answer": "Correct answer."},
     )
-    resp2 = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
+    resp2 = tenant.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token}"})
     assert resp2.status_code == 200
     assert resp2.json()["items"][0]["ideal_answer"] == "Correct answer."
 
 
 def test_list_bad_answers_respects_client_isolation(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Messages from other clients are not returned."""
+    """Messages from other tenants are not returned."""
     from backend.models import Chat, Message, MessageFeedback, MessageRole
 
-    token_a = register_and_verify_user(client, db_session, email="badisoa@example.com")
-    cl_a = client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="badisoa@example.com")
+    cl_a = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
     client_id_a = uuid.UUID(cl_a.json()["id"])
-    chat_a = Chat(client_id=client_id_a, session_id=uuid.uuid4())
+    chat_a = Chat(tenant_id=client_id_a, session_id=uuid.uuid4())
     db_session.add(chat_a)
     db_session.commit()
     db_session.refresh(chat_a)
@@ -2193,14 +2193,14 @@ def test_list_bad_answers_respects_client_isolation(
     db_session.add(msg_a)
     db_session.commit()
 
-    token_b = register_and_verify_user(client, db_session, email="badisob@example.com")
-    client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="badisob@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
 
-    resp = client.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token_b}"})
+    resp = tenant.get("/chat/bad-answers", headers={"Authorization": f"Bearer {token_b}"})
     assert resp.status_code == 200
     assert len(resp.json()["items"]) == 0
 
@@ -2210,23 +2210,23 @@ def test_list_bad_answers_respects_client_isolation(
 
 def test_debug_with_embeddings_vector_mode(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Debug endpoint keeps vector confidence separate from final retrieval mode."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="debugvec@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugvec@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Vec Client"},
+        json={"name": "Debug Vec Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="debug.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2252,8 +2252,8 @@ def test_debug_with_embeddings_vector_mode(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What is the answer?"},
     )
@@ -2282,17 +2282,17 @@ def test_debug_with_embeddings_vector_mode(
 
 
 def test_debug_response_includes_adjudication_fields_and_reliability_payload(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="debugadj@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugadj@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Adjudication Client"},
+        json={"name": "Debug Adjudication Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
     monkeypatch.setattr(
         "backend.chat.routes.run_debug",
@@ -2340,8 +2340,8 @@ def test_debug_response_includes_adjudication_fields_and_reliability_payload(
         ),
     )
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What changed?"},
     )
@@ -2359,23 +2359,23 @@ def test_debug_response_includes_adjudication_fields_and_reliability_payload(
 
 def test_debug_with_embeddings_keyword_mode(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Debug endpoint: low vector confidence → keyword fallback, mode keyword."""
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="debugkw@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugkw@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Kw Client"},
+        json={"name": "Debug Kw Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="debugkw.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2417,8 +2417,8 @@ def test_debug_with_embeddings_keyword_mode(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "secret number"},
     )
@@ -2436,7 +2436,7 @@ def test_debug_with_embeddings_keyword_mode(
 
 def test_debug_no_embeddings(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Debug endpoint: no embeddings → mode none, chunks empty."""
@@ -2444,16 +2444,16 @@ def test_debug_no_embeddings(
         Mock(embedding=[0.1] * 1536)
     ]
 
-    token = register_and_verify_user(client, db_session, email="debugnone@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugnone@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug None Client"},
+        json={"name": "Debug None Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Anything"},
     )
@@ -2472,23 +2472,23 @@ def test_debug_no_embeddings(
 
 def test_debug_does_not_persist_chat(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Debug runs do NOT create Chat/Message records."""
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    token = register_and_verify_user(client, db_session, email="debugnopersist@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugnopersist@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "No Persist Client"},
+        json={"name": "No Persist Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="debugnp.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2514,41 +2514,41 @@ def test_debug_does_not_persist_chat(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Hello"},
     )
     assert response.status_code == 200
 
     # No Chat/Message should have been created
-    chats = db_session.query(Chat).filter(Chat.client_id == client_id).all()
+    chats = db_session.query(Chat).filter(Chat.tenant_id == tenant_id).all()
     assert len(chats) == 0
     messages = db_session.query(Message).all()
     assert len(messages) == 0
 
 
-def test_debug_requires_auth(client: TestClient) -> None:
+def test_debug_requires_auth(tenant: TestClient) -> None:
     """Debug endpoint requires JWT."""
-    response = client.post(
-        "/chat/debug?bot_id=ch_testbot",
+    response = tenant.post(
+        "/chat/debug?tenant_id=ch_testbot",
         json={"question": "Hello"},
     )
     assert response.status_code == 401
 
 
-def test_debug_empty_question(client: TestClient, db_session: Session) -> None:
+def test_debug_empty_question(tenant: TestClient, db_session: Session) -> None:
     """Debug with empty question → 422."""
-    token = register_and_verify_user(client, db_session, email="debugempty@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debugempty@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Client"},
+        json={"name": "Empty Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": ""},
     )
@@ -2557,7 +2557,7 @@ def test_debug_empty_question(client: TestClient, db_session: Session) -> None:
 
 def test_chat_openai_unavailable_503(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """OpenAI API error → 503."""
@@ -2565,18 +2565,18 @@ def test_chat_openai_unavailable_503(
 
     from openai import APIError
 
-    token = register_and_verify_user(client, db_session, email="err@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="err@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Err Client"},
+        json={"name": "Err Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="err.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -2601,7 +2601,7 @@ def test_chat_openai_unavailable_503(
         body=None,
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "Hello"},
@@ -2612,23 +2612,23 @@ def test_chat_openai_unavailable_503(
 
 def test_chat_awaiting_email_valid_email_transitions_to_followup(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
 
-    token = register_and_verify_user(client, db_session, email="await-valid@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="await-valid@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Await Valid Client"},
+        json={"name": "Await Valid Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-await"},
     )
@@ -2637,7 +2637,7 @@ def test_chat_awaiting_email_valid_email_transitions_to_followup(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="Need human support",
         trigger=EscalationTrigger.user_request,
@@ -2653,7 +2653,7 @@ def test_chat_awaiting_email_valid_email_transitions_to_followup(
     db_session.add(chat)
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "reach me at user@example.com"},
@@ -2669,28 +2669,28 @@ def test_chat_awaiting_email_valid_email_transitions_to_followup(
 
 def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
 
-    token = register_and_verify_user(client, db_session, email="await-invalid@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="await-invalid@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Await Invalid Client"},
+        json={"name": "Await Invalid Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -2706,7 +2706,7 @@ def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
     db_session.add(chat)
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "my email is not provided"},
@@ -2719,24 +2719,24 @@ def test_chat_awaiting_email_invalid_keeps_waiting_ticket(
 
 
 def test_chat_followup_no_ends_chat(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
 
-    token = register_and_verify_user(client, db_session, email="follow-no@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="follow-no@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow No Client"},
+        json={"name": "Follow No Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={},
         escalation_followup_pending=True,
@@ -2746,7 +2746,7 @@ def test_chat_followup_no_ends_chat(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -2766,7 +2766,7 @@ def test_chat_followup_no_ends_chat(
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "no thanks"},
@@ -2779,25 +2779,25 @@ def test_chat_followup_no_ends_chat(
 
 
 def test_chat_followup_no_closes_active_user_session(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
     from backend.user_sessions.service import start_user_session
 
-    token = register_and_verify_user(client, db_session, email="follow-no-user-session@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="follow-no-user-session@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow No User Session Client"},
+        json={"name": "Follow No User Session Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-follow"},
         escalation_followup_pending=True,
@@ -2808,14 +2808,14 @@ def test_chat_followup_no_closes_active_user_session(
 
     row = start_user_session(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         user_context={"user_id": "u-follow"},
     )
     assert row is not None
     db_session.commit()
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0002",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -2835,7 +2835,7 @@ def test_chat_followup_no_closes_active_user_session(
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "no thanks"},
@@ -2849,25 +2849,25 @@ def test_chat_followup_no_closes_active_user_session(
 
 
 def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
     from backend.user_sessions.service import start_user_session
 
-    token = register_and_verify_user(client, db_session, email="follow-yes-user-session@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="follow-yes-user-session@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow Yes User Session Client"},
+        json={"name": "Follow Yes User Session Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-follow-yes"},
         escalation_followup_pending=True,
@@ -2878,14 +2878,14 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
 
     row = start_user_session(
         db_session,
-        client_id=client_id,
+        tenant_id=tenant_id,
         user_context={"user_id": "u-follow-yes"},
     )
     assert row is not None
     db_session.commit()
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0003",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -2905,7 +2905,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "yes please continue"},
@@ -2922,24 +2922,24 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
 
 
 def test_chat_followup_unclear_twice_falls_back_to_yes(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
 
-    token = register_and_verify_user(client, db_session, email="follow-unclear@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="follow-unclear@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Follow Unclear Client"},
+        json={"name": "Follow Unclear Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={},
         escalation_followup_pending=True,
@@ -2949,7 +2949,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     db_session.refresh(chat)
 
     ticket = EscalationTicket(
-        client_id=client_id,
+        tenant_id=tenant_id,
         ticket_number="ESC-0001",
         primary_question="Need support",
         trigger=EscalationTrigger.user_request,
@@ -2969,7 +2969,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
         ),
     )
 
-    r1 = client.post(
+    r1 = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "maybe"},
@@ -2980,7 +2980,7 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
     assert chat.escalation_followup_pending is True
     assert (chat.user_context or {}).get("escalation_followup_clarify") is True
 
-    r2 = client.post(
+    r2 = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "still not sure"},
@@ -2993,24 +2993,24 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
 
 
 def test_chat_when_already_closed_uses_closed_phase(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat
 
-    token = register_and_verify_user(client, db_session, email="closed@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="closed@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Closed Client"},
+        json={"name": "Closed Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-closed"},
         ended_at=datetime.now(timezone.utc),
@@ -3028,7 +3028,7 @@ def test_chat_when_already_closed_uses_closed_phase(
         ),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "hello again"},
@@ -3038,7 +3038,7 @@ def test_chat_when_already_closed_uses_closed_phase(
     assert "Chat already ended" in response.json()["text"]
     rows = (
         db_session.query(UserSession)
-        .filter(UserSession.client_id == client_id, UserSession.user_id == "u-closed")
+        .filter(UserSession.tenant_id == tenant_id, UserSession.user_id == "u-closed")
         .all()
     )
     assert rows == []
@@ -3046,23 +3046,23 @@ def test_chat_when_already_closed_uses_closed_phase(
 
 def test_anonymous_chat_does_not_create_user_sessions(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
-    token = register_and_verify_user(client, db_session, email="anon-user-session@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="anon-user-session@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Anonymous User Session Client"},
+        json={"name": "Anonymous User Session Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="anon.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3087,37 +3087,37 @@ def test_anonymous_chat_does_not_create_user_sessions(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=20)
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"question": "What is the answer?"},
     )
     assert response.status_code == 200
 
-    rows = db_session.query(UserSession).filter(UserSession.client_id == client_id).all()
+    rows = db_session.query(UserSession).filter(UserSession.tenant_id == tenant_id).all()
     assert rows == []
 
 
 def test_chat_succeeds_when_user_session_tracking_fails(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Message
 
-    token = register_and_verify_user(client, db_session, email="tracking-failure@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="tracking-failure@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Tracking Failure Client"},
+        json={"name": "Tracking Failure Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename="tracking.md",
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -3137,7 +3137,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     db_session.commit()
 
     chat = Chat(
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=uuid.uuid4(),
         user_context={"user_id": "u-track-fail"},
     )
@@ -3156,7 +3156,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tracking failed")),
     )
 
-    response = client.post(
+    response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={"session_id": str(chat.session_id), "question": "What is the answer?"},
@@ -3169,38 +3169,38 @@ def test_chat_succeeds_when_user_session_tracking_fails(
 
 
 def test_user_sessions_allow_only_one_active_row_per_user(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from sqlalchemy.exc import IntegrityError
 
-    token = register_and_verify_user(client, db_session, email="unique-user-session@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="unique-user-session@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Unique User Session Client"},
+        json={"name": "Unique User Session Tenant"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    db_session.add(UserSession(client_id=client_id, user_id="u-unique"))
+    db_session.add(UserSession(tenant_id=tenant_id, user_id="u-unique"))
     db_session.commit()
 
-    db_session.add(UserSession(client_id=client_id, user_id="u-unique"))
+    db_session.add(UserSession(tenant_id=tenant_id, user_id="u-unique"))
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
 
 
-def test_manual_escalate_requires_api_key(client: TestClient) -> None:
-    response = client.post(
+def test_manual_escalate_requires_api_key(tenant: TestClient) -> None:
+    response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
         json={"trigger": "user_request"},
     )
     assert response.status_code == 401
 
 
-def test_manual_escalate_invalid_api_key(client: TestClient) -> None:
-    response = client.post(
+def test_manual_escalate_invalid_api_key(tenant: TestClient) -> None:
+    response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
         headers={"X-API-Key": "bad-key"},
         json={"trigger": "user_request"},
@@ -3209,25 +3209,25 @@ def test_manual_escalate_invalid_api_key(client: TestClient) -> None:
 
 
 def test_manual_escalate_without_openai_key_returns_400(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     from backend.models import Chat
 
-    token = register_and_verify_user(client, db_session, email="manual-nokey@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-nokey@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual NoKey"},
     )
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         f"/chat/{chat.session_id}/escalate",
         headers={"X-API-Key": api_key},
         json={"trigger": "user_request"},
@@ -3236,19 +3236,19 @@ def test_manual_escalate_without_openai_key_returns_400(
 
 
 def test_manual_escalate_missing_session_returns_404(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="manual-404@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-404@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual 404"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
     api_key = cl_resp.json()["api_key"]
 
-    response = client.post(
+    response = tenant.post(
         f"/chat/{uuid.uuid4()}/escalate",
         headers={"X-API-Key": api_key},
         json={"trigger": "user_request"},
@@ -3257,23 +3257,23 @@ def test_manual_escalate_missing_session_returns_404(
 
 
 def test_manual_escalate_openai_error_returns_503(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat
     from openai import APIError
 
-    token = register_and_verify_user(client, db_session, email="manual-503@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-503@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual 503"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
 
@@ -3282,7 +3282,7 @@ def test_manual_escalate_openai_error_returns_503(
 
     monkeypatch.setattr("backend.chat.routes.perform_manual_escalation", _raise_api_error)
 
-    response = client.post(
+    response = tenant.post(
         f"/chat/{chat.session_id}/escalate",
         headers={"X-API-Key": api_key},
         json={"trigger": "user_request"},
@@ -3291,22 +3291,22 @@ def test_manual_escalate_openai_error_returns_503(
 
 
 def test_manual_escalate_success_for_both_triggers(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat
 
-    token = register_and_verify_user(client, db_session, email="manual-success@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="manual-success@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Manual Success"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
-    chat = Chat(client_id=client_id, session_id=uuid.uuid4(), user_context={})
+    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={})
     db_session.add(chat)
     db_session.commit()
 
@@ -3315,7 +3315,7 @@ def test_manual_escalate_success_for_both_triggers(
         lambda *args, **kwargs: ("Escalated.", "ESC-0009"),
     )
 
-    r1 = client.post(
+    r1 = tenant.post(
         f"/chat/{chat.session_id}/escalate",
         headers={"X-API-Key": api_key},
         json={"trigger": "user_request"},
@@ -3323,7 +3323,7 @@ def test_manual_escalate_success_for_both_triggers(
     assert r1.status_code == 200
     assert r1.json()["ticket_number"] == "ESC-0009"
 
-    r2 = client.post(
+    r2 = tenant.post(
         f"/chat/{chat.session_id}/escalate",
         headers={"X-API-Key": api_key},
         json={"trigger": "answer_rejected"},
@@ -3741,20 +3741,20 @@ def test_resolve_language_context_detector_failure_returns_english(
 def test_run_chat_pipeline_injection_detected(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     """Injection → strategy=guard_reject, reject_reason=injection, no retrieval."""
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
 
-    token = register_and_verify_user(client, db_session, email="pipe-inject@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pipe-inject@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Pipeline Inject Client"},
+        json={"name": "Pipeline Inject Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     monkeypatch.setattr(
@@ -3790,20 +3790,20 @@ def test_run_chat_pipeline_injection_detected(
 def test_run_chat_pipeline_not_relevant(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     """not_relevant → strategy=guard_reject, reject_reason=not_relevant, soft text."""
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
 
-    token = register_and_verify_user(client, db_session, email="pipe-irrel@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pipe-irrel@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Pipeline Irrelevant Client"},
+        json={"name": "Pipeline Irrelevant Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     monkeypatch.setattr(
@@ -3865,19 +3865,19 @@ def test_run_chat_pipeline_not_relevant(
 def test_run_chat_pipeline_injection_detected_french_question(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
 
-    token = register_and_verify_user(client, db_session, email="pipe-inj-en@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pipe-inj-en@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Pipeline Injection EN Client"},
+        json={"name": "Pipeline Injection EN Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     monkeypatch.setattr(
@@ -3911,21 +3911,21 @@ def test_run_chat_pipeline_injection_detected_french_question(
 def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     """When validation fails with low confidence, final_answer uses INSUFFICIENT_CONFIDENCE text."""
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
     from backend.search.service import default_retrieval_reliability
 
-    token = register_and_verify_user(client, db_session, email="pipe-valfall@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pipe-valfall@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Pipeline ValFall Client"},
+        json={"name": "Pipeline ValFall Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
     doc_id = uuid.uuid4()
 
@@ -4007,24 +4007,24 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
 def test_run_chat_pipeline_validates_quick_answers_as_supporting_context(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
     from backend.search.service import default_retrieval_reliability
 
-    token = register_and_verify_user(client, db_session, email="pipe-quick-validate@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pipe-quick-validate@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Pipeline Quick Validate Client"},
+        json={"name": "Pipeline Quick Validate Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     source = UrlSource(
-        client_id=client_row.id,
+        tenant_id=client_row.id,
         name="Documentation",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -4121,21 +4121,21 @@ def test_run_chat_pipeline_validates_quick_answers_as_supporting_context(
 def test_run_debug_does_not_create_db_records(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     """run_debug must not persist any Chat or Message records."""
-    from backend.models import Chat, Client, Message
+    from backend.models import Chat, Tenant, Message
     from backend.guards.injection_detector import InjectionDetectionResult
     from backend.search.service import default_retrieval_reliability
 
-    token = register_and_verify_user(client, db_session, email="debug-nodb@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debug-nodb@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug NoDB Client"},
+        json={"name": "Debug NoDB Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     monkeypatch.setattr(
@@ -4192,11 +4192,11 @@ def test_run_debug_does_not_create_db_records(
         lambda *args, **kwargs: (False, None),
     )
 
-    chats_before = db_session.query(Chat).filter(Chat.client_id == client_row.id).count()
+    chats_before = db_session.query(Chat).filter(Chat.tenant_id == client_row.id).count()
     messages_before = (
         db_session.query(Message)
         .join(Chat, Message.chat_id == Chat.id)
-        .filter(Chat.client_id == client_row.id)
+        .filter(Chat.tenant_id == client_row.id)
         .count()
     )
 
@@ -4207,11 +4207,11 @@ def test_run_debug_does_not_create_db_records(
         api_key=cl_resp.json()["api_key"],
     )
 
-    chats_after = db_session.query(Chat).filter(Chat.client_id == client_row.id).count()
+    chats_after = db_session.query(Chat).filter(Chat.tenant_id == client_row.id).count()
     messages_after = (
         db_session.query(Message)
         .join(Chat, Message.chat_id == Chat.id)
-        .filter(Chat.client_id == client_row.id)
+        .filter(Chat.tenant_id == client_row.id)
         .count()
     )
 
@@ -4227,20 +4227,20 @@ def test_run_debug_does_not_create_db_records(
 def test_run_debug_guard_reject_shows_strategy_and_reject_reason(
     monkeypatch: pytest.MonkeyPatch,
     db_session: Session,
-    client: TestClient,
+    tenant: TestClient,
 ) -> None:
     """run_debug for injection → debug_dict has strategy=guard_reject, reject_reason=injection."""
     from backend.guards.injection_detector import InjectionDetectionResult
-    from backend.models import Client
+    from backend.models import Tenant
 
-    token = register_and_verify_user(client, db_session, email="debug-guard@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debug-guard@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Guard Client"},
+        json={"name": "Debug Guard Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     monkeypatch.setattr(
@@ -4266,7 +4266,7 @@ def test_run_debug_guard_reject_shows_strategy_and_reject_reason(
 
 def test_chat_debug_endpoint_exposes_pipeline_fields(
     mock_openai_client: Mock,
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -4274,13 +4274,13 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     from backend.guards.injection_detector import InjectionDetectionResult
     from backend.search.service import default_retrieval_reliability
 
-    token = register_and_verify_user(client, db_session, email="debug-fields@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debug-fields@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Fields Client"},
+        json={"name": "Debug Fields Tenant"},
     )
-    set_client_openai_key(client, token)
+    set_client_openai_key(tenant, token)
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
@@ -4336,8 +4336,8 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
         lambda *args, **kwargs: (False, None),
     )
 
-    response = client.post(
-        f"/chat/debug?bot_id={cl_resp.json()['public_id']}",
+    response = tenant.post(
+        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How does the API work?"},
     )
@@ -4400,18 +4400,18 @@ def _make_pipeline_result(
 
 
 def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="clarify-domain@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="clarify-domain@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Clarify Domain Client"},
+        json={"name": "Clarify Domain Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
     session_id = uuid.uuid4()
 
@@ -4429,7 +4429,7 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     )
 
     outcome = process_chat_message(
-        client_id,
+        tenant_id,
         "How to connect domain?",
         session_id,
         db_session,
@@ -4440,20 +4440,20 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     assert outcome.tokens_used == 3
 
 def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.models import Client
+    from backend.models import Tenant
 
-    token = register_and_verify_user(client, db_session, email="locale-fallback@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="locale-fallback@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Locale Fallback Client"},
+        json={"name": "Locale Fallback Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_row = db_session.get(Client, uuid.UUID(cl_resp.json()["id"]))
+    set_client_openai_key(tenant, token)
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
     assert client_row is not None
 
     captured_kwargs: dict[str, object] = {}
@@ -4483,18 +4483,18 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
 
 
 def test_run_debug_reports_plain_answer_metadata_when_model_asks_to_clarify(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="debug-clarify@example.com")
-    cl_resp = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="debug-clarify@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Debug Clarify Client"},
+        json={"name": "Debug Clarify Tenant"},
     )
-    set_client_openai_key(client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
     monkeypatch.setattr(
@@ -4507,7 +4507,7 @@ def test_run_debug_reports_plain_answer_metadata_when_model_asks_to_clarify(
     )
 
     answer, _tokens_used, debug_dict = run_debug(
-        client_id=client_id,
+        tenant_id=tenant_id,
         question="How to connect domain?",
         db=db_session,
         api_key=api_key,

@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.chat.routes import chat_router
-from backend.clients.routes import clients_router
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
 from backend.documents.routes import documents_router
@@ -31,6 +30,7 @@ from backend.observability import init_observability, shutdown_observability
 from backend.routes.public import public_router
 from backend.routes.widget import widget_router
 from backend.search.routes import search_router
+from backend.tenants.routes import tenants_router
 
 
 @asynccontextmanager
@@ -53,7 +53,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
         "widget_rate_limit_exceeded",
         extra={
             "route": request.url.path,
-            "client_id": request.query_params.get("client_id") or "unknown",
+            "tenant_id": request.query_params.get("tenant_id") or "unknown",
             "ip_hash": hash_ip_for_logs(get_remote_address(request)),
         },
     )
@@ -102,7 +102,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 app.include_router(auth_router, prefix="/auth")
 app.include_router(admin_router)
-app.include_router(clients_router, prefix="/clients")
+app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
 app.include_router(embeddings_router, prefix="/embeddings")
 app.include_router(search_router, prefix="/search")

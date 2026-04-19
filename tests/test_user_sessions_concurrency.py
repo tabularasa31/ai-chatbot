@@ -19,11 +19,11 @@ def _session_factory(engine) -> sessionmaker[Session]:
     )
 
 
-def _active_sessions(db: Session, *, client_id: uuid.UUID, user_id: str) -> list[UserSession]:
+def _active_sessions(db: Session, *, tenant_id: uuid.UUID, user_id: str) -> list[UserSession]:
     return (
         db.query(UserSession)
         .filter(
-            UserSession.client_id == client_id,
+            UserSession.tenant_id == tenant_id,
             UserSession.user_id == user_id,
             UserSession.session_ended_at.is_(None),
         )
@@ -34,13 +34,13 @@ def _active_sessions(db: Session, *, client_id: uuid.UUID, user_id: str) -> list
 
 def test_start_user_session_two_writer_race_returns_winner_row(engine, db_session: Session, monkeypatch) -> None:
     user = _create_user(db_session, email="user-session-race-a@example.com")
-    client = _create_client(db_session, user, name="User Session Race A")
+    tenant = _create_client(db_session, user, name="User Session Race A")
     user_context = {"user_id": "u1", "email": "user-session-race-a@example.com"}
     session_factory = _session_factory(engine)
     with session_factory() as winner_db:
         winner_row = user_session_service.start_user_session(
             winner_db,
-            client_id=client.id,
+            tenant_id=tenant.id,
             user_context=user_context,
         )
         winner_db.commit()
@@ -57,7 +57,7 @@ def test_start_user_session_two_writer_race_returns_winner_row(engine, db_sessio
 
     row = user_session_service.start_user_session(
         db_session,
-        client_id=client.id,
+        tenant_id=tenant.id,
         user_context=user_context,
     )
     db_session.commit()
@@ -66,7 +66,7 @@ def test_start_user_session_two_writer_race_returns_winner_row(engine, db_sessio
     assert row is not None
     assert row.id == winner_id
 
-    active_rows = _active_sessions(db_session, client_id=client.id, user_id="u1")
+    active_rows = _active_sessions(db_session, tenant_id=tenant.id, user_id="u1")
     assert len(active_rows) == 1
     assert active_rows[0].id == winner_id
 
@@ -77,11 +77,11 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
     monkeypatch,
 ) -> None:
     user = _create_user(db_session, email="user-session-race-b@example.com")
-    client = _create_client(db_session, user, name="User Session Race B")
+    tenant = _create_client(db_session, user, name="User Session Race B")
     user_context = {"user_id": "u1", "email": "user-session-race-b@example.com"}
     old_row = user_session_service.start_user_session(
         db_session,
-        client_id=client.id,
+        tenant_id=tenant.id,
         user_context=user_context,
     )
     db_session.commit()
@@ -105,7 +105,7 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
             monkeypatch.setattr(user_session_service, "_close_active_user_sessions", original_close)
             row = user_session_service.start_user_session(
                 db,
-                client_id=client.id,
+                tenant_id=tenant.id,
                 user_context=user_context,
             )
             db.commit()
@@ -119,7 +119,7 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
 
     row = user_session_service.start_user_session(
         db_session,
-        client_id=client.id,
+        tenant_id=tenant.id,
         user_context=user_context,
     )
     db_session.commit()
@@ -133,7 +133,7 @@ def test_start_user_session_close_then_race_creates_one_new_active_session(
     assert refreshed_old is not None
     assert refreshed_old.session_ended_at is not None
 
-    active_rows = _active_sessions(db_session, client_id=client.id, user_id="u1")
+    active_rows = _active_sessions(db_session, tenant_id=tenant.id, user_id="u1")
     assert len(active_rows) == 1
     assert active_rows[0].id == winner_id
     assert active_rows[0].id != old_row.id
@@ -145,11 +145,11 @@ def test_start_user_session_savepoint_rollback_preserves_outer_transaction(
     monkeypatch,
 ) -> None:
     user = _create_user(db_session, email="user-session-race-c@example.com")
-    client = _create_client(db_session, user, name="User Session Race C")
+    tenant = _create_client(db_session, user, name="User Session Race C")
     user_context = {"user_id": "u1", "email": "user-session-race-c@example.com"}
     old_row = user_session_service.start_user_session(
         db_session,
-        client_id=client.id,
+        tenant_id=tenant.id,
         user_context=user_context,
     )
     db_session.commit()
@@ -168,7 +168,7 @@ def test_start_user_session_savepoint_rollback_preserves_outer_transaction(
         db.add(unrelated_user)
         recovered_row = user_session_service.start_user_session(
             db,
-            client_id=client.id,
+            tenant_id=tenant.id,
             user_context=user_context,
         )
         db.commit()
@@ -187,6 +187,6 @@ def test_start_user_session_savepoint_rollback_preserves_outer_transaction(
     assert refreshed_old is not None
     assert refreshed_old.session_ended_at is None
 
-    active_rows = _active_sessions(db_session, client_id=client.id, user_id="u1")
+    active_rows = _active_sessions(db_session, tenant_id=tenant.id, user_id="u1")
     assert len(active_rows) == 1
     assert active_rows[0].id == winner_id

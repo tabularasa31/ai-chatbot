@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type ClientMeResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
+import { api, type TenantMeResponse, type KycSecretResponse, type KycStatusResponse } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function WidgetSettingsPage() {
-  const [clientInfo, setClientInfo] = useState<ClientMeResponse | null>(null);
+  const [tenantInfo, setClientInfo] = useState<TenantMeResponse | null>(null);
   const [status, setStatus] = useState<KycStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -69,8 +69,8 @@ export default function WidgetSettingsPage() {
   }
 
   async function copyBotId() {
-    if (!clientInfo?.public_id) return;
-    await navigator.clipboard.writeText(clientInfo.public_id);
+    if (!tenantInfo?.public_id) return;
+    await navigator.clipboard.writeText(tenantInfo.public_id);
     setCopiedBotId(true);
     setTimeout(() => setCopiedBotId(false), 2000);
   }
@@ -137,7 +137,7 @@ function makeWidgetIdentityToken({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <code className="text-xs break-all bg-slate-50 border border-slate-200 text-slate-900 font-mono rounded px-3 py-2 flex-1 min-w-0">
-            {clientInfo?.public_id ?? "—"}
+            {tenantInfo?.public_id ?? "—"}
           </code>
           <button
             type="button"

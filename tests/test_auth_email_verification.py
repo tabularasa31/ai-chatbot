@@ -9,12 +9,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.auth import routes as auth_routes
-from backend.clients.service import get_client_by_user
+from backend.tenants.service import get_tenant_by_user
 from backend.models import User
 
 
 def test_signup_sets_verification_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -26,7 +26,7 @@ def test_signup_sets_verification_token(
 
     monkeypatch.setattr(auth_routes, "send_email", fake_send_email)
 
-    response = client.post(
+    response = tenant.post(
         "/auth/register",
         json={"email": "verify@example.com", "password": "SecurePass1!"},
     )
@@ -43,10 +43,10 @@ def test_signup_sets_verification_token(
 
 
 def test_verify_email_success(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
-    """Verify email with valid token verifies the user and provisions a client."""
+    """Verify email with valid token verifies the user and provisions a tenant."""
     from backend.core.security import hash_password
 
     token = "abc123validtoken"
@@ -61,7 +61,7 @@ def test_verify_email_success(
     db_session.commit()
     db_session.refresh(user)
 
-    response = client.post(
+    response = tenant.post(
         "/auth/verify-email",
         json={"token": token},
     )
@@ -75,14 +75,14 @@ def test_verify_email_success(
     assert user.is_verified is True
     assert user.verification_token is None
     assert user.verification_expires_at is None
-    provisioned_client = get_client_by_user(user.id, db_session)
+    provisioned_client = get_tenant_by_user(user.id, db_session)
     assert provisioned_client is not None
     assert provisioned_client.name == "My Workspace"
 
 
-def test_verify_email_invalid_token(client: TestClient) -> None:
+def test_verify_email_invalid_token(tenant: TestClient) -> None:
     """Verify email with non-existent token returns 400."""
-    response = client.post(
+    response = tenant.post(
         "/auth/verify-email",
         json={"token": "nonexistent-token-12345"},
     )
@@ -91,7 +91,7 @@ def test_verify_email_invalid_token(client: TestClient) -> None:
 
 
 def test_verify_email_expired_token(
-    client: TestClient,
+    tenant: TestClient,
     db_session: Session,
 ) -> None:
     """Verify email with expired token returns 400."""
@@ -108,7 +108,7 @@ def test_verify_email_expired_token(
     db_session.add(user)
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         "/auth/verify-email",
         json={"token": token},
     )

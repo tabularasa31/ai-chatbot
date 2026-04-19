@@ -71,7 +71,7 @@ def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
 
 def check_relevance_precheck(
     *,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_question: str,
     db: Session,
     api_key: str,
@@ -84,12 +84,12 @@ def check_relevance_precheck(
     If profile is empty → returns (True, "no_profile", None) to pass through.
     If LLM times out or errors → returns (True, "timeout_or_error", None) to pass through.
     """
-    profile = db.get(TenantProfileModel, client_id)
+    profile = db.get(TenantProfileModel, tenant_id)
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
 
-    # Cache key: hash(client_id + question[:100])
-    key_src = f"{client_id}:{user_question[:100]}"
+    # Cache key: hash(tenant_id + question[:100])
+    key_src = f"{tenant_id}:{user_question[:100]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -116,7 +116,7 @@ def check_relevance_precheck(
     if trace is not None:
         span = trace.span(
             name="relevance_check",
-            input={"client_id": str(client_id), "question_preview": user_question[:60]},
+            input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
         )
 
     def _call_llm() -> tuple[bool, str]:

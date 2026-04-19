@@ -39,11 +39,11 @@ def _insert_embedding(db: Session, document_id: uuid.UUID, chunk_text: str, vect
     db.commit()
 
 
-def _make_document(db: Session, client_id: uuid.UUID, filename: str = "doc.md") -> uuid.UUID:
+def _make_document(db: Session, tenant_id: uuid.UUID, filename: str = "doc.md") -> uuid.UUID:
     from backend.models import Document, DocumentStatus, DocumentType
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename=filename,
         file_type=DocumentType.markdown,
         status=DocumentStatus.ready,
@@ -118,7 +118,7 @@ def test_pgvector_search_respects_client_isolation(
     mock_openai_client: Mock,
     pg_db_session: Session,
 ) -> None:
-    """_pgvector_search must not leak embeddings across clients."""
+    """_pgvector_search must not leak embeddings across tenants."""
     from tests.test_models import _create_client, _create_user
     from backend.search.service import _pgvector_search
 
@@ -131,13 +131,13 @@ def test_pgvector_search_respects_client_isolation(
     doc_b = _make_document(pg_db_session, cl_b.id, "b.md")
 
     vec = [0.5] + [0.0] * 1535
-    _insert_embedding(pg_db_session, doc_a, "client A secret", vec)
-    _insert_embedding(pg_db_session, doc_b, "client B secret", vec)
+    _insert_embedding(pg_db_session, doc_a, "tenant A secret", vec)
+    _insert_embedding(pg_db_session, doc_b, "tenant B secret", vec)
 
     results = _pgvector_search(cl_a.id, vec, top_k=10, db=pg_db_session)
 
     assert len(results) == 1
-    assert results[0][0].chunk_text == "client A secret"
+    assert results[0][0].chunk_text == "tenant A secret"
 
 
 @pytest.mark.pgvector
@@ -411,15 +411,15 @@ def test_search_endpoint_uses_pgvector(
 
     token = register_and_verify_user(pg_client, pg_db_session, email="ep_pv@example.com")
     cl_resp = pg_client.post(
-        "/clients",
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "EP PV Client"},
+        json={"name": "EP PV Tenant"},
     )
     assert cl_resp.status_code in (200, 201)
     set_client_openai_key(pg_client, token)
-    client_id = uuid.UUID(cl_resp.json()["id"])
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    doc_id = _make_document(pg_db_session, client_id)
+    doc_id = _make_document(pg_db_session, tenant_id)
     vec = [0.9, 0.1] + [0.0] * 1534
     _insert_embedding(pg_db_session, doc_id, "endpoint pgvector chunk", vec)
     # Flush so HTTP handler sees the row

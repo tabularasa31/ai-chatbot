@@ -109,7 +109,7 @@ def run_extract_client_knowledge_for_document(
     api_key: str,
 ) -> None:
     """
-    Extract structured client knowledge after successful document embedding.
+    Extract structured tenant knowledge after successful document embedding.
 
     Important: this job must be best-effort; exceptions should not break embedding runs.
     """
@@ -117,7 +117,7 @@ def run_extract_client_knowledge_for_document(
         doc = db.query(Document).filter(Document.id == document_id).first()
         if not doc:
             return
-        client_id = doc.client_id
+        tenant_id = doc.tenant_id
 
         rows = (
             db.query(Embedding)
@@ -131,18 +131,18 @@ def run_extract_client_knowledge_for_document(
         if not chunks:
             logger.info(
                 "Tenant knowledge extraction skipped: no chunks "
-                "(document_id=%s client_id=%s)",
+                "(document_id=%s tenant_id=%s)",
                 document_id,
-                client_id,
+                tenant_id,
             )
             return
 
         combined_text = _truncate_to_approx_tokens("\n\n".join(chunks), max_tokens=6000)
         logger.info(
             "Tenant knowledge extraction started "
-            "(document_id=%s client_id=%s file_type=%s embedding_rows=%s chunks_used=%s combined_chars=%s)",
+            "(document_id=%s tenant_id=%s file_type=%s embedding_rows=%s chunks_used=%s combined_chars=%s)",
             document_id,
-            client_id,
+            tenant_id,
             doc.file_type.value,
             len(rows),
             len(chunks),
@@ -184,9 +184,9 @@ def run_extract_client_knowledge_for_document(
         if not isinstance(extracted, dict):
             logger.warning(
                 "Tenant knowledge extraction returned non-dict payload "
-                "(document_id=%s client_id=%s payload_type=%s)",
+                "(document_id=%s tenant_id=%s payload_type=%s)",
                 document_id,
-                client_id,
+                tenant_id,
                 type(extracted).__name__,
             )
             return
@@ -296,12 +296,12 @@ def run_extract_client_knowledge_for_document(
         faq_batch_id = uuid.uuid4()
         logger.info(
             "Tenant knowledge extraction parsed FAQ candidates "
-            "(batch_id=%s document_id=%s client_id=%s raw_faq_count=%s parsed_faq_count=%s "
+            "(batch_id=%s document_id=%s tenant_id=%s raw_faq_count=%s parsed_faq_count=%s "
             "medium_or_high_confidence=%s low_confidence=%s skipped_non_dict=%s "
             "skipped_non_string=%s skipped_too_short=%s skipped_duplicate_question=%s)",
             faq_batch_id,
             document_id,
-            client_id,
+            tenant_id,
             raw_faq_count,
             len(faq_candidates),
             faq_medium_or_high_confidence,
@@ -314,10 +314,10 @@ def run_extract_client_knowledge_for_document(
         for candidate in faq_candidates:
             logger.info(
                 "Tenant knowledge extraction FAQ candidate "
-                "(batch_id=%s document_id=%s client_id=%s question=%r confidence=%.3f source=%s)",
+                "(batch_id=%s document_id=%s tenant_id=%s question=%r confidence=%.3f source=%s)",
                 faq_batch_id,
                 document_id,
-                client_id,
+                tenant_id,
                 candidate.question,
                 float(candidate.confidence),
                 candidate.source,
@@ -344,7 +344,7 @@ def run_extract_client_knowledge_for_document(
         updated_at = datetime.now(UTC)
         merge_into_profile(
             db,
-            client_id=client_id,
+            tenant_id=tenant_id,
             # Preserve extracted casing; only trim/collapse spaces upstream.
             product_name=product_name_norm if product_name_norm else None,
             product_name_confidence=float(product_conf),
@@ -359,10 +359,10 @@ def run_extract_client_knowledge_for_document(
         )
         logger.info(
             "Tenant knowledge extraction merged profile "
-            "(document_id=%s client_id=%s product_name_present=%s modules=%s glossary_entries=%s "
+            "(document_id=%s tenant_id=%s product_name_present=%s modules=%s glossary_entries=%s "
             "support_email_present=%s support_urls=%s aliases=%s)",
             document_id,
-            client_id,
+            tenant_id,
             bool(product_name_norm),
             len(modules),
             len(glossary_entries),
@@ -375,7 +375,7 @@ def run_extract_client_knowledge_for_document(
         if faq_candidates:
             insert_new_faq_candidates(
                 db=db,
-                client_id=client_id,
+                tenant_id=tenant_id,
                 faq_candidates=faq_candidates,
                 api_key=api_key,
                 document_id=document_id,
@@ -384,17 +384,17 @@ def run_extract_client_knowledge_for_document(
         else:
             logger.info(
                 "Tenant knowledge extraction finished with no FAQ candidates to insert "
-                "(batch_id=%s document_id=%s client_id=%s)",
+                "(batch_id=%s document_id=%s tenant_id=%s)",
                 faq_batch_id,
                 document_id,
-                client_id,
+                tenant_id,
             )
 
     except Exception:
         # Best-effort job: never fail embeddings pipeline.
         logger.exception("Tenant knowledge extraction failed for document_id=%s", document_id)
         try:
-            profile = db.get(TenantProfile, client_id)
+            profile = db.get(TenantProfile, tenant_id)
             if profile is not None:
                 profile.extraction_status = "failed"
                 db.add(profile)

@@ -11,23 +11,23 @@ from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
 from backend.admin.schemas import (
-    AdminClientMetricsItem,
-    AdminClientMetricsList,
     AdminMetricsSummary,
     AdminPiiEventItem,
     AdminPiiEventList,
+    AdminTenantMetricsItem,
+    AdminTenantMetricsList,
 )
 from backend.auth.middleware import require_admin_user, require_verified_user
 from backend.core.db import get_db
 from backend.models import (
     Chat,
-    Client,
     Document,
     Embedding,
     Message,
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    Tenant,
     User,
 )
 from backend.privacy_schemas import DeletedCountResponse
@@ -54,7 +54,7 @@ def get_metrics_summary(
 ) -> AdminMetricsSummary:
     """Platform-wide metrics summary."""
     total_users = db.query(User).count()
-    total_clients = db.query(Client).count()
+    total_clients = db.query(Tenant).count()
     total_documents = db.query(Document).count()
     total_chat_sessions = db.query(Chat).count()
     total_messages_user = db.query(Message).filter(
@@ -65,8 +65,8 @@ def get_metrics_summary(
     ).count()
     total_tokens_chat = db.query(func.sum(Chat.tokens_used)).scalar() or 0
 
-    doc_client_ids = {row[0] for row in db.query(Document.client_id).distinct()}
-    chat_client_ids = {row[0] for row in db.query(Chat.client_id).distinct()}
+    doc_client_ids = {row[0] for row in db.query(Document.tenant_id).distinct()}
+    chat_client_ids = {row[0] for row in db.query(Chat.tenant_id).distinct()}
     active_clients = len(doc_client_ids & chat_client_ids)
 
     return AdminMetricsSummary(
@@ -81,49 +81,49 @@ def get_metrics_summary(
     )
 
 
-@admin_router.get("/metrics/clients", response_model=AdminClientMetricsList)
-def get_client_metrics(
+@admin_router.get("/metrics/tenants", response_model=AdminTenantMetricsList)
+def get_tenant_metrics(
     _: Annotated[User, Depends(get_admin_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> AdminClientMetricsList:
-    """Per-client metrics table."""
-    # NOTE: This is N+1 per client (users/docs/chats/messages). For current scale it's fine,
-    # but if number of clients grows, we should replace this with aggregated GROUP BY queries.
-    clients = db.query(Client).all()
+) -> AdminTenantMetricsList:
+    """Per-tenant metrics table."""
+    # NOTE: This is N+1 per tenant (users/docs/chats/messages). For current scale it's fine,
+    # but if number of tenants grows, we should replace this with aggregated GROUP BY queries.
+    tenants = db.query(Tenant).all()
     items = []
 
-    for c in clients:
-        users_count = db.query(User).filter(User.client_id == c.id).count()
-        documents_count = db.query(Document).filter(Document.client_id == c.id).count()
+    for c in tenants:
+        users_count = db.query(User).filter(User.tenant_id == c.id).count()
+        documents_count = db.query(Document).filter(Document.tenant_id == c.id).count()
         embedded_documents_count = (
             db.query(func.count(distinct(Document.id)))
-            .filter(Document.client_id == c.id)
+            .filter(Document.tenant_id == c.id)
             .join(Embedding, Embedding.document_id == Document.id)
             .scalar()
         ) or 0
-        chat_sessions_count = db.query(Chat).filter(Chat.client_id == c.id).count()
+        chat_sessions_count = db.query(Chat).filter(Chat.tenant_id == c.id).count()
         messages_user_count = (
             db.query(Message)
             .join(Chat)
-            .filter(Chat.client_id == c.id, Message.role == MessageRole.user)
+            .filter(Chat.tenant_id == c.id, Message.role == MessageRole.user)
             .count()
         )
         messages_assistant_count = (
             db.query(Message)
             .join(Chat)
-            .filter(Chat.client_id == c.id, Message.role == MessageRole.assistant)
+            .filter(Chat.tenant_id == c.id, Message.role == MessageRole.assistant)
             .count()
         )
         tokens_used_chat = (
             db.query(func.sum(Chat.tokens_used))
-            .filter(Chat.client_id == c.id)
+            .filter(Chat.tenant_id == c.id)
             .scalar()
         ) or 0
         has_openai_key = bool(c.openai_api_key)
 
         items.append(
-            AdminClientMetricsItem(
-                client_id=c.id,
+            AdminTenantMetricsItem(
+                tenant_id=c.id,
                 public_id=c.public_id,
                 owner_email=c.user.email if c.user else None,
                 users_count=users_count,
@@ -137,7 +137,7 @@ def get_client_metrics(
             )
         )
 
-    return AdminClientMetricsList(items=items)
+    return AdminTenantMetricsList(items=items)
 
 
 @admin_router.get("/privacy/pii-events", response_model=AdminPiiEventList)
@@ -147,7 +147,7 @@ def list_pii_events(
     limit: Annotated[int, Query(ge=0, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
     direction: str | None = None,
-    client_id: str | None = None,
+    tenant_id: str | None = None,
     actor_user_id: str | None = None,
     since_days: Annotated[int | None, Query(ge=1)] = None,
 ) -> AdminPiiEventList:
@@ -157,11 +157,11 @@ def list_pii_events(
             q = q.filter(PiiEvent.direction == PiiEventDirection(direction))
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid direction") from exc
-    if client_id:
+    if tenant_id:
         try:
-            q = q.filter(PiiEvent.client_id == uuid.UUID(client_id))
+            q = q.filter(PiiEvent.tenant_id == uuid.UUID(tenant_id))
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid client_id") from exc
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid tenant_id") from exc
     if actor_user_id:
         try:
             q = q.filter(PiiEvent.actor_user_id == uuid.UUID(actor_user_id))
@@ -175,7 +175,7 @@ def list_pii_events(
         items=[
             AdminPiiEventItem(
                 id=row.id,
-                client_id=row.client_id,
+                tenant_id=row.tenant_id,
                 chat_id=row.chat_id,
                 message_id=row.message_id,
                 actor_user_id=row.actor_user_id,

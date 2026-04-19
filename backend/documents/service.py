@@ -369,7 +369,7 @@ def _parse_content(content: bytes, file_type: str) -> str:
 
 
 def upload_document(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     filename: str,
     content: bytes,
     file_type: str,
@@ -380,9 +380,9 @@ def upload_document(
 
     Validates file_type (pdf, markdown, swagger only) and size (max 50MB).
     Saves document with status=processing, parses, then updates to ready or error.
-    Enforces a shared client-wide document capacity.
+    Enforces a shared tenant-wide document capacity.
     """
-    existing_count = db.query(Document).filter(Document.client_id == client_id).count()
+    existing_count = db.query(Document).filter(Document.tenant_id == tenant_id).count()
     if existing_count >= KNOWLEDGE_DOCUMENT_CAPACITY:
         raise HTTPException(
             status_code=400,
@@ -402,7 +402,7 @@ def upload_document(
 
     doc_type = DocumentType[file_type]
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         filename=filename,
         file_type=doc_type,
         status=DocumentStatus.processing,
@@ -422,11 +422,11 @@ def upload_document(
     return doc
 
 
-def get_documents(client_id: uuid.UUID, db: Session) -> list[Document]:
-    """Return all documents for this client, ordered by created_at DESC."""
+def get_documents(tenant_id: uuid.UUID, db: Session) -> list[Document]:
+    """Return all documents for this tenant, ordered by created_at DESC."""
     return (
         db.query(Document)
-        .filter(Document.client_id == client_id)
+        .filter(Document.tenant_id == tenant_id)
         .order_by(Document.created_at.desc())
         .all()
     )
@@ -434,22 +434,22 @@ def get_documents(client_id: uuid.UUID, db: Session) -> list[Document]:
 
 def get_document(
     document_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> Document:
     """
-    Get document by id. Verifies ownership (document.client_id == client_id).
+    Get document by id. Verifies ownership (document.tenant_id == tenant_id).
     Raises 404 if not found or not owner.
     """
     doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc or doc.client_id != client_id:
+    if not doc or doc.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Document not found")
     return doc
 
 
 def delete_document(
     document_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> None:
     """
@@ -457,7 +457,7 @@ def delete_document(
     CASCADE: embeddings are deleted automatically (already in DB schema).
     Raises 404 if not found or not owner.
     """
-    doc = get_document(document_id, client_id, db)
+    doc = get_document(document_id, tenant_id, db)
     db.delete(doc)
     db.commit()
-    invalidate_bm25_cache_for_tenant(client_id)
+    invalidate_bm25_cache_for_tenant(tenant_id)

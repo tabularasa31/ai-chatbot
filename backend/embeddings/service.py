@@ -257,7 +257,7 @@ def create_embeddings_for_document(
     # Delete existing embeddings (re-embed on demand)
     db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()
-    invalidate_bm25_cache_for_tenant(doc.client_id)
+    invalidate_bm25_cache_for_tenant(doc.tenant_id)
 
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
@@ -336,11 +336,11 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
     try:
         create_embeddings_for_document(document_id, db, api_key=api_key)
         doc = db.query(Document).filter(Document.id == document_id).first()
-        tenant_id = doc.client_id if doc is not None else None
+        tenant_id = doc.tenant_id if doc is not None else None
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
-        # Phase 1 (best-effort): update client knowledge after successful indexing.
+        # Phase 1 (best-effort): update tenant knowledge after successful indexing.
         # Never break embeddings pipeline if extraction fails.
         try:
             from backend.tenant_knowledge.extract_tenant_knowledge import (
@@ -381,17 +381,17 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
 
 def get_embeddings_for_document(
     document_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> list[Embedding]:
     """
     Get all embeddings for a document. Verifies document ownership.
 
     Raises:
-        HTTPException 404: Document not found or not owned by client.
+        HTTPException 404: Document not found or not owned by tenant.
     """
     doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc or doc.client_id != client_id:
+    if not doc or doc.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Document not found")
     return (
         db.query(Embedding)
@@ -412,7 +412,7 @@ def delete_embeddings_for_document(
         Count of deleted embeddings.
     """
     tenant_id = (
-        db.query(Document.client_id).filter(Document.id == document_id).scalar()
+        db.query(Document.tenant_id).filter(Document.id == document_id).scalar()
     )
     result = db.query(Embedding).filter(Embedding.document_id == document_id).delete()
     db.commit()

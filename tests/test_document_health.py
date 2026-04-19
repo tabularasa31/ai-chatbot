@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.documents.service import _compute_health_score, _normalize_warnings, run_document_health_check
-from backend.models import Client, Document, DocumentStatus, DocumentType, Embedding, User
+from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding, User
 from tests.conftest import register_and_verify_user
 
 
@@ -27,11 +27,11 @@ def _create_ready_document(
     )
     db_session.add(user)
     db_session.flush()
-    client = Client(user_id=user.id, name="Health Client", api_key="k" * 32)
-    db_session.add(client)
+    tenant = Tenant(user_id=user.id, name="Health Tenant", api_key="k" * 32)
+    db_session.add(tenant)
     db_session.flush()
     doc = Document(
-        client_id=client.id,
+        tenant_id=tenant.id,
         filename=filename,
         file_type=file_type,
         parsed_text=parsed_text,
@@ -72,22 +72,22 @@ def test_normalize_warnings_filters_invalid() -> None:
     assert out[0]["type"] == "poor_structure"
 
 
-def test_get_document_health_404_when_null(client: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(client, db_session, email="health404@example.com")
-    client.post(
-        "/clients",
+def test_get_document_health_404_when_null(tenant: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(tenant, db_session, email="health404@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Health Client"},
+        json={"name": "Health Tenant"},
     )
     md_content = b"# Doc\n\nSome text."
-    up = client.post(
+    up = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("h.md", md_content, "text/markdown")},
     )
     assert up.status_code == 201
     doc_id = up.json()["id"]
-    r = client.get(
+    r = tenant.get(
         f"/documents/{doc_id}/health",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -95,32 +95,32 @@ def test_get_document_health_404_when_null(client: TestClient, db_session: Sessi
     assert "not yet available" in r.json()["detail"].lower()
 
 
-def test_document_health_ownership_enforced(client: TestClient, db_session: Session) -> None:
-    token_a = register_and_verify_user(client, db_session, email="owner_a@example.com")
-    client.post(
-        "/clients",
+def test_document_health_ownership_enforced(tenant: TestClient, db_session: Session) -> None:
+    token_a = register_and_verify_user(tenant, db_session, email="owner_a@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "Client A"},
+        json={"name": "Tenant A"},
     )
-    up = client.post(
+    up = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_a}"},
         files={"file": ("a.md", b"# A\n\nText.", "text/markdown")},
     )
     doc_id = up.json()["id"]
 
-    token_b = register_and_verify_user(client, db_session, email="owner_b@example.com")
-    client.post(
-        "/clients",
+    token_b = register_and_verify_user(tenant, db_session, email="owner_b@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_b}"},
-        json={"name": "Client B"},
+        json={"name": "Tenant B"},
     )
-    r_health = client.get(
+    r_health = tenant.get(
         f"/documents/{doc_id}/health",
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert r_health.status_code == 404
-    r_run = client.post(
+    r_run = tenant.post(
         f"/documents/{doc_id}/health/run",
         headers={"Authorization": f"Bearer {token_b}"},
     )
@@ -269,14 +269,14 @@ def test_run_document_health_check_flags_low_information_density(db_session: Ses
     assert "low_information_density" in [warning["type"] for warning in result["warnings"]]
 
 
-def test_get_health_after_run_via_api_without_openai_key(client: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(client, db_session, email="apihealth@example.com")
-    client.post(
-        "/clients",
+def test_get_health_after_run_via_api_without_openai_key(tenant: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(tenant, db_session, email="apihealth@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "API Health"},
     )
-    up = client.post(
+    up = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={
@@ -293,7 +293,7 @@ def test_get_health_after_run_via_api_without_openai_key(client: TestClient, db_
         },
     )
     doc_id = up.json()["id"]
-    run = client.post(
+    run = tenant.post(
         f"/documents/{doc_id}/health/run",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -301,7 +301,7 @@ def test_get_health_after_run_via_api_without_openai_key(client: TestClient, db_
     data = run.json()
     assert data["score"] == 80
     assert "incomplete_section" in [warning["type"] for warning in data["warnings"]]
-    get = client.get(
+    get = tenant.get(
         f"/documents/{doc_id}/health",
         headers={"Authorization": f"Bearer {token}"},
     )

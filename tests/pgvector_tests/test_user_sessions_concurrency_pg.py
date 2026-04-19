@@ -19,7 +19,7 @@ def test_start_user_session_two_writer_race_returns_winner_row_on_postgres(
     monkeypatch,
 ) -> None:
     user = _create_user(pg_db_session, email="user-session-race-pg@example.com")
-    client = _create_client(pg_db_session, user, name="User Session Race PG")
+    tenant = _create_client(pg_db_session, user, name="User Session Race PG")
     user_context = {"user_id": "u1", "email": "user-session-race-pg@example.com"}
     barrier = threading.Barrier(2)
     original_create = user_session_service._create_user_session_row
@@ -41,7 +41,7 @@ def test_start_user_session_two_writer_race_returns_winner_row_on_postgres(
         with session_factory() as db:
             row = user_session_service.start_user_session(
                 db,
-                client_id=client.id,
+                tenant_id=tenant.id,
                 user_context=user_context,
             )
             db.commit()
@@ -60,7 +60,7 @@ def test_start_user_session_two_writer_race_returns_winner_row_on_postgres(
     active_rows = (
         pg_db_session.query(UserSession)
         .filter(
-            UserSession.client_id == client.id,
+            UserSession.tenant_id == tenant.id,
             UserSession.user_id == "u1",
             UserSession.session_ended_at.is_(None),
         )

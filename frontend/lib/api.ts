@@ -61,7 +61,7 @@ export type ChatDebugResponse = {
   };
 };
 
-export type ClientResponse = {
+export type TenantResponse = {
   id: string;
   name: string;
   api_key: string;
@@ -71,7 +71,7 @@ export type ClientResponse = {
   updated_at: string;
 };
 
-export type ClientMeResponse = ClientResponse & {
+export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
 };
@@ -134,8 +134,8 @@ export type AdminMetricsSummary = {
   total_tokens_chat: number;
 };
 
-export type AdminClientMetricsItem = {
-  client_id: string;
+export type AdminTenantMetricsItem = {
+  tenant_id: string;
   public_id: string;
   owner_email: string | null;
   users_count: number;
@@ -460,35 +460,35 @@ export const api = {
   },
   clients: {
     async create(name: string) {
-      const res = await authFetch(`${BASE_URL}/clients`, {
+      const res = await authFetch(`${BASE_URL}/tenants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as ClientResponse;
+      return data as TenantResponse;
     },
     async getMe() {
-      const res = await authFetch(`${BASE_URL}/clients/me`);
+      const res = await authFetch(`${BASE_URL}/tenants/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
-      return data as ClientMeResponse;
+      return data as TenantMeResponse;
     },
     async update(data: { name?: string; openai_api_key?: string | null }) {
-      const res = await authFetch(`${BASE_URL}/clients/me`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       const responseData = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
-      return responseData as ClientResponse;
+      return responseData as TenantResponse;
     },
   },
   kyc: {
     async generateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/secret`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/secret`, {
         method: "POST",
       });
       const data = await res.json();
@@ -496,13 +496,13 @@ export const api = {
       return data as KycSecretResponse;
     },
     async getStatus(): Promise<KycStatusResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/status`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/status`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get KYC status"));
       return data as KycStatusResponse;
     },
     async rotateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/kyc/rotate`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/rotate`, {
         method: "POST",
       });
       const data = await res.json();
@@ -512,13 +512,13 @@ export const api = {
   },
   disclosure: {
     async get(): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
       return data as DisclosureConfigResponse;
     },
     async update(config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/disclosure`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/disclosure`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -530,13 +530,13 @@ export const api = {
   },
   support: {
     async get(): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`);
+      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
       return data as SupportSettingsResponse;
     },
     async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/clients/me/support-settings`, {
+      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -685,7 +685,7 @@ export const api = {
   },
   knowledge: {
     async getProfile(botId?: string): Promise<KnowledgeProfile> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/profile`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
@@ -698,7 +698,7 @@ export const api = {
       payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>,
       botId?: string
     ): Promise<KnowledgeProfile> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/profile`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -720,14 +720,14 @@ export const api = {
       if (typeof params?.limit === "number") search.set("limit", String(params.limit));
       if (typeof params?.offset === "number") search.set("offset", String(params.offset));
       const suffix = search.toString() ? `?${search.toString()}` : "";
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq${suffix}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load FAQ"));
       return data as KnowledgeFaqListResponse;
     },
     async approveFaq(id: string, botId?: string): Promise<{ id: string; approved: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq/${id}/approve`, {
         method: "POST",
       });
@@ -736,7 +736,7 @@ export const api = {
       return data as { id: string; approved: boolean };
     },
     async rejectFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq/${id}/reject`, {
         method: "POST",
       });
@@ -745,7 +745,7 @@ export const api = {
       return data as { id: string; deleted: boolean };
     },
     async approveAll(botId?: string): Promise<{ approved_count: number }> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq/approve-all`, {
         method: "POST",
       });
@@ -758,7 +758,7 @@ export const api = {
       payload: { question: string; answer: string },
       botId?: string
     ): Promise<KnowledgeFaqItem> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -769,7 +769,7 @@ export const api = {
       return data as KnowledgeFaqItem;
     },
     async deleteFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/bots/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
+      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
       const res = await authFetch(`${base}/faq/${id}`, {
         method: "DELETE",
       });
@@ -1000,8 +1000,8 @@ export const api = {
       if (!res.ok) throw new Error("Failed to load admin metrics summary");
       return res.json();
     },
-    async getClients(): Promise<AdminClientMetricsItem[]> {
-      const res = await authFetch(`${BASE_URL}/admin/metrics/clients`);
+    async getTenants(): Promise<AdminTenantMetricsItem[]> {
+      const res = await authFetch(`${BASE_URL}/admin/metrics/tenants`);
       if (!res.ok) throw new Error("Failed to load admin client metrics");
       const data = await res.json();
       return data.items;

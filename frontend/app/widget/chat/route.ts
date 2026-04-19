@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const params = new URLSearchParams({ client_id: botId });
+  const params = new URLSearchParams({ tenant_id: botId });
   if (sessionId) params.set("session_id", sessionId);
   if (locale) params.set("locale", locale);
 

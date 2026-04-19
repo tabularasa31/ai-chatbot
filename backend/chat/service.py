@@ -59,7 +59,6 @@ from backend.guards.reject_response import (
 from backend.guards.relevance_checker import check_relevance_precheck
 from backend.models import (
     Chat,
-    Client,
     EscalationPhase,
     EscalationTicket,
     EscalationTrigger,
@@ -68,6 +67,7 @@ from backend.models import (
     MessageRole,
     PiiEvent,
     PiiEventDirection,
+    Tenant,
     TenantProfile,
 )
 from backend.observability import TraceHandle, begin_trace
@@ -188,7 +188,7 @@ def _quick_answer_keys_for_question(question: str) -> list[str]:
     return list(dict.fromkeys(selected))
 
 
-def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> list[str]:
+def _quick_answers_context(tenant_id: uuid.UUID, question: str, db: Session) -> list[str]:
     """Return only the structured quick answers relevant to this question."""
     from backend.models import QuickAnswer
 
@@ -198,7 +198,7 @@ def _quick_answers_context(client_id: uuid.UUID, question: str, db: Session) -> 
 
     answers = (
         db.query(QuickAnswer)
-        .filter(QuickAnswer.tenant_id == client_id, QuickAnswer.key.in_(selected_keys))
+        .filter(QuickAnswer.tenant_id == tenant_id, QuickAnswer.key.in_(selected_keys))
         .options(selectinload(QuickAnswer.source))
         .all()
     )
@@ -235,7 +235,7 @@ def _safe_int(value: Any) -> int:
 
 
 def retrieve_context(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     question: str,
     db: Session,
     api_key: str,
@@ -248,13 +248,13 @@ def retrieve_context(
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
 
-    Uses client-scoped search with:
+    Uses tenant-scoped search with:
     - rank scores for ordering/debug
     - vector similarity for escalation confidence
-    client_id filtering enforced at DB level.
+    tenant_id filtering enforced at DB level.
     """
     bundle = search_similar_chunks_detailed(
-        client_id=client_id,
+        tenant_id=tenant_id,
         query=question,
         top_k=top_k,
         db=db,
@@ -410,12 +410,12 @@ def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any])
 
 def _resolve_product_name(
     *,
-    client: Client | None,
+    tenant: Tenant | None,
     db: Session,
 ) -> str:
-    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == client.id).first() if client else None
+    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first() if tenant else None
     product_name = (profile.product_name if profile and profile.product_name else None) or (
-        client.name if client and client.name else None
+        tenant.name if tenant and tenant.name else None
     )
     return product_name or "this product"
 
@@ -466,7 +466,7 @@ def _is_bootstrap_question(text: str) -> bool:
 def _resolve_chat_language_context(
     *,
     current_turn_text: str,
-    client_row: Client | None,
+    client_row: Tenant | None,
     tenant_profile: TenantProfile | None,
     bootstrap_user_locale: str | None,
     browser_locale: str | None,
@@ -533,7 +533,7 @@ def _set_last_response_language(
     *,
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     response_language: str | None,
     resolution_reason: str | None,
 ) -> None:
@@ -545,7 +545,7 @@ def _set_last_response_language(
             "response_language_changed",
             extra={
                 "chat_id": str(chat.id),
-                "client_id": str(client_id),
+                "tenant_id": str(tenant_id),
                 "previous": previous_language,
                 "next": response_language,
                 "reason": resolution_reason,
@@ -560,7 +560,7 @@ def _persist_turn_with_response_language(
     *,
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     response_language: str | None,
     resolution_reason: str | None,
     user_content: str,
@@ -572,14 +572,14 @@ def _persist_turn_with_response_language(
     _set_last_response_language(
         db=db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         response_language=response_language,
         resolution_reason=resolution_reason,
     )
     return _persist_turn(
         db,
         chat,
-        client_id,
+        tenant_id,
         user_content,
         assistant_content,
         document_ids,
@@ -592,7 +592,7 @@ def _persist_assistant_message_with_response_language(
     *,
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     response_language: str | None,
     resolution_reason: str | None,
     assistant_content: str,
@@ -602,14 +602,14 @@ def _persist_assistant_message_with_response_language(
     _set_last_response_language(
         db=db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         response_language=response_language,
         resolution_reason=resolution_reason,
     )
     _persist_assistant_message(
         db,
         chat,
-        client_id,
+        tenant_id,
         assistant_content,
         extra_tokens,
         optional_entity_types=optional_entity_types,
@@ -617,7 +617,7 @@ def _persist_assistant_message_with_response_language(
 
 
 def run_chat_pipeline(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     question: str,
     db: Session,
     *,
@@ -663,7 +663,7 @@ def run_chat_pipeline(
     injection_result = (
         precomputed_injection
         if precomputed_injection is not None
-        else detect_injection(question, client_id=str(client_id), api_key=api_key)
+        else detect_injection(question, tenant_id=str(tenant_id), api_key=api_key)
     )
     if injection_result.detected:
         reject_result = build_reject_response_result(
@@ -719,7 +719,7 @@ def run_chat_pipeline(
     # --- 3. FAQ matching ---
     try:
         faq_match = match_faq(
-            client_id=client_id,
+            tenant_id=tenant_id,
             question=question,
             question_embedding=base_question_embedding,
             db=db,
@@ -744,7 +744,7 @@ def run_chat_pipeline(
         _retrieval_skipped = faq_match.strategy == "faq_direct"
         _faq_span.end(
             metadata={
-                "client_id": str(client_id),
+                "tenant_id": str(tenant_id),
                 "strategy": faq_match.strategy,
                 "top_score": faq_match.top_score,
                 "selected_score": faq_match.selected_score,
@@ -784,7 +784,7 @@ def run_chat_pipeline(
 
     # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
     relevant, _, profile = check_relevance_precheck(
-        client_id=client_id,
+        tenant_id=tenant_id,
         user_question=question,
         db=db,
         api_key=api_key,
@@ -821,14 +821,14 @@ def run_chat_pipeline(
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    quick_answer_items = _quick_answers_context(client_id, question, db)
+    quick_answer_items = _quick_answers_context(tenant_id, question, db)
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
         "faq_context" if faq_context_items else "rag_only"
     )
 
     # --- 5. Retrieve context ---
     retrieval = retrieve_context(
-        client_id=client_id,
+        tenant_id=tenant_id,
         question=question,
         db=db,
         api_key=api_key,
@@ -986,7 +986,7 @@ def build_rag_prompt(
 
     system_rules = (
         f"{DISCLOSURE_HARD_LIMITS}\n"
-        "You are a technical support agent for the client's product.\n"
+        "You are a technical support agent for the tenant's product.\n"
         "Rules:\n"
         "- Answer using ONLY the provided context, verified FAQ candidates, and structured quick answers.\n"
         "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
@@ -1030,7 +1030,7 @@ def build_rag_prompt(
         )
         system_rules += f"""
 VERIFIED FAQ CANDIDATES
-Use these as high-priority client hints if they are relevant to the user question.
+Use these as high-priority tenant hints if they are relevant to the user question.
 Do not treat them as exclusive truth when retrieved documents provide more specific or newer evidence.
 
 {faq_block}
@@ -1304,10 +1304,10 @@ def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid
     return document_ids if "postgresql" in str(db.bind.url) else None
 
 
-def _client_optional_entity_types(client: Client | None) -> set[str] | None:
-    if not client:
+def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
+    if not tenant:
         return None
-    raw = client.settings if isinstance(client.settings, dict) else None
+    raw = tenant.settings if isinstance(tenant.settings, dict) else None
     cfg = public_redaction_config_dict(raw)
     return set(cfg["optional_entity_types"])
 
@@ -1340,7 +1340,7 @@ def _create_message(
     db: Session,
     *,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     role: MessageRole,
     content: str,
     source_documents: list[uuid.UUID] | None = None,
@@ -1362,7 +1362,7 @@ def _create_message(
         for entity in redaction.entities_found:
             db.add(
                 PiiEvent(
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     chat_id=chat.id,
                     message_id=message.id,
                     direction=direction,
@@ -1376,7 +1376,7 @@ def _create_message(
 def _persist_turn(
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     user_content: str,
     assistant_content: str,
     document_ids: list[uuid.UUID],
@@ -1386,7 +1386,7 @@ def _persist_turn(
     user_message = _create_message(
         db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         role=MessageRole.user,
         content=user_content,
         optional_entity_types=optional_entity_types,
@@ -1394,7 +1394,7 @@ def _persist_turn(
     assistant_message = _create_message(
         db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=_source_docs_for_db(db, document_ids),
@@ -1403,7 +1403,7 @@ def _persist_turn(
     _finalize_persisted_messages(
         db=db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         extra_tokens=extra_tokens,
     )
     return user_message, assistant_message
@@ -1413,7 +1413,7 @@ def _finalize_persisted_messages(
     *,
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     extra_tokens: int,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
@@ -1422,14 +1422,14 @@ def _finalize_persisted_messages(
         with db.begin_nested():
             record_user_session_turn(
                 db,
-                client_id=client_id,
+                tenant_id=tenant_id,
                 user_context=chat.user_context,
                 ended_at=chat.ended_at,
             )
     except Exception:
         logger.warning(
-            "user_session_turn_tracking_failed: client_id=%s session_id=%s",
-            client_id,
+            "user_session_turn_tracking_failed: tenant_id=%s session_id=%s",
+            tenant_id,
             chat.session_id,
             exc_info=True,
         )
@@ -1439,7 +1439,7 @@ def _finalize_persisted_messages(
 def _persist_assistant_message(
     db: Session,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     assistant_content: str,
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
@@ -1447,7 +1447,7 @@ def _persist_assistant_message(
     _create_message(
         db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         role=MessageRole.assistant,
         content=assistant_content,
         source_documents=None,
@@ -1456,7 +1456,7 @@ def _persist_assistant_message(
     _finalize_persisted_messages(
         db=db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         extra_tokens=extra_tokens,
     )
 
@@ -1464,7 +1464,7 @@ def _persist_assistant_message(
 def _try_ingest_gap_signal(
     *,
     chat: Chat,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     session_id: uuid.UUID,
     user_message: Message,
     assistant_message: Message,
@@ -1482,7 +1482,7 @@ def _try_ingest_gap_signal(
         )
         orchestrator.ingest_signal(
             GapSignal(
-                tenant_id=client_id,
+                tenant_id=tenant_id,
                 chat_id=chat.id,
                 session_id=session_id,
                 user_message_id=user_message.id,
@@ -1497,12 +1497,12 @@ def _try_ingest_gap_signal(
             )
         )
         ingestion_db.commit()
-        _start_mode_b_followup(client_id)
+        _start_mode_b_followup(tenant_id)
     except ValueError:
         ingestion_db.rollback()
         logger.warning(
-            "gap_analyzer_signal_ingestion_contract_failed: client_id=%s session_id=%s assistant_message_id=%s",
-            client_id,
+            "gap_analyzer_signal_ingestion_contract_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
+            tenant_id,
             session_id,
             assistant_message.id,
             exc_info=True,
@@ -1510,8 +1510,8 @@ def _try_ingest_gap_signal(
     except Exception:
         ingestion_db.rollback()
         logger.exception(
-            "gap_analyzer_signal_ingestion_failed: client_id=%s session_id=%s assistant_message_id=%s",
-            client_id,
+            "gap_analyzer_signal_ingestion_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
+            tenant_id,
             session_id,
             assistant_message.id,
         )
@@ -1543,7 +1543,7 @@ def record_gap_feedback_for_message(
 
 
 def _trigger_log_analysis_threshold(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     api_key: str,
 ) -> None:
     """Increment message counter and enqueue analysis job if threshold is reached.
@@ -1557,7 +1557,7 @@ def _trigger_log_analysis_threshold(
         try:
             from backend.jobs.analyze_chat_logs import increment_and_check_threshold
 
-            increment_and_check_threshold(client_id=client_id, api_key=api_key)
+            increment_and_check_threshold(tenant_id=tenant_id, api_key=api_key)
         except Exception:
             logger.debug("Log analysis threshold check failed", exc_info=True)
 
@@ -1565,7 +1565,7 @@ def _trigger_log_analysis_threshold(
 
 
 def process_chat_message(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     question: str,
     session_id: uuid.UUID,
     db: Session,
@@ -1580,15 +1580,15 @@ def process_chat_message(
     Returns:
         Typed turn outcome. The object is also iterable for legacy tuple-style callers.
     """
-    client_row = db.query(Client).filter(Client.id == client_id).first()
-    optional_entity_types = _client_optional_entity_types(client_row)
+    client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    optional_entity_types = _tenant_optional_entity_types(client_row)
     redaction = redact(question, optional_entity_types=optional_entity_types)
     redacted_question = redaction.redacted_text
 
     chat = (
         db.query(Chat)
         .options(joinedload(Chat.messages))
-        .filter(Chat.session_id == session_id, Chat.client_id == client_id)
+        .filter(Chat.session_id == session_id, Chat.tenant_id == tenant_id)
         .first()
     )
 
@@ -1606,7 +1606,7 @@ def process_chat_message(
             uc = dict(uc or {})
             uc.setdefault("browser_locale", browser_locale)
         chat = Chat(
-            client_id=client_id,
+            tenant_id=tenant_id,
             session_id=session_id,
             user_context=uc,
         )
@@ -1614,7 +1614,7 @@ def process_chat_message(
         db.flush()
         touch_user_session(
             db,
-            client_id=client_id,
+            tenant_id=tenant_id,
             user_context=chat.user_context,
             started_at=chat.created_at,
         )
@@ -1631,7 +1631,7 @@ def process_chat_message(
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
     tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
         if client_row is not None
         else None
     )
@@ -1657,10 +1657,10 @@ def process_chat_message(
     trace = begin_trace(
         name="rag-query",
         session_id=str(session_id),
-        client_id=str(client_id),
+        tenant_id=str(tenant_id),
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
         metadata={
-            "client_id": str(client_id),
+            "tenant_id": str(tenant_id),
             "session_id": str(session_id),
             "chat_id": str(chat.id),
             "browser_locale": browser_locale,
@@ -1674,7 +1674,7 @@ def process_chat_message(
             "escalation_language": language_context.escalation_language,
             "escalation_language_source": language_context.escalation_language_source,
         },
-        tags=[f"tenant:{client_id}"],
+        tags=[f"tenant:{tenant_id}"],
         force_trace=explicit_human_request_raw,
     )
 
@@ -1682,7 +1682,7 @@ def process_chat_message(
         if not is_new_session:
             raise ValueError("Question is required")
         greeting = _build_greeting_result(
-            product_name=_resolve_product_name(client=client_row, db=db),
+            product_name=_resolve_product_name(tenant=client_row, db=db),
             response_language=language_context.response_language,
             api_key=api_key,
         )
@@ -1694,7 +1694,7 @@ def process_chat_message(
         _persist_assistant_message_with_response_language(
             db=db,
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             response_language=language_context.response_language,
             resolution_reason=language_context.response_language_resolution_reason,
             assistant_content=greeting.text,
@@ -1735,7 +1735,7 @@ def process_chat_message(
     )
     injection_result = detect_injection(
         redacted_question,
-        client_id=str(client_id),
+        tenant_id=str(tenant_id),
         api_key=api_key,
     )
     injection_latency_ms = round((perf_counter() - injection_start) * 1000, 2)
@@ -1757,7 +1757,7 @@ def process_chat_message(
         user_message, assistant_message = _persist_turn_with_response_language(
             db=db,
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             response_language=language_context.response_language,
             resolution_reason=language_context.response_language_resolution_reason,
             user_content=question,
@@ -1768,7 +1768,7 @@ def process_chat_message(
         )
         _try_ingest_gap_signal(
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             session_id=session_id,
             user_message=user_message,
             assistant_message=assistant_message,
@@ -1814,7 +1814,7 @@ def process_chat_message(
         _persist_turn_with_response_language(
             db=db,
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             response_language=language_context.escalation_language,
             resolution_reason=language_context.response_language_resolution_reason,
             user_content=question,
@@ -1873,7 +1873,7 @@ def process_chat_message(
                     _set_last_response_language(
                         db=db,
                         chat=chat,
-                        client_id=client_id,
+                        tenant_id=tenant_id,
                         response_language=language_context.escalation_language,
                         resolution_reason=language_context.response_language_resolution_reason,
                     )
@@ -1882,7 +1882,7 @@ def process_chat_message(
                     _persist_turn(
                         db,
                         chat,
-                        client_id,
+                        tenant_id,
                         question,
                         out.message_to_user,
                         [],
@@ -1917,7 +1917,7 @@ def process_chat_message(
                 _persist_turn_with_response_language(
                     db=db,
                     chat=chat,
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     response_language=language_context.escalation_language,
                     resolution_reason=language_context.response_language_resolution_reason,
                     user_content=question,
@@ -1980,7 +1980,7 @@ def process_chat_message(
                 _persist_turn_with_response_language(
                     db=db,
                     chat=chat,
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     response_language=language_context.escalation_language,
                     resolution_reason=language_context.response_language_resolution_reason,
                     user_content=question,
@@ -2012,7 +2012,7 @@ def process_chat_message(
                 _persist_turn_with_response_language(
                     db=db,
                     chat=chat,
-                    client_id=client_id,
+                    tenant_id=tenant_id,
                     response_language=language_context.escalation_language,
                     resolution_reason=language_context.response_language_resolution_reason,
                     user_content=question,
@@ -2041,7 +2041,7 @@ def process_chat_message(
             _persist_turn_with_response_language(
                 db=db,
                 chat=chat,
-                client_id=client_id,
+                tenant_id=tenant_id,
                 response_language=language_context.escalation_language,
                 resolution_reason=language_context.response_language_resolution_reason,
                 user_content=question,
@@ -2082,7 +2082,7 @@ def process_chat_message(
     if explicit_human_request:
         try:
             ticket = create_escalation_ticket(
-                client_id,
+                tenant_id,
                 question,
                 EscalationTrigger.user_request,
                 db,
@@ -2111,7 +2111,7 @@ def process_chat_message(
             _set_last_response_language(
                 db=db,
                 chat=chat,
-                client_id=client_id,
+                tenant_id=tenant_id,
                 response_language=language_context.escalation_language,
                 resolution_reason=language_context.response_language_resolution_reason,
             )
@@ -2120,7 +2120,7 @@ def process_chat_message(
             user_message, assistant_message = _persist_turn(
                 db,
                 chat,
-                client_id,
+                tenant_id,
                 question,
                 out.message_to_user,
                 [],
@@ -2129,7 +2129,7 @@ def process_chat_message(
             )
             _try_ingest_gap_signal(
                 chat=chat,
-                client_id=client_id,
+                tenant_id=tenant_id,
                 session_id=session_id,
                 user_message=user_message,
                 assistant_message=assistant_message,
@@ -2163,7 +2163,7 @@ def process_chat_message(
     # regardless of topic relevance. The pipeline handles injection → FAQ →
     # relevance → retrieve → generate → validate → escalation decision.
     result = run_chat_pipeline(
-        client_id,
+        tenant_id,
         question_for_pipeline,
         db,
         api_key=api_key,
@@ -2179,7 +2179,7 @@ def process_chat_message(
         user_message, assistant_message = _persist_turn_with_response_language(
             db=db,
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             response_language=language_context.response_language,
             resolution_reason=language_context.response_language_resolution_reason,
             user_content=question,
@@ -2190,7 +2190,7 @@ def process_chat_message(
         )
         _try_ingest_gap_signal(
             chat=chat,
-            client_id=client_id,
+            tenant_id=tenant_id,
             session_id=session_id,
             user_message=user_message,
             assistant_message=assistant_message,
@@ -2274,7 +2274,7 @@ def process_chat_message(
         try:
             preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
             ticket = create_escalation_ticket(
-                client_id,
+                tenant_id,
                 question,
                 esc_trigger,
                 db,
@@ -2312,7 +2312,7 @@ def process_chat_message(
     user_message, assistant_message = _persist_turn_with_response_language(
         db=db,
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         response_language=(
             language_context.escalation_language if escalate else language_context.response_language
         ),
@@ -2329,7 +2329,7 @@ def process_chat_message(
     )
     _try_ingest_gap_signal(
         chat=chat,
-        client_id=client_id,
+        tenant_id=tenant_id,
         session_id=session_id,
         user_message=user_message,
         assistant_message=assistant_message,
@@ -2344,7 +2344,7 @@ def process_chat_message(
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.
-    _trigger_log_analysis_threshold(client_id, api_key)
+    _trigger_log_analysis_threshold(tenant_id, api_key)
 
     faq_match = result.faq_match
     trace.update(
@@ -2388,7 +2388,7 @@ def process_chat_message(
 
 
 def run_debug(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     question: str,
     db: Session,
     *,
@@ -2411,8 +2411,8 @@ def run_debug(
         debug_dict includes strategy, reject_reason, validation_outcome,
         raw_answer vs final_answer, retrieval details, and validation payload.
     """
-    client_row = db.query(Client).filter(Client.id == client_id).first()
-    optional_entity_types = _client_optional_entity_types(client_row)
+    client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    optional_entity_types = _tenant_optional_entity_types(client_row)
     redacted_question = redact(
         question,
         optional_entity_types=optional_entity_types,
@@ -2423,7 +2423,7 @@ def run_debug(
         disclosure_cfg = client_row.disclosure_config
 
     tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == client_id).first()
+        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
         if client_row is not None
         else None
     )
@@ -2437,7 +2437,7 @@ def run_debug(
     )
 
     result = run_chat_pipeline(
-        client_id,
+        tenant_id,
         redacted_question,
         db,
         api_key=api_key,
@@ -2500,7 +2500,7 @@ def run_debug(
 
 def get_chat_history(
     session_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> list[Message]:
     """
@@ -2508,7 +2508,7 @@ def get_chat_history(
 
     Args:
         session_id: Chat session ID.
-        client_id: Client ID for ownership check.
+        tenant_id: Tenant ID for ownership check.
         db: Database session.
 
     Returns:
@@ -2516,7 +2516,7 @@ def get_chat_history(
     """
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
-        Chat.client_id == client_id,
+        Chat.tenant_id == tenant_id,
     ).first()
     if not chat:
         return []
@@ -2541,12 +2541,12 @@ class SessionSummary:
     last_activity: datetime
 
 
-def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary]:
+def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary]:
     """
-    List all chat sessions for a client, sorted by last_activity DESC.
+    List all chat sessions for a tenant, sorted by last_activity DESC.
 
     Args:
-        client_id: Client ID for client isolation.
+        tenant_id: Tenant ID for tenant isolation.
         db: Database session.
 
     Returns:
@@ -2555,7 +2555,7 @@ def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary
     # N+1 fix: joinedload eager-loads messages in one query instead of N queries per chat
     chats = (
         db.query(Chat)
-        .filter(Chat.client_id == client_id)
+        .filter(Chat.tenant_id == tenant_id)
         .options(joinedload(Chat.messages))
         .all()
     )
@@ -2605,7 +2605,7 @@ def list_chat_sessions(client_id: uuid.UUID, db: Session) -> list[SessionSummary
 
 def get_session_logs(
     session_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
     *,
     include_original: bool = False,
@@ -2615,7 +2615,7 @@ def get_session_logs(
 
     Args:
         session_id: Chat session ID.
-        client_id: Client ID for ownership check.
+        tenant_id: Tenant ID for ownership check.
         db: Database session.
 
     Returns:
@@ -2624,7 +2624,7 @@ def get_session_logs(
     """
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
-        Chat.client_id == client_id,
+        Chat.tenant_id == tenant_id,
     ).first()
     if not chat:
         return None
@@ -2653,12 +2653,12 @@ def get_session_logs(
 
 def delete_session_original_content(
     session_id: uuid.UUID,
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     db: Session,
 ) -> tuple[Chat | None, int]:
     chat = db.query(Chat).filter(
         Chat.session_id == session_id,
-        Chat.client_id == client_id,
+        Chat.tenant_id == tenant_id,
     ).first()
     if not chat:
         return None, 0

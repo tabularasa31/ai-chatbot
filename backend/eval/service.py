@@ -4,12 +4,12 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from backend.clients.widget_chat_gate import (
-    WidgetChatClientGateError,
-    get_client_eligible_for_widget_chat,
-)
 from backend.eval.schemas import EvalResultCreateRequest
 from backend.models import EvalResult, EvalSession, Tester
+from backend.tenants.widget_chat_gate import (
+    WidgetChatTenantGateError,
+    get_tenant_eligible_for_widget_chat,
+)
 
 
 def authenticate_tester(username: str, password: str, db: Session) -> Tester | None:
@@ -24,21 +24,21 @@ def authenticate_tester(username: str, password: str, db: Session) -> Tester | N
     return tester
 
 
-def assert_bot_ready_for_widget_chat(bot_id: str, db: Session) -> None:
-    """Same preconditions as POST /widget/chat (shared gate in clients.widget_chat_gate)."""
+def assert_tenant_ready_for_widget_chat(tenant_id: str, db: Session) -> None:
+    """Same preconditions as POST /widget/chat (shared gate in tenants.widget_chat_gate)."""
     try:
-        get_client_eligible_for_widget_chat(db, bot_id)
-    except WidgetChatClientGateError as e:
-        if e.reason == WidgetChatClientGateError.NOT_FOUND:
+        get_tenant_eligible_for_widget_chat(db, tenant_id)
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise ValueError("bot_not_found") from e
-        if e.reason == WidgetChatClientGateError.INACTIVE:
+        if e.reason == WidgetChatTenantGateError.INACTIVE:
             raise ValueError("bot_inactive") from e
         raise ValueError("bot_openai_not_configured") from e
 
 
-def create_eval_session(tester_id: uuid.UUID, bot_id: str, db: Session) -> EvalSession:
-    assert_bot_ready_for_widget_chat(bot_id, db)
-    session = EvalSession(tester_id=tester_id, bot_id=bot_id)
+def create_eval_session(tester_id: uuid.UUID, tenant_id: str, db: Session) -> EvalSession:
+    assert_tenant_ready_for_widget_chat(tenant_id, db)
+    session = EvalSession(tester_id=tester_id, tenant_id=tenant_id)
     db.add(session)
     db.commit()
     db.refresh(session)

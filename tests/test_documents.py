@@ -14,7 +14,7 @@ from pypdf import PdfWriter
 from sqlalchemy.orm import Session
 
 from backend.auth.service import create_token_for_user
-from backend.clients.service import create_client
+from backend.tenants.service import create_tenant
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.core.security import hash_password
 from backend.models import (
@@ -59,16 +59,16 @@ def _get_unverified_user_token(db_session: Session, email: str) -> str:
     return token
 
 
-def test_upload_pdf_success(client: TestClient, db_session: Session) -> None:
+def test_upload_pdf_success(tenant: TestClient, db_session: Session) -> None:
     """Upload a small PDF, get DocumentResponse back, status=ready."""
-    token = register_and_verify_user(client, db_session, email="pdf@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="pdf@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "PDF Client"},
+        json={"name": "PDF Tenant"},
     )
     pdf_bytes = _make_minimal_pdf()
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("test.pdf", pdf_bytes, "application/pdf")},
@@ -83,16 +83,16 @@ def test_upload_pdf_success(client: TestClient, db_session: Session) -> None:
     assert "updated_at" in data
 
 
-def test_upload_markdown_success(client: TestClient, db_session: Session) -> None:
+def test_upload_markdown_success(tenant: TestClient, db_session: Session) -> None:
     """Upload .md file, status=ready."""
-    token = register_and_verify_user(client, db_session, email="md@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="md@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "MD Client"},
+        json={"name": "MD Tenant"},
     )
     md_content = b"# Test\n\nThis is a test document."
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("test.md", md_content, "text/markdown")},
@@ -104,16 +104,16 @@ def test_upload_markdown_success(client: TestClient, db_session: Session) -> Non
     assert data["status"] == "ready"
 
 
-def test_upload_swagger_success(client: TestClient, db_session: Session) -> None:
+def test_upload_swagger_success(tenant: TestClient, db_session: Session) -> None:
     """Upload valid OpenAPI JSON, status=ready."""
-    token = register_and_verify_user(client, db_session, email="swagger@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="swagger@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Swagger Client"},
+        json={"name": "Swagger Tenant"},
     )
     swagger_content = b'{"openapi":"3.0.0","info":{"title":"Test API","version":"1.0"},"paths":{"/test":{"get":{"description":"Test endpoint"}}}}'
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("api.json", swagger_content, "application/json")},
@@ -125,13 +125,13 @@ def test_upload_swagger_success(client: TestClient, db_session: Session) -> None
     assert data["status"] == "ready"
 
 
-def test_upload_swagger_yaml_success(client: TestClient, db_session: Session) -> None:
+def test_upload_swagger_yaml_success(tenant: TestClient, db_session: Session) -> None:
     """Upload valid OpenAPI YAML, status=ready."""
-    token = register_and_verify_user(client, db_session, email="swagger-yaml@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="swagger-yaml@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Swagger YAML Client"},
+        json={"name": "Swagger YAML Tenant"},
     )
     swagger_content = b"""
 openapi: 3.0.0
@@ -146,7 +146,7 @@ paths:
         "201":
           description: Created
 """
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("api.yaml", swagger_content, "application/yaml")},
@@ -158,15 +158,15 @@ paths:
     assert data["status"] == "ready"
 
 
-def test_upload_unsupported_type(client: TestClient, db_session: Session) -> None:
+def test_upload_unsupported_type(tenant: TestClient, db_session: Session) -> None:
     """Upload .exe → 400."""
-    token = register_and_verify_user(client, db_session, email="exe@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="exe@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Exe Client"},
+        json={"name": "Exe Tenant"},
     )
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("virus.exe", b"MZ", "application/octet-stream")},
@@ -175,17 +175,17 @@ def test_upload_unsupported_type(client: TestClient, db_session: Session) -> Non
     assert "unsupported" in response.json()["detail"].lower()
 
 
-def test_upload_too_large(client: TestClient, db_session: Session) -> None:
+def test_upload_too_large(tenant: TestClient, db_session: Session) -> None:
     """Upload >50MB file → 400."""
-    token = register_and_verify_user(client, db_session, email="large@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="large@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Large Client"},
+        json={"name": "Large Tenant"},
     )
     # 51 MB
     large_content = b"x" * (51 * 1024 * 1024)
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("huge.pdf", large_content, "application/pdf")},
@@ -194,33 +194,33 @@ def test_upload_too_large(client: TestClient, db_session: Session) -> None:
     assert "too large" in response.json()["detail"].lower()
 
 
-def test_upload_no_client(client: TestClient, db_session: Session) -> None:
-    """Upload without creating client first → 404."""
-    token = register_and_verify_user(client, db_session, email="noclient@example.com")
+def test_upload_no_client(tenant: TestClient, db_session: Session) -> None:
+    """Upload without creating tenant first → 404."""
+    token = register_and_verify_user(tenant, db_session, email="noclient@example.com")
     md_content = b"# Test"
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("test.md", md_content, "text/markdown")},
     )
     assert response.status_code == 404
-    assert "client" in response.json()["detail"].lower()
+    assert "tenant" in response.json()["detail"].lower()
 
 
-def test_upload_document_limit_is_shared_capacity_100(client: TestClient, db_session: Session) -> None:
-    """The client-wide document capacity should allow 100 docs and reject the 101st."""
-    token = register_and_verify_user(client, db_session, email="limit100@example.com")
-    create_client_response = client.post(
-        "/clients",
+def test_upload_document_limit_is_shared_capacity_100(tenant: TestClient, db_session: Session) -> None:
+    """The tenant-wide document capacity should allow 100 docs and reject the 101st."""
+    token = register_and_verify_user(tenant, db_session, email="limit100@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Limit Client"},
+        json={"name": "Limit Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     for index in range(KNOWLEDGE_DOCUMENT_CAPACITY):
         db_session.add(
             Document(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 filename=f"existing-{index}.md",
                 file_type=DocumentType.markdown,
                 status=DocumentStatus.ready,
@@ -229,7 +229,7 @@ def test_upload_document_limit_is_shared_capacity_100(client: TestClient, db_ses
         )
     db_session.commit()
 
-    response = client.post(
+    response = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("overflow.md", b"# Overflow", "text/markdown")},
@@ -239,25 +239,25 @@ def test_upload_document_limit_is_shared_capacity_100(client: TestClient, db_ses
     assert response.json()["detail"] == f"Document limit reached (max {KNOWLEDGE_DOCUMENT_CAPACITY})"
 
 
-def test_upload_unauthenticated(client: TestClient) -> None:
+def test_upload_unauthenticated(tenant: TestClient) -> None:
     """No JWT → 401."""
     md_content = b"# Test"
-    response = client.post(
+    response = tenant.post(
         "/documents",
         files={"file": ("test.md", md_content, "text/markdown")},
     )
     assert response.status_code == 401
 
 
-def test_list_documents_empty(client: TestClient, db_session: Session) -> None:
+def test_list_documents_empty(tenant: TestClient, db_session: Session) -> None:
     """Get documents when none uploaded → empty list."""
-    token = register_and_verify_user(client, db_session, email="empty@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="empty@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Empty Client"},
+        json={"name": "Empty Tenant"},
     )
-    response = client.get(
+    response = tenant.get(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -267,40 +267,40 @@ def test_list_documents_empty(client: TestClient, db_session: Session) -> None:
     assert data["documents"] == []
 
 
-def test_list_knowledge_sources_requires_client(client: TestClient, db_session: Session) -> None:
-    """Knowledge sources should match other document routes and 404 without a client."""
-    token = register_and_verify_user(client, db_session, email="sources-noclient@example.com")
+def test_list_knowledge_sources_requires_client(tenant: TestClient, db_session: Session) -> None:
+    """Knowledge sources should match other document routes and 404 without a tenant."""
+    token = register_and_verify_user(tenant, db_session, email="sources-noclient@example.com")
 
-    response = client.get(
+    response = tenant.get(
         "/documents/sources",
         headers={"Authorization": f"Bearer {token}"},
     )
 
     assert response.status_code == 404
-    assert response.json()["detail"] == "Client not found"
+    assert response.json()["detail"] == "Tenant not found"
 
 
-def test_list_documents(client: TestClient, db_session: Session) -> None:
+def test_list_documents(tenant: TestClient, db_session: Session) -> None:
     """Upload 2 docs, get list → 2 items."""
-    token = register_and_verify_user(client, db_session, email="list@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="list@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "List Client"},
+        json={"name": "List Tenant"},
     )
     md1 = b"# Doc 1"
     md2 = b"# Doc 2"
-    client.post(
+    tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("doc1.md", md1, "text/markdown")},
     )
-    client.post(
+    tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("doc2.md", md2, "text/markdown")},
     )
-    response = client.get(
+    response = tenant.get(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -311,22 +311,22 @@ def test_list_documents(client: TestClient, db_session: Session) -> None:
     assert filenames == {"doc1.md", "doc2.md"}
 
 
-def test_get_document_detail(client: TestClient, db_session: Session) -> None:
+def test_get_document_detail(tenant: TestClient, db_session: Session) -> None:
     """Get single document, verify parsed_text preview."""
-    token = register_and_verify_user(client, db_session, email="detail@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="detail@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Detail Client"},
+        json={"name": "Detail Tenant"},
     )
     md_content = b"# Test\n\nThis is a test document with some content."
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("detail.md", md_content, "text/markdown")},
     )
     doc_id = upload_resp.json()["id"]
-    response = client.get(
+    response = tenant.get(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -339,25 +339,25 @@ def test_get_document_detail(client: TestClient, db_session: Session) -> None:
     assert "test document" in (data["parsed_text"] or "")
 
 
-def test_get_document_wrong_user(client: TestClient, db_session: Session) -> None:
+def test_get_document_wrong_user(tenant: TestClient, db_session: Session) -> None:
     """User B tries to get user A's document → 404."""
-    token_a = register_and_verify_user(client, db_session, email="userA@example.com")
-    client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="userA@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Client"},
+        json={"name": "User A Tenant"},
     )
     md_content = b"# Secret"
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_a}"},
         files={"file": ("secret.md", md_content, "text/markdown")},
     )
     doc_id = upload_resp.json()["id"]
 
-    token_b = register_and_verify_user(client, db_session, email="userB@example.com")
+    token_b = register_and_verify_user(tenant, db_session, email="userB@example.com")
 
-    response = client.get(
+    response = tenant.get(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
@@ -365,19 +365,19 @@ def test_get_document_wrong_user(client: TestClient, db_session: Session) -> Non
 
 
 def test_get_url_source_detail_returns_latest_five_runs(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
     """Source detail should return the five newest runs ordered in SQL."""
-    token = register_and_verify_user(client, db_session, email="source-runs@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="source-runs@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Runs Client"},
+        json={"name": "Source Runs Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -406,7 +406,7 @@ def test_get_url_source_detail_returns_latest_five_runs(
             expected_statuses.insert(0, run.status)
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         f"/documents/sources/{source.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -419,17 +419,17 @@ def test_get_url_source_detail_returns_latest_five_runs(
 
 @patch("backend.auth.routes.send_email")
 def test_delete_url_source_requires_verified_user(
-    mock_send_email, client: TestClient, db_session: Session
+    mock_send_email, tenant: TestClient, db_session: Session
 ) -> None:
     token = _get_unverified_user_token(db_session, "unverified-source-delete@example.com")
     from backend.models import User
 
     user = db_session.query(User).filter(User.email == "unverified-source-delete@example.com").first()
     assert user is not None
-    owner_client = create_client(user.id, "Unverified Client", db_session)
+    owner_client = create_tenant(user.id, "Unverified Tenant", db_session)
 
     source = UrlSource(
-        client_id=owner_client.id,
+        tenant_id=owner_client.id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -443,7 +443,7 @@ def test_delete_url_source_requires_verified_user(
     db_session.add(source)
     db_session.commit()
 
-    response = client.delete(
+    response = tenant.delete(
         f"/documents/sources/{source.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -453,18 +453,18 @@ def test_delete_url_source_requires_verified_user(
 
 
 def test_get_url_source_detail_includes_quick_answers(
-    client: TestClient, db_session: Session
+    tenant: TestClient, db_session: Session
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="source-qa@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="source-qa@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source QA Client"},
+        json={"name": "Source QA Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -479,7 +479,7 @@ def test_get_url_source_detail_includes_quick_answers(
     db_session.flush()
     db_session.add(
         QuickAnswer(
-            tenant_id=client_id,
+            tenant_id=tenant_id,
             source_id=source.id,
             key="documentation_url",
             value="https://docs.example.com/",
@@ -489,7 +489,7 @@ def test_get_url_source_detail_includes_quick_answers(
     )
     db_session.commit()
 
-    response = client.get(
+    response = tenant.get(
         f"/documents/sources/{source.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -507,13 +507,13 @@ def test_get_url_source_detail_includes_quick_answers(
 
 
 def test_create_url_source_rejects_duplicate_normalized_domain(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="source-dup@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="source-dup@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Dup Client"},
+        json={"name": "Source Dup Tenant"},
     )
 
     monkeypatch.setattr(
@@ -527,12 +527,12 @@ def test_create_url_source_rejects_duplicate_normalized_domain(
         lambda root_url, exclusions, page_cap: [root_url],
     )
 
-    first_response = client.post(
+    first_response = tenant.post(
         "/documents/sources/url",
         headers={"Authorization": f"Bearer {token}"},
         json={"url": "https://docs.example.com/start", "schedule": "manual"},
     )
-    second_response = client.post(
+    second_response = tenant.post(
         "/documents/sources/url",
         headers={"Authorization": f"Bearer {token}"},
         json={"url": "https://docs.example.com/another", "schedule": "manual"},
@@ -544,18 +544,18 @@ def test_create_url_source_rejects_duplicate_normalized_domain(
 
 
 def test_refresh_url_source_returns_429_inside_cooldown(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = register_and_verify_user(client, db_session, email="source-refresh@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="source-refresh@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Source Refresh Client"},
+        json={"name": "Source Refresh Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -572,7 +572,7 @@ def test_refresh_url_source_returns_429_inside_cooldown(
 
     monkeypatch.setattr("backend.documents.url_service._utcnow", lambda: datetime.now(timezone.utc))
 
-    response = client.post(
+    response = tenant.post(
         f"/documents/sources/{source.id}/refresh",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -582,7 +582,7 @@ def test_refresh_url_source_returns_429_inside_cooldown(
 
 
 def test_url_source_crawl_uses_remaining_shared_capacity(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """URL pages should consume the same shared capacity pool as uploaded files."""
     from backend.documents import url_service
@@ -590,18 +590,18 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
 
-    token = register_and_verify_user(client, db_session, email="shared-capacity@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="shared-capacity@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Shared Capacity Client"},
+        json={"name": "Shared Capacity Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     for index in range(60):
         db_session.add(
             Document(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 filename=f"file-{index}.md",
                 file_type=DocumentType.markdown,
                 status=DocumentStatus.ready,
@@ -610,7 +610,7 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
         )
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -650,11 +650,11 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     assert refreshed_source.pages_indexed == 40
     assert refreshed_source.warning_message is not None
     assert "Knowledge capacity reached" in refreshed_source.warning_message
-    assert db_session.query(Document).filter(Document.client_id == client_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
+    assert db_session.query(Document).filter(Document.tenant_id == tenant_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
 
 
 def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capacity(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Refresh should update existing source pages and only add new pages while capacity remains."""
     from backend.documents import url_service
@@ -662,16 +662,16 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
 
-    token = register_and_verify_user(client, db_session, email="refresh-capacity@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="refresh-capacity@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Refresh Capacity Client"},
+        json={"name": "Refresh Capacity Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/",
         normalized_domain="docs.example.com",
@@ -688,7 +688,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     for index in range(40):
         db_session.add(
             Document(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 filename=f"other-{index}.md",
                 file_type=DocumentType.markdown,
                 status=DocumentStatus.ready,
@@ -698,7 +698,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     for index in range(60):
         db_session.add(
             Document(
-                client_id=client_id,
+                tenant_id=tenant_id,
                 source_id=source.id,
                 source_url=f"https://docs.example.com/page-{index}",
                 filename=f"page-{index}",
@@ -735,74 +735,74 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     assert refreshed_source.pages_indexed == 60
     assert refreshed_source.warning_message is not None
     assert "Knowledge capacity reached" in refreshed_source.warning_message
-    assert db_session.query(Document).filter(Document.client_id == client_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
+    assert db_session.query(Document).filter(Document.tenant_id == tenant_id).count() == KNOWLEDGE_DOCUMENT_CAPACITY
 
 
-def test_delete_document_success(client: TestClient, db_session: Session) -> None:
+def test_delete_document_success(tenant: TestClient, db_session: Session) -> None:
     """Delete document → 204, verify gone."""
-    token = register_and_verify_user(client, db_session, email="del@example.com")
-    client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="del@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Del Client"},
+        json={"name": "Del Tenant"},
     )
     md_content = b"# To Delete"
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token}"},
         files={"file": ("todel.md", md_content, "text/markdown")},
     )
     doc_id = upload_resp.json()["id"]
 
-    response = client.delete(
+    response = tenant.delete(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 204
 
-    get_resp = client.get(
+    get_resp = tenant.get(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert get_resp.status_code == 404
 
 
-def test_delete_document_wrong_user(client: TestClient, db_session: Session) -> None:
+def test_delete_document_wrong_user(tenant: TestClient, db_session: Session) -> None:
     """User B tries to delete user A's document → 404."""
-    token_a = register_and_verify_user(client, db_session, email="delA@example.com")
-    client.post(
-        "/clients",
+    token_a = register_and_verify_user(tenant, db_session, email="delA@example.com")
+    tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token_a}"},
-        json={"name": "User A Client"},
+        json={"name": "User A Tenant"},
     )
     md_content = b"# Protected"
-    upload_resp = client.post(
+    upload_resp = tenant.post(
         "/documents",
         headers={"Authorization": f"Bearer {token_a}"},
         files={"file": ("protected.md", md_content, "text/markdown")},
     )
     doc_id = upload_resp.json()["id"]
 
-    token_b = register_and_verify_user(client, db_session, email="delB@example.com")
+    token_b = register_and_verify_user(tenant, db_session, email="delB@example.com")
 
-    response = client.delete(
+    response = tenant.delete(
         f"/documents/{doc_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
     assert response.status_code == 404
 
 
-def test_delete_source_page_success_persists_exclusion(client: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(client, db_session, email="delete-source-page@example.com")
-    create_client_response = client.post(
-        "/clients",
+def test_delete_source_page_success_persists_exclusion(tenant: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(tenant, db_session, email="delete-source-page@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Client"},
+        json={"name": "Delete Source Page Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/start",
         normalized_domain="docs.example.com",
@@ -818,7 +818,7 @@ def test_delete_source_page_success_persists_exclusion(client: TestClient, db_se
     db_session.flush()
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         source_id=source.id,
         filename="Getting Started",
         file_type=DocumentType.url,
@@ -838,7 +838,7 @@ def test_delete_source_page_success_persists_exclusion(client: TestClient, db_se
     )
     db_session.commit()
 
-    response = client.delete(
+    response = tenant.delete(
         f"/documents/sources/{source.id}/pages/{doc.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -854,17 +854,17 @@ def test_delete_source_page_success_persists_exclusion(client: TestClient, db_se
     assert refreshed_source.metadata_json["manually_excluded_page_urls"] == ["https://docs.example.com/start"]
 
 
-def test_delete_source_page_rejects_document_from_another_source(client: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(client, db_session, email="delete-source-page-wrong-source@example.com")
-    create_client_response = client.post(
-        "/clients",
+def test_delete_source_page_rejects_document_from_another_source(tenant: TestClient, db_session: Session) -> None:
+    token = register_and_verify_user(tenant, db_session, email="delete-source-page-wrong-source@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Wrong Source Client"},
+        json={"name": "Delete Source Page Wrong Source Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     first_source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs A",
         url="https://docs.example.com/a",
         normalized_domain="docs.example.com",
@@ -876,7 +876,7 @@ def test_delete_source_page_rejects_document_from_another_source(client: TestCli
         metadata_json={},
     )
     second_source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs B",
         url="https://docs.example.com/b",
         normalized_domain="docs.example.com",
@@ -891,7 +891,7 @@ def test_delete_source_page_rejects_document_from_another_source(client: TestCli
     db_session.flush()
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         source_id=first_source.id,
         filename="Page A",
         file_type=DocumentType.url,
@@ -902,7 +902,7 @@ def test_delete_source_page_rejects_document_from_another_source(client: TestCli
     db_session.add(doc)
     db_session.commit()
 
-    response = client.delete(
+    response = tenant.delete(
         f"/documents/sources/{second_source.id}/pages/{doc.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -912,23 +912,23 @@ def test_delete_source_page_rejects_document_from_another_source(client: TestCli
 
 
 def test_manually_deleted_source_page_is_not_recreated_on_refresh(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from backend.documents import url_service
 
     monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
 
-    token = register_and_verify_user(client, db_session, email="delete-source-page-refresh@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="delete-source-page-refresh@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Delete Source Page Refresh Client"},
+        json={"name": "Delete Source Page Refresh Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="Docs",
         url="https://docs.example.com/start",
         normalized_domain="docs.example.com",
@@ -944,7 +944,7 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
     db_session.flush()
 
     doc = Document(
-        client_id=client_id,
+        tenant_id=tenant_id,
         source_id=source.id,
         filename="Getting Started",
         file_type=DocumentType.url,
@@ -964,7 +964,7 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
     )
     db_session.commit()
 
-    delete_response = client.delete(
+    delete_response = tenant.delete(
         f"/documents/sources/{source.id}/pages/{doc.id}",
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -1010,23 +1010,23 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
 
 
 def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(
-    client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from backend.documents import url_service
 
     monkeypatch.setattr(url_service, "SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
 
-    token = register_and_verify_user(client, db_session, email="openapi-url@example.com")
-    create_client_response = client.post(
-        "/clients",
+    token = register_and_verify_user(tenant, db_session, email="openapi-url@example.com")
+    create_client_response = tenant.post(
+        "/tenants",
         headers={"Authorization": f"Bearer {token}"},
-        json={"name": "OpenAPI URL Client"},
+        json={"name": "OpenAPI URL Tenant"},
     )
-    client_id = uuid.UUID(create_client_response.json()["id"])
+    tenant_id = uuid.UUID(create_client_response.json()["id"])
 
     source = UrlSource(
-        client_id=client_id,
+        tenant_id=tenant_id,
         name="API spec",
         url="https://docs.example.com/openapi.yaml",
         normalized_domain="docs.example.com",

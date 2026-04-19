@@ -17,7 +17,7 @@ from backend.gap_analyzer.jobs import (
     start_gap_analyzer_job_runner,
 )
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.models import Client, GapAnalyzerJob, User
+from backend.models import Tenant, GapAnalyzerJob, User
 
 
 @pytest.fixture(autouse=True)
@@ -45,7 +45,7 @@ def _create_tenant(db_session: Session) -> uuid.UUID:
     )
     db_session.add(user)
     db_session.flush()
-    tenant = Client(
+    tenant = Tenant(
         user_id=user.id,
         name=f"Gap Shutdown {uuid.uuid4().hex[:8]}",
         api_key=f"gap-{uuid.uuid4().hex[:28]}",

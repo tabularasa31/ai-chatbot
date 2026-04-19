@@ -9,7 +9,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
-from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.documents.service import get_document
 from backend.embeddings.schemas import EmbeddingListResponse, EmbeddingResponse
@@ -19,6 +18,7 @@ from backend.embeddings.service import (
     run_embeddings_background,
 )
 from backend.models import DocumentStatus, User
+from backend.tenants.service import get_tenant_by_user
 
 embeddings_router = APIRouter(tags=["embeddings"])
 
@@ -47,16 +47,16 @@ def create_embeddings_route(
     Poll GET /documents/{id} until status is `ready` or `error`.
     Errors: 404 (doc not found/not owner), 400 (doc not ready/no text).
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    if not client.openai_api_key:
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
         )
 
-    doc = get_document(document_id, client.id, db)  # 404 if not found or not owner
+    doc = get_document(document_id, tenant.id, db)  # 404 if not found or not owner
     if doc.status not in (DocumentStatus.ready, DocumentStatus.embedding):
         raise HTTPException(
             status_code=400,
@@ -71,7 +71,7 @@ def create_embeddings_route(
     doc.status = DocumentStatus.embedding
     db.commit()
 
-    background_tasks.add_task(run_embeddings_background, document_id, client.openai_api_key)
+    background_tasks.add_task(run_embeddings_background, document_id, tenant.openai_api_key)
     return {
         "document_id": str(document_id),
         "status": "embedding",
@@ -92,11 +92,11 @@ def list_embeddings_route(
 
     Errors: 404 (doc not found or not owner).
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    embeddings = get_embeddings_for_document(document_id, client.id, db)
+    embeddings = get_embeddings_for_document(document_id, tenant.id, db)
     return EmbeddingListResponse(
         embeddings=[
             EmbeddingResponse(
@@ -122,11 +122,11 @@ def delete_embeddings_route(
 
     Returns deleted count. Errors: 404 (doc not found or not owner).
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    get_document(document_id, client.id, db)  # 404 if not found or not owner
+    get_document(document_id, tenant.id, db)  # 404 if not found or not owner
     deleted = delete_embeddings_for_document(document_id, db)
     return {"deleted": deleted}
 

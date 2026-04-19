@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
-from backend.models import Client, Document, Embedding
+from backend.models import Document, Embedding, Tenant
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
     format_embedding_results,
@@ -36,7 +36,7 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 
 # Number of vector candidates to pre-fetch before BM25 scoring.
-# BM25 runs only on this pool (already in memory) — never queries all client chunks.
+# BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 RERANK_LEXICAL_WEIGHT = 0.35
@@ -643,11 +643,11 @@ def detect_metadata_contradictions(
     return tuple(contradiction_pairs)
 
 
-def _client_contradiction_adjudication_enabled(client: Client | None) -> bool:
-    """Resolve per-client contradiction adjudication override from JSON settings."""
-    if client is None or not isinstance(client.settings, dict):
+def _tenant_contradiction_adjudication_enabled(tenant: Tenant | None) -> bool:
+    """Resolve per-tenant contradiction adjudication override from JSON settings."""
+    if tenant is None or not isinstance(tenant.settings, dict):
         return False
-    retrieval_settings = client.settings.get("retrieval")
+    retrieval_settings = tenant.settings.get("retrieval")
     if not isinstance(retrieval_settings, dict):
         return False
     contradiction_settings = retrieval_settings.get(
@@ -684,7 +684,7 @@ def _build_contradiction_adjudication_evidence(
     *,
     contradiction_pairs: tuple[ContradictionPair, ...],
     final_results: list[tuple[Embedding, float]],
-    client: Client | None,
+    tenant: Tenant | None,
     api_key: str | None,
 ) -> tuple[ContradictionAdjudicationEvidence | None, ContradictionAdjudicationRun]:
     """
@@ -715,7 +715,7 @@ def _build_contradiction_adjudication_evidence(
             model=model,
         )
 
-    if not _client_contradiction_adjudication_enabled(client):
+    if not _tenant_contradiction_adjudication_enabled(tenant):
         return None, build_contradiction_adjudication_run(
             enabled=False,
             status="skipped_client_setting",
@@ -1189,7 +1189,7 @@ def _bm25_score_candidates(
 
 
 def _build_vector_candidate_set(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     variant_vectors: list[list[float]],
     db: Session,
     *,
@@ -1202,7 +1202,7 @@ def _build_vector_candidate_set(
     for variant_vector in variant_vectors:
         vector_search_call_count += 1
         for embedding, similarity in vector_search_fn(
-            client_id,
+            tenant_id,
             variant_vector,
             BM25_CANDIDATE_POOL,
             db,
@@ -1220,20 +1220,20 @@ def _build_vector_candidate_set(
 
 
 def bm25_search_chunks(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     query: str,
     top_k: int,
     db: Session,
 ) -> list[tuple[Embedding, float]]:
     """
-    BM25 full-text search over chunk_text for a client.
-    Fetches all client chunks from DB, then delegates scoring to _bm25_score_candidates.
+    BM25 full-text search over chunk_text for a tenant.
+    Fetches all tenant chunks from DB, then delegates scoring to _bm25_score_candidates.
     Public API preserved for direct use and tests.
     """
     embeddings = (
         db.query(Embedding)
         .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.client_id == client_id)
+        .filter(Document.tenant_id == tenant_id)
         .filter(Embedding.chunk_text.isnot(None))
         .all()
     )
@@ -1682,7 +1682,7 @@ def detect_source_overlaps(
 
 
 def _pgvector_search(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     query_vector: list[float],
     top_k: int,
     db: Session,
@@ -1693,7 +1693,7 @@ def _pgvector_search(
         results_with_distance = (
             db.query(Embedding, distance_expr.label("distance"))
             .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.client_id == client_id)
+            .filter(Document.tenant_id == tenant_id)
             .filter(Embedding.vector.isnot(None))
             .order_by(distance_expr)
             .limit(top_k)
@@ -1705,11 +1705,11 @@ def _pgvector_search(
         ]
     except Exception:
         logger.exception("pgvector search failed; falling back to Python cosine search")
-        return _python_cosine_search(client_id, query_vector, top_k, db)
+        return _python_cosine_search(tenant_id, query_vector, top_k, db)
 
 
 def search_similar_chunks(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     query: str,
     top_k: int,
     db: Session,
@@ -1718,7 +1718,7 @@ def search_similar_chunks(
 ) -> list[tuple[Embedding, float]]:
     """Compatibility wrapper returning ranked results only."""
     return search_similar_chunks_detailed(
-        client_id=client_id,
+        tenant_id=tenant_id,
         query=query,
         top_k=top_k,
         db=db,
@@ -1727,7 +1727,7 @@ def search_similar_chunks(
 
 
 def search_similar_chunks_detailed(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     query: str,
     top_k: int,
     db: Session,
@@ -1818,7 +1818,7 @@ def search_similar_chunks_detailed(
     # Build one shared candidate set before lexical stages: engine-specific
     # acquisition, then cross-variant merge/dedup/truncation.
     vector_candidate_set = _build_vector_candidate_set(
-        client_id,
+        tenant_id,
         variant_vectors,
         db,
         vector_search_fn=vector_search_fn,
@@ -1841,7 +1841,7 @@ def search_similar_chunks_detailed(
                 input={
                     "query_embedding": format_query_embedding_preview(trace_query_vector),
                     "query_variants": query_variants,
-                    "client_id": str(client_id),
+                    "tenant_id": str(tenant_id),
                     "top_k": BM25_CANDIDATE_POOL,
                     "engine": vector_engine,
                 },
@@ -1887,7 +1887,7 @@ def search_similar_chunks_detailed(
             input={
                 "query_embedding": format_query_embedding_preview(trace_query_vector),
                 "query_variants": query_variants,
-                "client_id": str(client_id),
+                "tenant_id": str(tenant_id),
                 "top_k": BM25_CANDIDATE_POOL,
                 "engine": vector_engine,
             },
@@ -1922,7 +1922,7 @@ def search_similar_chunks_detailed(
             input={
                 "query": query,
                 "query_variants": bm25_bundle.variant_queries,
-                "client_id": str(client_id),
+                "tenant_id": str(tenant_id),
                 "top_k": rrf_candidate_pool,
                 "bm25_expansion_mode": bm25_expansion_mode,
                 "variant_source": (
@@ -2076,14 +2076,14 @@ def search_similar_chunks_detailed(
         final_results,
         source_overlap_pairs,
     )
-    client_row: Client | None = None
+    client_row: Tenant | None = None
     if settings.contradiction_adjudication_enabled and hasattr(db, "query"):
-        client_row = db.query(Client).filter(Client.id == client_id).first()
+        client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     contradiction_adjudication, contradiction_adjudication_observability = (
         _build_contradiction_adjudication_evidence(
             contradiction_pairs=contradiction_pairs,
             final_results=final_results,
-            client=client_row,
+            tenant=client_row,
             api_key=api_key,
         )
     )
@@ -2144,7 +2144,7 @@ def search_similar_chunks_detailed(
 
 
 def _python_cosine_search(
-    client_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     query_vector: list[float],
     top_k: int,
     db: Session,
@@ -2156,7 +2156,7 @@ def _python_cosine_search(
     Not recommended for production with large datasets.
 
     Args:
-        client_id: Client ID for filtering.
+        tenant_id: Tenant ID for filtering.
         query_vector: Pre-computed query embedding.
         top_k: Number of results.
         db: Database session.
@@ -2166,7 +2166,7 @@ def _python_cosine_search(
     embeddings = (
         db.query(Embedding)
         .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.client_id == client_id)
+        .filter(Document.tenant_id == tenant_id)
         .all()
     )
 

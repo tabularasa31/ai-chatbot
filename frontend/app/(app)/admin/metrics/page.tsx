@@ -2,14 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { api, type AdminClientMetricsItem, type AdminMetricsSummary } from "@/lib/api";
+import { api, type AdminTenantMetricsItem, type AdminMetricsSummary } from "@/lib/api";
 
 export default function AdminMetricsPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [summary, setSummary] = useState<AdminMetricsSummary | null>(null);
-  const [clients, setClients] = useState<AdminClientMetricsItem[]>([]);
+  const [clients, setClients] = useState<AdminTenantMetricsItem[]>([]);
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -28,7 +28,7 @@ export default function AdminMetricsPage() {
 
         const [summaryData, clientsData] = await Promise.all([
           api.admin.getSummary(),
-          api.admin.getClients(),
+          api.admin.getTenants(),
         ]);
         setSummary(summaryData);
         setClients(clientsData);
@@ -161,7 +161,7 @@ export default function AdminMetricsPage() {
             </thead>
             <tbody className="divide-y divide-slate-200">
               {clients.map((c) => (
-                <tr key={c.client_id} className="hover:bg-slate-50">
+                <tr key={c.tenant_id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-sm text-slate-800 font-medium">{c.public_id}</td>
                   <td className="px-4 py-3 text-sm text-slate-600">{c.owner_email ?? "—"}</td>
                   <td className="px-4 py-3 text-sm text-slate-600 text-right">

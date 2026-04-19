@@ -7,7 +7,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request,
 from sqlalchemy.orm import Session, selectinload
 
 from backend.auth.middleware import require_verified_user
-from backend.clients.service import get_client_by_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.documents.schemas import (
@@ -42,6 +41,7 @@ from backend.documents.url_service import (
     update_url_source,
 )
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
+from backend.tenants.service import get_tenant_by_user
 
 documents_router = APIRouter(tags=["documents"])
 
@@ -127,11 +127,11 @@ def upload_document_route(
     """
     Upload a document (protected JWT, multipart/form-data).
 
-    Returns 201 Created. Errors: 400 unsupported type/size, 404 no client, 422 parse error.
+    Returns 201 Created. Errors: 400 unsupported type/size, 404 no tenant, 422 parse error.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     file_type = _detect_file_type(file.filename or "")
     if not file_type:
@@ -146,7 +146,7 @@ def upload_document_route(
 
     try:
         doc = upload_document(
-            client_id=client.id,
+            tenant_id=tenant.id,
             filename=file.filename or "unnamed",
             content=content,
             file_type=file_type,
@@ -166,12 +166,12 @@ def list_documents_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentListResponse:
     """
-    List documents for current user's client (protected JWT).
+    List documents for current user's tenant (protected JWT).
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
         return DocumentListResponse(documents=[])
-    docs = get_documents(client.id, db)
+    docs = get_documents(tenant.id, db)
     return DocumentListResponse(documents=[_document_response(d) for d in docs])
 
 
@@ -181,11 +181,11 @@ def list_knowledge_sources_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeSourcesResponse:
     """List file documents and URL sources for the Knowledge page."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    payload = list_knowledge_sources(client.id, db)
+    payload = list_knowledge_sources(tenant.id, db)
     return KnowledgeSourcesResponse(
         documents=[_document_response(doc) for doc in payload["documents"]],
         url_sources=[_url_source_response(source) for source in payload["url_sources"]],
@@ -200,20 +200,20 @@ def create_url_source_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Create a new URL source and start indexing in the background."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     source, _ = create_url_source(
-        client=client,
+        tenant=tenant,
         url=str(payload.url),
         name=payload.name,
         schedule=payload.schedule,
         exclusions=payload.exclusions,
         db=db,
     )
-    if client.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
+    if tenant.openai_api_key:
+        background_tasks.add_task(crawl_url_source, source.id, tenant.openai_api_key)
     return _url_source_response(source)
 
 
@@ -224,11 +224,11 @@ def get_url_source_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceDetailResponse:
     """Return detail, recent crawl history, and indexed pages for one URL source."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    source = get_url_source(source_id, client.id, db)
+    source = get_url_source(source_id, tenant.id, db)
     docs = (
         db.query(Document)
         .options(selectinload(Document.embeddings))
@@ -270,12 +270,12 @@ def update_url_source_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Update editable URL source settings."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     source = update_url_source(
         source_id=source_id,
-        client_id=client.id,
+        tenant_id=tenant.id,
         name=payload.name,
         schedule=payload.schedule,
         exclusions=payload.exclusions,
@@ -292,12 +292,12 @@ def refresh_url_source_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
     """Trigger an immediate re-crawl for a URL source."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    source = trigger_refresh(source_id=source_id, client=client, db=db)
-    if client.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, client.openai_api_key)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    source = trigger_refresh(source_id=source_id, tenant=tenant, db=db)
+    if tenant.openai_api_key:
+        background_tasks.add_task(crawl_url_source, source.id, tenant.openai_api_key)
     return _url_source_response(source)
 
 
@@ -308,10 +308,10 @@ def delete_url_source_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete a URL source and all indexed pages/chunks associated with it."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    delete_url_source(source_id, client.id, db)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    delete_url_source(source_id, tenant.id, db)
 
 
 @documents_router.delete("/sources/{source_id}/pages/{document_id}", status_code=204, response_model=None)
@@ -322,13 +322,13 @@ def delete_source_page_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     """Delete one indexed page from a URL source and exclude it from future refreshes."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     delete_source_document(
         source_id=source_id,
         document_id=document_id,
-        client_id=client.id,
+        tenant_id=tenant.id,
         db=db,
     )
 
@@ -343,11 +343,11 @@ def get_document_health_route(
     Return stored health_status for a document (does not re-run the check).
     404 if health_status is null.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    doc = get_document(document_id, client.id, db)
+    doc = get_document(document_id, tenant.id, db)
     if doc.health_status is None or not isinstance(doc.health_status, dict):
         raise HTTPException(status_code=404, detail="Health check not yet available")
     hs = doc.health_status
@@ -366,10 +366,10 @@ def run_document_health_check_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentHealthStatusResponse:
     """Run health check synchronously and return updated health_status."""
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    get_document(document_id, client.id, db)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    get_document(document_id, tenant.id, db)
     result = run_document_health_check(document_id, db)
     return DocumentHealthStatusResponse(
         score=result.get("score"),
@@ -389,11 +389,11 @@ def get_document_detail_route(
     Get single document with parsed_text preview (protected JWT).
     404 if not found or not owner.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
-    doc = get_document(document_id, client.id, db)
+    doc = get_document(document_id, tenant.id, db)
     preview = None
     if doc.parsed_text:
         preview = doc.parsed_text[:500] + ("..." if len(doc.parsed_text) > 500 else "")
@@ -420,7 +420,7 @@ def delete_document_route(
     Delete document (protected JWT).
     204 No Content. 404 if not found or not owner.
     """
-    client = get_client_by_user(current_user.id, db)
-    if not client:
-        raise HTTPException(status_code=404, detail="Client not found")
-    delete_document(document_id, client.id, db)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    delete_document(document_id, tenant.id, db)

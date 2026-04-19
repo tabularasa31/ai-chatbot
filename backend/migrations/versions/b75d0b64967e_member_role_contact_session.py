@@ -14,9 +14,8 @@ Changes:
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "b75d0b64967e"
 down_revision = "93e5ff7b6924"
@@ -31,16 +30,34 @@ def upgrade() -> None:
             sa.Column("role", sa.String(32), nullable=False, server_default="owner")
         )
 
-    # 2. Drop tenants.user_id FK + column
+    # 2. Backfill users.tenant_id from tenants.user_id before dropping the source column.
+    # On PostgreSQL, USE the FROM clause; SQLite doesn't support FROM in UPDATE so
+    # we use a correlated subquery that works on both dialects.
+    op.execute(
+        """
+        UPDATE users
+        SET tenant_id = (
+            SELECT tenants.id
+            FROM tenants
+            WHERE tenants.user_id = users.id
+        )
+        WHERE users.tenant_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM tenants WHERE tenants.user_id = users.id
+          )
+        """
+    )
+
+    # 3. Drop tenants.user_id FK + column.
     # batch_alter_table recreates the table (SQLite) or uses ALTER (PG),
     # so we don't need to name the FK — batch_op drops it with the column.
     with op.batch_alter_table("tenants") as batch_op:
         batch_op.drop_column("user_id")
 
-    # 3. Rename table user_sessions → contact_sessions
+    # 4. Rename table user_sessions → contact_sessions
     op.rename_table("user_sessions", "contact_sessions")
 
-    # 4. Rename column user_id → contact_id; rename indexes
+    # 5. Rename column user_id → contact_id; rename indexes
     with op.batch_alter_table("contact_sessions") as batch_op:
         batch_op.alter_column("user_id", new_column_name="contact_id")
         batch_op.drop_index("ix_user_sessions_tenant_user")
@@ -76,6 +93,7 @@ def downgrade() -> None:
 
     op.rename_table("contact_sessions", "user_sessions")
 
+    # Restore tenants.user_id — initially nullable so we can backfill.
     with op.batch_alter_table("tenants") as batch_op:
         batch_op.add_column(
             sa.Column(
@@ -87,6 +105,26 @@ def downgrade() -> None:
         batch_op.create_foreign_key(
             "fk_tenants_user_id", "users", ["user_id"], ["id"], ondelete="CASCADE"
         )
+
+    # Backfill tenants.user_id from the owner user (role = 'owner') before enforcing NOT NULL.
+    op.execute(
+        """
+        UPDATE tenants
+        SET user_id = (
+            SELECT users.id
+            FROM users
+            WHERE users.tenant_id = tenants.id
+              AND users.role = 'owner'
+            LIMIT 1
+        )
+        WHERE user_id IS NULL
+        """
+    )
+
+    # Now tighten to NOT NULL + UNIQUE to restore original schema constraints.
+    with op.batch_alter_table("tenants") as batch_op:
+        batch_op.alter_column("user_id", nullable=False)
+        batch_op.create_unique_constraint("uq_tenants_user_id", ["user_id"])
 
     with op.batch_alter_table("users") as batch_op:
         batch_op.drop_column("role")

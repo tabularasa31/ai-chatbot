@@ -87,9 +87,19 @@ def get_tenant_metrics(
     db: Annotated[Session, Depends(get_db)],
 ) -> AdminTenantMetricsList:
     """Per-tenant metrics table."""
-    # NOTE: This is N+1 per tenant (users/docs/chats/messages). For current scale it's fine,
-    # but if number of tenants grows, we should replace this with aggregated GROUP BY queries.
+    # NOTE: per-tenant counts (users/docs/chats/messages) are still N+1.
+    # For current scale it's fine; replace with GROUP BY queries if tenant count grows.
     tenants = db.query(Tenant).all()
+
+    # Pre-fetch one owner email per tenant in a single query to avoid N+1.
+    owner_rows = (
+        db.query(User.tenant_id, func.min(User.email))
+        .filter(User.role == "owner", User.tenant_id.isnot(None))
+        .group_by(User.tenant_id)
+        .all()
+    )
+    owner_email_by_tenant: dict[uuid.UUID, str] = {row[0]: row[1] for row in owner_rows}
+
     items = []
 
     for c in tenants:
@@ -125,12 +135,7 @@ def get_tenant_metrics(
             AdminTenantMetricsItem(
                 tenant_id=c.id,
                 public_id=c.public_id,
-                owner_email=(
-                    db.query(User.email)
-                    .filter(User.tenant_id == c.id, User.role == "owner")
-                    .limit(1)
-                    .scalar()
-                ),
+                owner_email=owner_email_by_tenant.get(c.id),
                 users_count=users_count,
                 documents_count=documents_count,
                 embedded_documents_count=embedded_documents_count,

@@ -87,26 +87,33 @@ def ensure_tenant_for_user(
 
 
 def get_tenant_by_user(user_id: uuid.UUID, db: Session) -> Tenant | None:
-    """Get the tenant the user belongs to."""
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user or not user.tenant_id:
-        return None
-    return db.query(Tenant).filter(Tenant.id == user.tenant_id).first()
+    """Get the tenant the user belongs to (single JOIN query)."""
+    return (
+        db.query(Tenant)
+        .join(User, User.tenant_id == Tenant.id)
+        .filter(User.id == user_id)
+        .first()
+    )
 
 
 def get_tenant_by_id(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     db: Session,
+    *,
+    require_owner: bool = False,
 ) -> Tenant:
     """
     Get tenant by id. Verifies the user belongs to this tenant.
     Raises 404 if not found or not a member.
+    Pass require_owner=True for destructive operations (delete, rotate keys).
     """
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     user = db.query(User).filter(User.id == user_id).first()
     if not tenant or not user or user.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if require_owner and user.role != "owner":
+        raise HTTPException(status_code=403, detail="Owner role required")
     return tenant
 
 
@@ -360,6 +367,6 @@ def delete_tenant(
     CASCADE deletes all related documents/chats (already in DB schema).
     Raises 404 if not found or not owner.
     """
-    tenant = get_tenant_by_id(tenant_id, user_id, db)
+    tenant = get_tenant_by_id(tenant_id, user_id, db, require_owner=True)
     db.delete(tenant)
     db.commit()

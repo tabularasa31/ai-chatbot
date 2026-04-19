@@ -231,6 +231,12 @@ class Tenant(Base):
     )
 
     members = relationship("User", back_populates="tenant", foreign_keys="User.tenant_id")
+    bots = relationship(
+        "Bot",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     documents = relationship(
         "Document",
         back_populates="tenant",
@@ -261,6 +267,31 @@ class Tenant(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class Bot(Base):
+    __tablename__ = "bots"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String(255), nullable=False)
+    public_id = Column(
+        String(21),
+        unique=True,
+        nullable=False,
+        index=True,
+        default=generate_public_id,
+    )
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+    tenant = relationship("Tenant", back_populates="bots")
 
 
 class Document(Base):

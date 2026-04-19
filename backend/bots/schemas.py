@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel
+
+DisclosureLevelLiteral = Literal["detailed", "standard", "corporate"]
 
 
 class BotResponse(BaseModel):
@@ -32,8 +35,8 @@ class BotList(BaseModel):
 
 
 class DisclosureConfigResponse(BaseModel):
-    level: str
+    level: DisclosureLevelLiteral
 
 
 class DisclosureConfigUpdate(BaseModel):
-    level: str
+    level: DisclosureLevelLiteral

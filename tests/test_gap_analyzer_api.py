@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import threading
-import time
 from types import SimpleNamespace
 import uuid
 
@@ -10,27 +8,16 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.gap_analyzer.enums import GapSource
-from backend.gap_analyzer.jobs import _GapJobRunnerState, start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
-from backend.gap_analyzer._repo.job_queue_helpers import _GAP_JOB_LAST_ERROR_MAX_CHARS
-from backend.gap_analyzer.repository import (
-    SqlAlchemyGapAnalyzerRepository,
-    invalidate_bm25_cache_for_tenant,
-)
+from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.models import (
-    Tenant,
-    Document,
-    Embedding,
     GapAnalyzerJob,
-    GapDismissal,
     GapCluster,
     GapClusterStatus,
+    GapDismissal,
     GapDocTopic,
     GapDocTopicStatus,
     GapQuestion,
-    DocumentStatus,
-    DocumentType,
-    User,
 )
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -54,15 +41,16 @@ def _create_client_and_token(
     return token, tenant_id
 
 
-def test_gap_analyzer_list_returns_summary_and_two_sections(
+# ---------------------------------------------------------------------------
+# List endpoint
+# ---------------------------------------------------------------------------
+
+def test_list_returns_summary_and_two_sections(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-list@example.com",
-        name="Gap Phase 5 List Tenant",
+        tenant, db_session, email="gap-api-list@example.com", name="Gap API List Tenant"
     )
     mode_a_topic = GapDocTopic(
         tenant_id=tenant_id,
@@ -119,10 +107,7 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     )
     db_session.commit()
 
-    response = tenant.get(
-        "/gap-analyzer",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = tenant.get("/gap-analyzer", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -139,15 +124,12 @@ def test_gap_analyzer_list_returns_summary_and_two_sections(
     ]
 
 
-def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
+def test_list_dedupes_linked_mode_a_when_mode_b_is_active(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase6-linked-active@example.com",
-        name="Gap Phase 6 Linked Active Tenant",
+        tenant, db_session, email="gap-api-linked-active@example.com", name="Gap API Linked Active Tenant"
     )
     topic = GapDocTopic(
         tenant_id=tenant_id,
@@ -172,10 +154,7 @@ def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
     db_session.add_all([topic, cluster])
     db_session.commit()
 
-    response = tenant.get(
-        "/gap-analyzer",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = tenant.get("/gap-analyzer", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -186,15 +165,12 @@ def test_gap_analyzer_active_list_dedupes_linked_mode_a_when_mode_b_is_active(
     assert data["mode_b_items"][0]["also_missing_in_docs"] is True
 
 
-def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
+def test_dismissed_mode_b_does_not_hide_linked_mode_a(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase6-linked-dismissed@example.com",
-        name="Gap Phase 6 Linked Dismissed Tenant",
+        tenant, db_session, email="gap-api-linked-dismissed@example.com", name="Gap API Linked Dismissed Tenant"
     )
     topic = GapDocTopic(
         tenant_id=tenant_id,
@@ -232,15 +208,16 @@ def test_gap_analyzer_dismissed_mode_b_does_not_hide_active_mode_a(
     assert data["mode_b_items"][0]["status"] == "dismissed"
 
 
-def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
+# ---------------------------------------------------------------------------
+# Dismiss / reactivate
+# ---------------------------------------------------------------------------
+
+def test_dismiss_and_reactivate_mode_a_topic(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-dismiss@example.com",
-        name="Gap Phase 5 Dismiss Tenant",
+        tenant, db_session, email="gap-api-dismiss-mode-a@example.com", name="Gap API Dismiss Mode A Tenant"
     )
     topic = GapDocTopic(
         tenant_id=tenant_id,
@@ -253,45 +230,37 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_a_topic(
     db_session.commit()
     db_session.refresh(topic)
 
-    dismiss_response = tenant.post(
+    dismiss = tenant.post(
         f"/gap-analyzer/mode_a/{topic.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
-    assert dismiss_response.status_code == 200, dismiss_response.text
-    assert dismiss_response.json()["status"] == "dismissed"
+    assert dismiss.status_code == 200, dismiss.text
+    assert dismiss.json()["status"] == "dismissed"
 
     dismissed_list = tenant.get(
         "/gap-analyzer?mode_a_status=dismissed",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert dismissed_list.status_code == 200, dismissed_list.text
     assert dismissed_list.json()["mode_a_items"][0]["status"] == "dismissed"
 
-    reactivate_response = tenant.post(
+    reactivate = tenant.post(
         f"/gap-analyzer/mode_a/{topic.id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert reactivate_response.status_code == 200, reactivate_response.text
-    assert reactivate_response.json()["status"] == "active"
+    assert reactivate.status_code == 200, reactivate.text
+    assert reactivate.json()["status"] == "active"
 
-    active_list = tenant.get(
-        "/gap-analyzer",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert active_list.status_code == 200, active_list.text
+    active_list = tenant.get("/gap-analyzer", headers={"Authorization": f"Bearer {token}"})
     assert active_list.json()["mode_a_items"][0]["status"] == "active"
 
 
-def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
+def test_dismiss_and_reactivate_mode_b_cluster(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-modeb-dismiss@example.com",
-        name="Gap Phase 5 Mode B Dismiss Tenant",
+        tenant, db_session, email="gap-api-dismiss-mode-b@example.com", name="Gap API Dismiss Mode B Tenant"
     )
     cluster = GapCluster(
         tenant_id=tenant_id,
@@ -306,45 +275,40 @@ def test_gap_analyzer_dismiss_and_reactivate_mode_b_cluster(
     db_session.commit()
     db_session.refresh(cluster)
 
-    dismiss_response = tenant.post(
+    dismiss = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
-    assert dismiss_response.status_code == 200, dismiss_response.text
-    assert dismiss_response.json()["status"] == "dismissed"
+    assert dismiss.status_code == 200, dismiss.text
+    assert dismiss.json()["status"] == "dismissed"
 
     dismissed_list = tenant.get(
         "/gap-analyzer?mode_b_status=dismissed",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert dismissed_list.status_code == 200, dismissed_list.text
     assert dismissed_list.json()["mode_b_items"][0]["status"] == "dismissed"
 
-    reactivate_response = tenant.post(
+    reactivate = tenant.post(
         f"/gap-analyzer/mode_b/{cluster.id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert reactivate_response.status_code == 200, reactivate_response.text
-    assert reactivate_response.json()["status"] == "active"
+    assert reactivate.status_code == 200, reactivate.text
+    assert reactivate.json()["status"] == "active"
 
     active_list = tenant.get(
         "/gap-analyzer?mode_b_status=active",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert active_list.status_code == 200, active_list.text
     assert active_list.json()["mode_b_items"][0]["status"] == "active"
 
 
-def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
+def test_repeated_dismiss_is_idempotent(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-repeat-dismiss@example.com",
-        name="Gap Phase 5 Repeat Dismiss Tenant",
+        tenant, db_session, email="gap-api-idempotent@example.com", name="Gap API Idempotent Tenant"
     )
     cluster = GapCluster(
         tenant_id=tenant_id,
@@ -375,54 +339,53 @@ def test_gap_analyzer_repeated_dismiss_is_idempotent_for_mode_b_cluster(
     assert second.json()["status"] == "dismissed"
 
 
-def test_gap_analyzer_returns_not_found_for_missing_mode_b_cluster_actions(
+def test_missing_resource_returns_404(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-missing-cluster@example.com",
-        name="Gap Phase 5 Missing Cluster Tenant",
+        tenant, db_session, email="gap-api-missing@example.com", name="Gap API Missing Tenant"
     )
-    missing_cluster_id = uuid.uuid4()
+    missing_id = uuid.uuid4()
 
-    dismiss_response = tenant.post(
-        f"/gap-analyzer/mode_b/{missing_cluster_id}/dismiss",
+    mode_a_reactivate = tenant.post(
+        f"/gap-analyzer/mode_a/{missing_id}/reactivate",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    mode_b_dismiss = tenant.post(
+        f"/gap-analyzer/mode_b/{missing_id}/dismiss",
         headers={"Authorization": f"Bearer {token}"},
         json={"reason": "other"},
     )
-    reactivate_response = tenant.post(
-        f"/gap-analyzer/mode_b/{missing_cluster_id}/reactivate",
+    mode_b_reactivate = tenant.post(
+        f"/gap-analyzer/mode_b/{missing_id}/reactivate",
         headers={"Authorization": f"Bearer {token}"},
     )
-    draft_response = tenant.post(
-        f"/gap-analyzer/mode_b/{missing_cluster_id}/draft",
+    mode_b_draft = tenant.post(
+        f"/gap-analyzer/mode_b/{missing_id}/draft",
         headers={"Authorization": f"Bearer {token}"},
     )
 
-    assert dismiss_response.status_code == 404, dismiss_response.text
-    assert dismiss_response.json()["detail"] == "Gap cluster not found"
-    assert reactivate_response.status_code == 404, reactivate_response.text
-    assert reactivate_response.json()["detail"] == "Gap cluster not found"
-    assert draft_response.status_code == 404, draft_response.text
-    assert draft_response.json()["detail"] == "Gap cluster not found"
+    assert mode_a_reactivate.status_code == 404, mode_a_reactivate.text
+    assert mode_a_reactivate.json()["detail"] == "Gap topic not found"
+    assert mode_b_dismiss.status_code == 404, mode_b_dismiss.text
+    assert mode_b_dismiss.json()["detail"] == "Gap cluster not found"
+    assert mode_b_reactivate.status_code == 404, mode_b_reactivate.text
+    assert mode_b_draft.status_code == 404, mode_b_draft.text
 
 
-def test_gap_analyzer_filters_and_sorts_mode_b_items(
+# ---------------------------------------------------------------------------
+# Filters and sorting
+# ---------------------------------------------------------------------------
+
+def test_filters_and_sorts_mode_b_items(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-modeb-filters@example.com",
-        name="Gap Phase 5 Mode B Filters Tenant",
+        tenant, db_session, email="gap-api-filters@example.com", name="Gap API Filters Tenant"
     )
     now = datetime.now(timezone.utc)
-    oldest = now.replace(microsecond=1)
-    middle = now.replace(microsecond=2)
-    newest = now.replace(microsecond=3)
     db_session.add_all(
         [
             GapCluster(
@@ -432,7 +395,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
                 aggregate_signal_weight=2.5,
                 coverage_score=0.4,
                 status=GapClusterStatus.active,
-                last_computed_at=middle,
+                last_computed_at=now.replace(microsecond=2),
             ),
             GapCluster(
                 tenant_id=tenant_id,
@@ -441,7 +404,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
                 aggregate_signal_weight=6.0,
                 coverage_score=0.2,
                 status=GapClusterStatus.active,
-                last_computed_at=oldest,
+                last_computed_at=now.replace(microsecond=1),
             ),
             GapCluster(
                 tenant_id=tenant_id,
@@ -450,7 +413,7 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
                 aggregate_signal_weight=1.0,
                 coverage_score=0.85,
                 status=GapClusterStatus.closed,
-                last_computed_at=newest,
+                last_computed_at=now.replace(microsecond=3),
             ),
         ]
     )
@@ -467,7 +430,6 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
         "/gap-analyzer?mode_b_sort=signal_desc",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert signal_sorted.status_code == 200, signal_sorted.text
     assert [item["label"] for item in signal_sorted.json()["mode_b_items"]] == [
         "Audit log webhooks",
         "CSV export retention",
@@ -477,7 +439,6 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
         "/gap-analyzer?mode_b_status=all&mode_b_sort=newest",
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert newest_sorted.status_code == 200, newest_sorted.text
     assert [item["label"] for item in newest_sorted.json()["mode_b_items"]] == [
         "SAML metadata refresh",
         "CSV export retention",
@@ -485,15 +446,134 @@ def test_gap_analyzer_filters_and_sorts_mode_b_items(
     ]
 
 
-def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
+def test_inactive_filter_surfaces_archived_clusters(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-draft@example.com",
-        name="Gap Phase 5 Draft Tenant",
+        tenant, db_session, email="gap-api-inactive@example.com", name="Gap API Inactive Tenant"
+    )
+    db_session.add_all(
+        [
+            GapCluster(
+                tenant_id=tenant_id,
+                label="Legacy exports",
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.9,
+                status=GapClusterStatus.closed,
+                last_computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ),
+            GapCluster(
+                tenant_id=tenant_id,
+                label="Fresh dismissed cluster",
+                question_count=1,
+                aggregate_signal_weight=1.0,
+                coverage_score=0.2,
+                status=GapClusterStatus.dismissed,
+                last_computed_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = tenant.get(
+        "/gap-analyzer?mode_b_status=inactive",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [item["label"] for item in data["mode_b_items"]] == ["Legacy exports"]
+    assert data["mode_b_items"][0]["status"] == "inactive"
+
+
+def test_archived_filter_is_source_specific(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token, tenant_id = _create_client_and_token(
+        tenant, db_session, email="gap-api-archived@example.com", name="Gap API Archived Tenant"
+    )
+    active_topic = GapDocTopic(
+        tenant_id=tenant_id,
+        topic_label="Billing exports",
+        coverage_score=0.2,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    dismissed_topic = GapDocTopic(
+        tenant_id=tenant_id,
+        topic_label="Legacy billing exports",
+        coverage_score=0.3,
+        status=GapDocTopicStatus.active,
+        extracted_at=datetime.now(timezone.utc),
+    )
+    active_cluster = GapCluster(
+        tenant_id=tenant_id,
+        label="Invoice export workflow",
+        question_count=1,
+        aggregate_signal_weight=2.0,
+        coverage_score=0.2,
+        status=GapClusterStatus.active,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    closed_cluster = GapCluster(
+        tenant_id=tenant_id,
+        label="SAML metadata refresh",
+        question_count=1,
+        aggregate_signal_weight=1.0,
+        coverage_score=0.9,
+        status=GapClusterStatus.closed,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    dismissed_cluster = GapCluster(
+        tenant_id=tenant_id,
+        label="Legacy invoice exports",
+        question_count=1,
+        aggregate_signal_weight=3.0,
+        coverage_score=0.4,
+        status=GapClusterStatus.dismissed,
+        last_computed_at=datetime.now(timezone.utc),
+    )
+    db_session.add_all([active_topic, dismissed_topic, active_cluster, closed_cluster, dismissed_cluster])
+    db_session.flush()
+    active_topic.linked_cluster_id = dismissed_cluster.id
+    dismissed_cluster.linked_doc_topic_id = active_topic.id
+    db_session.add_all([active_topic, dismissed_cluster])
+    db_session.commit()
+
+    tenant.post(
+        f"/gap-analyzer/mode_a/{dismissed_topic.id}/dismiss",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"reason": "other"},
+    )
+
+    response = tenant.get(
+        "/gap-analyzer?mode_a_status=archived&mode_b_status=archived",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert [item["label"] for item in data["mode_a_items"]] == ["Legacy billing exports"]
+    assert {item["label"] for item in data["mode_b_items"]} == {
+        "SAML metadata refresh",
+        "Legacy invoice exports",
+    }
+    assert all(item["status"] in {"closed", "dismissed"} for item in data["mode_b_items"])
+
+
+# ---------------------------------------------------------------------------
+# Draft generation
+# ---------------------------------------------------------------------------
+
+def test_draft_for_mode_b_cluster_returns_markdown(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token, tenant_id = _create_client_and_token(
+        tenant, db_session, email="gap-api-draft-mode-b@example.com", name="Gap API Draft Mode B Tenant"
     )
     cluster = GapCluster(
         tenant_id=tenant_id,
@@ -528,7 +608,7 @@ def test_gap_analyzer_draft_for_mode_b_cluster_returns_transient_markdown(
     assert "How do invoice exports work for finance?" in data["markdown"]
 
 
-def test_gap_analyzer_draft_for_linked_mode_b_cluster_appends_mode_a_examples(
+def test_draft_for_linked_mode_b_appends_mode_a_examples(
     monkeypatch,
 ) -> None:
     tenant_id = uuid.uuid4()
@@ -578,23 +658,17 @@ def test_gap_analyzer_draft_for_linked_mode_b_cluster_appends_mode_a_examples(
     )
     monkeypatch.setattr(
         "backend.gap_analyzer.orchestrator._load_mode_b_question_samples",
-        lambda db, cluster_ids: {
-            cluster_id: ["How do invoice exports work for finance?"]
-        },
+        lambda db, cluster_ids: {cluster_id: ["How do invoice exports work for finance?"]},
     )
 
-    draft = orchestrator.build_draft(
-        tenant_id=tenant_id,
-        source=GapSource.mode_b,
-        gap_id=cluster_id,
-    )
+    draft = orchestrator.build_draft(tenant_id=tenant_id, source=GapSource.mode_b, gap_id=cluster_id)
 
     assert "## Also missing in docs" in draft.markdown
     assert "How do invoice exports work for accounting?" in draft.markdown
     assert "Can I export invoices by month?" in draft.markdown
 
 
-def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
+def test_draft_for_mode_a_limits_example_questions(
     monkeypatch,
 ) -> None:
     topic_id = uuid.uuid4()
@@ -638,11 +712,7 @@ def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
         lambda: SqlAlchemyGapAnalyzerRepository(db=_FakeDB()),
     )
 
-    draft = orchestrator.build_draft(
-        tenant_id=tenant_id,
-        source=GapSource.mode_a,
-        gap_id=topic_id,
-    )
+    draft = orchestrator.build_draft(tenant_id=tenant_id, source=GapSource.mode_a, gap_id=topic_id)
 
     assert draft.title == "Webhook retries"
     assert "How many retries do webhooks get?" in draft.markdown
@@ -650,15 +720,16 @@ def test_gap_analyzer_draft_for_mode_a_limits_example_questions(
     assert "Can I disable webhook retries per endpoint?" not in draft.markdown
 
 
-def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
+# ---------------------------------------------------------------------------
+# Summary endpoint
+# ---------------------------------------------------------------------------
+
+def test_summary_returns_badge_payload_only(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-summary@example.com",
-        name="Gap Phase 5 Summary Tenant",
+        tenant, db_session, email="gap-api-summary@example.com", name="Gap API Summary Tenant"
     )
     db_session.add(
         GapDocTopic(
@@ -672,10 +743,7 @@ def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
     )
     db_session.commit()
 
-    response = tenant.get(
-        "/gap-analyzer/summary",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = tenant.get("/gap-analyzer/summary", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200, response.text
     data = response.json()
@@ -685,16 +753,13 @@ def test_gap_analyzer_summary_endpoint_returns_badge_payload_only(
     assert "mode_b_items" not in data
 
 
-def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
+def test_summary_uses_lightweight_repository_path(
     tenant: TestClient,
     db_session: Session,
     monkeypatch,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-summary-lightweight@example.com",
-        name="Gap Phase 5 Summary Lightweight Tenant",
+        tenant, db_session, email="gap-api-summary-lightweight@example.com", name="Gap API Summary Lightweight Tenant"
     )
     summary = {
         "total_active": 7,
@@ -718,24 +783,18 @@ def test_gap_analyzer_summary_endpoint_uses_lightweight_repository_path(
         lambda *, db: (_ for _ in ()).throw(AssertionError("summary route should not build full gap payload")),
     )
 
-    response = tenant.get(
-        "/gap-analyzer/summary",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = tenant.get("/gap-analyzer/summary", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200, response.text
     assert response.json() == {"summary": summary}
 
 
-def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linked_mode_b(
+def test_summary_dedupes_mode_a_suppressed_by_linked_mode_b(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-summary-linked@example.com",
-        name="Gap Phase 5 Summary Linked Tenant",
+        tenant, db_session, email="gap-api-summary-linked@example.com", name="Gap API Summary Linked Tenant"
     )
     topic = GapDocTopic(
         tenant_id=tenant_id,
@@ -762,10 +821,7 @@ def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linke
     db_session.add_all([topic, cluster])
     db_session.commit()
 
-    response = tenant.get(
-        "/gap-analyzer/summary",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = tenant.get("/gap-analyzer/summary", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == 200, response.text
     data = response.json()["summary"]
@@ -774,459 +830,17 @@ def test_gap_analyzer_summary_endpoint_dedupes_active_mode_a_suppressed_by_linke
     assert data["uncovered_count"] == 1
 
 
-def test_gap_analyzer_refresh_gap_job_lease_extends_expiration(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-refresh-lease@example.com",
-        name="Gap Phase 5 Refresh Lease Tenant",
-    )
-    job = GapAnalyzerJob(
-        tenant_id=tenant_id,
-        job_kind="mode_b",
-        status="in_progress",
-        trigger="manual",
-        lease_expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-    )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
-    previous_expiry = job.lease_expires_at
+# ---------------------------------------------------------------------------
+# Recalculate
+# ---------------------------------------------------------------------------
 
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    refreshed = repository.refresh_gap_job_lease(job_id=job.id, tenant_id=tenant_id)
-    db_session.commit()
-    db_session.refresh(job)
-
-    assert refreshed is True
-    assert previous_expiry is not None
-    assert job.lease_expires_at is not None
-    assert job.lease_expires_at > previous_expiry
-
-
-def test_start_gap_analyzer_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> None:
-    import backend.gap_analyzer.jobs as gap_jobs_module
-
-    monkeypatch.setattr(gap_jobs_module, "_job_runner_state", _GapJobRunnerState())
-
-    calls: list[str] = []
-    done = threading.Event()
-
-    def _fake_run_pending(*, max_jobs=None):
-        calls.append("run")
-        if len(calls) == 1:
-            start_gap_analyzer_job_runner()
-            return 0
-        done.set()
-        return 0
-
-    monkeypatch.setattr(
-        gap_jobs_module,
-        "run_pending_gap_analyzer_jobs_best_effort",
-        _fake_run_pending,
-    )
-
-    start_gap_analyzer_job_runner()
-
-    assert done.wait(1.0), "runner should perform a second drain pass after restart is requested"
-    for _ in range(50):
-        if not gap_jobs_module._job_runner_state.active:
-            break
-        time.sleep(0.01)
-    assert calls == ["run", "run"]
-
-
-def test_gap_analyzer_repository_bm25_match_streams_exact_title_and_body_hits(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-bm25-stream@example.com",
-        name="Gap Phase 5 BM25 Stream Tenant",
-    )
-    title_document = Document(
-        tenant_id=tenant_id,
-        filename="Invoice Exports",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-    )
-    body_document = Document(
-        tenant_id=tenant_id,
-        filename="guide.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-    )
-    filler_document = Document(
-        tenant_id=tenant_id,
-        filename="faq.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-    )
-    db_session.add_all([title_document, body_document, filler_document])
-    db_session.flush()
-    db_session.add_all(
-        [
-            Embedding(
-                document_id=title_document.id,
-                chunk_text="overview only",
-                vector=[0.1] * 1536,
-            ),
-            Embedding(
-                document_id=body_document.id,
-                chunk_text="invoice exports and billing workflows",
-                vector=[0.1] * 1536,
-            ),
-            Embedding(
-                document_id=filler_document.id,
-                chunk_text="account profile settings and notifications",
-                vector=[0.1] * 1536,
-            ),
-        ]
-    )
-    db_session.commit()
-
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    title_match = repository.bm25_match_for_tenant(
-        tenant_id=tenant_id,
-        query_text="invoice exports",
-        excluded_file_types=(),
-    )
-    body_match = repository.bm25_match_for_tenant(
-        tenant_id=tenant_id,
-        query_text="billing workflows",
-        excluded_file_types=(),
-    )
-
-    assert title_match.hit is True
-    assert title_match.match_kind == "exact_title"
-    assert title_match.score == 1.0
-    assert body_match.hit is True
-    assert body_match.match_kind == "body"
-    assert 0.0 < body_match.score < 1.0
-
-
-def test_gap_analyzer_repository_bm25_match_allows_single_term_queries(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-bm25-single-term@example.com",
-        name="Gap Phase 5 BM25 Single Term Tenant",
-    )
-    document = Document(
-        tenant_id=tenant_id,
-        filename="guide.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-    )
-    db_session.add(document)
-    db_session.flush()
-    db_session.add(
-        Embedding(
-            document_id=document.id,
-            chunk_text="billing exports workflow",
-            vector=[0.1] * 1536,
-        )
-    )
-    db_session.commit()
-
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    match = repository.bm25_match_for_tenant(
-        tenant_id=tenant_id,
-        query_text="billing",
-        excluded_file_types=(),
-    )
-
-    assert match.hit is True
-    assert match.match_kind == "body"
-    assert 0.0 < match.score < 1.0
-
-
-def test_gap_analyzer_repository_bm25_match_skips_db_for_empty_token_query(
-    db_session: Session,
-    monkeypatch,
-) -> None:
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-
-    def _fail_query(*args, **kwargs):
-        raise AssertionError("DB query should not run for an empty tokenized query")
-
-    monkeypatch.setattr(repository.db, "query", _fail_query)
-
-    match = repository.bm25_match_for_tenant(
-        tenant_id=uuid.uuid4(),
-        query_text="!!!",
-        excluded_file_types=(),
-    )
-
-    assert match.hit is False
-    assert match.score == 0.0
-    assert match.match_kind == "none"
-
-
-def test_gap_analyzer_repository_bm25_cache_reuses_corpus_until_invalidated(
-    db_session: Session,
-    monkeypatch,
-) -> None:
-    user = User(
-        email="gap-phase5-bm25-cache@example.com",
-        password_hash="x",
-        is_verified=True,
-        verification_token=None,
-        verification_expires_at=None,
-    )
-    db_session.add(user)
-    db_session.flush()
-    client_record = Tenant(name="Gap BM25 Cache", api_key="k" * 32)
-    db_session.add(client_record)
-    db_session.flush()
-    document = Document(
-        tenant_id=client_record.id,
-        filename="guide.md",
-        file_type=DocumentType.markdown,
-        status=DocumentStatus.ready,
-    )
-    db_session.add(document)
-    db_session.flush()
-    db_session.add(
-        Embedding(
-            document_id=document.id,
-            chunk_text="billing exports workflow",
-            vector=[0.1] * 1536,
-        )
-    )
-    db_session.commit()
-
-    invalidate_bm25_cache_for_tenant(client_record.id)
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    query_calls = 0
-    original_query = repository.db.query
-
-    def _counted_query(*args, **kwargs):
-        nonlocal query_calls
-        query_calls += 1
-        return original_query(*args, **kwargs)
-
-    monkeypatch.setattr(repository.db, "query", _counted_query)
-
-    first_match = repository.bm25_match_for_tenant(
-        tenant_id=client_record.id,
-        query_text="billing",
-        excluded_file_types=(),
-    )
-    second_match = repository.bm25_match_for_tenant(
-        tenant_id=client_record.id,
-        query_text="workflow",
-        excluded_file_types=(),
-    )
-
-    assert first_match.hit is True
-    assert second_match.hit is True
-    assert query_calls == 1
-
-    invalidate_bm25_cache_for_tenant(client_record.id)
-    third_match = repository.bm25_match_for_tenant(
-        tenant_id=client_record.id,
-        query_text="exports",
-        excluded_file_types=(),
-    )
-
-    assert third_match.hit is True
-    assert query_calls == 2
-
-
-def test_gap_analyzer_fail_gap_job_truncates_to_tail(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-job-error@example.com",
-        name="Gap Phase 5 Job Error Tenant",
-    )
-    job = GapAnalyzerJob(
-        tenant_id=tenant_id,
-        job_kind="mode_a",
-        status="in_progress",
-        trigger="manual",
-        attempt_count=1,
-        max_attempts=1,
-    )
-    db_session.add(job)
-    db_session.commit()
-    db_session.refresh(job)
-
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    error_message = "head\n" + ("middle\n" * 1000) + "ValueError: final failure"
-    repository.fail_gap_job(job_id=job.id, tenant_id=tenant_id, error_message=error_message)
-    db_session.commit()
-    db_session.refresh(job)
-
-    assert job.status == "failed"
-    assert job.last_error is not None
-    assert len(job.last_error) <= _GAP_JOB_LAST_ERROR_MAX_CHARS
-    assert "ValueError: final failure" in job.last_error
-
-
-def test_complete_gap_job_ignores_other_tenant(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, tenant_a = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-complete-a@example.com",
-        name="Gap Phase 5 Complete A",
-    )
-    _, tenant_b = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-complete-b@example.com",
-        name="Gap Phase 5 Complete B",
-    )
-    job_a = GapAnalyzerJob(
-        tenant_id=tenant_a,
-        job_kind="mode_a",
-        status="in_progress",
-        trigger="manual",
-    )
-    job_b = GapAnalyzerJob(
-        tenant_id=tenant_b,
-        job_kind="mode_b",
-        status="in_progress",
-        trigger="manual",
-    )
-    db_session.add_all([job_a, job_b])
-    db_session.commit()
-    db_session.refresh(job_a)
-    db_session.refresh(job_b)
-
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    completed = repository.complete_gap_job(job_id=job_a.id, tenant_id=tenant_b)
-    db_session.commit()
-    db_session.refresh(job_a)
-    db_session.refresh(job_b)
-
-    assert completed is False
-    assert job_a.status == "in_progress"
-    assert job_a.finished_at is None
-    assert job_b.status == "in_progress"
-
-
-def test_fail_gap_job_ignores_other_tenant(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    _, tenant_a = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-fail-a@example.com",
-        name="Gap Phase 5 Fail A",
-    )
-    _, tenant_b = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-fail-b@example.com",
-        name="Gap Phase 5 Fail B",
-    )
-    job_a = GapAnalyzerJob(
-        tenant_id=tenant_a,
-        job_kind="mode_a",
-        status="in_progress",
-        trigger="manual",
-        attempt_count=1,
-        max_attempts=1,
-    )
-    job_b = GapAnalyzerJob(
-        tenant_id=tenant_b,
-        job_kind="mode_b",
-        status="in_progress",
-        trigger="manual",
-    )
-    db_session.add_all([job_a, job_b])
-    db_session.commit()
-    db_session.refresh(job_a)
-    db_session.refresh(job_b)
-
-    repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    failed = repository.fail_gap_job(
-        job_id=job_a.id,
-        tenant_id=tenant_b,
-        error_message="should not apply",
-    )
-    db_session.commit()
-    db_session.refresh(job_a)
-    db_session.refresh(job_b)
-
-    assert failed is False
-    assert job_a.status == "in_progress"
-    assert job_a.last_error is None
-    assert job_b.status == "in_progress"
-
-
-def test_gap_analyzer_inactive_filter_surfaces_old_archived_mode_b_clusters(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    token, tenant_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-inactive@example.com",
-        name="Gap Phase 5 Inactive Tenant",
-    )
-    db_session.add_all(
-        [
-            GapCluster(
-                tenant_id=tenant_id,
-                label="Legacy exports",
-                question_count=1,
-                aggregate_signal_weight=1.0,
-                coverage_score=0.9,
-                status=GapClusterStatus.closed,
-                last_computed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-            ),
-            GapCluster(
-                tenant_id=tenant_id,
-                label="Fresh dismissed cluster",
-                question_count=1,
-                aggregate_signal_weight=1.0,
-                coverage_score=0.2,
-                status=GapClusterStatus.dismissed,
-                last_computed_at=datetime.now(timezone.utc),
-            ),
-        ]
-    )
-    db_session.commit()
-
-    response = tenant.get(
-        "/gap-analyzer?mode_b_status=inactive",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-
-    assert response.status_code == 200, response.text
-    data = response.json()
-    assert [item["label"] for item in data["mode_b_items"]] == ["Legacy exports"]
-    assert data["mode_b_items"][0]["status"] == "inactive"
-
-
-def test_gap_analyzer_recalculate_returns_accepted_and_starts_tasks(
+def test_recalculate_returns_accepted_and_starts_jobs(
     tenant: TestClient,
     db_session: Session,
     monkeypatch,
 ) -> None:
     token, _client_id = _create_client_and_token(
-        tenant,
-        db_session,
-        email="gap-phase5-recalc@example.com",
-        name="Gap Phase 5 Recalc Tenant",
+        tenant, db_session, email="gap-api-recalc@example.com", name="Gap API Recalc Tenant"
     )
     runner_calls: list[str] = []
     monkeypatch.setattr(

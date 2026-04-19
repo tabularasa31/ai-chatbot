@@ -54,6 +54,20 @@ def _make_retrieval_context(score: float) -> RetrievalContext:
     )
 
 
+def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
+    signal = GapSignal(
+        tenant_id=uuid.uuid4(),
+        question_text="How does this work?",
+        answer_confidence=0.4,
+        was_rejected=False,
+        had_fallback=False,
+        was_escalated=False,
+        user_thumbed_down=False,
+    )
+    assert signal.created_at.tzinfo is not None
+    assert signal.created_at.utcoffset() is not None
+
+
 @pytest.mark.parametrize(
     ("signal_kwargs", "expected_weight"),
     [
@@ -116,7 +130,7 @@ def test_gap_signal_ingestion_persists_weight_and_message_link(
     assert message_link.session_id == chat.session_id
 
 
-def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
+def test_feedback_down_reweights_linked_gap_signal(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -190,7 +204,7 @@ def test_set_message_feedback_down_reweights_exact_linked_gap_signal(
     assert gap_question_second.gap_signal_weight == 4.0
 
 
-def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
+def test_feedback_up_restores_base_weight_for_linked_gap_signal(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -251,7 +265,7 @@ def test_set_message_feedback_up_restores_base_linked_gap_signal_weight(
     assert gap_question.gap_signal_weight == 1.5
 
 
-def test_process_chat_message_persists_gap_signal_for_fallback_turn(
+def test_chat_fallback_persists_gap_signal(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,

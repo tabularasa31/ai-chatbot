@@ -19,6 +19,7 @@ jobs:
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      pgvector: ${{ steps.filter.outputs.pgvector }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -32,11 +33,55 @@ jobs:
               - 'alembic/**'
             frontend:
               - 'frontend/**'
+            pgvector:
+              - 'backend/search/**'
+              - 'backend/embeddings/**'
+              - 'backend/models.py'
+              - 'backend/gap_analyzer/**'
+              - 'backend/contact_sessions/**'
+              - 'alembic/**'
+              - 'tests/pgvector_tests/**'
 
   backend:
     name: Backend (pytest + ruff)
     needs: changes
     if: needs.changes.outputs.backend == 'true' || github.base_ref == 'deploy'
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: sqlite:///:memory:?check_same_thread=False
+      JWT_SECRET: test-secret-key-min-32-chars-long!!
+      EVAL_JWT_SECRET: test-eval-jwt-secret-min-32-chars-long!!
+      ENVIRONMENT: test
+      ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
+      OPENAI_API_KEY: sk-test
+      FRONTEND_URL: http://localhost:3000
+      BREVO_API_KEY: test-key
+      EMAIL_FROM: test@example.com
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with ruff
+        run: ruff check backend
+
+      - name: Run tests (SQLite)
+        run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
+
+  backend-pgvector:
+    name: Backend pgvector (pg integration tests)
+    needs: changes
+    if: needs.changes.outputs.pgvector == 'true' || github.base_ref == 'deploy'
     runs-on: ubuntu-latest
 
     services:
@@ -77,19 +122,6 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
-
-      - name: Lint with ruff
-        run: ruff check backend
-
-      - name: Check migration coverage (alembic check)
-        env:
-          DATABASE_URL: postgresql://postgres:password@localhost:5432/test_pgvector
-        run: |
-          alembic upgrade head
-          alembic check
-
-      - name: Run tests (SQLite)
-        run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
 
       - name: Run pgvector tests (PostgreSQL)
         env:

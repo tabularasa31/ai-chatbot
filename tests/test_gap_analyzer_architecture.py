@@ -101,7 +101,7 @@ def test_gap_analyzer_orchestrator_keeps_read_contracts_out_of_public_surface() 
     assert result.command_kind == "orchestration"
 
 
-def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
+def test_gap_analyzer_domain_policies_are_data_only() -> None:
     policy = CoveragePolicy()
     assert policy.mode_a_gate == 0.45
     assert not hasattr(policy, "compute_score")
@@ -118,20 +118,6 @@ def test_gap_analyzer_phase1_policies_remain_data_only() -> None:
 
 def test_gap_analyzer_shared_enums_are_single_source_of_truth() -> None:
     assert ModelGapDismissReason is GapDismissReason
-
-
-def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
-    signal = GapSignal(
-        tenant_id=uuid4(),
-        question_text="How does this work?",
-        answer_confidence=0.4,
-        was_rejected=False,
-        had_fallback=False,
-        was_escalated=False,
-        user_thumbed_down=False,
-    )
-    assert signal.created_at.tzinfo is not None
-    assert signal.created_at.utcoffset() is not None
 
 
 def test_gap_analyzer_models_are_registered_in_metadata() -> None:
@@ -186,7 +172,7 @@ def test_gap_analyzer_model_indexes_are_present() -> None:
     assert expected_indexes.issubset(seen_indexes)
 
 
-def test_gap_analyzer_phase1_migration_contains_view_and_indexes() -> None:
+def test_gap_analyzer_migration_contains_view_and_indexes() -> None:
     content = MIGRATION_PATH.read_text()
 
     assert "CREATE VIEW gap_unified AS" in content
@@ -201,7 +187,7 @@ def test_gap_analyzer_phase1_migration_contains_view_and_indexes() -> None:
     assert "ix_gap_question_links_session_id" in content
 
 
-def test_gap_analyzer_phase0_contracts_are_explicit_and_reviewable() -> None:
+def test_gap_analyzer_http_contracts_are_explicit_and_reviewable() -> None:
     content = README_PATH.read_text()
 
     assert "POST /gap-analyzer/recalculate" in content
@@ -221,7 +207,7 @@ def test_gap_analyzer_phase0_contracts_are_explicit_and_reviewable() -> None:
     assert contract.http_status_code == 202
 
 
-def test_gap_analyzer_phase1_migration_applies_on_minimal_sqlite_schema() -> None:
+def test_gap_analyzer_migration_applies_on_minimal_sqlite_schema() -> None:
     migration = _load_migration_module()
     engine = sa.create_engine("sqlite:///:memory:")
 

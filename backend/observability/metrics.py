@@ -72,7 +72,7 @@ class MetricsService:
                 host=settings.posthog_host,
             )
             self._enabled = True
-            logger.warning(
+            logger.info(
                 "PostHog metrics initialized",
                 extra={"posthog_host": settings.posthog_host},
             )

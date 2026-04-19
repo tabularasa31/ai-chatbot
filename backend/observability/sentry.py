@@ -43,10 +43,15 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         for k, ts in list(_recent_fingerprints.items()):
             if ts < cutoff:
                 _recent_fingerprints.pop(k, None)
-        # Hard cap: if a sustained storm leaves the cache full of
-        # in-window entries, drop everything to prevent unbounded growth.
+        # Sustained high-cardinality storm: evict the oldest in-window entries
+        # instead of clearing everything. Wholesale clear would re-admit every
+        # known fingerprint to Sentry exactly when dedup matters most.
         if len(_recent_fingerprints) > _DEDUP_MAX_CACHE_SIZE:
-            _recent_fingerprints.clear()
+            overflow = len(_recent_fingerprints) - _DEDUP_MAX_CACHE_SIZE
+            for k, _ in sorted(
+                _recent_fingerprints.items(), key=lambda item: item[1]
+            )[:overflow]:
+                _recent_fingerprints.pop(k, None)
     return event
 
 
@@ -84,7 +89,7 @@ def init_sentry() -> None:
         )
         sentry_sdk.set_user(None)
         _initialized = True
-        logger.warning("Sentry initialized", extra={"environment": settings.environment})
+        logger.info("Sentry initialized", extra={"environment": settings.environment})
     except Exception:
         logger.exception("Failed to initialize Sentry; staying disabled")
 

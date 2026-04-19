@@ -76,6 +76,7 @@ from backend.models import (
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
+from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
     RetrievalReliability,
@@ -193,11 +194,16 @@ def _quick_answer_keys_for_question(question: str) -> list[str]:
 
 def _quick_answers_context(tenant_id: uuid.UUID, question: str, db: Session) -> list[str]:
     """Return only the structured quick answers relevant to this question."""
-    from backend.models import QuickAnswer
-
     selected_keys = _quick_answer_keys_for_question(question)
     if not selected_keys:
         return []
+    return _lookup_quick_answers(tenant_id, selected_keys, db)
+
+
+def _lookup_quick_answers(
+    tenant_id: uuid.UUID, selected_keys: list[str], db: Session
+) -> list[str]:
+    from backend.models import QuickAnswer
 
     answers = (
         db.query(QuickAnswer)
@@ -223,6 +229,44 @@ def _quick_answers_context(tenant_id: uuid.UUID, question: str, db: Session) -> 
         label = labels.get(answer.key, answer.key)
         lines_by_key[answer.key] = f"{label}: {answer.value}"
     return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
+
+
+def _metrics_distinct_id(
+    bot_public_id: str | None, tenant_public_id: str | None
+) -> str:
+    return bot_public_id or tenant_public_id or "unknown"
+
+
+def _emit_quick_answer_lookup_event(
+    *,
+    selected_keys: list[str],
+    matched_count: int,
+    text_length: int,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+) -> None:
+    # Skip when neither identifier is known to avoid collapsing events under
+    # distinct_id="unknown" and polluting per-tenant rollups.
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "quick_answer.lookup",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "selected_keys": ",".join(selected_keys),
+                "selected_count": len(selected_keys),
+                "matched_count": matched_count,
+                "hit": matched_count > 0,
+                "text_length": text_length,
+                "chat_id": chat_id,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)
 
 
 def _safe_int(value: Any) -> int:
@@ -632,6 +676,9 @@ def run_chat_pipeline(
     disclosure_config: dict[str, Any] | None = None,
     trace: TraceHandle | None = None,
     precomputed_injection: Any | None = None,
+    tenant_public_id: str | None = None,
+    bot_public_id: str | None = None,
+    chat_id: str | None = None,
 ) -> ChatPipelineResult:
     """
     Pure RAG pipeline — no DB writes, no escalation actions, no observability side effects.
@@ -826,7 +873,24 @@ def run_chat_pipeline(
         topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    quick_answer_items = _quick_answers_context(tenant_id, question, db)
+    selected_quick_answer_keys = _quick_answer_keys_for_question(question)
+    quick_answer_items = (
+        _lookup_quick_answers(tenant_id, selected_quick_answer_keys, db)
+        if selected_quick_answer_keys
+        else []
+    )
+    # Only emit when the question actually triggered a quick-answer lookup —
+    # emitting on every chat turn would flood PostHog with no-keyword "miss"
+    # noise and bury the hit/miss-after-match signal we care about.
+    if selected_quick_answer_keys:
+        _emit_quick_answer_lookup_event(
+            selected_keys=selected_quick_answer_keys,
+            matched_count=len(quick_answer_items),
+            text_length=len(question),
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            chat_id=chat_id,
+        )
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
         "faq_context" if faq_context_items else "rag_only"
     )
@@ -1579,6 +1643,7 @@ def process_chat_message(
     user_context: dict | None = None,
     browser_locale: str | None = None,
     disclosure_config: dict | None = _DISCLOSURE_UNSET,  # type: ignore[assignment]
+    bot_public_id: str | None = None,
 ) -> ChatTurnOutcome:
     """
     RAG pipeline with FI-ESC escalation state machine.
@@ -2188,6 +2253,9 @@ def process_chat_message(
         disclosure_config=disclosure_cfg,
         trace=trace,
         precomputed_injection=injection_result,
+        tenant_public_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
+        bot_public_id=bot_public_id,
+        chat_id=str(chat.id) if chat is not None else None,
     )
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).

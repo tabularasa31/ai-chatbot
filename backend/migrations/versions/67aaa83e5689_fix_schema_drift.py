@@ -36,24 +36,23 @@ def upgrade() -> None:
     conn = op.get_bind()
     insp = sa_inspect(conn)
 
-    # ── 1. tenants table: fix indexes after clients→tenants table rename ─────
-    # ix_clients_api_key → ix_tenants_api_key  (unique index on api_key)
-    if _idx(insp, "tenants", "ix_clients_api_key"):
-        op.drop_index("ix_clients_api_key", table_name="tenants")
-    if not _idx(insp, "tenants", "ix_tenants_api_key"):
-        op.create_index("ix_tenants_api_key", "tenants", ["api_key"], unique=True)
+    # ── 1. tenants table: fix indexes/constraints after clients→tenants rename ─
+    with op.batch_alter_table("tenants") as batch_op:
+        # ix_clients_api_key → ix_tenants_api_key  (unique index on api_key)
+        if _idx(insp, "tenants", "ix_clients_api_key"):
+            batch_op.drop_index("ix_clients_api_key")
+        if not _idx(insp, "tenants", "ix_tenants_api_key"):
+            batch_op.create_index("ix_tenants_api_key", ["api_key"], unique=True)
 
-    # uq_clients_public_id → uq_tenants_public_id  (unique constraint on public_id)
-    if _uq(insp, "tenants", "uq_clients_public_id"):
-        with op.batch_alter_table("tenants") as batch_op:
+        # uq_clients_public_id → uq_tenants_public_id  (unique constraint on public_id)
+        if _uq(insp, "tenants", "uq_clients_public_id"):
             batch_op.drop_constraint("uq_clients_public_id", type_="unique")
-    if not _uq(insp, "tenants", "uq_tenants_public_id"):
-        with op.batch_alter_table("tenants") as batch_op:
+        if not _uq(insp, "tenants", "uq_tenants_public_id"):
             batch_op.create_unique_constraint("uq_tenants_public_id", ["public_id"])
 
-    # ix_tenants_public_id: separate non-unique index from Column(index=True)
-    if not _idx(insp, "tenants", "ix_tenants_public_id"):
-        op.create_index("ix_tenants_public_id", "tenants", ["public_id"])
+        # ix_tenants_public_id: separate non-unique index from Column(index=True)
+        if not _idx(insp, "tenants", "ix_tenants_public_id"):
+            batch_op.create_index("ix_tenants_public_id", ["public_id"])
 
     # ── 2. Per-table client_id → tenant_id index renames ─────────────────────
     _client_tenant_renames = [
@@ -76,15 +75,14 @@ def upgrade() -> None:
     if not _idx(insp, "eval_sessions", "ix_eval_sessions_tenant_id"):
         op.create_index("ix_eval_sessions_tenant_id", "eval_sessions", ["tenant_id"])
 
-    # ── 4. Drop extra index not present in model ──────────────────────────────
-    # escalation_tickets.created_at was indexed in fi_esc_v1 but model has no index=True
-    if _idx(insp, "escalation_tickets", "ix_escalation_tickets_created_at"):
-        op.drop_index("ix_escalation_tickets_created_at", table_name="escalation_tickets")
-
-    # ── 5. Fix Enum column widths (compare_type=True detects VARCHAR(N) drift) ─
+    # ── 4+5. escalation_tickets: drop extra index + fix Enum column widths ──────
+    # Consolidated into one batch block → single table recreation on SQLite.
     # In PostgreSQL these are safe narrowing changes (existing data uses short values).
-    # batch_alter_table recreates the table on SQLite, issues ALTER COLUMN on PG.
     with op.batch_alter_table("escalation_tickets") as batch_op:
+        # created_at was indexed in fi_esc_v1 but model has no index=True
+        if _idx(insp, "escalation_tickets", "ix_escalation_tickets_created_at"):
+            batch_op.drop_index("ix_escalation_tickets_created_at")
+
         batch_op.alter_column(
             "trigger",
             type_=sa.Enum(
@@ -112,6 +110,11 @@ def upgrade() -> None:
             existing_type=sa.String(32),
             existing_nullable=False,
         )
+
+    # Backfill old enum values before narrowing the column type.
+    # native_enum=False means these are plain VARCHAR rows — safe to UPDATE in-place.
+    op.execute("UPDATE messages SET feedback = 'up'   WHERE feedback = 'positive'")
+    op.execute("UPDATE messages SET feedback = 'down' WHERE feedback = 'negative'")
 
     with op.batch_alter_table("messages") as batch_op:
         batch_op.alter_column(

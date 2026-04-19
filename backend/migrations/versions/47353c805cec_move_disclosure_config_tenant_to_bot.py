@@ -24,23 +24,34 @@ def upgrade() -> None:
     op.add_column("bots", sa.Column("disclosure_config", sa.JSON(), nullable=True))
 
     conn = op.get_bind()
-    rows = conn.execute(
-        sa.text("SELECT id, disclosure_config FROM tenants WHERE disclosure_config IS NOT NULL")
-    ).fetchall()
-    for tenant_id, raw in rows:
-        try:
-            cfg = json.loads(raw) if isinstance(raw, str) else raw
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(cfg, dict):
-            continue
-        conn.execute(
+    _BATCH = 500
+    offset = 0
+    while True:
+        rows = conn.execute(
             sa.text(
-                "UPDATE bots SET disclosure_config = :cfg"
-                " WHERE tenant_id = :tid AND disclosure_config IS NULL"
+                "SELECT id, disclosure_config FROM tenants"
+                " WHERE disclosure_config IS NOT NULL"
+                " LIMIT :limit OFFSET :offset"
             ),
-            {"cfg": json.dumps(cfg), "tid": str(tenant_id)},
-        )
+            {"limit": _BATCH, "offset": offset},
+        ).fetchall()
+        if not rows:
+            break
+        for tenant_id, raw in rows:
+            try:
+                cfg = json.loads(raw) if isinstance(raw, str) else raw
+            except (ValueError, TypeError):
+                continue
+            if not isinstance(cfg, dict):
+                continue
+            conn.execute(
+                sa.text(
+                    "UPDATE bots SET disclosure_config = :cfg"
+                    " WHERE tenant_id = :tid AND disclosure_config IS NULL"
+                ),
+                {"cfg": json.dumps(cfg), "tid": str(tenant_id)},
+            )
+        offset += _BATCH
 
     op.drop_column("tenants", "disclosure_config")
 

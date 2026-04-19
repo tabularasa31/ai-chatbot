@@ -41,6 +41,18 @@ def update_bot(
     is_active: bool | None = None,
 ) -> Bot:
     bot = get_bot_by_id(bot_id, tenant_id, db)
+    if is_active is False and bot.is_active:
+        active_count = (
+            db.query(Bot)
+            .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
+            .with_for_update()
+            .count()
+        )
+        if active_count <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot deactivate the last active bot of a tenant",
+            )
     if name is not None:
         bot.name = name
     if is_active is not None:

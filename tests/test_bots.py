@@ -112,6 +112,37 @@ def test_delete_bot_allowed_when_multiple(tenant: TestClient, db_session: Sessio
     assert del_resp.status_code == 204
 
 
+def test_deactivate_last_active_bot_blocked(tenant: TestClient, db_session: Session) -> None:
+    """Deactivating the only active bot should return 409."""
+    token, _ = _auth(tenant, db_session, "deact-last@example.com")
+    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
+
+    resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert resp.status_code == 409
+
+
+def test_deactivate_bot_allowed_when_another_active(tenant: TestClient, db_session: Session) -> None:
+    token, _ = _auth(tenant, db_session, "deact-ok@example.com")
+    extra_id = tenant.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Second Bot"},
+    ).json()["id"]
+
+    first_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
+    resp = tenant.patch(
+        f"/bots/{first_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_active"] is False
+
+
 def test_bot_not_accessible_by_other_tenant(tenant: TestClient, db_session: Session) -> None:
     token1, _ = _auth(tenant, db_session, "tenant-a@example.com")
     token2, _ = _auth(tenant, db_session, "tenant-b@example.com")

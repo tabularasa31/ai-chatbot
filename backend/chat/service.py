@@ -24,6 +24,7 @@ from backend.chat.language import (
     resolve_language_context,
 )
 from backend.chat.pii import redact
+from backend.contact_sessions.service import record_user_session_turn, touch_user_session
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
@@ -84,7 +85,6 @@ from backend.search.service import (
     search_similar_chunks_detailed,
 )
 from backend.support_config import public_support_config_dict
-from backend.contact_sessions.service import record_user_session_turn, touch_user_session
 
 PREVIEW_MAX_LEN = 120
 

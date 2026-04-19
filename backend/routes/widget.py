@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
+from backend.contact_sessions.service import start_user_session, touch_user_session
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import (
@@ -27,7 +28,6 @@ from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_tenant_eligible_for_widget_chat,
 )
-from backend.contact_sessions.service import start_user_session, touch_user_session
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
     SESSION_INVALID_CODE,

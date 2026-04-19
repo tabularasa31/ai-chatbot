@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact
+from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.email.service import send_email
@@ -31,7 +32,6 @@ from backend.models import (
 )
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
-from backend.contact_sessions.service import sync_user_session_identity
 
 logger = logging.getLogger(__name__)
 

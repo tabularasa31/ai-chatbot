@@ -27,7 +27,14 @@ from backend.eval.routes import eval_router
 from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.knowledge.routes import knowledge_router
-from backend.observability import init_observability, shutdown_observability
+from backend.observability import (
+    init_metrics,
+    init_observability,
+    init_sentry,
+    shutdown_metrics,
+    shutdown_observability,
+    shutdown_sentry,
+)
 from backend.routes.public import public_router
 from backend.routes.widget import widget_router
 from backend.search.routes import search_router
@@ -37,10 +44,14 @@ from backend.tenants.routes import tenants_router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_observability()
+    init_metrics()
+    init_sentry()
     try:
         yield
     finally:
         gap_graceful_shutdown()
+        shutdown_metrics()
+        shutdown_sentry()
         shutdown_observability()
 
 

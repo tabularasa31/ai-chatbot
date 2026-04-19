@@ -33,7 +33,7 @@ from backend.models import (
     EscalationStatus,
     Message,
     MessageRole,
-    UserSession,
+    ContactSession,
     User,
 )
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -242,7 +242,7 @@ def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    cl = Tenant(user_id=user.id, name="Clarify Tenant", api_key="clarify-key")
+    cl = Tenant(name="Clarify Tenant", api_key="clarify-key")
     db_session.add(cl)
     db_session.commit()
     db_session.refresh(cl)
@@ -302,7 +302,7 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     db_session.add(chat)
     db_session.commit()
 
-    row = UserSession(tenant_id=tenant_id, user_id="u-123", email=None)
+    row = ContactSession(tenant_id=tenant_id, contact_id="u-123", email=None)
     db_session.add(row)
     db_session.commit()
 

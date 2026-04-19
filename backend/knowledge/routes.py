@@ -73,7 +73,7 @@ def _resolve_tenant_for_knowledge(
 
     tenant = (
         db.query(Tenant)
-        .filter(Tenant.public_id == tenant_id, Tenant.user_id == current_user.id)
+        .filter(Tenant.public_id == tenant_id, Tenant.id == current_user.tenant_id)
         .first()
     )
     if not tenant:

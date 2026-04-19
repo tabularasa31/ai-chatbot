@@ -27,7 +27,7 @@ def _create_ready_document(
     )
     db_session.add(user)
     db_session.flush()
-    tenant = Tenant(user_id=user.id, name="Health Tenant", api_key="k" * 32)
+    tenant = Tenant(name="Health Tenant", api_key="k" * 32)
     db_session.add(tenant)
     db_session.flush()
     doc = Document(

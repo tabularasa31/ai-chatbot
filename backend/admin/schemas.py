@@ -14,8 +14,8 @@ class AdminMetricsSummary(BaseModel):
     """Platform-wide metrics summary."""
 
     total_users: int
-    total_clients: int
-    active_clients: int
+    total_tenants: int
+    active_tenants: int
     total_documents: int
     total_chat_sessions: int
     total_messages_user: int

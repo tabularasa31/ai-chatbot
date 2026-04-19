@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact
+from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
 from backend.email.service import send_email
@@ -31,7 +32,6 @@ from backend.models import (
 )
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
-from backend.user_sessions.service import sync_user_session_identity
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +180,7 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
 
 
 def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Session) -> None:
-    user = db.query(User).filter(User.id == tenant.user_id).first()
+    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
     support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
     if not recipient:

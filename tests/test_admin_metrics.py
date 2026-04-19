@@ -124,8 +124,8 @@ def test_admin_metrics_summary_values(tenant: TestClient, db_session: Session) -
     assert resp.status_code == 200
     data = resp.json()
     assert data["total_users"] >= 1
-    assert data["total_clients"] >= 1
-    assert data["active_clients"] >= 1
+    assert data["total_tenants"] >= 1
+    assert data["active_tenants"] >= 1
     assert data["total_documents"] >= 1
     assert data["total_chat_sessions"] >= 1
     assert data["total_messages_user"] >= 1

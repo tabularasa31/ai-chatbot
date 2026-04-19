@@ -181,6 +181,7 @@ class User(Base):
     verification_expires_at = Column(DateTime, nullable=True)
     reset_password_token = Column(String(128), nullable=True, unique=True)
     reset_password_expires_at = Column(DateTime, nullable=True)
+    role = Column(String(32), nullable=False, server_default="owner")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,
@@ -191,10 +192,8 @@ class User(Base):
 
     tenant = relationship(
         "Tenant",
-        back_populates="user",
-        foreign_keys="Tenant.user_id",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+        back_populates="members",
+        foreign_keys="User.tenant_id",
     )
 
 
@@ -205,13 +204,6 @@ class Tenant(Base):
         PG_UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
-    )
-    user_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-        index=True,
     )
     name = Column(String(255), nullable=False)
     api_key = Column(String(32), unique=True, nullable=False, index=True)
@@ -238,7 +230,7 @@ class Tenant(Base):
         onupdate=_utcnow,
     )
 
-    user = relationship("User", back_populates="tenant", foreign_keys="Tenant.user_id")
+    members = relationship("User", back_populates="tenant", foreign_keys="User.tenant_id")
     documents = relationship(
         "Document",
         back_populates="tenant",
@@ -1166,10 +1158,10 @@ class PiiEvent(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
 
-class UserSession(Base):
+class ContactSession(Base):
     """Cross-session history for identified users (v2+); v1 only persists schema."""
 
-    __tablename__ = "user_sessions"
+    __tablename__ = "contact_sessions"
 
     id = Column(
         PG_UUID(as_uuid=True),
@@ -1182,7 +1174,7 @@ class UserSession(Base):
         nullable=False,
         index=True,
     )
-    user_id = Column(String(255), nullable=False, index=True)
+    contact_id = Column(String(255), nullable=False, index=True)
     email = Column(String(255), nullable=True)
     name = Column(String(255), nullable=True)
     plan_tier = Column(String(64), nullable=True)
@@ -1194,17 +1186,17 @@ class UserSession(Base):
 
 
 Index(
-    "ix_user_sessions_tenant_user",
-    UserSession.tenant_id,
-    UserSession.user_id,
+    "ix_contact_sessions_tenant_contact",
+    ContactSession.tenant_id,
+    ContactSession.contact_id,
 )
 Index(
-    "uq_user_sessions_tenant_user_active",
-    UserSession.tenant_id,
-    UserSession.user_id,
+    "uq_contact_sessions_tenant_contact_active",
+    ContactSession.tenant_id,
+    ContactSession.contact_id,
     unique=True,
-    postgresql_where=UserSession.session_ended_at.is_(None),
-    sqlite_where=UserSession.session_ended_at.is_(None),
+    postgresql_where=ContactSession.session_ended_at.is_(None),
+    sqlite_where=ContactSession.session_ended_at.is_(None),
 )
 
 

@@ -5,7 +5,7 @@ import { api, type TenantMeResponse, type KycSecretResponse, type KycStatusRespo
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
 export default function WidgetSettingsPage() {
-  const [tenantInfo, setClientInfo] = useState<TenantMeResponse | null>(null);
+  const [tenantInfo, setTenantInfo] = useState<TenantMeResponse | null>(null);
   const [status, setStatus] = useState<KycStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -19,7 +19,7 @@ export default function WidgetSettingsPage() {
     try {
       const [s, c] = await Promise.all([api.kyc.getStatus(), api.clients.getMe()]);
       setStatus(s);
-      setClientInfo(c);
+      setTenantInfo(c);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     } finally {

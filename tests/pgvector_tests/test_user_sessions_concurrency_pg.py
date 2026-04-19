@@ -7,8 +7,8 @@ import uuid
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.models import UserSession
-from backend.user_sessions import service as user_session_service
+from backend.models import ContactSession
+from backend.contact_sessions import service as user_session_service
 from tests.test_models import _create_client, _create_user
 
 
@@ -58,11 +58,11 @@ def test_start_user_session_two_writer_race_returns_winner_row_on_postgres(
 
     pg_db_session.expire_all()
     active_rows = (
-        pg_db_session.query(UserSession)
+        pg_db_session.query(ContactSession)
         .filter(
-            UserSession.tenant_id == tenant.id,
-            UserSession.user_id == "u1",
-            UserSession.session_ended_at.is_(None),
+            ContactSession.tenant_id == tenant.id,
+            ContactSession.contact_id == "u1",
+            ContactSession.session_ended_at.is_(None),
         )
         .all()
     )

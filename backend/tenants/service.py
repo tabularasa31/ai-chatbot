@@ -43,7 +43,6 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
         )
     api_key = secrets.token_hex(16)  # 32 chars
     tenant = Tenant(
-        user_id=user_id,
         name=name,
         api_key=api_key,
     )
@@ -88,22 +87,33 @@ def ensure_tenant_for_user(
 
 
 def get_tenant_by_user(user_id: uuid.UUID, db: Session) -> Tenant | None:
-    """Get tenant by user_id. Returns None if not found."""
-    return db.query(Tenant).filter(Tenant.user_id == user_id).first()
+    """Get the tenant the user belongs to (single JOIN query)."""
+    return (
+        db.query(Tenant)
+        .join(User, User.tenant_id == Tenant.id)
+        .filter(User.id == user_id)
+        .first()
+    )
 
 
 def get_tenant_by_id(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     db: Session,
+    *,
+    require_owner: bool = False,
 ) -> Tenant:
     """
-    Get tenant by id. Verifies ownership (tenant.user_id == user_id).
-    Raises 404 if not found or not owner.
+    Get tenant by id. Verifies the user belongs to this tenant.
+    Raises 404 if not found or not a member.
+    Pass require_owner=True for destructive operations (delete, rotate keys).
     """
     tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    if not tenant or tenant.user_id != user_id:
+    user = db.query(User).filter(User.id == user_id).first()
+    if not tenant or not user or user.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
+    if require_owner and user.role != "owner":
+        raise HTTPException(status_code=403, detail="Owner role required")
     return tenant
 
 
@@ -168,7 +178,7 @@ def get_support_settings_for_user(user_id: uuid.UUID, db: Session) -> dict[str, 
     tenant = get_tenant_by_user(user_id, db)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    owner = db.query(User).filter(User.id == tenant.user_id).first()
+    owner = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").limit(1).first()
     raw = tenant.settings if isinstance(tenant.settings, dict) else None
     config = public_support_config_dict(raw)
     return {
@@ -357,6 +367,6 @@ def delete_tenant(
     CASCADE deletes all related documents/chats (already in DB schema).
     Raises 404 if not found or not owner.
     """
-    tenant = get_tenant_by_id(tenant_id, user_id, db)
+    tenant = get_tenant_by_id(tenant_id, user_id, db, require_owner=True)
     db.delete(tenant)
     db.commit()

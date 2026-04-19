@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 import backend.chat.language as language_module
 from backend.core.config import Settings
-from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource, UserSession
+from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource, ContactSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from backend.chat.service import (
     RetrievalContext,
@@ -2784,7 +2784,7 @@ def test_chat_followup_no_closes_active_user_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
-    from backend.user_sessions.service import start_user_session
+    from backend.contact_sessions.service import start_user_session
 
     token = register_and_verify_user(tenant, db_session, email="follow-no-user-session@example.com")
     cl_resp = tenant.post(
@@ -2854,7 +2854,7 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.models import Chat, EscalationTicket, EscalationTrigger, EscalationStatus
-    from backend.user_sessions.service import start_user_session
+    from backend.contact_sessions.service import start_user_session
 
     token = register_and_verify_user(tenant, db_session, email="follow-yes-user-session@example.com")
     cl_resp = tenant.post(
@@ -3037,14 +3037,14 @@ def test_chat_when_already_closed_uses_closed_phase(
     assert response.json()["chat_ended"] is True
     assert "Chat already ended" in response.json()["text"]
     rows = (
-        db_session.query(UserSession)
-        .filter(UserSession.tenant_id == tenant_id, UserSession.user_id == "u-closed")
+        db_session.query(ContactSession)
+        .filter(ContactSession.tenant_id == tenant_id, ContactSession.contact_id == "u-closed")
         .all()
     )
     assert rows == []
 
 
-def test_anonymous_chat_does_not_create_user_sessions(
+def test_anonymous_chat_does_not_create_contact_sessions(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
@@ -3094,7 +3094,7 @@ def test_anonymous_chat_does_not_create_user_sessions(
     )
     assert response.status_code == 200
 
-    rows = db_session.query(UserSession).filter(UserSession.tenant_id == tenant_id).all()
+    rows = db_session.query(ContactSession).filter(ContactSession.tenant_id == tenant_id).all()
     assert rows == []
 
 
@@ -3168,7 +3168,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     assert len(messages) == 2
 
 
-def test_user_sessions_allow_only_one_active_row_per_user(
+def test_contact_sessions_allow_only_one_active_row_per_contact(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -3182,10 +3182,10 @@ def test_user_sessions_allow_only_one_active_row_per_user(
     )
     tenant_id = uuid.UUID(cl_resp.json()["id"])
 
-    db_session.add(UserSession(tenant_id=tenant_id, user_id="u-unique"))
+    db_session.add(ContactSession(tenant_id=tenant_id, contact_id="u-unique"))
     db_session.commit()
 
-    db_session.add(UserSession(tenant_id=tenant_id, user_id="u-unique"))
+    db_session.add(ContactSession(tenant_id=tenant_id, contact_id="u-unique"))
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()

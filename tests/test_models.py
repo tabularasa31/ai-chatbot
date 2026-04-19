@@ -28,12 +28,13 @@ def _create_user(db_session, email: str = "user@example.com") -> User:
 
 def _create_client(db_session, user: User, name: str = "Test Tenant") -> Tenant:
     tenant = Tenant(
-        user_id=user.id,
         name=name,
         api_key=f"{uuid.uuid4().hex[:32]}",
         settings={"language": "en"},
     )
     db_session.add(tenant)
+    db_session.flush()
+    user.tenant_id = tenant.id
     db_session.commit()
     db_session.refresh(tenant)
     return tenant
@@ -116,11 +117,11 @@ def test_client_creation_with_api_key(db_session) -> None:
 
 
 def test_client_user_relationship(db_session) -> None:
-    """У клиента должна корректно работать связь с пользователем."""
+    """Tenant members relationship works correctly."""
     user = _create_user(db_session)
     tenant = _create_client(db_session, user)
-    assert tenant.user.id == user.id
-    assert user.tenant[0].id == tenant.id
+    assert tenant.members[0].id == user.id
+    assert user.tenant.id == tenant.id
 
 
 def test_document_creation_default_status_processing(db_session) -> None:
@@ -230,22 +231,18 @@ def test_timestamps_are_utc(db_session) -> None:
 
 
 def test_multiple_clients_for_one_user_rejected(db_session) -> None:
-    """Один пользователь не может иметь несколько клиентов."""
-    user = _create_user(db_session)
-    _create_client(db_session, user, name="Tenant 1")
+    """Сервис не позволяет создать второй тенант для одного пользователя."""
+    from fastapi import HTTPException
+    from backend.tenants.service import create_tenant
 
-    tenant = Tenant(
-        user_id=user.id,
-        name="Tenant 2",
-        api_key=f"{uuid.uuid4().hex[:32]}",
-        settings={"language": "en"},
-    )
-    db_session.add(tenant)
+    user = _create_user(db_session, email="double-tenant@example.com")
+    create_tenant(user.id, "Tenant 1", db_session)
+
     try:
-        db_session.commit()
-        assert False, "Ожидался IntegrityError при попытке создать второго клиента"
-    except IntegrityError:
-        db_session.rollback()
+        create_tenant(user.id, "Tenant 2", db_session)
+        assert False, "Ожидался 409 при попытке создать второго тенанта"
+    except HTTPException as e:
+        assert e.status_code == 409
 
 
 def test_multiple_messages_in_chat_order(db_session) -> None:

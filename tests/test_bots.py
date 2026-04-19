@@ -24,13 +24,14 @@ def _auth(client: TestClient, db: Session, email: str = "bot-owner@example.com")
 
 
 def test_list_bots_returns_default_bot(tenant: TestClient, db_session: Session) -> None:
-    """After creating a tenant the backfill gives no bots (SQLite test DB), but list endpoint works."""
-    token, tenant_id = _auth(tenant, db_session, "list-bots@example.com")
+    """create_tenant auto-creates one default bot; list returns it immediately."""
+    token, _ = _auth(tenant, db_session, "list-bots@example.com")
 
     resp = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     data = resp.json()
-    assert "items" in data
+    assert len(data["items"]) == 1
+    assert data["items"][0]["name"] == "Bot Test Tenant"
 
 
 def test_create_and_get_bot(tenant: TestClient, db_session: Session) -> None:
@@ -77,14 +78,10 @@ def test_update_bot(tenant: TestClient, db_session: Session) -> None:
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
-    """Deleting the only bot should return 409."""
-    token, tenant_id = _auth(tenant, db_session, "del-bot@example.com")
+    """Deleting the only bot (the auto-created default) should return 409."""
+    token, _ = _auth(tenant, db_session, "del-bot@example.com")
 
-    bot_id = tenant.post(
-        "/bots",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Solo Bot"},
-    ).json()["id"]
+    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
 
     del_resp = tenant.delete(
         f"/bots/{bot_id}",

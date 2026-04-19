@@ -29,3 +29,11 @@ class BotUpdate(BaseModel):
 
 class BotList(BaseModel):
     items: list[BotResponse]
+
+
+class DisclosureConfigResponse(BaseModel):
+    level: str
+
+
+class DisclosureConfigUpdate(BaseModel):
+    level: str

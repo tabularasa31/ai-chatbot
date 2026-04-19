@@ -1,4 +1,4 @@
-"""Disclosure controls: tenant-wide level + API."""
+"""Disclosure controls: bot-level level + API."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+import uuid as _uuid
+
 from backend.disclosure_config import public_config_dict, resolve_level
-from backend.models import Tenant
+from backend.models import Bot
 from tests.conftest import register_and_verify_user
 
 
@@ -31,17 +33,27 @@ def test_public_config_dict() -> None:
     assert public_config_dict({"level": "corporate"}) == {"level": "corporate"}
 
 
+def _setup(tenant: TestClient, db_session: Session, email: str, name: str) -> tuple[str, str]:
+    """Register user, create tenant (auto-creates default bot), return (token, bot_id)."""
+    token = register_and_verify_user(tenant, db_session, email=email)
+    cr = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": name},
+    )
+    assert cr.status_code == 201
+    bots_r = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
+    assert bots_r.status_code == 200
+    bot_id = bots_r.json()["items"][0]["id"]
+    return token, bot_id
+
+
 def test_get_disclosure_defaults(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="disc-get@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Disc Tenant"},
-    )
-    r = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    token, bot_id = _setup(tenant, db_session, "disc-get@example.com", "Disc Tenant")
+    r = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
@@ -50,20 +62,15 @@ def test_put_and_get_disclosure(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="disc-put@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Disc Put"},
-    )
+    token, bot_id = _setup(tenant, db_session, "disc-put@example.com", "Disc Put")
     r = tenant.put(
-        "/tenants/me/disclosure",
+        f"/bots/{bot_id}/disclosure",
         headers={"Authorization": f"Bearer {token}"},
         json={"level": "corporate"},
     )
     assert r.status_code == 200
     assert r.json() == {"level": "corporate"}
-    r2 = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r2 = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r2.json() == {"level": "corporate"}
 
 
@@ -71,18 +78,13 @@ def test_get_disclosure_ignores_unsupported_keys_in_db(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="disc-alias@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Alias Co"},
-    )
-    cl = db_session.query(Tenant).filter(Tenant.name == "Alias Co").first()
-    assert cl is not None
-    cl.disclosure_config = {"legacy_level": "detailed"}
+    token, bot_id = _setup(tenant, db_session, "disc-alias@example.com", "Alias Co")
+    bot = db_session.query(Bot).filter(Bot.id == _uuid.UUID(bot_id)).first()
+    assert bot is not None
+    bot.disclosure_config = {"legacy_level": "detailed"}
     db_session.commit()
 
-    r = tenant.get("/tenants/me/disclosure", headers={"Authorization": f"Bearer {token}"})
+    r = tenant.get(f"/bots/{bot_id}/disclosure", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert r.json() == {"level": "standard"}
 
@@ -91,14 +93,9 @@ def test_put_disclosure_invalid_level(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="disc-bad@example.com")
-    tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Bad Level Co"},
-    )
+    token, bot_id = _setup(tenant, db_session, "disc-bad@example.com", "Bad Level Co")
     r = tenant.put(
-        "/tenants/me/disclosure",
+        f"/bots/{bot_id}/disclosure",
         headers={"Authorization": f"Bearer {token}"},
         json={"level": "mega"},
     )

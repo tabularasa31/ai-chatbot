@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.bots import service as bots_service
-from backend.bots.schemas import BotCreate, BotList, BotResponse, BotUpdate
+from backend.bots.schemas import (
+    BotCreate,
+    BotList,
+    BotResponse,
+    BotUpdate,
+    DisclosureConfigResponse,
+    DisclosureConfigUpdate,
+)
 from backend.core.db import get_db
 from backend.models import User
 
@@ -70,3 +77,24 @@ def delete_bot(
     db: Annotated[Session, Depends(get_db)],
 ) -> None:
     bots_service.delete_bot(bot_id, tenant_id, db)
+
+
+@bots_router.get("/{bot_id}/disclosure", response_model=DisclosureConfigResponse)
+def get_bot_disclosure(
+    bot_id: uuid.UUID,
+    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DisclosureConfigResponse:
+    data = bots_service.get_bot_disclosure_config(bot_id, tenant_id, db)
+    return DisclosureConfigResponse(**data)
+
+
+@bots_router.put("/{bot_id}/disclosure", response_model=DisclosureConfigResponse)
+def put_bot_disclosure(
+    bot_id: uuid.UUID,
+    body: DisclosureConfigUpdate,
+    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    db: Annotated[Session, Depends(get_db)],
+) -> DisclosureConfigResponse:
+    data = bots_service.update_bot_disclosure_config(bot_id, tenant_id, body.level, db)
+    return DisclosureConfigResponse(**data)

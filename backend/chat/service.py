@@ -1573,6 +1573,7 @@ def process_chat_message(
     api_key: str,
     user_context: dict | None = None,
     browser_locale: str | None = None,
+    disclosure_config: dict | None = None,
 ) -> ChatTurnOutcome:
     """
     RAG pipeline with FI-ESC escalation state machine.
@@ -1722,9 +1723,9 @@ def process_chat_message(
 
     explicit_human_request = detect_human_request(question_for_pipeline)
 
-    disclosure_cfg: dict[str, Any] | None = None
-    if tenant_row and isinstance(tenant_row.disclosure_config, dict):
-        disclosure_cfg = tenant_row.disclosure_config
+    disclosure_cfg: dict[str, Any] | None = (
+        disclosure_config if isinstance(disclosure_config, dict) else None
+    )
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
 
@@ -2418,10 +2419,6 @@ def run_debug(
         optional_entity_types=optional_entity_types,
     ).redacted_text
 
-    disclosure_cfg: dict[str, Any] | None = None
-    if tenant_row and isinstance(tenant_row.disclosure_config, dict):
-        disclosure_cfg = tenant_row.disclosure_config
-
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
         if tenant_row is not None
@@ -2442,7 +2439,7 @@ def run_debug(
         db,
         api_key=api_key,
         language_context=language_context,
-        disclosure_config=disclosure_cfg,
+        disclosure_config=None,
     )
     retrieval = result.retrieval
     if retrieval is not None:

@@ -5,6 +5,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.models import Bot
 
 
@@ -47,6 +48,30 @@ def update_bot(
     db.commit()
     db.refresh(bot)
     return bot
+
+
+def get_bot_disclosure_config(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> dict[str, str]:
+    bot = get_bot_by_id(bot_id, tenant_id, db)
+    raw = bot.disclosure_config if isinstance(bot.disclosure_config, dict) else None
+    return public_config_dict(raw)
+
+
+def update_bot_disclosure_config(
+    bot_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    level: str,
+    db: Session,
+) -> dict[str, str]:
+    if level not in ALLOWED_LEVELS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"level must be one of: {', '.join(sorted(ALLOWED_LEVELS))}",
+        )
+    bot = get_bot_by_id(bot_id, tenant_id, db)
+    bot.disclosure_config = {"level": level}
+    db.commit()
+    db.refresh(bot)
+    return public_config_dict(bot.disclosure_config)
 
 
 _MIN_BOTS_PER_TENANT = 1

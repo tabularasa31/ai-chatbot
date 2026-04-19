@@ -289,6 +289,7 @@ def widget_chat(
             api_key=tenant.openai_api_key,
             user_context=None,
             browser_locale=locale_hint,
+            disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

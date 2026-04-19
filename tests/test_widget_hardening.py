@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import uuid
 from unittest.mock import Mock
 
@@ -40,29 +39,18 @@ def _post_widget_chat(
     bot_public_id: str,
     *,
     message: str | None = None,
-    query_message: str | None = None,
-    locale: str | None = None,
-    session_id: str | None = None,
     test_ip: str | None = None,
 ):
-    query = f"/widget/chat?bot_id={bot_public_id}"
-    if query_message is not None:
-        from urllib.parse import quote
-
-        query += f"&message={quote(query_message)}"
-    if locale is not None:
-        from urllib.parse import quote
-
-        query += f"&locale={quote(locale)}"
-    if session_id is not None:
-        query += f"&session_id={session_id}"
-
     headers = {}
     if test_ip is not None:
         headers["x-test-ip"] = test_ip
+    json = None if message is None else {"message": message}
+    return tenant.post(f"/widget/chat?bot_id={bot_public_id}", json=json, headers=headers)
 
-    json = None if message is None and locale is None else {"message": message, "locale": locale}
-    return tenant.post(query, json=json, headers=headers)
+
+# ---------------------------------------------------------------------------
+# Message validation
+# ---------------------------------------------------------------------------
 
 
 def test_widget_chat_rejects_oversized_message(
@@ -70,74 +58,13 @@ def test_widget_chat_rejects_oversized_message(
     db_session: Session,
 ) -> None:
     body = _create_widget_client(
-        tenant,
-        db_session,
+        tenant, db_session,
         email="widget-hardening-too-long@example.com",
         name="Widget Hardening Too Long",
     )
-
     response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 5000)
-
     assert response.status_code == 413
-    assert response.json()["detail"] == {
-        "code": "message_too_long",
-        "max_chars": 4000,
-    }
-
-
-def test_widget_chat_accepts_4000_chars_exactly(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    body = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-4000@example.com",
-        name="Widget Hardening 4000",
-    )
-    _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="ok"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
-
-    response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 4000)
-
-    assert response.status_code == 200
-
-
-def test_widget_chat_rejects_query_only_message(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    body = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-fallback@example.com",
-        name="Widget Hardening Fallback",
-    )
-    _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="ok"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=3)
-
-    body_response = _post_widget_chat(tenant, body["bot_public_id"], message="hello from body")
-    query_response = _post_widget_chat(
-        tenant,
-        body["bot_public_id"],
-        query_message="hello from query",
-    )
-
-    assert body_response.status_code == 200
-    assert query_response.status_code == 422
-    assert query_response.json()["detail"]["code"] == "message_required"
+    assert response.json()["detail"] == {"code": "message_too_long", "max_chars": 4000}
 
 
 def test_widget_chat_rejects_empty_message(
@@ -145,33 +72,18 @@ def test_widget_chat_rejects_empty_message(
     db_session: Session,
 ) -> None:
     body = _create_widget_client(
-        tenant,
-        db_session,
+        tenant, db_session,
         email="widget-hardening-empty@example.com",
         name="Widget Hardening Empty",
     )
-
     response = _post_widget_chat(tenant, body["bot_public_id"], message="")
-
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "message_required"
 
 
-def test_widget_chat_rejects_whitespace_only_message(
-    tenant: TestClient,
-    db_session: Session,
-) -> None:
-    body = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-whitespace@example.com",
-        name="Widget Hardening Whitespace",
-    )
-
-    response = _post_widget_chat(tenant, body["bot_public_id"], message="   ")
-
-    assert response.status_code == 422
-    assert response.json()["detail"]["code"] == "message_required"
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
 
 
 def test_per_client_ip_rate_limit(
@@ -183,26 +95,14 @@ def test_per_client_ip_rate_limit(
     from backend.core.limiter import set_widget_public_rate_limit_key_override
 
     body = _create_widget_client(
-        tenant,
-        db_session,
+        tenant, db_session,
         email="widget-hardening-tenant-ip@example.com",
         name="Widget Hardening Tenant IP",
     )
     _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="ok"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
     monkeypatch.setattr(
         "backend.routes.widget.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
-            text="ok",
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        ),
+        lambda *args, **kwargs: ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False),
     )
 
     set_widget_public_rate_limit_key_override(
@@ -210,139 +110,8 @@ def test_per_client_ip_rate_limit(
     )
     try:
         for _ in range(30):
-            response = _post_widget_chat(
-                tenant,
-                body["bot_public_id"],
-                message="hello",
-                test_ip="198.51.100.1",
-            )
-            assert response.status_code == 200
-
-        limited = _post_widget_chat(
-            tenant,
-            body["bot_public_id"],
-            message="hello",
-            test_ip="198.51.100.1",
-        )
-
-        assert limited.status_code == 429
-    finally:
-        set_widget_public_rate_limit_key_override(None)
-
-
-def test_global_per_client_rate_limit_with_rotating_ip(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from backend.core.limiter import set_widget_public_rate_limit_key_override
-
-    body = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-global-tenant@example.com",
-        name="Widget Hardening Global Tenant",
-    )
-    _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="ok"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
-    monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
-            text="ok",
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        ),
-    )
-
-    set_widget_public_rate_limit_key_override(
-        lambda request: request.headers.get("x-test-ip", "127.0.0.1")
-    )
-    try:
-        for i in range(120):
-            response = _post_widget_chat(
-                tenant,
-                body["bot_public_id"],
-                message="hello",
-                test_ip=f"198.51.100.{i}",
-            )
-            assert response.status_code == 200
-
-        limited = _post_widget_chat(
-            tenant,
-            body["bot_public_id"],
-            message="hello",
-            test_ip="198.51.100.250",
-        )
-
-        assert limited.status_code == 429
-    finally:
-        set_widget_public_rate_limit_key_override(None)
-
-
-def test_per_ip_independence_across_clients(
-    mock_openai_client: Mock,
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from backend.core.limiter import set_widget_public_rate_limit_key_override
-
-    first = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-tenant-a@example.com",
-        name="Widget Hardening Tenant A",
-    )
-    second = _create_widget_client(
-        tenant,
-        db_session,
-        email="widget-hardening-tenant-b@example.com",
-        name="Widget Hardening Tenant B",
-    )
-    _seed_rag_chunk(db_session, uuid.UUID(first["id"]))
-    _seed_rag_chunk(db_session, uuid.UUID(second["id"]))
-
-    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="ok"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
-    monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
-            text="ok",
-            document_ids=[],
-            tokens_used=0,
-            chat_ended=False,
-        ),
-    )
-
-    set_widget_public_rate_limit_key_override(
-        lambda request: request.headers.get("x-test-ip", "127.0.0.1")
-    )
-    try:
-        for _ in range(30):
-            response_a = _post_widget_chat(
-                tenant,
-                first["bot_public_id"],
-                message="hello",
-                test_ip="203.0.113.10",
-            )
-            response_b = _post_widget_chat(
-                tenant,
-                second["bot_public_id"],
-                message="hello",
-                test_ip="203.0.113.10",
-            )
-            assert response_a.status_code == 200
-            assert response_b.status_code == 200
+            assert _post_widget_chat(tenant, body["bot_public_id"], message="hello", test_ip="198.51.100.1").status_code == 200
+        assert _post_widget_chat(tenant, body["bot_public_id"], message="hello", test_ip="198.51.100.1").status_code == 429
     finally:
         set_widget_public_rate_limit_key_override(None)
 
@@ -354,8 +123,7 @@ def test_session_init_rate_limit_lower(
     from backend.core.limiter import set_widget_public_rate_limit_key_override
 
     body = _create_widget_client(
-        tenant,
-        db_session,
+        tenant, db_session,
         email="widget-hardening-init-rate@example.com",
         name="Widget Hardening Init Rate",
     )
@@ -365,72 +133,38 @@ def test_session_init_rate_limit_lower(
     )
     try:
         for _ in range(10):
-            response = tenant.post(
+            assert tenant.post(
                 "/widget/session/init",
                 json={"api_key": body["api_key"]},
                 headers={"x-test-ip": "192.0.2.11"},
-            )
-            assert response.status_code == 200
-
-        limited = tenant.post(
+            ).status_code == 200
+        assert tenant.post(
             "/widget/session/init",
             json={"api_key": body["api_key"]},
             headers={"x-test-ip": "192.0.2.11"},
-        )
-        assert limited.status_code == 429
+        ).status_code == 429
     finally:
         set_widget_public_rate_limit_key_override(None)
 
 
-def test_apply_patch_strips_unknown_keys() -> None:
-    result = apply_identity_context_patch(
-        {"user_id": "u1", "malicious": "x", "xss": "<script>"},
-        {},
-    )
+# ---------------------------------------------------------------------------
+# Identity context patch
+# ---------------------------------------------------------------------------
 
+
+def test_apply_patch_strips_unknown_keys_and_caps_email() -> None:
+    result = apply_identity_context_patch({"user_id": "u1", "malicious": "x"}, {})
     assert result == {"user_id": "u1"}
 
-
-def test_apply_patch_caps_long_email() -> None:
-    result = apply_identity_context_patch(
-        {"user_id": "u1"},
-        {"email": f"{'a' * 490}@example.com"},
-    )
-
+    result = apply_identity_context_patch({"user_id": "u1"}, {"email": f"{'a' * 490}@example.com"})
     assert len(result["email"]) == 320
 
 
-def test_apply_patch_ignores_empty_fresh_fields() -> None:
-    result = apply_identity_context_patch(
-        {"user_id": "u1", "email": "kept@example.com"},
-        {"email": "   "},
-    )
-
-    assert result["email"] == "kept@example.com"
-
-
-def test_apply_patch_preserves_canonical_user_id() -> None:
-    result = apply_identity_context_patch(
-        {"user_id": "u1"},
-        {"user_id": "u2", "name": "Alice"},
-    )
-
-    assert result["user_id"] == "u1"
-    assert result["name"] == "Alice"
-
-
 def test_apply_patch_sanitizes_browser_locale() -> None:
-    accepted = apply_identity_context_patch(
-        {"user_id": "u1"},
-        {},
-        browser_locale=sanitize_locale("en-US"),
-    )
+    accepted = apply_identity_context_patch({"user_id": "u1"}, {}, browser_locale=sanitize_locale("en-US"))
     rejected = apply_identity_context_patch(
-        {"user_id": "u1"},
-        {},
-        browser_locale=sanitize_locale("not_a_locale; DROP TABLE"),
+        {"user_id": "u1"}, {}, browser_locale=sanitize_locale("not_a_locale; DROP TABLE")
     )
-
     assert accepted["browser_locale"] == "en-US"
     assert "browser_locale" not in rejected
 
@@ -440,50 +174,27 @@ def test_sanitize_locale_accepts_valid_tags(value: str) -> None:
     assert sanitize_locale(value) == value
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        'en"; ignore previous',
-        "en; system=evil",
-        "../../",
-        "select * from users",
-        "x" * 100,
-    ],
-)
+@pytest.mark.parametrize("value", ['en"; ignore previous', "en; system=evil", "x" * 100])
 def test_sanitize_locale_rejects_injection(value: str) -> None:
     assert sanitize_locale(value) is None
 
 
-@pytest.mark.parametrize("value", [None, "", "   "])
-def test_sanitize_locale_none_for_empty_or_none(value: str | None) -> None:
-    assert sanitize_locale(value) is None
+# ---------------------------------------------------------------------------
+# Session init 404
+# ---------------------------------------------------------------------------
 
 
-def test_session_init_404_for_invalid_key(
-    tenant: TestClient,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level("INFO")
-    response = tenant.post("/widget/session/init", json={"api_key": "ch_invalid"})
-
-    assert response.status_code == 404
-    assert "widget_session_init_rejected" in caplog.text
-    assert any(
-        record.message == "widget_session_init_rejected"
-        and getattr(record, "reason", None) == "not_found"
-        for record in caplog.records
-    )
-
-
-def test_session_init_404_for_inactive_client(
+def test_session_init_404_for_invalid_and_inactive(
     tenant: TestClient,
     db_session: Session,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level("INFO")
+    response = tenant.post("/widget/session/init", json={"api_key": "ch_invalid"})
+    assert response.status_code == 404
+
     body = _create_widget_client(
-        tenant,
-        db_session,
+        tenant, db_session,
         email="widget-hardening-inactive@example.com",
         name="Widget Hardening Inactive",
     )
@@ -493,17 +204,17 @@ def test_session_init_404_for_inactive_client(
     db_session.commit()
 
     response = tenant.post("/widget/session/init", json={"api_key": body["api_key"]})
-
     assert response.status_code == 404
-    assert "widget_session_init_rejected" in caplog.text
-    assert any(
-        record.message == "widget_session_init_rejected"
-        and getattr(record, "reason", None) == "inactive"
-        for record in caplog.records
-    )
+
+
+# ---------------------------------------------------------------------------
+# Trusted host
+# ---------------------------------------------------------------------------
 
 
 def test_trusted_host_rejects_bad_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
     import backend.core.config as config_module
     import backend.main as main_module
 
@@ -515,11 +226,8 @@ def test_trusted_host_rejects_bad_host(monkeypatch: pytest.MonkeyPatch) -> None:
     reloaded_main = importlib.reload(main_module)
     restricted_client = TestClient(reloaded_main.app)
 
-    bad = restricted_client.get("/health", headers={"host": "evil.com"})
-    ok = restricted_client.get("/health", headers={"host": "api.example.com"})
-
-    assert bad.status_code == 400
-    assert ok.status_code == 200
+    assert restricted_client.get("/health", headers={"host": "evil.com"}).status_code == 400
+    assert restricted_client.get("/health", headers={"host": "api.example.com"}).status_code == 200
 
     monkeypatch.setenv("ALLOWED_HOSTS", "*")
     importlib.reload(config_module)

@@ -655,3 +655,50 @@ def test_load_recent_user_turn_texts_prefers_decrypted_original(
         )
 
     assert texts == ["current question", "Как сбросить пароль?"]
+
+
+# ---------------------------------------------------------------------------
+# Single-word hint suppression (from test_language_detection_hints)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_detection_cache():
+    from backend.chat.language import _detect_language_cached
+
+    _detect_language_cached.cache_clear()
+    yield
+    _detect_language_cached.cache_clear()
+
+
+@pytest.mark.parametrize("word", ["hello", "pricing", "thanks"])
+def test_single_english_hint_word_not_forced(word: str) -> None:
+    from backend.chat.language import detect_language
+
+    result = detect_language(word)
+    assert not result.is_reliable or result.detected_language == "unknown"
+
+
+@pytest.mark.parametrize(
+    "word, expected_lang",
+    [
+        ("bonjour", "fr"),
+        ("hola", "es"),
+        ("hallo", "de"),
+        ("obrigado", "pt"),
+    ],
+)
+def test_single_non_english_hint_word_detected(word: str, expected_lang: str) -> None:
+    from backend.chat.language import detect_language
+
+    result = detect_language(word)
+    assert result.detected_language == expected_lang
+    assert result.is_reliable
+
+
+@pytest.mark.parametrize("word", ["ok", "hi", "yes", "no"])
+def test_short_single_word_unreliable(word: str) -> None:
+    from backend.chat.language import detect_language
+
+    result = detect_language(word)
+    assert not result.is_reliable

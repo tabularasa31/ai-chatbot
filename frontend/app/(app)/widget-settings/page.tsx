@@ -85,7 +85,6 @@ export default function WidgetSettingsPage() {
 
 function makeWidgetIdentityToken({
   secretHex,
-  botPublicId,
   userId,
   extras = {},
   ttlSeconds = 300,
@@ -93,7 +92,6 @@ function makeWidgetIdentityToken({
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     user_id: userId,
-    tenant_id: botPublicId,
     exp: now + ttlSeconds,
     iat: now,
     ...extras,

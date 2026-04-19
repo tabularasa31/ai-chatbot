@@ -319,7 +319,6 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     body = cl_resp.json()
-    tenant_public_id = body["public_id"]  # KYC token still uses tenant public_id as audience
     client_uuid = uuid.UUID(body["id"])
     api_key = body["api_key"]
     bot_public_id = _create_bot(tenant, token)
@@ -332,7 +331,7 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     assert sk_resp.status_code == 200
     secret_hex = sk_resp.json()["secret_key"]
     identity_token = generate_kyc_token(
-        {"user_id": "ext-42", "tenant_id": tenant_public_id, "email": "user@example.com"},
+        {"user_id": "ext-42", "email": "user@example.com"},
         secret_hex,
     )
     init_resp = tenant.post(

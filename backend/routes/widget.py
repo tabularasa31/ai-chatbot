@@ -82,7 +82,7 @@ def _resolve_widget_identity(
     last_reason = "bad_signature"
     for sk, _label in keys:
         raw_ctx, err = validate_kyc_token_detail(
-            identity_token.strip(), sk, tenant.public_id
+            identity_token.strip(), sk
         )
         if raw_ctx is not None:
             try:

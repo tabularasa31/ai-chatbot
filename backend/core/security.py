@@ -90,12 +90,11 @@ def generate_kyc_token(user_context: dict, secret_key: str, ttl_seconds: int = 3
 def validate_kyc_token_detail(
     token: str,
     secret_key: str,
-    tenant_id: str,
 ) -> tuple[dict | None, str | None]:
     """
     Validate a signed identity token. Returns (user_context_dict, None) or (None, reason).
 
-    reason is one of: malformed, expired, wrong_tenant, missing_user_id, bad_signature
+    reason is one of: malformed, expired, missing_user_id, bad_signature
     """
     if not token or "." not in token:
         return None, "malformed"
@@ -125,10 +124,6 @@ def validate_kyc_token_detail(
     if int(time.time()) > exp_i:
         return None, "expired"
 
-    tid = data.get("tenant_id")
-    if tid != tenant_id:
-        return None, "wrong_tenant"
-
     uid = data.get("user_id")
     if not isinstance(uid, str) or not uid.strip():
         return None, "missing_user_id"
@@ -141,15 +136,15 @@ def validate_kyc_token_detail(
     if not hmac.compare_digest(expected, sig_hex):
         return None, "bad_signature"
 
-    out = {k: v for k, v in data.items() if k not in ("exp", "iat", "tenant_id")}
+    out = {k: v for k, v in data.items() if k not in ("exp", "iat")}
     return out, None
 
 
-def validate_kyc_token(token: str, secret_key: str, tenant_id: str) -> dict | None:
+def validate_kyc_token(token: str, secret_key: str) -> dict | None:
     """
     Validate a signed identity token.
 
     Returns UserContext fields dict if valid, None otherwise (never raises).
     """
-    ctx, _err = validate_kyc_token_detail(token, secret_key, tenant_id)
+    ctx, _err = validate_kyc_token_detail(token, secret_key)
     return ctx

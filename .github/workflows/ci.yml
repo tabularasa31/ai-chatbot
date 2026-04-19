@@ -81,6 +81,13 @@ jobs:
       - name: Lint with ruff
         run: ruff check backend
 
+      - name: Check migration coverage (alembic check)
+        env:
+          DATABASE_URL: postgresql://postgres:password@localhost:5432/test_pgvector
+        run: |
+          alembic upgrade head
+          alembic check
+
       - name: Run tests (SQLite)
         run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
 

@@ -2,37 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #0A0A0F;
-  --foreground: #FAF5FF;
-  --surface: #12121A;
-  --surface-elevated: #1E1E2E;
-  --border: #2E2E3E;
-  --primary: #E879F9;
-  --primary-hover: #f099fb;
-  --secondary: #38BDF8;
-  --success: #4ADE80;
-  --error: #F87171;
-  --text-muted: rgba(250, 245, 255, 0.6);
-  --text-disabled: rgba(250, 245, 255, 0.4);
-  color-scheme: dark;
-}
-
 body {
-  color: var(--foreground);
-  background: var(--background);
+  color: #FAF5FF;
+  background: #0A0A0F;
   font-family: Arial, Helvetica, sans-serif;
 }
 
 input,
 textarea,
 select {
-  color: var(--foreground);
+  color: #FAF5FF;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: color-mix(in srgb, var(--foreground) 45%, transparent);
+  color: rgba(250, 245, 255, 0.45);
   opacity: 1;
 }
 

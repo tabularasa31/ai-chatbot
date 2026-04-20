@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  color-scheme: light;
+  --background: #0A0A0F;
+  --foreground: #FAF5FF;
+  color-scheme: dark;
 }
 
 body {
@@ -17,12 +17,12 @@ body {
 input,
 textarea,
 select {
-  color: var(--foreground);
+  color: #FAF5FF;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: color-mix(in srgb, var(--foreground) 45%, transparent);
+  color: rgba(250, 245, 255, 0.45);
   opacity: 1;
 }
 

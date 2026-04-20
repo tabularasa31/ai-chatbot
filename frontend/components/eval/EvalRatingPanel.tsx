@@ -70,19 +70,19 @@ export function EvalRatingPanel({
 
   if (saved && frozen) {
     return (
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      <div className="rounded-lg border border-[#4ADE80]/30 bg-[#4ADE80]/10 px-4 py-3 text-sm text-[#4ADE80]">
         <div className="flex flex-wrap items-center gap-2">
-          <Check size={14} className="text-emerald-600" />
+          <Check size={14} />
           <span className="font-semibold">Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}</span>
         </div>
         {frozen.verdict === "fail" && frozen.error_category ? (
-          <p className="mt-1.5 text-sm text-emerald-700">
+          <p className="mt-1.5 text-sm opacity-80">
             Категория:{" "}
             {CATEGORIES.find((c) => c.value === frozen.error_category)?.label ?? frozen.error_category}
           </p>
         ) : null}
         {frozen.comment ? (
-          <p className="mt-1.5 text-sm text-emerald-700">Комментарий: {frozen.comment}</p>
+          <p className="mt-1.5 text-sm opacity-80">Комментарий: {frozen.comment}</p>
         ) : null}
       </div>
     );
@@ -94,13 +94,13 @@ export function EvalRatingPanel({
 
   if (!expanded) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+      <div className="rounded-lg border border-[#2E2E3E] bg-[#1E1E2E] px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-600">Оценка ответа необязательна. Можно сразу продолжать диалог.</p>
+          <p className="text-sm text-[#FAF5FF]/60">Оценка ответа необязательна. Можно сразу продолжать диалог.</p>
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900"
+            className="inline-flex items-center rounded-lg border border-[#2E2E3E] bg-[#0A0A0F] px-3 py-1.5 text-sm font-medium text-[#FAF5FF]/80 transition-colors hover:border-[#E879F9]/50 hover:text-[#FAF5FF]"
           >
             Оценить ответ
           </button>
@@ -172,12 +172,12 @@ export function EvalRatingPanel({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <div className="rounded-lg border border-[#2E2E3E] bg-[#1E1E2E] p-4">
       {/* Header row */}
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h4 className="text-sm font-medium text-gray-900">Оцените ответ ассистента</h4>
-          <p className="mt-1 text-xs text-slate-500">Это необязательный шаг. Следующий вопрос можно задать в любой момент.</p>
+          <h4 className="text-sm font-medium text-[#FAF5FF]">Оцените ответ ассистента</h4>
+          <p className="mt-1 text-xs text-[#FAF5FF]/50">Это необязательный шаг. Следующий вопрос можно задать в любой момент.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -189,7 +189,7 @@ export function EvalRatingPanel({
               setComment("");
               setSaveError("");
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-all hover:border-slate-300 hover:text-slate-800"
+            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#2E2E3E] bg-[#0A0A0F] px-3 py-1.5 text-xs font-medium text-[#FAF5FF]/60 transition-all hover:border-[#FAF5FF]/30 hover:text-[#FAF5FF]/80"
           >
             Позже
           </button>
@@ -203,8 +203,8 @@ export function EvalRatingPanel({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "pass"
-                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                : "border-gray-200 bg-white text-gray-600 hover:border-emerald-400 hover:text-emerald-600",
+                ? "border-[#4ADE80] bg-[#4ADE80]/10 text-[#4ADE80]"
+                : "border-[#2E2E3E] bg-[#0A0A0F] text-[#FAF5FF]/60 hover:border-[#4ADE80]/50 hover:text-[#4ADE80]",
             )}
           >
             <Check size={13} />
@@ -219,8 +219,8 @@ export function EvalRatingPanel({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "fail"
-                ? "border-red-500 bg-red-50 text-red-700"
-                : "border-gray-200 bg-white text-gray-600 hover:border-red-400 hover:text-red-600",
+                ? "border-[#F87171] bg-[#F87171]/10 text-[#F87171]"
+                : "border-[#2E2E3E] bg-[#0A0A0F] text-[#FAF5FF]/60 hover:border-[#F87171]/50 hover:text-[#F87171]",
             )}
           >
             <AlertTriangle size={13} />
@@ -233,7 +233,7 @@ export function EvalRatingPanel({
       {verdict === "fail" && (
         <div className="space-y-3 mt-3">
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-[#FAF5FF]/70">
               <Tag size={12} />
               Категория
             </label>
@@ -243,7 +243,7 @@ export function EvalRatingPanel({
                 setErrorCategory(e.target.value);
                 setSaveError("");
               }}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
+              className="w-full rounded-lg border border-[#2E2E3E] bg-[#0A0A0F] px-3 py-2 text-sm text-[#FAF5FF] outline-none transition focus:border-transparent focus:ring-2 focus:ring-[#E879F9]"
             >
               <option value="">Выберите категорию</option>
               {CATEGORIES.map((c) => (
@@ -255,7 +255,7 @@ export function EvalRatingPanel({
           </div>
 
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-[#FAF5FF]/70">
               <MessageSquare size={12} />
               Комментарий
             </label>
@@ -267,14 +267,14 @@ export function EvalRatingPanel({
               }}
               placeholder="Что именно пошло не так?"
               rows={3}
-              className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm leading-6 text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
+              className="w-full resize-none rounded-lg border border-[#2E2E3E] bg-[#0A0A0F] px-3 py-2 text-sm leading-6 text-[#FAF5FF] outline-none transition placeholder:text-[#FAF5FF]/40 focus:border-transparent focus:ring-2 focus:ring-[#E879F9]"
             />
           </div>
         </div>
       )}
 
       {saveError && (
-        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mt-3 rounded-lg border border-[#F87171]/30 bg-[#F87171]/10 px-3 py-2 text-sm text-[#F87171]">
           {saveError}
         </div>
       )}
@@ -285,7 +285,7 @@ export function EvalRatingPanel({
             type="button"
             disabled={saving || (!canSavePass && !canSaveFail)}
             onClick={handleSave}
-            className="rounded-lg bg-[#a855f7] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea] disabled:cursor-not-allowed disabled:bg-gray-300"
+            className="rounded-lg bg-[#E879F9] px-4 py-2 text-sm font-medium text-[#0A0A0F] transition-colors hover:bg-[#f099fb] disabled:cursor-not-allowed disabled:bg-[#2E2E3E] disabled:text-[#FAF5FF]/40"
           >
             {saving ? "Сохранение..." : "Сохранить оценку"}
           </button>

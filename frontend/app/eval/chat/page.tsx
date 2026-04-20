@@ -34,18 +34,18 @@ function EvalStateMessage({
   description: string;
 }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-50 px-4 py-10 font-['Inter']">
-      <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-[#E879F9]/18 blur-3xl" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0A0A0F] px-4 py-10">
+      <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-[#E879F9]/20 blur-3xl" />
       <div className="absolute bottom-[-96px] right-[-40px] h-72 w-72 rounded-full bg-[#38BDF8]/18 blur-3xl" />
       <div
-        className={`relative max-w-xl rounded-[30px] border px-6 py-7 shadow-[0_30px_100px_rgba(15,23,42,0.12)] ${
+        className={`relative max-w-xl rounded-xl border px-6 py-7 ${
           tone === "danger"
-            ? "border-[#FECACA] bg-[#FFF1F2] text-[#991B1B]"
-            : "border-[#DCE5F2] bg-white text-[#0F172A]"
+            ? "border-[#F87171]/30 bg-[#F87171]/10 text-[#F87171]"
+            : "border-[#2E2E3E] bg-[#1E1E2E] text-[#FAF5FF]"
         }`}
       >
-        <h1 className="text-2xl font-semibold tracking-[-0.03em]">{title}</h1>
-        <p className="mt-3 text-sm leading-7 text-inherit/80">{description}</p>
+        <h1 className="text-2xl font-semibold">{title}</h1>
+        <p className="mt-3 text-sm leading-7 opacity-80">{description}</p>
       </div>
     </div>
   );
@@ -211,19 +211,19 @@ function EvalChatContent() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-gray-50 font-['Inter']">
-      <header className="border-b border-gray-200 bg-white px-8 py-4">
+    <div className="flex min-h-screen flex-col bg-[#0A0A0F]">
+      <header className="border-b border-[#1E1E2E] bg-[#12121A] px-8 py-4">
         <div className="flex items-center justify-between">
-          <span className="text-[#a855f7] font-medium hover:text-[#9333ea] transition-colors cursor-default">
+          <span className="text-[#E879F9] font-medium cursor-default">
             UI Evals
           </span>
-          <h1 className="text-gray-900 font-medium">Ручная проверка диалога</h1>
-          <span className="text-gray-500 text-sm">{botId}</span>
+          <h1 className="text-[#FAF5FF] font-medium">Ручная проверка диалога</h1>
+          <span className="text-[#FAF5FF]/60 text-sm">{botId}</span>
         </div>
       </header>
 
       <main className="flex flex-1 items-center justify-center p-8">
-        <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-lg shadow-lg">
+        <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-xl border border-[#1E1E2E] shadow-2xl">
           <ChatWidget botId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
         </div>
       </main>
@@ -235,7 +235,7 @@ export default function EvalChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 text-sm text-[#64748B]">
+        <div className="flex min-h-screen items-center justify-center bg-[#0A0A0F] px-4 text-sm text-[#FAF5FF]/60">
           Загрузка...
         </div>
       }

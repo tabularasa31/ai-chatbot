@@ -3,9 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  color-scheme: light;
+  --background: #0A0A0F;
+  --foreground: #FAF5FF;
+  --surface: #12121A;
+  --surface-elevated: #1E1E2E;
+  --border: #2E2E3E;
+  --primary: #E879F9;
+  --primary-hover: #f099fb;
+  --secondary: #38BDF8;
+  --success: #4ADE80;
+  --error: #F87171;
+  --text-muted: rgba(250, 245, 255, 0.6);
+  --text-disabled: rgba(250, 245, 255, 0.4);
+  color-scheme: dark;
 }
 
 body {

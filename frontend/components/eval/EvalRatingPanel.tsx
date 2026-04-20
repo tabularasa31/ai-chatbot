@@ -189,7 +189,7 @@ export function EvalRatingPanel({
               setComment("");
               setSaveError("");
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[#2E2E3E] bg-[#0A0A0F] px-3 py-1.5 text-xs font-medium text-[#FAF5FF]/60 transition-all hover:border-[#FAF5FF]/30 hover:text-[#FAF5FF]/80"
+            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-[#2E2E3E] bg-[#0A0A0F] px-3 py-1.5 text-xs font-medium text-[#FAF5FF]/60 transition-all hover:border-[#FAF5FF]/30 hover:text-[#FAF5FF]/80"
           >
             Позже
           </button>

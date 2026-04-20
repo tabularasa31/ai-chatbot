@@ -34,11 +34,11 @@ function EvalStateMessage({
   description: string;
 }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0A0A0F] px-4 py-10">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0A0A0F] px-4 py-10 font-['Inter']">
       <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-[#E879F9]/20 blur-3xl" />
       <div className="absolute bottom-[-96px] right-[-40px] h-72 w-72 rounded-full bg-[#38BDF8]/18 blur-3xl" />
       <div
-        className={`relative max-w-xl rounded-xl border px-6 py-7 ${
+        className={`relative max-w-xl rounded-lg border px-6 py-7 ${
           tone === "danger"
             ? "border-[#F87171]/30 bg-[#F87171]/10 text-[#F87171]"
             : "border-[#2E2E3E] bg-[#1E1E2E] text-[#FAF5FF]"
@@ -211,7 +211,7 @@ function EvalChatContent() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#0A0A0F]">
+    <div className="flex min-h-screen flex-col bg-[#0A0A0F] font-['Inter']">
       <header className="border-b border-[#1E1E2E] bg-[#12121A] px-8 py-4">
         <div className="flex items-center justify-between">
           <span className="text-[#E879F9] font-medium cursor-default">

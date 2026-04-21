@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { MessageCircle, Send } from "lucide-react";
 
 const LANDING_DEMO_BOT_ID =
-  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() ?? "";
+  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() || "ch_h5l1bdj2len7iky0pj";
 
 const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
 

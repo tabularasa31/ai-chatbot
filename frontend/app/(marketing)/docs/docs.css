@@ -1,0 +1,62 @@
+/* ── Docs page: match dashboard color scheme ─────────────────────────────
+   Light content area + dark sidebar/navbar, mirroring the app dashboard.
+   We override fumadocs-ui --fd-* CSS variables after the preset sets them.
+   ──────────────────────────────────────────────────────────────────────── */
+
+/* 1. Light content area (override the dark brand preset for the page body) */
+:root {
+  --fd-background:         220 14% 97% !important;   /* ≈ #F4F5F7 */
+  --fd-foreground:         222 47% 11% !important;   /* dark text  */
+  --fd-card:               0 0% 100%   !important;   /* white cards */
+  --fd-card-foreground:    222 47% 11% !important;
+  --fd-muted:              220 13% 93% !important;
+  --fd-muted-foreground:   215 16% 47% !important;
+  --fd-border:             220 13% 89% !important;
+  --fd-secondary:          220 14% 93% !important;
+  --fd-secondary-foreground: 222 47% 11% !important;
+  --fd-accent:             220 14% 91% !important;
+  --fd-accent-foreground:  222 47% 11% !important;
+  --fd-primary:            291 90% 55% !important;   /* purple accent */
+  --fd-primary-foreground: 0 0% 100%   !important;
+  --fd-popover:            0 0% 100%   !important;
+  --fd-popover-foreground: 222 47% 11% !important;
+  --fd-ring:               291 90% 72% !important;
+}
+
+/* 2. Dark sidebar — re-apply the brand dark palette scoped to the sidebar */
+#nd-sidebar {
+  background-color:   #0A0A0F !important;
+  border-inline-end:  1px solid rgba(255, 255, 255, 0.07) !important;
+
+  --fd-background:             240 20% 5%   !important;
+  --fd-foreground:             275 100% 97% !important;
+  --fd-muted:                  240 16% 12%  !important;
+  --fd-muted-foreground:       275 40% 75%  !important;
+  --fd-secondary:              240 15% 14%  !important;
+  --fd-secondary-foreground:   275 100% 97% !important;
+  --fd-accent:                 240 16% 17%  !important;
+  --fd-accent-foreground:      275 100% 97% !important;
+  --fd-border:                 240 15% 18%  !important;
+  --fd-primary:                291 90% 72%  !important;
+  --fd-primary-foreground:     240 20% 5%   !important;
+}
+
+/* 3. Sidebar nav items — active link uses the pink accent */
+#nd-sidebar [data-active='true'] {
+  background-color: rgba(232, 121, 249, 0.08) !important;
+  color: #FAF5FF !important;
+}
+
+/* 4. Match sidebar width to dashboard (200 px) */
+@media (min-width: 768px) {
+  [style*='--fd-sidebar-width'],
+  .md\:\[--fd-sidebar-width\:268px\] {
+    --fd-sidebar-width: 200px !important;
+  }
+}
+
+/* 5. Docs navbar header bar — match dashboard topbar */
+header[class*='sticky'] {
+  background-color: #0A0A0F !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+}

@@ -10,7 +10,9 @@
   var botId =
     (currentScript.dataset && currentScript.dataset.botId) ||
     (function () {
-      try { return new URL(currentScript.src).searchParams.get("botId"); } catch (e) { return null; }
+      var src = currentScript.src || "";
+      var m = src.match(/[?&]botId=([^&]*)/);
+      return m ? decodeURIComponent(m[1]) : null;
     })();
 
   if (!botId) {
@@ -26,7 +28,9 @@
   var widgetBase =
     (typeof window !== "undefined" && window.Chat9Config && window.Chat9Config.widgetUrl) ||
     (function () {
-      try { return new URL(currentScript.src).origin; } catch (e) { return ""; }
+      var src = currentScript.src || "";
+      var m = src.match(/^(https?:\/\/[^\/]+)/);
+      return m ? m[1] : "";
     })();
 
   var browserLocale =
@@ -34,9 +38,9 @@
     null;
 
   function buildWidgetUrl() {
-    var p = new URLSearchParams({ botId: botId });
-    if (browserLocale) p.set("locale", browserLocale);
-    return widgetBase + "/widget?" + p.toString();
+    var query = "botId=" + encodeURIComponent(botId);
+    if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
+    return widgetBase + "/widget?" + query;
   }
 
   function makeIframe() {
@@ -62,6 +66,7 @@
     inlineFrame.style.cssText =
       "width:100%;height:600px;border:none;display:block;" +
       "border-radius:12px;overflow:hidden;";
+    targetEl.innerHTML = "";
     targetEl.appendChild(inlineFrame);
     console.log("Chat9 Widget loaded (inline)", { botId: botId });
     return;
@@ -72,9 +77,17 @@
   var isResizing = false;
   var resizeStartX, resizeStartY, resizeStartW, resizeStartH;
 
-  var fabBg      = color ? color : "linear-gradient(135deg,#e879f9,#a855f7)";
-  var fabShadow  = color ? ("0 4px 18px " + color + "66") : "0 4px 18px rgba(168,85,247,0.45)";
-  var fabShadowH = color ? ("0 6px 24px " + color + "88") : "0 6px 24px rgba(168,85,247,0.55)";
+  var fabBg = color ? color : "linear-gradient(135deg,#e879f9,#a855f7)";
+
+  // Convert #RRGGBB → rgba string; returns null for named colors / shorthand / rgb()
+  function hexToRgba(hex, a) {
+    var m = hex && hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+    return m ? "rgba(" + parseInt(m[1],16) + "," + parseInt(m[2],16) + "," + parseInt(m[3],16) + "," + a + ")" : null;
+  }
+  var colorRgba1 = color ? hexToRgba(color, 0.40) : null;
+  var colorRgba2 = color ? hexToRgba(color, 0.55) : null;
+  var fabShadow  = colorRgba1 ? ("0 4px 18px " + colorRgba1) : (color ? "0 4px 18px rgba(0,0,0,0.28)" : "0 4px 18px rgba(168,85,247,0.45)");
+  var fabShadowH = colorRgba2 ? ("0 6px 24px " + colorRgba2) : (color ? "0 6px 24px rgba(0,0,0,0.38)" : "0 6px 24px rgba(168,85,247,0.55)");
 
   var isLeft      = position === "left";
   var hEdge       = isLeft ? "left:20px;" : "right:20px;";

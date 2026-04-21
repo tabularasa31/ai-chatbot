@@ -193,7 +193,7 @@ function EmbedContent() {
             <input
               type="text"
               value={targetId}
-              onChange={(e) => setTargetId(e.target.value.replace(/\s/g, "-"))}
+              onChange={(e) => setTargetId(e.target.value.replace(/[^a-zA-Z0-9-_]/g, "-"))}
               className="px-3 py-1.5 border border-slate-200 rounded-md text-sm font-mono text-slate-700 w-60 focus:outline-none focus:ring-2 focus:ring-violet-300"
               placeholder="chat9-widget"
             />

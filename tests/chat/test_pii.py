@@ -93,3 +93,32 @@ def test_multiple_entities():
     assert "[PHONE]" in result
     assert "test@test.com" not in result
     assert "+79991234567" not in result
+
+
+def test_id_doc_us_ssn():
+    assert "[ID_DOC]" in redact_text("my SSN is 123-45-6789")
+    assert "[ID_DOC]" in redact_text("my SSN is 123456789")
+    assert "[ID_DOC]" in redact_text("social security: 123-45-6789")
+    assert "[ID_DOC]" in redact_text("SSN number:123-45-6789")
+    # invalid format (mixed separators) — must NOT match
+    assert "[ID_DOC]" not in redact_text("SSN 123-456789")
+    # no keyword — must NOT match to avoid 9-digit false positives
+    assert "[ID_DOC]" not in redact_text("order 123456789 placed")
+    assert "[ID_DOC]" not in redact_text("version 1.2-34-5678 released")
+
+
+def test_id_doc_icao_passport():
+    assert "[ID_DOC]" in redact_text("passport number AB1234567")
+    assert "[ID_DOC]" in redact_text("passport: AB1234567")
+    assert "[ID_DOC]" in redact_text("my passport is A12345678")
+    assert "[ID_DOC]" in redact_text("id AB1234567")
+    assert "[ID_DOC]" not in redact_text("serial AB1234567")
+
+
+def test_id_doc_uk_ni():
+    assert "[ID_DOC]" in redact_text("national insurance AB123456C")
+    assert "[ID_DOC]" in redact_text("NI: AB123456C")
+    assert "[ID_DOC]" in redact_text("NI number AB 12 34 56 C")
+    assert "[ID_DOC]" in redact_text("NI number:AB123456C")
+    # no keyword — must NOT match
+    assert "[ID_DOC]" not in redact_text("reference AB123456C submitted")

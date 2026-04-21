@@ -97,12 +97,15 @@ def test_multiple_entities():
 
 def test_id_doc_us_ssn():
     assert "[ID_DOC]" in redact_text("my SSN is 123-45-6789")
+    assert "[ID_DOC]" in redact_text("my SSN is 123456789")
     assert "[ID_DOC]" not in redact_text("version 1.2-34-5678 released")
 
 
 def test_id_doc_icao_passport():
     assert "[ID_DOC]" in redact_text("passport number AB1234567")
     assert "[ID_DOC]" in redact_text("my passport is A12345678")
+    assert "[ID_DOC]" in redact_text("id AB1234567")
+    assert "[ID_DOC]" not in redact_text("serial AB1234567")
 
 
 def test_id_doc_uk_ni():

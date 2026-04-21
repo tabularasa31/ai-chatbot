@@ -80,9 +80,9 @@ _ID_DOC_PATTERNS = [
     r"(?:паспорт)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
     r"(?:инн|снилс)\s*[№:]?\s*[\d\s-]{8,}",
     # USA — Social Security Number: 123-45-6789 or 123456789
-    r"\b\d{3}-\d{2}-\d{4}\b",
+    r"\b\d{3}-?\d{2}-?\d{4}\b",
     # ICAO machine-readable passport number: 1-2 letters + 6-9 digits (most countries)
-    r"\b[A-Z]{1,2}\d{6,9}\b",
+    r"\b(?:passport|id)\b\s*(?:\w{1,10}\s+)?\s*[A-Z]{1,2}\d{6,9}\b",
     # UK National Insurance: AB123456C
     r"\b[A-CEGHJ-PR-TW-Z]{2}\d{6}[A-D]\b",
 ]

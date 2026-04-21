@@ -59,7 +59,7 @@ function EvalLoginForm() {
   return (
     <AuthCard>
       <div className="flex items-center gap-2 mb-6">
-        <span className="inline-flex items-center gap-2 rounded-full border border-[#E879F9]/30 bg-[#E879F9]/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-[#E879F9]">
+        <span className="inline-flex items-center gap-2 rounded-full border border-nd-accent/30 bg-nd-accent/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-nd-accent">
           <Sparkles size={12} />
           Chat9 Eval
         </span>
@@ -70,12 +70,12 @@ function EvalLoginForm() {
         Внутренняя UI-оценка ботов: тестируйте сценарии, проверяйте ответы и фиксируйте качество.
       </p>
 
-      <div className="mb-6 rounded-lg border border-[#2E2E3E] bg-[#0A0A0F]/50 p-4">
+      <div className="mb-6 rounded-lg border border-nd-border bg-nd-base/50 p-4">
         <div className="flex items-center gap-2 mb-2">
-          <ShieldCheck size={14} className="text-[#38BDF8]" />
-          <span className="text-xs uppercase tracking-[0.2em] text-[#38BDF8]">Для QA-команды</span>
+          <ShieldCheck size={14} className="text-nd-info" />
+          <span className="text-xs uppercase tracking-[0.2em] text-nd-info">Для QA-команды</span>
         </div>
-        <p className="text-sm text-[#FAF5FF]/70 leading-relaxed">
+        <p className="text-sm text-nd-text/70 leading-relaxed">
           Быстрый доступ к eval-сессиям без лишних экранов и с оценкой каждого ответа в один клик.
         </p>
       </div>
@@ -126,7 +126,7 @@ export default function EvalLoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-[#0A0A0F] px-4 text-sm text-[#FAF5FF]/60">
+        <div className="flex min-h-screen items-center justify-center bg-nd-base px-4 text-sm text-nd-text/60">
           Загрузка...
         </div>
       }

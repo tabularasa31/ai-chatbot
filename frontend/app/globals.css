@@ -17,12 +17,12 @@ body {
 input,
 textarea,
 select {
-  color: #FAF5FF;
+  color: inherit;
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: rgba(250, 245, 255, 0.45);
+  color: color-mix(in srgb, currentColor 45%, transparent);
   opacity: 1;
 }
 

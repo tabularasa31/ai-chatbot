@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 
 const LANDING_DEMO_BOT_ID =
@@ -11,12 +11,7 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL?.trim() || "").replace(/\/$/, "
 const TARGET_ID = "chat9-landing-demo";
 
 function DemoWidget() {
-  const mountedRef = useRef(false);
-
   useEffect(() => {
-    if (mountedRef.current) return;
-    mountedRef.current = true;
-
     const script = document.createElement("script");
     script.src = `${API_URL}/embed.js`;
     script.async = true;

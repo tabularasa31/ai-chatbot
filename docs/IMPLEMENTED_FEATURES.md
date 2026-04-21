@@ -25,7 +25,7 @@
 | Per-client OpenAI key | Encrypted in DB, PATCH client | `PATCH /clients/me`, `backend/core/crypto.py` |
 | **FI-DISC v1** | Single tenant-wide response detail level (detailed / standard / corporate), hard limits in prompt | `GET`/`PUT /clients/me/disclosure`, `backend/disclosure_config.py`, `backend/chat/service.py`, UI `/settings/disclosure` |
 | **FI-KYC** | Widget signing secret, rotation | `POST /clients/me/kyc/secret`, `status`, `rotate`; UI `/settings/widget` |
-| **Eval QA (internal MVP)** | Testers table, eval sessions/results; separate `EVAL_JWT_SECRET` + `typ=eval_tester`; `/eval/login`, `/eval/sessions`, results CRUD (append-only); CLI `scripts/create_tester.py`; Next `/eval/login`, `/eval/chat`; shared client readiness with widget | `backend/eval/*`, `backend/models.py` (`Tester`, `EvalSession`, `EvalResult`), migration `eval_qa_mvp_v1`, `tests/test_eval.py`, `docs/04-features.md` §10 |
+| **Eval QA (internal MVP)** | Testers table, eval sessions/results; separate `EVAL_JWT_SECRET` + `typ=eval_tester`; `/eval/login`, `/eval/sessions`, results CRUD (append-only); CLI `scripts/create_tester.py`; Next `/eval/login`, `/eval/chat`; shared client readiness with widget | `backend/eval/*`, `backend/models.py` (`Tester`, `EvalSession`, `EvalResult`), migration `eval_qa_mvp_v1`, `tests/test_eval.py`, `docs/04-features.md` §11 |
 
 ---
 

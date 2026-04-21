@@ -10,12 +10,13 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 
 | Layer | Technologies |
 |-------|----------------|
-| Backend | Python 3.11, FastAPI, Pydantic v2, SQLAlchemy, Alembic |
-| Database | PostgreSQL 14+ with **pgvector** (production); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
-| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single client/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user`; internal eval QA (`/eval/*`) uses a separate signing secret `EVAL_JWT_SECRET` |
-| LLM | OpenAI API (per-client key / client settings; see `backend/core/openai_client.py`) |
-| Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion |
-| Widget | Dedicated Next.js routes (`/widget`), API calls; some public endpoints in `backend/routes/widget.py` and `backend/widget/` |
+| Backend | Python 3.11, FastAPI 0.111, Pydantic v2 (2.5), SQLAlchemy 2.0, Alembic |
+| Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
+| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user`; internal eval QA (`/eval/*`) uses a separate signing secret `EVAL_JWT_SECRET` |
+| LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |
+| Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion, fumadocs-ui for content |
+| Widget | Dedicated Next.js routes (`/widget`), API calls; public endpoints in `backend/routes/widget.py` and `backend/widget/` |
+| Observability | Langfuse (LLM tracing), PostHog (product analytics), Sentry (errors) — see `backend/observability/` |
 
 Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
 
@@ -85,12 +86,14 @@ ai-chatbot/
 │   ├── main.py               # FastAPI entry, router wiring
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
-│   ├── auth/, chat/, clients/, documents/, embeddings/, search/, escalation/, admin/, widget/
+│   ├── auth/, admin/, bots/, chat/, contact_sessions/, documents/, embeddings/,
+│   │   escalation/, eval/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
+│   │   observability/, search/, tenant_knowledge/, tenants/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
-│   ├── routes/               # cross-cutting: public, widget
-│   └── migrations/           # Alembic: versions/, env.py
+│   ├── routes/               # cross-cutting public routes: embed.js loader, widget
+│   └── migrations/           # Alembic: versions/, env.py (~40 migrations)
 ├── frontend/                 # Next.js app
 │   └── app/                  # App Router: (marketing), (auth), (app), widget/, layout.tsx
 ├── docs/                     # product and technical docs (no need to copy the full stack here)
@@ -106,11 +109,12 @@ Run the API from the repo root with `PYTHONPATH` pointing at the root so `backen
 ### Python (backend)
 
 - Modules and functions: `snake_case`.
-- SQLAlchemy model classes: `PascalCase` (`User`, `EscalationTicket`).
-- DB tables: **plural, snake_case** (`users`, `clients`, `escalation_tickets`, `user_sessions`).
+- SQLAlchemy model classes: `PascalCase` (`User`, `Tenant`, `EscalationTicket`).
+- DB tables: **plural, snake_case** (`users`, `tenants`, `escalation_tickets`, `contact_sessions`).
 - Pydantic API schemas: suffixes like `Request` / `Response` or descriptive names (`ChatMessageLogItem`), in the domain’s `schemas.py`.
-- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/chat`).
-- Public string IDs for clients, etc.: follow existing patterns (`generate_public_id`, prefixes like `ch_` — do not invent new ones without a reason).
+- Routers: `*_router`; path prefixes wired in `main.py` (e.g. `/auth`, `/chat`, `/tenants`).
+- Public string IDs for tenants/bots, etc.: follow existing patterns (`generate_public_id`, prefixes like `ch_` — do not invent new ones without a reason).
+- Terminology: the legacy product term "client" has been renamed **"tenant"** at the schema/API level; keep new code and docs on `tenant` / `tenant_id`. "Client" may still appear in marketing copy meaning "customer".
 
 ### TypeScript / React (frontend)
 

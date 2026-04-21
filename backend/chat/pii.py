@@ -80,11 +80,11 @@ _ID_DOC_PATTERNS = [
     r"(?:паспорт)\s*[№:]?\s*\d{2,4}[\s-]?\d{4,6}",
     r"(?:инн|снилс)\s*[№:]?\s*[\d\s-]{8,}",
     # USA — Social Security Number: requires keyword prefix to avoid 9-digit false positives
-    r"\b(?:ssn|social security)\b\s*(?:\w{1,10}\s+)?\s*[:#-]?\s*\d{3}-?\d{2}-?\d{4}\b",
+    r"\b(?:ssn|social security)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?(?:\d{3}-\d{2}-\d{4}|\d{9})\b",
     # ICAO machine-readable passport number: keyword + optional punctuation/connector word
     r"\b(?:passport|id)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?[A-Z]{1,2}\d{6,9}\b",
     # UK National Insurance: keyword prefix + space-separated format support (QQ 12 34 56 A)
-    r"\b(?:ni|national insurance)\b\s*(?:\w{1,10}\s+)?\s*[:#-]?\s*[A-CEGHJ-PR-TW-Z]{2}(?:\s*\d){6}\s*[A-D]\b",
+    r"\b(?:ni|national insurance)\b\s*[:#№-]?\s*(?:\w{1,10}\s*[:#№-]?\s*)?[A-CEGHJ-PR-TW-Z]{2}(?:\s*\d){6}\s*[A-D]\b",
 ]
 _ID_DOC_RE = re.compile("|".join(_ID_DOC_PATTERNS), re.IGNORECASE)
 

@@ -25,14 +25,12 @@ export function Navigation() {
             >
               Blog
             </Link>
-            <a
-              href="https://chat9.gitbook.io/chat9-docs"
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              href="/docs"
               className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors"
             >
               Docs
-            </a>
+            </Link>
             <a
               href="https://github.com/tabularasa31/chat9-sdks"
               target="_blank"
@@ -85,14 +83,12 @@ export function Navigation() {
                 >
                   Blog
                 </Link>
-                <a
-                  href="https://chat9.gitbook.io/chat9-docs"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <Link
+                  href="/docs"
                   className="text-[#FAF5FF]/80 hover:text-[#FAF5FF] transition-colors text-left"
                 >
                   Docs
-                </a>
+                </Link>
                 <a
                   href="https://github.com/tabularasa31/chat9-sdks"
                   target="_blank"

@@ -90,6 +90,15 @@ const mainNav: NavItem[] = [
 
 const settingsNav: NavItem[] = [
   {
+    href: "/embed",
+    label: "Embed",
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+        <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10M7.5 4l-1.5 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
+  {
     href: "/settings",
     label: "Settings",
     icon: (
@@ -106,7 +115,8 @@ const settingsNav: NavItem[] = [
     label: "Widget",
     icon: (
       <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10M7.5 4l-1.5 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4.5 5L2 7.5 4.5 10M10.5 5L13 7.5 10.5 10" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+        <rect x="5" y="5" width="5" height="5" rx="1" stroke="currentColor" strokeWidth="1.3" />
       </svg>
     ),
   },

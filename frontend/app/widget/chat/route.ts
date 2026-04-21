@@ -26,6 +26,18 @@ export async function POST(request: NextRequest) {
     body: JSON.stringify({ message }),
   });
 
-  const data = await res.json().catch(() => ({}));
-  return NextResponse.json(data, { status: res.status });
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json(data, { status: res.status });
+  }
+
+  return new Response(res.body, {
+    status: res.status,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

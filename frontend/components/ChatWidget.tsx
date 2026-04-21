@@ -149,6 +149,7 @@ export function ChatWidget({
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
+  const [streamingText, setStreamingText] = useState<string>("");
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -204,9 +205,11 @@ export function ChatWidget({
   const requestWidgetTurn = useCallback(async ({
     message,
     attemptSessionId,
+    onChunk,
   }: {
     message: string;
     attemptSessionId: string | null;
+    onChunk?: (partialText: string) => void;
   }) => {
     const params = new URLSearchParams({
       botId,
@@ -216,12 +219,71 @@ export function ChatWidget({
     if (localeParam) params.set("locale", localeParam);
 
     const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
-    const payload = (await res.json().catch(() => ({}))) as {
+
+    if (!res.ok || !res.body) {
+      const payload = (await res.json().catch(() => ({}))) as {
+        detail?: unknown;
+        text?: string;
+        session_id?: string;
+        chat_ended?: boolean;
+      };
+      return { res, payload };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    const payload: {
       detail?: unknown;
       text?: string;
       session_id?: string;
       chat_ended?: boolean;
+    } = {};
+
+    const handleEvent = (eventData: string) => {
+      const raw = eventData.trim();
+      if (!raw) return;
+      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; message?: string; code?: number };
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return;
+      }
+      if (parsed.type === "chunk" && typeof parsed.text === "string") {
+        fullText += parsed.text;
+        onChunk?.(fullText);
+      } else if (parsed.type === "done") {
+        payload.text = typeof parsed.text === "string" ? parsed.text : fullText;
+        payload.session_id = parsed.session_id;
+        payload.chat_ended = parsed.chat_ended;
+        if (typeof parsed.text === "string" && parsed.text !== fullText) {
+          onChunk?.(parsed.text);
+        }
+      } else if (parsed.type === "error") {
+        payload.detail = parsed.message ?? "stream_error";
+      }
     };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          const dataLines = frame
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trimStart())
+            .join("\n");
+          if (dataLines) handleEvent(dataLines);
+        }
+      }
+      if (done) break;
+    }
+
     return { res, payload };
   }, [botId, localeParam]);
 
@@ -303,21 +365,25 @@ export function ChatWidget({
 
     setLoading(true);
     setInput("");
+    setStreamingText("");
     setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
 
     try {
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
         attemptSessionId: sessionId,
+        onChunk: setStreamingText,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
         clearStoredSession(botId);
         setSessionId(null);
+        setStreamingText("");
         ({ res, payload } = await requestWidgetTurn({
           message: userMessage,
           attemptSessionId: null,
+          onChunk: setStreamingText,
         }));
         detail = payload.detail;
         code = apiErrorCode(detail);
@@ -347,6 +413,7 @@ export function ChatWidget({
         ),
       ]);
     } finally {
+      setStreamingText("");
       setLoading(false);
     }
   };
@@ -450,7 +517,13 @@ export function ChatWidget({
                 );
             })}
 
-            {loading ? (
+            {loading && streamingText ? (
+              <div className="flex items-end gap-3">
+                <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
+                  <p className="whitespace-pre-wrap text-sm">{streamingText}</p>
+                </div>
+              </div>
+            ) : loading ? (
               <div className="flex items-end gap-3">
                 <div className="rounded-2xl bg-gray-100 px-4 py-3">
                   <span className="flex h-6 items-center gap-1.5">

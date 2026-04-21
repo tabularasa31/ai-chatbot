@@ -194,8 +194,36 @@ def mock_openai_client():
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536)]
     )
-    def _chat_completions_create(*args: object, **kwargs: object) -> Mock:
+    def _as_stream(response: Mock) -> list[Mock]:
+        """Convert a non-stream mock response into an iterable of stream chunks."""
+        try:
+            content = response.choices[0].message.content or ""
+        except (AttributeError, IndexError, TypeError):
+            content = ""
+        try:
+            total_tokens = response.usage.total_tokens
+        except AttributeError:
+            total_tokens = 0
+        chunks: list[Mock] = []
+        if content:
+            chunks.append(
+                Mock(
+                    choices=[Mock(delta=Mock(content=content), finish_reason=None)],
+                    usage=None,
+                )
+            )
+        chunks.append(
+            Mock(
+                choices=[Mock(delta=Mock(content=None), finish_reason="stop")],
+                usage=Mock(total_tokens=total_tokens, prompt_tokens=0, completion_tokens=total_tokens),
+            )
+        )
+        return chunks
+
+    def _chat_completions_create(*args: object, **kwargs: object) -> Mock | list[Mock]:
         messages = kwargs.get("messages") or []
+        stream = bool(kwargs.get("stream"))
+        response: Mock
         if isinstance(messages, list) and messages:
             system_content = ""
             user_content = ""
@@ -206,11 +234,13 @@ def mock_openai_client():
             if "You localize assistant messages." in system_content:
                 marker = "Assistant message to localize:\n"
                 canonical = user_content.split(marker, 1)[1] if marker in user_content else "AI response"
-                return Mock(
+                response = Mock(
                     choices=[Mock(message=Mock(content=canonical.strip()))],
                     usage=Mock(total_tokens=20),
                 )
-        return mock_client.chat.completions.create.return_value
+                return _as_stream(response) if stream else response
+        response = mock_client.chat.completions.create.return_value
+        return _as_stream(response) if stream else response
 
     mock_client.chat.completions.create.side_effect = _chat_completions_create
     mock_client.chat.completions.create.return_value = Mock(

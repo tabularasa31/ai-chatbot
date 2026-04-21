@@ -8,7 +8,7 @@ import 'fumadocs-ui/style.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col bg-[#0A0A0F]">
+    <div className="flex min-h-screen flex-col bg-nd-base">
       <Navigation />
       <RootProvider theme={{ defaultTheme: 'dark', forcedTheme: 'dark' }}>
         <DocsLayout

@@ -3,7 +3,7 @@
 **AI-powered support bot platform. Upload your docs, get a chat widget, your customers get instant answers — 24/7.**
 
 ![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.104-green.svg)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.111-green.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)
 ![Railway](https://img.shields.io/badge/Railway-Deploy-0B0D0E.svg)
 ![Vercel](https://img.shields.io/badge/Vercel-Deploy-000000.svg)
@@ -166,13 +166,31 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | POST | `/auth/login` | Login, get JWT |
 | POST | `/auth/verify-email` | Verify email with one-time token and provision the user's client/workspace |
 
-### Clients
+### Tenants
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/clients` | Create client manually; the normal signup flow provisions it on `/auth/verify-email` |
-| GET | `/clients/me` | Get current client info (JWT) |
-| GET | `/clients/me/disclosure` | Tenant-wide response detail level (JWT) |
-| PUT | `/clients/me/disclosure` | Update response level: `detailed` \| `standard` \| `corporate` (JWT, verified) |
+| POST | `/tenants` | Create tenant manually; the normal signup flow provisions it on `/auth/verify-email` |
+| GET | `/tenants/me` | Get current tenant info (JWT) |
+| PATCH | `/tenants/me` | Update tenant name / OpenAI key (JWT, verified) |
+| GET | `/tenants/me/privacy` | Tenant privacy / PII-redaction config (JWT) |
+| PUT | `/tenants/me/privacy` | Update privacy config (JWT, verified) |
+| GET | `/tenants/me/support-settings` | Support / escalation routing (JWT) |
+| PUT | `/tenants/me/support-settings` | Update support settings (JWT, verified) |
+| POST | `/tenants/me/kyc/secret` | Generate KYC signing secret (shown once) (JWT, verified) |
+| GET | `/tenants/me/kyc/status` | KYC secret metadata (JWT) |
+| POST | `/tenants/me/kyc/rotate` | Rotate the KYC signing secret (JWT, verified) |
+| GET | `/tenants/validate/{api_key}` | Public tenant lookup by API key (rate-limited) |
+
+### Bots
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/bots` | List bots for the current tenant (JWT) |
+| POST | `/bots` | Create bot (JWT, verified) |
+| GET | `/bots/{bot_id}` | Bot detail (JWT) |
+| PATCH | `/bots/{bot_id}` | Update bot (JWT, verified) |
+| DELETE | `/bots/{bot_id}` | Delete bot (JWT, verified) |
+| GET | `/bots/{bot_id}/disclosure` | Response detail level: `detailed` \| `standard` \| `corporate` (JWT) |
+| PUT | `/bots/{bot_id}/disclosure` | Update bot disclosure config (JWT, verified) |
 
 ### Documents
 | Method | Path | Description |
@@ -217,11 +235,24 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | GET | `/escalations/{id}` | Ticket detail (JWT) |
 | POST | `/escalations/{id}/resolve` | Mark resolved with `resolution_text` (JWT) |
 
+### Knowledge
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/knowledge/profile` | Tenant knowledge profile (product name, topics, glossary, aliases) (JWT) |
+| PATCH | `/knowledge/profile` | Update knowledge profile (JWT, verified) |
+| GET | `/knowledge/faq` | List FAQ candidates extracted from docs/logs (JWT) |
+| POST | `/knowledge/faq` | Create FAQ candidate (JWT, verified) |
+| PATCH | `/knowledge/faq/{faq_id}` | Update / approve a FAQ candidate (JWT, verified) |
+| DELETE | `/knowledge/faq/{faq_id}` | Delete FAQ candidate (JWT) |
+| POST | `/knowledge/faq/approve-all` | Bulk-approve pending FAQ candidates (JWT, verified) |
+
 ### Admin
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/metrics/summary` | Platform-wide stats (admin only) |
-| GET | `/admin/metrics/clients` | Per-client stats (admin only) |
+| GET | `/admin/metrics/tenants` | Per-tenant stats (admin only) |
+| GET | `/admin/privacy/pii-events` | PII redaction / access audit log (admin only) |
+| DELETE | `/admin/privacy/pii-events/retention` | Purge expired PII-event rows (admin only) |
 
 ### Other
 | Method | Path | Description |
@@ -235,7 +266,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 
 ### Internal manual QA (Eval)
 
-Internal testers only; separate **`EVAL_JWT_SECRET`** (not dashboard JWT). See **`docs/04-features.md`** §10.
+Internal testers only; separate **`EVAL_JWT_SECRET`** (not dashboard JWT). See **`docs/04-features.md`** §11.
 
 **`bot_id`** in eval is the same string as **`clientId`** in the widget embed URL (`embed.js?clientId=ch_…`), i.e. dashboard **public id** — **not** the secret `api_key`.
 

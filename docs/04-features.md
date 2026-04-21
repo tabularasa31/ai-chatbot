@@ -459,7 +459,7 @@ Configuration (high level): global env (`CONTRADICTION_ADJUDICATION_*`), per-cli
 
 ---
 
-## 5. RAG Chat Pipeline
+## 6. RAG Chat Pipeline
 
 ### How a chat turn works
 
@@ -558,7 +558,7 @@ Each conversation is a **session** (UUID). Messages within a session are stored 
 
 ---
 
-## 6. L2 Escalation Tickets (FI-ESC)
+## 7. L2 Escalation Tickets (FI-ESC)
 
 When the bot cannot adequately answer, the conversation is **escalated to a human** and a support ticket is created.
 
@@ -595,7 +595,7 @@ Tenants see all their tickets at `/escalations`:
 
 ---
 
-## 7. Response Controls / Disclosure (FI-DISC)
+## 8. Response Controls / Disclosure (FI-DISC)
 
 Clients can set a client-wide response detail level that controls how the bot phrases answers across all channels (widget + API).
 
@@ -612,7 +612,7 @@ The selected level is injected into the RAG system prompt as a hard instruction 
 
 ---
 
-## 8. Widget User Identification (FI-KYC)
+## 9. Widget User Identification (FI-KYC)
 
 By default the widget is **anonymous** — no information about the end user is passed to the bot. Optionally, clients can pass structured user context via a signed identity token.
 
@@ -640,7 +640,7 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ---
 
-## 9. Embeddable Widget
+## 10. Embeddable Widget
 
 ### How embedding works
 
@@ -681,7 +681,7 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 
 ---
 
-## 10. Internal manual QA (Eval)
+## 11. Internal manual QA (Eval)
 
 **Purpose:** Internal-only flow for human testers to chat with a client bot (same public widget path as production) and record **pass/fail** (and optional error category + comment) per assistant message. It does **not** change dashboard user auth or the public widget contract.
 
@@ -733,7 +733,7 @@ Regression coverage: `tests/test_eval.py`.
 
 ---
 
-## 11. Dashboard
+## 12. Dashboard
 
 The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages use a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for `is_admin` users); the top bar shows brand, email, and logout.
 
@@ -752,13 +752,13 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 ---
 
-## 12. Security
+## 13. Security
 
 | Area | Implementation |
 |------|---------------|
 | Authentication | JWT (HS256), bcrypt passwords; user access tokens include `typ=chat9_user` |
 | Internal eval | Separate `EVAL_JWT_SECRET`, `typ=eval_tester`, `/eval/*` only |
-| Data isolation | All queries scoped by `client_id`; no cross-client access possible |
+| Data isolation | All queries scoped by `tenant_id`; no cross-tenant access possible |
 | API key storage | AES-GCM encrypted at rest |
 | KYC secret storage | AES-GCM encrypted at rest |
 | PII protection | Regex redaction before all OpenAI calls |
@@ -767,7 +767,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 ---
 
-## 13. Infrastructure
+## 14. Infrastructure
 
 ```
 getchat9.live (Vercel, Next.js 14)

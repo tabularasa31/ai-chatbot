@@ -6,11 +6,11 @@ Chat9 supports optional widget-side user identification for tenants that want to
 
 In the codebase this feature is called **KYC** or **identified widget sessions**. It is implemented in:
 
-- [backend/routes/widget.py](/Users/tabularasa/Projects/ai-chatbot/backend/routes/widget.py)
-- [backend/core/security.py](/Users/tabularasa/Projects/ai-chatbot/backend/core/security.py)
-- [backend/models.py](/Users/tabularasa/Projects/ai-chatbot/backend/models.py)
+- `backend/routes/widget.py`
+- `backend/core/security.py` (`validate_kyc_token_detail`, `generate_kyc_token`)
+- `backend/models.py` (`ContactSession`, `Chat.user_context`)
 
-This document describes the real production flow as of April 6, 2026.
+This document describes the real production flow as of April 21, 2026.
 
 ## High-level flow
 
@@ -24,7 +24,7 @@ This document describes the real production flow as of April 6, 2026.
 5. Chat9 validates the token.
 6. If valid, Chat9 either resumes an eligible identified chat for the same `user_id` or creates a new one.
 7. Chat9 stores the validated user context in `chats.user_context`.
-8. Chat9 also maintains an identified-user lifecycle row in `user_sessions`.
+8. Chat9 also maintains an identified-user lifecycle row in `contact_sessions` (table `contact_sessions`, columns `tenant_id`, `contact_id`).
 9. The response returns:
    - `session_id`
    - `mode` = `identified` or `anonymous`
@@ -85,20 +85,21 @@ Payload generation:
 
 Reference implementation:
 
-- `generate_kyc_token(...)` in [backend/core/security.py](/Users/tabularasa/Projects/ai-chatbot/backend/core/security.py#L72)
+- `generate_kyc_token(...)` in `backend/core/security.py`
 
 ## Payload fields
 
 ### Required
 
-- `tenant_id`
-  - must equal the tenant's public bot ID, for example `ch_abc123`
 - `user_id`
-  - any non-empty string
+  - any non-empty string (after trimming)
 - `exp`
   - token expiration time, Unix timestamp in seconds
+
+### Recommended
+
 - `iat`
-  - token issued-at time, Unix timestamp in seconds
+  - token issued-at time, Unix timestamp in seconds (stored in the signed payload; not used for windowing)
 
 ### Optional
 
@@ -109,7 +110,7 @@ Reference implementation:
 - `company`
 - `locale`
 
-The server validates `tenant_id`, `user_id`, `exp`, and the HMAC signature. Unknown extra fields are ignored by the `UserContext` model.
+The server validates `user_id` (non-empty), `exp` (not in the past), and the HMAC signature. Any other fields — including `tenant_id` if you embed it — are passed through into `UserContext` and `chats.user_context` but are **not** verified against the tenant record. The tenant is resolved from the `api_key` in the `POST /widget/session/init` request body, not from the token. Unknown extra fields are ignored by the `UserContext` model (`extra="ignore"`).
 
 ## Field semantics
 
@@ -143,7 +144,6 @@ The server validates `tenant_id`, `user_id`, `exp`, and the HMAC signature. Unkn
 
 - `malformed`
 - `expired`
-- `wrong_tenant`
 - `missing_user_id`
 - `bad_signature`
 
@@ -156,9 +156,9 @@ If validation fails, the widget flow does not hard-fail. Chat9 falls back to ano
 Returned when:
 
 - `identity_token` is present
-- signature is valid
-- tenant matches
+- signature is valid under the tenant's signing secret
 - token is not expired
+- `user_id` is a non-empty string
 - payload passes `UserContext` validation
 
 Effects:
@@ -198,20 +198,21 @@ Typical stored fields:
 
 Internal fields removed before storage:
 
-- `tenant_id`
 - `exp`
 - `iat`
 
-For identified users, Chat9 also maintains a `user_sessions` row with:
+(Any `tenant_id` included in the token stays in `chats.user_context` as opaque metadata; it is not used for authorization.)
 
-- `client_id`
-- `user_id`
+For identified users, Chat9 also maintains a `contact_sessions` row with:
+
+- `tenant_id` (resolved from the `api_key`)
+- `contact_id` (the payload's `user_id`)
 - best-known identity fields (`email`, `name`, `plan_tier`, `audience_tag`)
 - `session_started_at`
 - optional `session_ended_at`
 - `conversation_turns`
 
-Only one active `user_sessions` row is allowed per `client_id + user_id`.
+Only one active `contact_sessions` row is allowed per `tenant_id + contact_id` (partial unique index `uq_contact_sessions_tenant_contact_active`, where `session_ended_at IS NULL`).
 
 ## Session continuity and resume
 
@@ -227,11 +228,11 @@ The widget now has two different continuity mechanisms:
 ### Identified users
 
 - resume is decided on the backend during `POST /widget/session/init`
-- matching key: `client_id + user_id`
+- matching key: `tenant_id + contact_id` (the token's `user_id`)
 - Chat9 resumes the latest eligible chat when:
   - `ended_at is null`
   - the last chat activity is within 24 hours
-- otherwise Chat9 creates a new chat and a new active `user_sessions` row
+- otherwise Chat9 creates a new chat and a new active `contact_sessions` row
 
 ### Closed chats
 
@@ -252,7 +253,7 @@ PII such as `user_id`, `email`, and `name` are not put into the prompt line.
 
 Reference:
 
-- `_user_context_prompt_line(...)` in [backend/chat/service.py](/Users/tabularasa/Projects/ai-chatbot/backend/chat/service.py#L573)
+- `_user_context_prompt_line(...)` in `backend/chat/service.py`
 
 ## What affects escalations
 
@@ -267,15 +268,15 @@ This means identified sessions produce richer escalation tickets than anonymous 
 
 Reference:
 
-- [backend/escalation/service.py](/Users/tabularasa/Projects/ai-chatbot/backend/escalation/service.py#L228)
+- `backend/escalation/service.py`
 
 ## Secret management
 
 Tenant-facing secret endpoints:
 
-- `POST /clients/me/kyc/secret`
-- `GET /clients/me/kyc/status`
-- `POST /clients/me/kyc/rotate`
+- `POST /tenants/me/kyc/secret`
+- `GET /tenants/me/kyc/status`
+- `POST /tenants/me/kyc/rotate`
 
 Behavior:
 
@@ -297,7 +298,6 @@ Behavior:
 ```json
 {
   "user_id": "cust_12345",
-  "tenant_id": "ch_demo123",
   "email": "user@example.com",
   "plan_tier": "growth",
   "audience_tag": "b2b",
@@ -306,6 +306,8 @@ Behavior:
   "iat": 1775399400
 }
 ```
+
+(Adding a `tenant_id` field is allowed but ignored by the validator — the tenant is resolved from the `api_key` in the request body.)
 
 3. Tenant backend signs the payload and sends `POST /widget/session/init`.
 4. Chat9 returns:

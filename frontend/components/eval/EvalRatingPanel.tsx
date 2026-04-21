@@ -70,19 +70,19 @@ export function EvalRatingPanel({
 
   if (saved && frozen) {
     return (
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      <div className="rounded-lg border border-nd-success/30 bg-nd-success/10 px-4 py-3 text-sm text-nd-success">
         <div className="flex flex-wrap items-center gap-2">
-          <Check size={14} className="text-emerald-600" />
+          <Check size={14} />
           <span className="font-semibold">Оценка: {frozen.verdict === "pass" ? "Pass" : "Fail"}</span>
         </div>
         {frozen.verdict === "fail" && frozen.error_category ? (
-          <p className="mt-1.5 text-sm text-emerald-700">
+          <p className="mt-1.5 text-sm opacity-80">
             Категория:{" "}
             {CATEGORIES.find((c) => c.value === frozen.error_category)?.label ?? frozen.error_category}
           </p>
         ) : null}
         {frozen.comment ? (
-          <p className="mt-1.5 text-sm text-emerald-700">Комментарий: {frozen.comment}</p>
+          <p className="mt-1.5 text-sm opacity-80">Комментарий: {frozen.comment}</p>
         ) : null}
       </div>
     );
@@ -94,13 +94,13 @@ export function EvalRatingPanel({
 
   if (!expanded) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+      <div className="rounded-lg border border-nd-border bg-nd-surface px-4 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-slate-600">Оценка ответа необязательна. Можно сразу продолжать диалог.</p>
+          <p className="text-sm text-nd-text/60">Оценка ответа необязательна. Можно сразу продолжать диалог.</p>
           <button
             type="button"
             onClick={() => setExpanded(true)}
-            className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:border-slate-400 hover:text-slate-900"
+            className="inline-flex items-center rounded-lg border border-nd-border bg-nd-base px-3 py-1.5 text-sm font-medium text-nd-text/80 transition-colors hover:border-nd-accent/50 hover:text-nd-text"
           >
             Оценить ответ
           </button>
@@ -172,12 +172,12 @@ export function EvalRatingPanel({
   }
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+    <div className="rounded-lg border border-nd-border bg-nd-surface p-4">
       {/* Header row */}
       <div className="flex items-center justify-between mb-3">
         <div>
-          <h4 className="text-sm font-medium text-gray-900">Оцените ответ ассистента</h4>
-          <p className="mt-1 text-xs text-slate-500">Это необязательный шаг. Следующий вопрос можно задать в любой момент.</p>
+          <h4 className="text-sm font-medium text-nd-text">Оцените ответ ассистента</h4>
+          <p className="mt-1 text-xs text-nd-text/50">Это необязательный шаг. Следующий вопрос можно задать в любой момент.</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -189,7 +189,7 @@ export function EvalRatingPanel({
               setComment("");
               setSaveError("");
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition-all hover:border-slate-300 hover:text-slate-800"
+            className="inline-flex items-center gap-1.5 rounded-lg border-2 border-nd-border bg-nd-base px-3 py-1.5 text-xs font-medium text-nd-text/60 transition-all hover:border-nd-text/30 hover:text-nd-text/80"
           >
             Позже
           </button>
@@ -203,8 +203,8 @@ export function EvalRatingPanel({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "pass"
-                ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                : "border-gray-200 bg-white text-gray-600 hover:border-emerald-400 hover:text-emerald-600",
+                ? "border-nd-success bg-nd-success/10 text-nd-success"
+                : "border-nd-border bg-nd-base text-nd-text/60 hover:border-nd-success/50 hover:text-nd-success",
             )}
           >
             <Check size={13} />
@@ -219,8 +219,8 @@ export function EvalRatingPanel({
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border-2 px-3 py-1.5 text-xs font-medium transition-all",
               verdict === "fail"
-                ? "border-red-500 bg-red-50 text-red-700"
-                : "border-gray-200 bg-white text-gray-600 hover:border-red-400 hover:text-red-600",
+                ? "border-nd-danger bg-nd-danger/10 text-nd-danger"
+                : "border-nd-border bg-nd-base text-nd-text/60 hover:border-nd-danger/50 hover:text-nd-danger",
             )}
           >
             <AlertTriangle size={13} />
@@ -233,7 +233,7 @@ export function EvalRatingPanel({
       {verdict === "fail" && (
         <div className="space-y-3 mt-3">
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <Tag size={12} />
               Категория
             </label>
@@ -243,7 +243,7 @@ export function EvalRatingPanel({
                 setErrorCategory(e.target.value);
                 setSaveError("");
               }}
-              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none transition focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
+              className="w-full rounded-lg border border-nd-border bg-nd-base px-3 py-2 text-sm text-nd-text outline-none transition focus:border-transparent focus:ring-2 focus:ring-nd-accent"
             >
               <option value="">Выберите категорию</option>
               {CATEGORIES.map((c) => (
@@ -255,7 +255,7 @@ export function EvalRatingPanel({
           </div>
 
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-700">
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <MessageSquare size={12} />
               Комментарий
             </label>
@@ -267,14 +267,14 @@ export function EvalRatingPanel({
               }}
               placeholder="Что именно пошло не так?"
               rows={3}
-              className="w-full resize-none rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm leading-6 text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-transparent focus:ring-2 focus:ring-[#a855f7]"
+              className="w-full resize-none rounded-lg border border-nd-border bg-nd-base px-3 py-2 text-sm leading-6 text-nd-text outline-none transition placeholder:text-nd-text/40 focus:border-transparent focus:ring-2 focus:ring-nd-accent"
             />
           </div>
         </div>
       )}
 
       {saveError && (
-        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="mt-3 rounded-lg border border-nd-danger/30 bg-nd-danger/10 px-3 py-2 text-sm text-nd-danger">
           {saveError}
         </div>
       )}
@@ -285,7 +285,7 @@ export function EvalRatingPanel({
             type="button"
             disabled={saving || (!canSavePass && !canSaveFail)}
             onClick={handleSave}
-            className="rounded-lg bg-[#a855f7] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea] disabled:cursor-not-allowed disabled:bg-gray-300"
+            className="rounded-lg bg-nd-accent px-4 py-2 text-sm font-medium text-nd-base transition-colors hover:bg-nd-accent-hover disabled:cursor-not-allowed disabled:bg-nd-border disabled:text-nd-text/40"
           >
             {saving ? "Сохранение..." : "Сохранить оценку"}
           </button>

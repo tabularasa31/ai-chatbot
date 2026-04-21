@@ -1,4 +1,7 @@
-# Frequently Asked Questions
+---
+title: FAQ
+description: Common questions about Chat9 — setup, widget, quality, identified sessions, and security.
+---
 
 ## General
 
@@ -67,7 +70,7 @@ If the answer is not in your documentation, the bot will either say it doesn't h
 **How can I improve answer quality?**
 - Upload more complete documentation.
 - Add or refresh URL sources if your docs live on a website.
-- Use the 👍/👎 feedback in Chat Logs to identify weak answers.
+- Use the thumbs-up/thumbs-down feedback in Chat Logs to identify weak answers.
 - Use the "Review bad answers" page to write ideal answers for training.
 - Use Gap Analyzer to find repeated missing topics and recurring question clusters.
 - Use the Debug page to see which document chunks are being retrieved.
@@ -99,9 +102,11 @@ In the Dashboard, go to **Settings → Widget API** and click **Generate secret*
 
 **What languages does the SDK support?**
 Phase 1 ships Python. A PyPI release is coming soon — until then install directly from GitHub:
+
 ```bash
 pip install git+https://github.com/tabularasa31/chat9-sdks.git#subdirectory=python
 ```
+
 Node.js, Go, and PHP packages follow the same interface and are in progress. Until they are released you can generate the token manually — see the [token specification](https://github.com/tabularasa31/chat9-sdks/blob/main/docs/token-spec.md).
 
 **What exception does the Python SDK raise?**

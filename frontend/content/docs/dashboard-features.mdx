@@ -1,4 +1,7 @@
-# Dashboard Features
+---
+title: Dashboard Features
+description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Logs, Debug, and more.
+---
 
 The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for platform admins). The top bar shows the Chat9 brand, your email, and **Logout**.
 
@@ -49,11 +52,11 @@ View all conversations your users have had with your bot.
 - **Session details:** Last question, last answer preview, last activity time.
 - **Message view:** User messages and bot answers in a thread layout.
 - **Clarification visibility:** if the bot asked a structured follow-up question, you can see that turn in the conversation instead of guessing why the bot paused before answering.
-- **Feedback:** Click 👍 or 👎 on any bot answer to rate its quality.
+- **Feedback:** Click thumbs-up or thumbs-down on any bot answer to rate its quality.
 
 ## Review Bad Answers (`/review`)
 
-A dedicated page showing answers marked with 👎.
+A dedicated page showing answers marked with thumbs-down.
 
 - Review each bad answer with the original question.
 - See which document chunks were retrieved (retrieval debug).
@@ -83,7 +86,7 @@ Set the client-wide **response detail level** (Detailed / Standard / Corporate) 
 - Manage **signing secret** (generate, rotate) for optional **identified** widget sessions.
 - Generating a new secret immediately invalidates the previous one — all in-flight tokens signed with the old secret will be rejected.
 - Server-side token example (Python) with copy-to-clipboard on the snippet block.
-- See [Embedding the Widget → Identified sessions](./03-embedding-the-widget.md#identified-sessions-optional) for the full integration guide and SDK reference.
+- See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional) for the full integration guide and SDK reference.
 
 ## Escalations (`/escalations`)
 

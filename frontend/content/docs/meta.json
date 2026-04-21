@@ -1,0 +1,11 @@
+{
+  "title": "Docs",
+  "pages": [
+    "index",
+    "getting-started",
+    "embedding-the-widget",
+    "dashboard-features",
+    "pricing-and-limits",
+    "faq"
+  ]
+}

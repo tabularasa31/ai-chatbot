@@ -18,14 +18,12 @@ export function Footer() {
             >
               Blog
             </Link>
-            <a
-              href="https://chat9.gitbook.io/chat9-docs"
-              target="_blank"
-              rel="noopener noreferrer"
+            <Link
+              href="/docs"
               className="text-[#FAF5FF]/80 hover:text-[#38BDF8] transition-colors"
             >
               Docs
-            </a>
+            </Link>
             <a
               href="https://github.com/tabularasa31/chat9-sdks"
               target="_blank"

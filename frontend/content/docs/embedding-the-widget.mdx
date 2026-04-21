@@ -1,4 +1,7 @@
-# Embedding the Chat Widget
+---
+title: Embedding the Widget
+description: How to add the Chat9 chat widget to your site, plus identified sessions for advanced integrations.
+---
 
 ## Basic embed
 
@@ -25,7 +28,7 @@ Example (placeholders — the Dashboard fills in your real public bot ID and may
 
 Language behavior:
 
-- before the first real user question, deterministic widget text uses `locale -> browser locale -> English`
+- before the first real user question, deterministic widget text uses `locale → browser locale → English`
 - after the first real user question, replies follow the language of that question
 
 ## Where to get the embed code
@@ -76,7 +79,7 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
 
 ### How it works
 
-1. In **Dashboard -> Settings -> Widget API**, generate a signing secret.
+1. In **Dashboard → Settings → Widget API**, generate a signing secret.
 2. Store that secret on your server.
 3. Your server generates a short-lived signed `identity_token`.
 4. Your integration calls `POST /widget/session/init` with:
@@ -231,10 +234,10 @@ When the widget receives structured clarification options, it can render them as
 
 | Field | Required | Type | Constraints |
 |---|---|---|---|
-| `tenant_id` | ✅ | string | must equal your bot public ID (`ch_...`) |
-| `user_id` | ✅ | string | non-empty, non-whitespace |
-| `exp` | ✅ | integer | Unix timestamp in seconds |
-| `iat` | ✅ | integer | Unix timestamp in seconds |
+| `tenant_id` | yes | string | must equal your bot public ID (`ch_...`) |
+| `user_id` | yes | string | non-empty, non-whitespace |
+| `exp` | yes | integer | Unix timestamp in seconds |
+| `iat` | yes | integer | Unix timestamp in seconds |
 | `email` | — | string | optional |
 | `name` | — | string | optional |
 | `plan_tier` | — | string | optional |
@@ -276,10 +279,10 @@ Used for richer escalation metadata:
 
 ### Security checklist
 
-- ✅ Generate the token **on your server**, never in browser JavaScript
-- ✅ Store the signing secret in an environment variable, not in source code
-- ✅ Use a short TTL (300 s is a reasonable default)
-- ✅ Rotate the secret from the Dashboard if it is ever exposed
-- ✅ Treat invalid tokens as a fallback to anonymous mode, not as a widget outage
-- ❌ Do not put passwords, card numbers, or other secrets in the token payload
-- ❌ Do not assume the stock `embed.js` snippet enables KYC by itself
+- Generate the token **on your server**, never in browser JavaScript
+- Store the signing secret in an environment variable, not in source code
+- Use a short TTL (300 s is a reasonable default)
+- Rotate the secret from the Dashboard if it is ever exposed
+- Treat invalid tokens as a fallback to anonymous mode, not as a widget outage
+- Do NOT put passwords, card numbers, or other secrets in the token payload
+- Do NOT assume the stock `embed.js` snippet enables KYC by itself

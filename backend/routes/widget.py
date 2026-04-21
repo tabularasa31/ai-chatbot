@@ -1,16 +1,22 @@
 """Widget API routes for embedded chat (public, bot-id based)."""
 
+import asyncio
+import json
 import logging
+import queue
+import threading
 import uuid
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session, touch_user_session
+from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import (
@@ -200,7 +206,7 @@ def widget_chat(
         str | None, Query(description="Browser locale hint (e.g. ru-RU)")
     ] = None,
     db: Session = Depends(get_db),
-) -> dict:
+) -> StreamingResponse:
     """
     PUBLIC endpoint for embedded widget.
     No authentication required (bot public_id = permission).
@@ -280,31 +286,98 @@ def widget_chat(
     else:
         sid = uuid.uuid4()
 
-    try:
-        outcome = process_chat_message(
-            tenant_id=tenant.id,
-            question=resolved_message,
-            session_id=sid,
-            db=db,
-            api_key=tenant.openai_api_key,
-            user_context=None,
-            browser_locale=locale_hint,
-            disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
-            bot_public_id=getattr(_bot, "public_id", None),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except APIError:
-        raise HTTPException(
-            status_code=503,
-            detail="OpenAI service unavailable",
-        ) from None
+    process_kwargs = dict(
+        tenant_id=tenant.id,
+        question=resolved_message,
+        session_id=sid,
+        api_key=tenant.openai_api_key,
+        user_context=None,
+        browser_locale=locale_hint,
+        disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
+        bot_public_id=getattr(_bot, "public_id", None),
+    )
 
-    return {
-        "text": outcome.text,
-        "session_id": str(sid),
-        "chat_ended": outcome.chat_ended,
-    }
+    return _widget_chat_stream(sid, process_kwargs)
+
+
+_STREAM_SENTINEL = object()
+
+
+def _widget_chat_stream(
+    sid: uuid.UUID,
+    process_kwargs: dict,
+) -> StreamingResponse:
+    q: queue.Queue[Any] = queue.Queue()
+    result_holder: dict[str, Any] = {}
+
+    def on_chunk(text: str) -> None:
+        if text:
+            q.put(("chunk", text))
+
+    def run_pipeline() -> None:
+        worker_db = core_db.SessionLocal()
+        try:
+            outcome = process_chat_message(
+                db=worker_db,
+                stream_callback=on_chunk,
+                **process_kwargs,
+            )
+            result_holder["outcome"] = outcome
+        except BaseException as exc:
+            result_holder["error"] = exc
+        finally:
+            worker_db.close()
+            q.put(_STREAM_SENTINEL)
+
+    worker = threading.Thread(target=run_pipeline, daemon=True)
+    worker.start()
+
+    async def event_stream():
+        streamed_any = False
+        while True:
+            item = await asyncio.to_thread(q.get)
+            if item is _STREAM_SENTINEL:
+                break
+            kind, text = item
+            if kind == "chunk":
+                streamed_any = True
+                yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
+
+        worker.join()
+
+        err = result_holder.get("error")
+        if err is not None:
+            if isinstance(err, ValueError):
+                payload = {"type": "error", "code": 422, "message": str(err)}
+            elif isinstance(err, APIError):
+                payload = {"type": "error", "code": 503, "message": "OpenAI service unavailable"}
+            else:
+                logger.exception("widget_chat_stream_failed", exc_info=err)
+                payload = {"type": "error", "code": 500, "message": "Internal error"}
+            yield f"data: {json.dumps(payload)}\n\n"
+            return
+
+        outcome = result_holder.get("outcome")
+        final_text = outcome.text if outcome is not None else ""
+        if not streamed_any and final_text:
+            yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
+        done_payload = {
+            "type": "done",
+            "session_id": str(sid),
+            "chat_ended": bool(outcome.chat_ended) if outcome is not None else False,
+            "text": final_text,
+        }
+        yield f"data: {json.dumps(done_payload)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @widget_router.post("/escalate", response_model=ManualEscalateResponse)

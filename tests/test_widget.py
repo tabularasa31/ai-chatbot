@@ -33,6 +33,57 @@ def _widget_url(bot_public_id: str, *, locale: str | None = None) -> str:
     return url
 
 
+def _parse_sse_response(raw_body: str) -> dict:
+    """Collapse SSE frames from /widget/chat into a legacy-style JSON payload."""
+    import json as _json
+
+    chunks: list[str] = []
+    payload: dict = {}
+    for frame in raw_body.split("\n\n"):
+        frame = frame.strip()
+        if not frame:
+            continue
+        data_line = "\n".join(
+            line[len("data:"):].strip()
+            for line in frame.splitlines()
+            if line.startswith("data:")
+        )
+        if not data_line:
+            continue
+        try:
+            event = _json.loads(data_line)
+        except _json.JSONDecodeError:
+            continue
+        if event.get("type") == "chunk" and isinstance(event.get("text"), str):
+            chunks.append(event["text"])
+        elif event.get("type") == "done":
+            payload["session_id"] = event.get("session_id")
+            payload["chat_ended"] = event.get("chat_ended")
+            text = event.get("text")
+            payload["text"] = text if isinstance(text, str) else "".join(chunks)
+        elif event.get("type") == "error":
+            payload["detail"] = event.get("message")
+    if "text" not in payload and chunks:
+        payload["text"] = "".join(chunks)
+    return payload
+
+
+class _SSEResponse:
+    """Thin wrapper letting tests call `.json()` on a streamed widget response."""
+
+    def __init__(self, response) -> None:
+        self._response = response
+        self._decoded = _parse_sse_response(response.text) if response.status_code < 400 else None
+
+    def __getattr__(self, item):
+        return getattr(self._response, item)
+
+    def json(self):
+        if self._decoded is not None:
+            return self._decoded
+        return self._response.json()
+
+
 def _post_widget_chat(
     tenant: TestClient,
     bot_public_id: str,
@@ -44,7 +95,8 @@ def _post_widget_chat(
     query = f"/widget/chat?bot_id={bot_public_id}"
     if session_id:
         query += f"&session_id={session_id}"
-    return tenant.post(query, json={"message": message, "locale": locale})
+    resp = tenant.post(query, json={"message": message, "locale": locale})
+    return _SSEResponse(resp)
 
 
 def _seed_rag_chunk(db_session: Session, client_uuid: uuid.UUID) -> None:
@@ -362,6 +414,63 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     )
     assert row is not None
     assert row.conversation_turns == 1
+
+
+def test_widget_chat_stream_sse(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """stream=true returns text/event-stream with chunk + done events."""
+    token = register_and_verify_user(tenant, db_session, email="widget-stream@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Stream Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
+    def fake_process(*, stream_callback=None, session_id=None, **kwargs):
+        if stream_callback is not None:
+            for piece in ("Hello", ", ", "world!"):
+                stream_callback(piece)
+        return ChatTurnOutcome(
+            text="Hello, world!",
+            document_ids=[],
+            tokens_used=3,
+            chat_ended=False,
+        )
+
+    monkeypatch.setattr(
+        "backend.routes.widget.process_chat_message",
+        fake_process,
+    )
+
+    r = tenant.post(
+        f"/widget/chat?bot_id={bot_public_id}",
+        json={"message": "hi"},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+
+    events = []
+    for raw in r.text.split("\n\n"):
+        raw = raw.strip()
+        if not raw or not raw.startswith("data:"):
+            continue
+        import json as _json
+        events.append(_json.loads(raw[len("data:"):].strip()))
+
+    chunk_events = [e for e in events if e.get("type") == "chunk"]
+    done_events = [e for e in events if e.get("type") == "done"]
+
+    assert chunk_events, "expected at least one chunk event"
+    assert "".join(e["text"] for e in chunk_events) == "Hello, world!"
+    assert len(done_events) == 1
+    assert done_events[0]["session_id"]
+    assert done_events[0]["chat_ended"] is False
 
 
 def test_widget_chat_returns_plain_answer_payload(

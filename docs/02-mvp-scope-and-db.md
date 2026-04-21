@@ -7,18 +7,23 @@
 ### What's INCLUDED ✅
 
 **Backend:**
-- User authentication (email/password + JWT + email verification)
-- Client management (create, generate API key, store OpenAI API key)
+- User authentication (email/password + JWT + email verification via Brevo)
+- Tenant management (create, generate API key, store per-tenant OpenAI API key)
+- Bot management (per-tenant bots with disclosure / response-detail config)
 - Document upload (PDF, Markdown, Swagger/OpenAPI)
-- Document parsing & text extraction
-- Embedding creation (OpenAI API, via client's own key)
-- Vector search (similarity search with pgvector)
-- RAG chat endpoint (Q&A generation)
-- Chat history logging with sessions
+- URL knowledge sources (crawl + refresh)
+- Document parsing & text extraction (incl. structured OpenAPI ingestion)
+- Embedding creation (OpenAI API, via tenant's own key)
+- Hybrid retrieval (pgvector + BM25 + RRF + reranking, contradiction adjudication)
+- RAG chat endpoint (Q&A generation with clarification outcomes)
+- Chat history logging with sessions; optional identified (KYC) sessions
 - Feedback system (👍/👎 + optional ideal answer)
-- Token usage tracking per client
+- Manual escalation → tickets dashboard
+- Gap Analyzer (Mode A docs-gap + Mode B user-signal clustering)
+- Token usage tracking per tenant
 - Debug mode (show which chunks were used)
-- Admin metrics
+- Admin metrics + PII-event audit log
+- Internal eval QA framework (`/eval/*`) with a separate JWT secret
 
 **Frontend:**
 - Login/signup page
@@ -34,9 +39,9 @@
 - Basic styling (no customization)
 
 **Database:**
-- PostgreSQL with pgvector extension
-- Users, Clients, Documents, Embeddings, Chats, Messages tables
-- Migrations (Alembic)
+- PostgreSQL 15 with pgvector extension
+- Tenants, Users, Bots, Documents, UrlSources, Embeddings, Chats, Messages, ContactSessions, EscalationTickets, Gap* (Analyzer), PiiEvents, Tester/EvalSession/EvalResult (internal QA)
+- Migrations (Alembic) — ~40 versioned revisions under `backend/migrations/versions/`
 
 ### What's EXCLUDED (v2) ❌
 
@@ -73,15 +78,15 @@ users
 └─ updated_at (TIMESTAMP)
 ```
 
-#### Clients (Companies)
+#### Tenants (Workspaces)
 ```sql
-clients
+tenants
 ├─ id (PK, UUID)
 ├─ public_id (VARCHAR(20), UNIQUE — used in widget/embed URLs, ch_…)
-├─ user_id (FK → users, NOT NULL)
+├─ user_id (FK → users, NOT NULL — workspace owner)
 ├─ name (VARCHAR, NOT NULL)
 ├─ api_key (UNIQUE, NOT NULL, 32-char random)
-├─ openai_api_key (VARCHAR, encrypted, nullable — client's OpenAI key)
+├─ openai_api_key (VARCHAR, encrypted, nullable — tenant's OpenAI key)
 ├─ kyc_secret_key (+ previous + previous_expires_at + hint) — FI-KYC signing secrets (encrypted)
 ├─ settings (JSONB, default={})
 ├─ is_active (BOOLEAN)
@@ -89,11 +94,13 @@ clients
 └─ updated_at (TIMESTAMP)
 ```
 
+> Historical note: the model was previously named `Client`; all schema/API surfaces now use **tenant** / `tenant_id`. See `backend/models.py:Tenant`.
+
 #### Documents (Uploaded Files)
 ```sql
 documents
 ├─ id (PK, UUID)
-├─ client_id (FK → clients, NOT NULL)
+├─ tenant_id (FK → tenants, NOT NULL)
 ├─ filename (VARCHAR, NOT NULL)
 ├─ file_type (ENUM: pdf, markdown, swagger)
 ├─ original_content (TEXT, raw file content)
@@ -104,7 +111,7 @@ documents
 └─ updated_at (TIMESTAMP)
 
 Indexes:
-├─ (client_id)
+├─ (tenant_id)
 └─ (status)
 ```
 
@@ -131,7 +138,7 @@ Indexes:
 ```sql
 chats
 ├─ id (PK, UUID)
-├─ client_id (FK → clients, NOT NULL)
+├─ tenant_id (FK → tenants, NOT NULL)
 ├─ session_id (UUID, unique per visitor session)
 ├─ user_context (JSONB, nullable — FI-KYC identified session payload fields)
 ├─ tokens_used (INTEGER)
@@ -139,20 +146,29 @@ chats
 └─ updated_at (TIMESTAMP)
 
 Indexes:
-└─ (client_id)
+└─ (tenant_id)
 ```
 
-#### User sessions (FI-KYC schema placeholder)
+#### Contact sessions (FI-KYC identified-user lifecycle)
 ```sql
-user_sessions   -- v2+ cross-session analytics; table exists, app logic minimal in v1
-├─ id, client_id, user_id (tenant's id), email, name, plan_tier, audience_tag
-├─ session_started_at, session_ended_at, conversation_turns, created_at
-└─ INDEX (client_id, user_id)
+contact_sessions   -- cross-session history for identified users
+├─ id (PK, UUID)
+├─ tenant_id (FK → tenants ON DELETE CASCADE, NOT NULL)
+├─ contact_id (VARCHAR(255), NOT NULL — the KYC token's user_id)
+├─ email, name, plan_tier, audience_tag (nullable)
+├─ session_started_at, session_ended_at (nullable)
+├─ conversation_turns (INTEGER, default 0)
+└─ created_at (TIMESTAMP)
+
+Indexes:
+├─ ix_contact_sessions_tenant_contact (tenant_id, contact_id)
+└─ uq_contact_sessions_tenant_contact_active — partial unique on
+   (tenant_id, contact_id) WHERE session_ended_at IS NULL
 ```
 
 #### Internal manual QA (Eval)
 
-Not tenant-scoped; internal testers only. Migration `eval_qa_mvp_v1`. See `docs/04-features.md` §10.
+Not tenant-scoped; internal testers only. Migration `eval_qa_mvp_v1`. See `docs/04-features.md` §11.
 
 ```sql
 testers
@@ -204,56 +220,60 @@ Indexes:
 
 ### Multi-Tenancy Security
 
-**CRITICAL:** Always filter by `client_id` on every query.
+**CRITICAL:** Always filter by `tenant_id` on every query.
 
 ```python
-# Example: Get embeddings for a client's search
+# Example: Get embeddings for a tenant's search
 SELECT chunk_text, similarity_score
 FROM embeddings
 WHERE document_id IN (
-  SELECT id FROM documents 
-  WHERE client_id = $1  # ← ALWAYS filter by client_id
+  SELECT id FROM documents
+  WHERE tenant_id = $1  # ← ALWAYS filter by tenant_id
 )
 ORDER BY vector <-> query_vector
 LIMIT 3;
 ```
 
 ### Foreign Keys
-- `documents.client_id` → `clients.id` (CASCADE DELETE)
+- `documents.tenant_id` → `tenants.id` (CASCADE DELETE)
 - `embeddings.document_id` → `documents.id` (CASCADE DELETE)
-- `chats.client_id` → `clients.id` (CASCADE DELETE)
+- `chats.tenant_id` → `tenants.id` (CASCADE DELETE)
 - `messages.chat_id` → `chats.id` (CASCADE DELETE)
-- `clients.user_id` → `users.id` (CASCADE DELETE)
+- `tenants.user_id` → `users.id` (CASCADE DELETE)
+- `contact_sessions.tenant_id` → `tenants.id` (CASCADE DELETE)
 
 ### Unique Constraints
 - `users.email` UNIQUE
-- `clients.api_key` UNIQUE
-- `clients.public_id` UNIQUE
+- `tenants.api_key` UNIQUE
+- `tenants.public_id` UNIQUE
 
 ### Not Null Constraints
 - `users.email`, `users.password_hash`
-- `clients.user_id`, `clients.name`, `clients.api_key`, `clients.openai_api_key`
-- `documents.client_id`, `documents.filename`, `documents.file_type`
+- `tenants.user_id`, `tenants.name`, `tenants.api_key`
+- `documents.tenant_id`, `documents.filename`, `documents.file_type`
 - `embeddings.document_id`, `embeddings.chunk_text`, `embeddings.vector`
-- `chats.client_id`
+- `chats.tenant_id`
 - `messages.chat_id`, `messages.role`, `messages.content`
 
 ---
 
 ## Migration Strategy (Alembic)
 
+Migrations live under `backend/migrations/versions/` (~40 revisions as of April 2026). `alembic.ini` points `script_location = backend/migrations`. Revision IDs are short snake_case and must fit the 32-char `alembic_version.version_num` column (see `AGENTS.md` → Alembic safety rule).
+
 ```
-alembic/
+backend/migrations/
 ├─ versions/
-│  ├─ 001_init_users_clients.py
-│  ├─ 002_documents.py
-│  ├─ 003_embeddings_with_pgvector.py
-│  ├─ 004_chats_and_messages.py
-│  └─ 005_indexes.py
+│  ├─ 3e6c7b506784_init.py
+│  ├─ fi_disc_v1.py
+│  ├─ qa_url_answers_v1.py
+│  ├─ phase4_user_sessions_active_v1.py
+│  ├─ phase4_message_embeddings_v1.py
+│  └─ …
 └─ env.py
 ```
 
-Each migration is atomic and reversible.
+Each migration is atomic and, wherever practical, reversible. Railway runs `alembic upgrade head` on every deploy via the Procfile `release` step.
 
 ---
 

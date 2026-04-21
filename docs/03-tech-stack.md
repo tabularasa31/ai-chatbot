@@ -12,7 +12,7 @@
   - Built-in async support
   - Easy validation with Pydantic
   
-- **Database:** PostgreSQL 14+ with pgvector extension
+- **Database:** PostgreSQL 15 with pgvector extension (production: `pgvector/pgvector:pg15`)
   - Proven production DB
   - pgvector: native vector similarity search
   - Full-text search, JSON support
@@ -137,7 +137,7 @@
 │  POST /widget/session/init (api_key, optional identity)  │
 │  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
 │    ↓                                                      │
-│    1. Resolve client → client_id + openai_api_key        │
+│    1. Resolve tenant → tenant_id + openai_api_key        │
 │    2. Redact PII in question (regex + tenant toggles)    │
 │    3. If pending clarification exists, classify the turn │
 │       as continuation vs new intent                      │
@@ -159,10 +159,11 @@
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
 │                                                           │
-│  Tables:                                                 │
-│  - users, clients (with openai_api_key)                 │
-│  - documents, embeddings (vectors)                      │
-│  - chats, messages (with token_count, feedback)         │
+│  Tables (selection):                                     │
+│  - users, tenants (with encrypted openai_api_key)        │
+│  - bots, documents, url_sources, embeddings (vectors)    │
+│  - chats, messages, contact_sessions                     │
+│  - escalation_tickets, gap_* (analyzer)                  │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                OpenAI API (External)                      │
@@ -200,9 +201,9 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 ```
 1. Visitor types question
    ↓
-2. Widget sends `POST /widget/chat?client_id=ch_…` with JSON body `{ "message": "..." }`
+2. Widget sends `POST /widget/chat?bot_id=ch_…` with JSON body `{ "message": "..." }`
    ↓
-3. Backend resolves the public bot ID (`client_id` query param) → gets internal `client_id` + client's OpenAI key
+3. Backend resolves the public bot ID (`bot_id` query param) → gets internal `tenant_id` + tenant's OpenAI key
    ↓
 4. Regex PII redaction on question (FI-043) → typed placeholders for external calls
    ↓
@@ -256,9 +257,9 @@ When `message_type != answer`, the payload also includes structured
 ### API Key Authentication
 - Client gets 32-character random API key
 - Dashboard / private API calls use the client API key (`X-API-Key`)
-- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `client_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with the private API key plus signed identity token
-- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `client_id` and the client's OpenAI key
-- All queries filter by client_id (no data leaks between tenants)
+- Public widget chat uses the bot public ID (`public_id`, exposed in frontend copy as the bot ID) via the `bot_id` query parameter; optional identified-mode bootstrap uses `POST /widget/session/init` with the private tenant API key plus signed identity token
+- Backend validates the private API key only on the authenticated/private paths or widget session bootstrap, then retrieves `tenant_id` and the tenant's OpenAI key
+- All queries filter by `tenant_id` (no data leaks between tenants)
 
 ### OpenAI Key Isolation
 - Each client's OpenAI key is stored encrypted per client
@@ -272,12 +273,12 @@ When `message_type != answer`, the payload also includes structured
 - Client admins can manage optional regex entity toggles in `Settings → Privacy`; privacy audit rows are retained via admin retention controls
 
 ### Multi-Tenant Isolation
-- Every query includes `WHERE client_id = $1`
-- No way to see other client's documents
-- No way to see other client's chat history
+- Every query includes `WHERE tenant_id = $1`
+- No way to see another tenant's documents
+- No way to see another tenant's chat history
 
 ### Rate limiting (shipped baseline)
-- **slowapi** on public and sensitive routes: e.g. `GET /clients/validate/{api_key}` (20/min), `POST /search` (30/min), `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
+- **slowapi** on public and sensitive routes: e.g. `GET /tenants/validate/{api_key}` (20/min), `POST /search` (30/min), `POST /chat` (30/min), `POST /widget/session/init` and `POST /widget/chat` (20/min) — see `backend/core/limiter.py` and route decorators.
 - **Future / Phase 2 embed:** per-client daily quotas, global per-tenant caps, subscription-tier limits — see `docs/BACKLOG_EMBED-PHASE2.md`.
 
 ### OpenAI errors (ongoing)
@@ -288,8 +289,8 @@ When `message_type != answer`, the payload also includes structured
 ## Scalability Considerations
 
 ### Database
-- Indexes on `client_id`, `document_id`, `vector`
-- Partitioning by `client_id` if needed (future)
+- Indexes on `tenant_id`, `document_id`, `vector`
+- Partitioning by `tenant_id` if needed (future)
 - Connection pooling (pgBouncer)
 
 ### Backend

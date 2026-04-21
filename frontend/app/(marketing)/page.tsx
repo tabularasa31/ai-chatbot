@@ -1,3 +1,5 @@
+'use client';
+
 import { Navigation } from '@/components/marketing/Navigation';
 import { Hero } from '@/components/marketing/Hero';
 import { Features } from '@/components/marketing/Features';

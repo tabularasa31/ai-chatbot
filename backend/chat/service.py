@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
@@ -679,6 +680,7 @@ def run_chat_pipeline(
     tenant_public_id: str | None = None,
     bot_public_id: str | None = None,
     chat_id: str | None = None,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> ChatPipelineResult:
     """
     Pure RAG pipeline — no DB writes, no escalation actions, no Langfuse trace mutations.
@@ -961,6 +963,7 @@ def run_chat_pipeline(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         trace=trace,
+        stream_callback=stream_callback,
     )
 
     # --- 8. Validate answer ---
@@ -1177,6 +1180,7 @@ def generate_answer(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     trace: TraceHandle | None = None,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI gpt-4o-mini with RAG prompt.
@@ -1243,17 +1247,52 @@ def generate_answer(
         )
     started_at = perf_counter()
     try:
-        response = call_openai_with_retry(
-            "chat_generate",
-            lambda: openai_client.chat.completions.create(
+        prompt_tokens_raw = 0
+        completion_tokens_raw = 0
+        finish_reason: str | None = None
+        if stream_callback is not None:
+            stream = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.2,
                 max_tokens=500,
-            ),
-        )
-        answer_text = response.choices[0].message.content or ""
-        total_tokens = response.usage.total_tokens if response.usage else 0
+                stream=True,
+                stream_options={"include_usage": True},
+            )
+            chunks: list[str] = []
+            total_tokens = 0
+            for chunk in stream:
+                if getattr(chunk, "usage", None):
+                    total_tokens = chunk.usage.total_tokens or 0
+                    prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                    completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason
+                delta = getattr(choice.delta, "content", None) if choice.delta else None
+                if delta:
+                    chunks.append(delta)
+                    stream_callback(delta)
+            answer_text = "".join(chunks)
+        else:
+            response = call_openai_with_retry(
+                "chat_generate",
+                lambda: openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=500,
+                ),
+            )
+            answer_text = response.choices[0].message.content or ""
+            total_tokens = response.usage.total_tokens if response.usage else 0
+            if response.usage:
+                prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
+                completion_tokens_raw = getattr(response.usage, "completion_tokens", 0) or 0
+            if response.choices:
+                finish_reason = getattr(response.choices[0], "finish_reason", None)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -1261,23 +1300,15 @@ def generate_answer(
             model="gpt-4o-mini",
         )
         if generation is not None:
-            prompt_tokens = _safe_int(
-                getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
-            )
-            completion_tokens = _safe_int(
-                getattr(response.usage, "completion_tokens", 0) if response.usage else 0
-            )
             generation.end(
                 output=answer_text.strip(),
                 usage={
-                    "input": prompt_tokens,
-                    "output": completion_tokens,
+                    "input": _safe_int(prompt_tokens_raw),
+                    "output": _safe_int(completion_tokens_raw),
                 },
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
-                    "finish_reason": (
-                        getattr(response.choices[0], "finish_reason", None) if response.choices else None
-                    ),
+                    "finish_reason": finish_reason,
                     "cost_usd": round((_safe_int(total_tokens) / 1_000_000) * 0.30, 6),
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                 },
@@ -1648,6 +1679,7 @@ def process_chat_message(
     browser_locale: str | None = None,
     disclosure_config: dict | None = _DISCLOSURE_UNSET,  # type: ignore[assignment]
     bot_public_id: str | None = None,
+    stream_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
     """
     RAG pipeline with FI-ESC escalation state machine.
@@ -2260,6 +2292,7 @@ def process_chat_message(
         tenant_public_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         bot_public_id=bot_public_id,
         chat_id=str(chat.id) if chat is not None else None,
+        stream_callback=stream_callback,
     )
 
     # Guard rejects and faq_direct: persist and return immediately (no escalation).

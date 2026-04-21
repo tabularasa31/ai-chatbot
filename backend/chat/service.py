@@ -53,7 +53,7 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import detect_injection
+from backend.guards.injection_detector import detect_injection, detect_injection_structural
 from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
@@ -75,6 +75,7 @@ from backend.models import (
 )
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
+_SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -931,6 +932,7 @@ def run_chat_pipeline(
             profile=profile,
             response_language=language_context.response_language,
             api_key=api_key,
+            question=question,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -1842,6 +1844,48 @@ def process_chat_message(
             else None
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
+
+    # Short-message early exit: ≤ _SHORT_TURN_MAX_WORDS words → skip expensive LLM guards
+    # and return a friendly invite. Structural injection check (regex, ~0 ms) still runs
+    # to guard against obfuscated payloads that happen to be short.
+    # Skip when the chat is in an escalation followup state — the user's reply ("yes"/"no")
+    # must reach the followup handler even if it is a single word.
+    if len(redacted_question.split()) <= _SHORT_TURN_MAX_WORDS and not chat.escalation_followup_pending:
+        structural_result = detect_injection_structural(redacted_question)
+        if not structural_result.detected:
+            small_talk_result = _build_greeting_result(
+                product_name=_resolve_product_name(tenant=tenant_row, db=db),
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            _persist_turn_with_response_language(
+                db=db,
+                chat=chat,
+                tenant_id=tenant_id,
+                response_language=language_context.response_language,
+                resolution_reason=language_context.response_language_resolution_reason,
+                user_content=question,
+                assistant_content=small_talk_result.text,
+                document_ids=[],
+                extra_tokens=small_talk_result.tokens_used,
+                optional_entity_types=optional_entity_types,
+            )
+            trace.update(
+                output={"answer": small_talk_result.text, "source": "small_talk"},
+                metadata={
+                    "chat_ended": False,
+                    "escalated": False,
+                    "small_talk": True,
+                    "question": redacted_question,
+                    "response_language": language_context.response_language,
+                },
+            )
+            return ChatTurnOutcome(
+                text=small_talk_result.text,
+                document_ids=[],
+                tokens_used=small_talk_result.tokens_used,
+                chat_ended=False,
+            )
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
 

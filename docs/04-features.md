@@ -53,7 +53,7 @@ Every client gets a random 32-character `api_key` when the workspace client is p
 
 ### Public ID
 
-A human-readable `public_id` (format: `ch_xxxxxxxxxxxxxxxx`) is used in the embeddable widget snippet. It is safe to expose in public HTML — it only identifies the client, grants no write access.
+Every bot has its own `public_id` which is what customers paste into the embeddable widget snippet as `data-bot-id`. A tenant also has a `public_id`, but **they are not interchangeable** — `/widget/chat` resolves `Bot.public_id`, not `Tenant.public_id`. The bot public ID is safe to expose in public HTML — it only identifies the bot, grants no write access.
 
 ### OpenAI API key (per client)
 
@@ -547,10 +547,10 @@ Behavior details:
 | Channel | Auth | Endpoint |
 |---------|------|----------|
 | Dashboard / API | `X-Api-Key` | `POST /chat` |
-| Widget (public) | `botId` in frontend/UI and embed seam (same `public_id`) | `POST /widget/chat` |
-| Debug tool | JWT + `bot_id` query param (`Client.public_id`) | `POST /chat/debug?bot_id=ch_...` |
+| Widget (public) | `bot_id` query param (bot `public_id`) | `POST /widget/chat?bot_id=…` |
+| Debug tool | JWT + `bot_id` query param (bot `public_id`) | `POST /chat/debug?bot_id=…` |
 
-The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated client's `public_id`; users are not expected to edit the URL manually. The explicit `bot_id` URL pattern remains part of the eval flow only (`/eval/chat?bot_id=...`).
+The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually. The explicit `bot_id` URL pattern remains part of the eval flow only (`/eval/chat?bot_id=...`).
 
 ### Sessions and history
 
@@ -644,21 +644,28 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ### How embedding works
 
-Users copy a snippet from the **Dashboard** (and optionally from docs). In product/UI language this is the bot ID, and the script URL uses the same `botId` value, which is the client/bot **`public_id`** (`ch_…`). If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
+Users copy a snippet from the **Dashboard**. The snippet passes the bot's `public_id` via the `data-bot-id` attribute on the script tag. If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
 
-Example (placeholders — the Dashboard fills in your real public bot ID and URLs):
+Example (placeholders — the Dashboard fills in your real bot public ID and URLs):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script src="https://<your-api-host>/embed.js?botId=ch_xxxxxxxxxxxxxxxx"></script>
+<script
+  src="https://<your-api-host>/embed.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
-If the frontend and API share the same origin, you can omit `Chat9Config` and use a single script tag with `?botId=…` only.
+If the frontend and API share the same origin, you can omit `Chat9Config`.
+
+`embed.js` supports two modes:
+- **Bubble** (default): floating chat button in the bottom-right corner.
+- **Inline**: renders inside an existing container. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
 `embed.js` (vanilla JS, served from the API):
-- Reads `botId` from the script URL query string
-- Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script’s origin, as the **iframe base URL**
-- Appends a fixed-position container and an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>`
+- Reads the bot `public_id` from `data-bot-id` (legacy `?botId=` URL param still supported)
+- Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script's origin, as the **iframe base URL**
+- Injects an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>`
 - The iframe renders the full `ChatWidget` React component
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk.
@@ -697,25 +704,28 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 | Method | Path | Auth |
 |--------|------|------|
 | POST | `/eval/login` | Body: `username`, `password` → `access_token` |
-| POST | `/eval/sessions` | Eval JWT; body: `bot_id` (public bot ID / client `public_id`) |
+| POST | `/eval/sessions` | Eval JWT; body: `bot_id` (bot's `public_id`, same value as widget `data-bot-id`) |
 | POST | `/eval/sessions/{id}/results` | Eval JWT; snapshot `question`, `bot_answer`, `verdict`, optional `error_category`, `comment` |
 | GET | `/eval/sessions/{id}/results` | Eval JWT; list results for **own** sessions only (404 if not owner) |
 
-### `bot_id` = public bot ID (same value as widget `botId`, not the API key)
+### `bot_id` = bot's `public_id` (same value as widget `data-bot-id`, not the API key)
 
-The query/body field **`bot_id`** is exactly the public bot ID from the dashboard embed snippet, e.g. `embed.js?botId=ch_xxxxxxxxxxxxxxxx`.
+The query/body field **`bot_id`** is exactly the bot's `public_id` from the dashboard embed snippet, e.g. the value of `data-bot-id`.
 
 ```html
-<script src="https://<api-host>/embed.js?botId=ch_bwf5xpwxgaok3bzqjg"></script>
+<script
+  src="https://<api-host>/embed.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
-→ use **`/eval/chat?bot_id=ch_bwf5xpwxgaok3bzqjg`** (same string).
+→ use **`/eval/chat?bot_id=YOUR_BOT_PUBLIC_ID`** (same string).
 
 Do **not** use the secret **32-character `api_key`** (used for `X-API-Key` / server chat) as `bot_id`.
 
 ### Bot eligibility (aligned with widget)
 
-Creating an eval session uses **`backend/clients/widget_chat_gate.py`** — the same rules as **`POST /widget/chat`** and **`POST /widget/escalate`**: client must exist, be **active**, and have a **non-empty** OpenAI API key configured. Otherwise the API returns the same class of errors as the widget (404 / 403 / 400), so testers do not get a “session created” state when the chat cannot run.
+Creating an eval session uses **`backend/tenants/widget_chat_gate.py`** — the same rules as **`POST /widget/chat`** and **`POST /widget/escalate`**: client must exist, be **active**, and have a **non-empty** OpenAI API key configured. Otherwise the API returns the same class of errors as the widget (404 / 403 / 400), so testers do not get a “session created” state when the chat cannot run.
 
 ### Misconfiguration
 
@@ -724,7 +734,7 @@ If `EVAL_JWT_SECRET` is missing or blank, eval login and protected eval routes r
 ### Frontend
 
 - **`/eval/login`** — stores token in `localStorage` (`chat9_eval_access_token`); supports `?next=` to return to `/eval/chat?bot_id=…`
-- **`/eval/chat?bot_id=ch_…`** — bootstraps eval session once (deduped in dev under React Strict Mode), reuses **`ChatWidget`** + rating panel under each assistant bubble
+- **`/eval/chat?bot_id=…`** — bootstraps eval session once (deduped in dev under React Strict Mode), reuses **`ChatWidget`** + rating panel under each assistant bubble
 - **Escalation handoff** messages are still assistant bubbles and remain rateable in MVP; if you aggregate scores as “model quality”, filter by turn type later to reduce noise.
 
 ### Tests
@@ -739,7 +749,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 | Page / route | What it shows |
 |--------------|---------------|
-| **Dashboard** (`/dashboard`) | **API key** (server-to-server `X-Api-Key`), **embed code** snippet (`public_id` / `ch_…`); banner linking to Agents if OpenAI key is missing |
+| **Dashboard** (`/dashboard`) | **Your Bot ID** (bot's `public_id`, used as `data-bot-id`), **API key** (server-to-server `X-Api-Key`), **embed code** snippet; banner linking to Agents if OpenAI key is missing |
 | **Knowledge** (`/knowledge`) | Upload files, add URL sources, trigger embeddings/crawls, health indicators, delete; unified indexed sources table (replaces legacy `/documents`) |
 | **Agents** (`/settings`) | Per-client **OpenAI API key** (encrypted), save/update/remove |
 | **Logs** (`/logs`) | Full chat history across sessions; thumbs up/down feedback |

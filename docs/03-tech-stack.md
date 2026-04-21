@@ -110,7 +110,7 @@
 │                   (Client's Website)                     │
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
-│  <script src="https://api/embed.js?botId=ch_…">         │
+│  <script src="https://api/embed.js" data-bot-id="…">    │
 │  optional: window.Chat9Config.widgetUrl → Next.js origin   │
 │                                                           │
 │  ↓                                                        │

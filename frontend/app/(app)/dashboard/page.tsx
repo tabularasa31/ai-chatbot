@@ -15,7 +15,7 @@ function DashboardContent() {
   const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
   const [apiKey, setApiKey] = useState<string | null>(null);
-  const [publicId, setPublicId] = useState<string | null>(null);
+  const [botPublicId, setBotPublicId] = useState<string | null>(null);
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [redirecting, setRedirecting] = useState(false);
@@ -42,8 +42,15 @@ function DashboardContent() {
         }
 
         setApiKey(client.api_key);
-        setPublicId(client.public_id ?? null);
         setHasOpenaiKey(client.has_openai_key ?? false);
+
+        try {
+          const bots = await api.bots.list();
+          const firstActive = bots.find((b) => b.is_active) ?? bots[0];
+          setBotPublicId(firstActive?.public_id ?? null);
+        } catch {
+          setBotPublicId(null);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -68,7 +75,7 @@ function DashboardContent() {
       APP_URL && APP_URL !== API_URL
         ? `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n`
         : "";
-    return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${publicId ?? ""}">\n</script>`;
+    return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${botPublicId ?? ""}">\n</script>`;
   }
 
   if (loading || redirecting) {
@@ -99,14 +106,14 @@ function DashboardContent() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-6">
-        {publicId && (
+        {botPublicId && (
           <div className="mb-6">
             <h2 className="text-base font-semibold text-slate-800 mb-1">Your Bot ID</h2>
             <p className="mb-2 text-sm text-slate-500">
               Public bot identifier used in the widget snippet.
             </p>
             <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
-              {publicId}
+              {botPublicId}
             </code>
           </div>
         )}

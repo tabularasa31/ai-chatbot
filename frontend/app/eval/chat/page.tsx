@@ -34,14 +34,14 @@ function EvalStateMessage({
   description: string;
 }) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#0A0A0F] px-4 py-10 font-['Inter']">
-      <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-[#E879F9]/20 blur-3xl" />
-      <div className="absolute bottom-[-96px] right-[-40px] h-72 w-72 rounded-full bg-[#38BDF8]/18 blur-3xl" />
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-nd-base px-4 py-10 font-['Inter']">
+      <div className="absolute left-[-72px] top-[-64px] h-64 w-64 rounded-full bg-nd-accent/20 blur-3xl" />
+      <div className="absolute bottom-[-96px] right-[-40px] h-72 w-72 rounded-full bg-nd-info/[.18] blur-3xl" />
       <div
         className={`relative max-w-xl rounded-lg border px-6 py-7 ${
           tone === "danger"
-            ? "border-[#F87171]/30 bg-[#F87171]/10 text-[#F87171]"
-            : "border-[#2E2E3E] bg-[#1E1E2E] text-[#FAF5FF]"
+            ? "border-nd-danger/30 bg-nd-danger/10 text-nd-danger"
+            : "border-nd-border bg-nd-surface text-nd-text"
         }`}
       >
         <h1 className="text-2xl font-semibold">{title}</h1>
@@ -211,19 +211,19 @@ function EvalChatContent() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#0A0A0F] font-['Inter']">
-      <header className="border-b border-[#1E1E2E] bg-[#12121A] px-8 py-4">
+    <div className="flex min-h-screen flex-col bg-nd-base font-['Inter']">
+      <header className="border-b border-nd-surface bg-nd-base-alt px-8 py-4">
         <div className="flex items-center justify-between">
-          <span className="text-[#E879F9] font-medium cursor-default">
+          <span className="text-nd-accent font-medium cursor-default">
             UI Evals
           </span>
-          <h1 className="text-[#FAF5FF] font-medium">Ручная проверка диалога</h1>
-          <span className="text-[#FAF5FF]/60 text-sm">{botId}</span>
+          <h1 className="text-nd-text font-medium">Ручная проверка диалога</h1>
+          <span className="text-nd-text/60 text-sm">{botId}</span>
         </div>
       </header>
 
       <main className="flex flex-1 items-center justify-center p-8">
-        <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-xl border border-[#1E1E2E] shadow-2xl">
+        <div className="flex h-[700px] w-full max-w-4xl overflow-hidden rounded-xl border border-nd-surface shadow-2xl">
           <ChatWidget botId={botId} locale={locale} renderBelowAssistant={renderBelowAssistant} />
         </div>
       </main>
@@ -235,7 +235,7 @@ export default function EvalChatPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-[#0A0A0F] px-4 text-sm text-[#FAF5FF]/60">
+        <div className="flex min-h-screen items-center justify-center bg-nd-base px-4 text-sm text-nd-text/60">
           Загрузка...
         </div>
       }

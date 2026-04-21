@@ -6,27 +6,93 @@
       return scripts[scripts.length - 1];
     })();
 
-  var scriptSrc = currentScript.src;
-  var url = new URL(scriptSrc);
-  var botId = url.searchParams.get("botId");
+  // Support data-bot-id attribute (preferred) or legacy ?botId= URL param
+  var botId =
+    (currentScript.dataset && currentScript.dataset.botId) ||
+    (function () {
+      var src = currentScript.src || "";
+      var m = src.match(/[?&]botId=([^&]*)/);
+      return m ? decodeURIComponent(m[1]) : null;
+    })();
 
   if (!botId) {
-    console.error("Chat9: botId not found in script URL");
+    console.error("Chat9: botId not found. Set data-bot-id attribute on the script tag.");
     return;
   }
 
+  var mode     = (currentScript.dataset && currentScript.dataset.mode)     || "bubble";
+  var color    = (currentScript.dataset && currentScript.dataset.color)    || null;
+  var position = (currentScript.dataset && currentScript.dataset.position) || "right";
+  var targetId = (currentScript.dataset && currentScript.dataset.target)   || null;
+
   var widgetBase =
     (typeof window !== "undefined" && window.Chat9Config && window.Chat9Config.widgetUrl) ||
-    url.origin;
+    (function () {
+      var src = currentScript.src || "";
+      var m = src.match(/^(https?:\/\/[^\/]+)/);
+      return m ? m[1] : "";
+    })();
 
   var browserLocale =
-    (typeof navigator !== "undefined" &&
-      (navigator.language || navigator.userLanguage)) ||
+    (typeof navigator !== "undefined" && (navigator.language || navigator.userLanguage)) ||
     null;
 
+  function buildWidgetUrl() {
+    var query = "botId=" + encodeURIComponent(botId);
+    if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
+    return widgetBase + "/widget?" + query;
+  }
+
+  function makeIframe() {
+    var f = document.createElement("iframe");
+    f.src = buildWidgetUrl();
+    f.id = "chat9-widget-iframe";
+    f.style.cssText = "width:100%;height:100%;border:none;display:block;";
+    f.allow = "microphone; camera";
+    return f;
+  }
+
+  // ── INLINE MODE ────────────────────────────────────────────────────────────
+  if (mode === "inline") {
+    var targetEl = targetId ? document.getElementById(targetId) : null;
+    if (!targetEl) {
+      console.error(
+        "Chat9 inline: target element not found. " +
+        "Add data-target=\"<elementId>\" to the script tag and make sure the element exists."
+      );
+      return;
+    }
+    var inlineFrame = makeIframe();
+    inlineFrame.style.cssText =
+      "width:100%;height:600px;border:none;display:block;" +
+      "border-radius:12px;overflow:hidden;";
+    targetEl.innerHTML = "";
+    targetEl.appendChild(inlineFrame);
+    console.log("Chat9 Widget loaded (inline)", { botId: botId });
+    return;
+  }
+
+  // ── BUBBLE MODE ────────────────────────────────────────────────────────────
   var isOpen = false;
   var isResizing = false;
   var resizeStartX, resizeStartY, resizeStartW, resizeStartH;
+
+  var fabBg = color ? color : "linear-gradient(135deg,#e879f9,#a855f7)";
+
+  // Convert #RRGGBB → rgba string; returns null for named colors / shorthand / rgb()
+  function hexToRgba(hex, a) {
+    var m = hex && hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
+    return m ? "rgba(" + parseInt(m[1],16) + "," + parseInt(m[2],16) + "," + parseInt(m[3],16) + "," + a + ")" : null;
+  }
+  var colorRgba1 = color ? hexToRgba(color, 0.40) : null;
+  var colorRgba2 = color ? hexToRgba(color, 0.55) : null;
+  var fabShadow  = colorRgba1 ? ("0 4px 18px " + colorRgba1) : (color ? "0 4px 18px rgba(0,0,0,0.28)" : "0 4px 18px rgba(168,85,247,0.45)");
+  var fabShadowH = colorRgba2 ? ("0 6px 24px " + colorRgba2) : (color ? "0 6px 24px rgba(0,0,0,0.38)" : "0 6px 24px rgba(168,85,247,0.55)");
+
+  var isLeft      = position === "left";
+  var hEdge       = isLeft ? "left:20px;" : "right:20px;";
+  var tOrigin     = isLeft ? "bottom left" : "bottom right";
+  var windowAlign = isLeft ? "align-items:flex-start;" : "align-items:flex-end;";
 
   var CHAT_ICON =
     '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
@@ -45,11 +111,11 @@
   container.style.cssText =
     "position:fixed;" +
     "bottom:20px;" +
-    "right:20px;" +
+    hEdge +
     "z-index:9999;" +
     "display:flex;" +
     "flex-direction:column;" +
-    "align-items:flex-end;" +
+    windowAlign +
     "gap:12px;";
   document.body.appendChild(container);
 
@@ -70,24 +136,26 @@
     "box-shadow:0 8px 40px rgba(0,0,0,0.20);" +
     "opacity:0;" +
     "transform:scale(0.93) translateY(10px);" +
-    "transform-origin:bottom right;" +
+    "transform-origin:" + tOrigin + ";" +
     "transition:opacity 0.22s ease, transform 0.22s ease;";
 
-  // ── Resize handle (top-left corner) ───────────────────────────────────────
+  // ── Resize handle (top corner opposite to position) ───────────────────────
   var resizeHandle = document.createElement("div");
   resizeHandle.id = "chat9-resize-handle";
+  var handleCorner = isLeft ? "top:0;right:0;" : "top:0;left:0;";
+  var handleCursor = isLeft ? "ne-resize" : "nw-resize";
+  var handleRadius = isLeft ? "border-radius:0 0 0 6px;" : "border-radius:0 0 6px 0;";
   resizeHandle.style.cssText =
     "position:absolute;" +
-    "top:0;" +
-    "left:0;" +
+    handleCorner +
     "width:28px;" +
     "height:28px;" +
-    "cursor:nw-resize;" +
+    "cursor:" + handleCursor + ";" +
     "z-index:20;" +
     "display:flex;" +
     "align-items:center;" +
     "justify-content:center;" +
-    "border-radius:0 0 6px 0;";
+    handleRadius;
   resizeHandle.innerHTML =
     '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">' +
     '<circle cx="2" cy="10" r="1.2" fill="rgba(255,255,255,0.45)"/>' +
@@ -96,26 +164,16 @@
     "</svg>";
 
   // ── Iframe ─────────────────────────────────────────────────────────────────
-  var iframe = document.createElement("iframe");
-  var widgetParams = new URLSearchParams({ botId: botId });
-  if (browserLocale) widgetParams.set("locale", browserLocale);
-  iframe.src = widgetBase + "/widget?" + widgetParams.toString();
-  iframe.id = "chat9-widget-iframe";
-  iframe.style.cssText =
-    "width:100%;" +
-    "height:100%;" +
-    "border:none;" +
-    "display:block;";
-  iframe.allow = "microphone; camera";
+  var iframe = makeIframe();
 
-  // ── Resize overlay (blocks iframe from eating mouse events during resize) ──
+  // ── Resize overlay ─────────────────────────────────────────────────────────
   var resizeOverlay = document.createElement("div");
   resizeOverlay.style.cssText =
     "display:none;" +
     "position:fixed;" +
     "top:0;left:0;right:0;bottom:0;" +
     "z-index:10000;" +
-    "cursor:nw-resize;";
+    "cursor:" + handleCursor + ";";
 
   // ── FAB button ─────────────────────────────────────────────────────────────
   var fab = document.createElement("button");
@@ -126,12 +184,12 @@
     "height:56px;" +
     "border-radius:50%;" +
     "border:none;" +
-    "background:linear-gradient(135deg,#e879f9,#a855f7);" +
+    "background:" + fabBg + ";" +
     "cursor:pointer;" +
     "display:flex;" +
     "align-items:center;" +
     "justify-content:center;" +
-    "box-shadow:0 4px 18px rgba(168,85,247,0.45);" +
+    "box-shadow:" + fabShadow + ";" +
     "transition:transform 0.18s ease, box-shadow 0.18s ease;" +
     "flex-shrink:0;" +
     "outline:none;";
@@ -139,11 +197,11 @@
 
   fab.addEventListener("mouseenter", function () {
     fab.style.transform = "scale(1.08)";
-    fab.style.boxShadow = "0 6px 24px rgba(168,85,247,0.55)";
+    fab.style.boxShadow = fabShadowH;
   });
   fab.addEventListener("mouseleave", function () {
     fab.style.transform = "scale(1)";
-    fab.style.boxShadow = "0 4px 18px rgba(168,85,247,0.45)";
+    fab.style.boxShadow = fabShadow;
   });
 
   // ── Toggle open / close ────────────────────────────────────────────────────
@@ -161,9 +219,7 @@
     isOpen = false;
     chatWindow.style.opacity = "0";
     chatWindow.style.transform = "scale(0.93) translateY(10px)";
-    setTimeout(function () {
-      chatWindow.style.display = "none";
-    }, 220);
+    setTimeout(function () { chatWindow.style.display = "none"; }, 220);
     fab.innerHTML = CHAT_ICON;
   }
 
@@ -184,7 +240,7 @@
 
   document.addEventListener("mousemove", function (e) {
     if (!isResizing) return;
-    var dx = resizeStartX - e.clientX;
+    var dx = isLeft ? (e.clientX - resizeStartX) : (resizeStartX - e.clientX);
     var dy = resizeStartY - e.clientY;
     var newW = Math.max(280, Math.min(700, resizeStartW + dx));
     var newH = Math.max(360, Math.min(820, resizeStartH + dy));
@@ -206,5 +262,5 @@
   container.appendChild(fab);
   document.body.appendChild(resizeOverlay);
 
-  console.log("Chat9 Widget loaded", { botId: botId });
+  console.log("Chat9 Widget loaded (bubble)", { botId: botId, position: position });
 })();

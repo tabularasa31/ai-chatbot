@@ -62,11 +62,13 @@ function DashboardContent() {
   }
 
   function getEmbedSnippet() {
-    const scriptUrl = `${API_URL}/embed.js?botId=${encodeURIComponent(publicId ?? "")}`;
-    if (APP_URL && APP_URL !== API_URL) {
-      return `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n<script src="${scriptUrl}"></script>`;
-    }
-    return `<script src="${scriptUrl}"></script>`;
+    const base = API_URL || APP_URL;
+    const scriptUrl = `${base}/embed.js`;
+    const configLine =
+      APP_URL && APP_URL !== API_URL
+        ? `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n`
+        : "";
+    return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${publicId ?? ""}">\n</script>`;
   }
 
   if (loading || redirecting) {
@@ -132,19 +134,29 @@ function DashboardContent() {
       )}
 
       <div className="bg-white rounded-xl border border-slate-200 p-6">
-        <h2 className="text-base font-semibold text-slate-800 mb-1">Embed code</h2>
-        <p className="text-slate-500 text-sm mb-3">
-          Add this snippet to your website HTML, right before{" "}
-          <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code>:
-        </p>
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800 mb-1">Embed your bot</h2>
+            <p className="text-slate-500 text-sm">
+              Add the widget to any website with one snippet.
+            </p>
+          </div>
+          <a
+            href="/embed"
+            className="shrink-0 px-3 py-1.5 text-sm font-medium text-violet-600 border border-violet-200 rounded-lg hover:bg-violet-50 transition-colors"
+          >
+            Configure →
+          </a>
+        </div>
         <CodeBlockWithCopy
           code={getEmbedSnippet()}
           copyLabel="Copy embed code"
           tone="light"
           preClassName="text-sm mb-3"
         />
-        <p className="text-slate-400 text-xs mb-4">
-          One-line embed — works on any domain. No CORS setup needed. `botId` is the public bot ID.
+        <p className="text-slate-400 text-xs">
+          Choose between a floating chat bubble or an inline widget on the{" "}
+          <a href="/embed" className="underline hover:text-slate-500">Embed page</a>.
         </p>
       </div>
 

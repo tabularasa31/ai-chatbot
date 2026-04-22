@@ -18,6 +18,14 @@ import backend.chat.language as language_module
 from backend.core.config import Settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource, ContactSession
 from tests.conftest import register_and_verify_user, set_client_openai_key
+
+
+def _bot_public_id(tenant, token: str) -> str:
+    r = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert items, "expected at least one bot after tenant bootstrap"
+    return items[0]["public_id"]
 from backend.chat.service import (
     RetrievalContext,
     ChatPipelineResult,
@@ -2253,7 +2261,7 @@ def test_debug_with_embeddings_vector_mode(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What is the answer?"},
     )
@@ -2341,7 +2349,7 @@ def test_debug_response_includes_adjudication_fields_and_reliability_payload(
     )
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "What changed?"},
     )
@@ -2418,7 +2426,7 @@ def test_debug_with_embeddings_keyword_mode(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "secret number"},
     )
@@ -2453,7 +2461,7 @@ def test_debug_no_embeddings(
     set_client_openai_key(tenant, token)
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Anything"},
     )
@@ -2515,7 +2523,7 @@ def test_debug_does_not_persist_chat(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "Hello"},
     )
@@ -2531,7 +2539,7 @@ def test_debug_does_not_persist_chat(
 def test_debug_requires_auth(tenant: TestClient) -> None:
     """Debug endpoint requires JWT."""
     response = tenant.post(
-        "/chat/debug?tenant_id=ch_testbot",
+        "/chat/debug?bot_id=ch_testbot",
         json={"question": "Hello"},
     )
     assert response.status_code == 401
@@ -2548,7 +2556,7 @@ def test_debug_empty_question(tenant: TestClient, db_session: Session) -> None:
     set_client_openai_key(tenant, token)
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": ""},
     )
@@ -4337,7 +4345,7 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     )
 
     response = tenant.post(
-        f"/chat/debug?tenant_id={cl_resp.json()['public_id']}",
+        f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
         headers={"Authorization": f"Bearer {token}"},
         json={"question": "How does the API work?"},
     )

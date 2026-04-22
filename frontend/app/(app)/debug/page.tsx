@@ -43,9 +43,10 @@ export default function DebugPage() {
       setBotLoading(true);
       setBotError("");
       try {
-        const client = await api.clients.getMe();
+        const bots = await api.bots.list();
         if (cancelled) return;
-        setBotId(client.public_id);
+        const firstActive = bots.find((b) => b.is_active) ?? bots[0];
+        setBotId(firstActive?.public_id ?? "");
       } catch (err) {
         if (cancelled) return;
         setBotError(err instanceof Error ? err.message : "Failed to load bot context");

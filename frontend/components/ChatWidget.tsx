@@ -364,10 +364,11 @@ export function ChatWidget({
         ]);
       })
       .finally(() => {
-        // Always reset loading. Omitting `loading` from deps prevents React from
-        // cleaning up (cancelled=true) the moment setLoading(true) triggers a
-        // re-render, which would leave the input permanently disabled.
-        if (!cancelled) setLoading(false);
+        // Unconditionally reset loading: the React flush microtask triggered by
+        // setMessages/setSessionId inside fetchGreeting runs before .finally(),
+        // so `cancelled` is already true here even on success. Keeping the guard
+        // would leave loading stuck at true and the input permanently disabled.
+        setLoading(false);
       });
     return () => {
       cancelled = true;

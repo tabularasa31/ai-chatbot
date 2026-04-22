@@ -978,7 +978,7 @@ def test_chat_no_embeddings(
     response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
-        json={"question": "Anything"},
+        json={"question": "How does your product work?"},
     )
     assert response.status_code == 200
     data = response.json()
@@ -1363,7 +1363,7 @@ def test_get_history_success(
     chat_resp = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
-        json={"question": "Hello"},
+        json={"question": "How do I get started?"},
     )
     session_id = chat_resp.json()["session_id"]
 
@@ -1376,7 +1376,7 @@ def test_get_history_success(
     assert data["session_id"] == session_id
     assert len(data["messages"]) == 2
     assert data["messages"][0]["role"] == "user"
-    assert data["messages"][0]["content"] == "Hello"
+    assert data["messages"][0]["content"] == "How do I get started?"
     assert data["messages"][1]["role"] == "assistant"
     assert data["messages"][1]["content"] == "Reply"
 
@@ -2604,7 +2604,7 @@ def test_chat_openai_unavailable_503(
     response = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
-        json={"question": "Hello"},
+        json={"question": "What is the pricing plan?"},
     )
     assert response.status_code == 503
     assert "OpenAI" in response.json()["detail"]

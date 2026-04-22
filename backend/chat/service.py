@@ -53,7 +53,7 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import detect_injection
+from backend.guards.injection_detector import detect_injection, detect_injection_structural
 from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
@@ -75,6 +75,7 @@ from backend.models import (
 )
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
+_SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -482,6 +483,66 @@ def _resolve_fallback_locale(
     if browser_locale and browser_locale.strip():
         return browser_locale.strip()
     return None
+
+
+def _handle_small_talk_early_exit(
+    *,
+    redacted_question: str,
+    question: str,
+    chat: Chat,
+    tenant_row: Any,
+    tenant_id: uuid.UUID,
+    language_context: Any,
+    api_key: str,
+    db: Session,
+    trace: Any,
+    optional_entity_types: set[str] | None,
+) -> ChatTurnOutcome | None:
+    """Return a ChatTurnOutcome for single-word inputs that are not injections, else None.
+
+    Skipped when the chat has a pending escalation followup so that
+    one-word replies ("yes", "no") reach the followup handler.
+    """
+    if chat.escalation_followup_pending:
+        return None
+    if len(redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
+        return None
+    if detect_injection_structural(redacted_question).detected:
+        return None
+
+    small_talk_result = _build_greeting_result(
+        product_name=_resolve_product_name(tenant=tenant_row, db=db),
+        response_language=language_context.response_language,
+        api_key=api_key,
+    )
+    _persist_turn_with_response_language(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        response_language=language_context.response_language,
+        resolution_reason=language_context.response_language_resolution_reason,
+        user_content=question,
+        assistant_content=small_talk_result.text,
+        document_ids=[],
+        extra_tokens=small_talk_result.tokens_used,
+        optional_entity_types=optional_entity_types,
+    )
+    trace.update(
+        output={"answer": small_talk_result.text, "source": "small_talk"},
+        metadata={
+            "chat_ended": False,
+            "escalated": False,
+            "small_talk": True,
+            "question": redacted_question,
+            "response_language": language_context.response_language,
+        },
+    )
+    return ChatTurnOutcome(
+        text=small_talk_result.text,
+        document_ids=[],
+        tokens_used=small_talk_result.tokens_used,
+        chat_ended=False,
+    )
 
 
 def _build_greeting_result(
@@ -931,6 +992,7 @@ def run_chat_pipeline(
             profile=profile,
             response_language=language_context.response_language,
             api_key=api_key,
+            question=question,
         )
         return ChatPipelineResult(
             raw_answer=reject_result.text,
@@ -1842,6 +1904,20 @@ def process_chat_message(
             else None
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
+
+    if outcome := _handle_small_talk_early_exit(
+        redacted_question=redacted_question,
+        question=question,
+        chat=chat,
+        tenant_row=tenant_row,
+        tenant_id=tenant_id,
+        language_context=language_context,
+        api_key=api_key,
+        db=db,
+        trace=trace,
+        optional_entity_types=optional_entity_types,
+    ):
+        return outcome
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
 

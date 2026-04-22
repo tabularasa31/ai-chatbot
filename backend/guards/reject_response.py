@@ -11,6 +11,8 @@ from backend.chat.language import (
 )
 from backend.models import TenantProfile as TenantProfileModel
 
+_SOFT_REJECT_MAX_WORDS = 2  # short inputs get an invite instead of a blunt refusal
+
 
 class RejectReason(enum.Enum):
     INJECTION_DETECTED = "injection"
@@ -35,6 +37,7 @@ def _build_canonical_reject_response(
     *,
     reason: RejectReason,
     profile: TenantProfileModel | None,
+    question: str | None = None,
 ) -> str:
     product_name = (
         profile.product_name if profile and profile.product_name else None
@@ -63,7 +66,11 @@ def _build_canonical_reject_response(
             "Please clarify your question or ask it another way."
         )
 
-    # NOT_RELEVANT and LOW_RETRIEVAL_SCORE — out-of-domain bucket
+    # NOT_RELEVANT and LOW_RETRIEVAL_SCORE — out-of-domain bucket.
+    # Short inputs (≤ 2 words) are likely greetings or vague prompts that slipped past
+    # the small-talk early exit; use a soft invite rather than a blunt refusal.
+    if question is not None and len(question.split()) <= _SOFT_REJECT_MAX_WORDS:
+        return f"Hi! I'm here to help with {product_name} questions. What would you like to know?"
     if topic_hint:
         return (
             f"Sorry, but I can't help with that question. "
@@ -88,6 +95,7 @@ def build_reject_response(
     canonical_text = _build_canonical_reject_response(
         reason=reason,
         profile=profile,
+        question=question,
     )
     if response_language is None:
         target_language = _resolve_reject_target_language(
@@ -119,6 +127,7 @@ def build_reject_response_result(
     canonical_text = _build_canonical_reject_response(
         reason=reason,
         profile=profile,
+        question=question,
     )
     if response_language is None:
         target_language = _resolve_reject_target_language(

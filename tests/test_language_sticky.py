@@ -436,12 +436,12 @@ def test_chat_sticky_survives_outlier_turn(
     _patch_process_chat_dependencies(
         monkeypatch,
         {
-            "Привет": _detection("ru"),
+            "Привет мир": _detection("ru"),
             "Traceback: ValueError": _detection("en"),
         },
     )
 
-    first = process_chat_message(tenant_id, "Привет", session_id, db_session, api_key=api_key)
+    first = process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
     second = process_chat_message(
         tenant_id,
         "Traceback: ValueError",

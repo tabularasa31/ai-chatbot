@@ -4,10 +4,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function POST(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+  const body = (await request.json().catch(() => ({}))) as {
+    message?: unknown;
+    locale?: unknown;
+  };
   const botId = searchParams.get("botId");
-  const message = searchParams.get("message");
+  const message = typeof body.message === "string" ? body.message : null;
   const sessionId = searchParams.get("session_id");
-  const locale = searchParams.get("locale");
+  const locale = typeof body.locale === "string" ? body.locale : null;
 
   if (!botId || message === null) {
     return NextResponse.json(
@@ -23,7 +27,7 @@ export async function POST(request: NextRequest) {
   const res = await fetch(`${API_URL}/widget/chat?${params}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, locale }),
   });
 
   if (!res.ok || !res.body) {

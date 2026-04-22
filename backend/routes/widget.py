@@ -16,7 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
-from backend.contact_sessions.service import start_user_session, touch_user_session
+from backend.contact_sessions.service import start_user_session
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
@@ -40,7 +40,6 @@ from backend.widget.service import (
     SESSION_INVALID_CODE,
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
-    find_resumable_identified_chat,
     sanitize_locale,
     widget_session_error_detail,
 )
@@ -130,52 +129,26 @@ def widget_session_init(
 
     ctx, fail_reason = _resolve_widget_identity(tenant, body.identity_token)
     if ctx is not None:
-        resumable_chat = find_resumable_identified_chat(
+        merged = apply_identity_context_patch(
+            {"user_id": ctx["user_id"]},
+            ctx,
+            browser_locale=locale,
+        )
+        chat = Chat(
+            tenant_id=tenant.id,
+            session_id=session_id,
+            user_context=merged,
+        )
+        db.add(chat)
+        db.flush()
+        start_user_session(
             db,
             tenant_id=tenant.id,
-            user_id=ctx["user_id"],
+            user_context=merged,
+            started_at=chat.created_at,
         )
-        if resumable_chat is not None:
-            session_id = resumable_chat.session_id
-            resumable_chat.user_context = apply_identity_context_patch(
-                resumable_chat.user_context,
-                ctx,
-                browser_locale=locale,
-            )
-            db.add(resumable_chat)
-            touch_user_session(
-                db,
-                tenant_id=tenant.id,
-                user_context=resumable_chat.user_context,
-                started_at=resumable_chat.created_at,
-            )
-            db.commit()
-            logger.info("kyc_session_resumed: tenant_id=%s", tenant.id)
-        else:
-            merged = apply_identity_context_patch(
-                {"user_id": ctx["user_id"]},
-                ctx,
-                browser_locale=locale,
-            )
-            chat = Chat(
-                tenant_id=tenant.id,
-                session_id=session_id,
-                user_context=merged,
-            )
-            db.add(chat)
-            db.flush()
-            start_user_session(
-                db,
-                tenant_id=tenant.id,
-                user_context=merged,
-                started_at=chat.created_at,
-            )
-            db.commit()
-            logger.info(
-                "kyc_session_resume_skipped: tenant_id=%s reason=no_resumable_session",
-                tenant.id,
-            )
-            logger.info("kyc_session_created: tenant_id=%s", tenant.id)
+        db.commit()
+        logger.info("kyc_session_created: tenant_id=%s", tenant.id)
         mode = "identified"
     elif body.identity_token and body.identity_token.strip():
         reason = fail_reason or "invalid_token"

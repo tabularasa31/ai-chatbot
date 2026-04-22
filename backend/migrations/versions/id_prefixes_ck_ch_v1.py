@@ -53,13 +53,10 @@ def upgrade() -> None:
     # 1. Widen tenants.api_key to fit ck_-prefixed values (35 chars).
     current_len = _col_len(insp, "tenants", "api_key")
     if current_len is not None and current_len < 35:
-        if bind.dialect.name == "postgresql":
-            op.execute("ALTER TABLE tenants ALTER COLUMN api_key TYPE VARCHAR(35)")
-        else:
-            with op.batch_alter_table("tenants") as batch_op:
-                batch_op.alter_column(
-                    "api_key", type_=String(35), existing_nullable=False
-                )
+        with op.batch_alter_table("tenants") as batch_op:
+            batch_op.alter_column(
+                "api_key", type_=String(35), existing_nullable=False
+            )
 
     # 2. Prepend ck_ to existing api_keys that don't have it.
     if bind.dialect.name == "postgresql":
@@ -94,7 +91,7 @@ def upgrade() -> None:
 
     updates: list[dict[str, str]] = []
     batch_size = 1000
-    result = bind.execute(select_sql)
+    result = bind.execution_options(stream_results=True).execute(select_sql)
     for (bot_id,) in result:
         updates.append({"id": bot_id, "p": _generate_bot_public_id()})
         if len(updates) >= batch_size:

@@ -21,9 +21,12 @@ function EmbedContent() {
   const [targetId, setTargetId] = useState("chat9-widget");
 
   useEffect(() => {
-    api.clients
-      .getMe()
-      .then((c) => setPublicId(c.public_id ?? null))
+    api.bots
+      .list()
+      .then((bots) => {
+        const firstActive = bots.find((b) => b.is_active) ?? bots[0];
+        setPublicId(firstActive?.public_id ?? null);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, []);

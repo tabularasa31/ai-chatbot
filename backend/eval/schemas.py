@@ -18,21 +18,21 @@ class EvalTokenResponse(BaseModel):
 
 
 class EvalSessionCreateRequest(BaseModel):
-    tenant_id: str
+    bot_id: str
 
-    @field_validator("tenant_id")
+    @field_validator("bot_id")
     @classmethod
-    def tenant_id_non_empty(cls, v: str) -> str:
+    def bot_id_non_empty(cls, v: str) -> str:
         s = v.strip() if isinstance(v, str) else ""
         if not s:
-            raise ValueError("tenant_id is required")
+            raise ValueError("bot_id is required")
         return s
 
 
 class EvalSessionResponse(BaseModel):
     id: UUID
     tester_id: UUID
-    tenant_id: str
+    bot_id: str
     started_at: datetime
 
 

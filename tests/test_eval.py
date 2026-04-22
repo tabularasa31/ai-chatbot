@@ -46,7 +46,15 @@ def _eligible_bot_client(tenant: TestClient, db_session: Session, *, email_suffi
     )
     assert cl.status_code == 201, cl.text
     set_client_openai_key(tenant, token)
-    return cl.json()["public_id"]
+    return _bot_public_id(tenant, token)
+
+
+def _bot_public_id(tenant: TestClient, token: str) -> str:
+    bots = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
+    assert bots.status_code == 200, bots.text
+    items = bots.json()["items"]
+    assert items, "expected at least one bot after tenant bootstrap"
+    return items[0]["public_id"]
 
 
 def test_eval_login_success(tenant: TestClient, db_session: Session) -> None:
@@ -73,7 +81,7 @@ def test_eval_login_inactive_tester(tenant: TestClient, db_session: Session) -> 
 def test_create_session_unknown_bot(tenant: TestClient, db_session: Session) -> None:
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    r = tenant.post("/eval/sessions", headers=h, json={"tenant_id": "ch_does_not_exist_xx"})
+    r = tenant.post("/eval/sessions", headers=h, json={"bot_id": "ch_does_not_exist_xx"})
     assert r.status_code == 404
     assert r.json()["detail"] == "Bot not found"
 
@@ -87,7 +95,7 @@ def test_create_session_inactive_client(tenant: TestClient, db_session: Session)
     )
     assert cl.status_code == 201
     set_client_openai_key(tenant, token)
-    public_id = cl.json()["public_id"]
+    bot_public_id = _bot_public_id(tenant, token)
     cid = uuid.UUID(cl.json()["id"])
     row = db_session.query(Tenant).filter(Tenant.id == cid).first()
     assert row is not None
@@ -96,7 +104,7 @@ def test_create_session_inactive_client(tenant: TestClient, db_session: Session)
 
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    r = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id})
+    r = tenant.post("/eval/sessions", headers=h, json={"bot_id": bot_public_id})
     assert r.status_code == 403
     assert r.json()["detail"] == "Tenant is not active"
 
@@ -109,11 +117,11 @@ def test_create_session_no_openai_key(tenant: TestClient, db_session: Session) -
         json={"name": "No OAI Eval Co"},
     )
     assert cl.status_code == 201
-    public_id = cl.json()["public_id"]
+    bot_public_id = _bot_public_id(tenant, token)
 
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    r = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id})
+    r = tenant.post("/eval/sessions", headers=h, json={"bot_id": bot_public_id})
     assert r.status_code == 400
     assert "OpenAI API key" in r.json()["detail"]
 
@@ -122,10 +130,10 @@ def test_create_session_success(tenant: TestClient, db_session: Session) -> None
     public_id = _eligible_bot_client(tenant, db_session, email_suffix="ok")
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    r = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id})
+    r = tenant.post("/eval/sessions", headers=h, json={"bot_id": public_id})
     assert r.status_code == 201
     data = r.json()
-    assert data["tenant_id"] == public_id
+    assert data["bot_id"] == public_id
     assert "id" in data
 
 
@@ -135,7 +143,7 @@ def test_tester_cannot_access_other_tester_session(tenant: TestClient, db_sessio
     _eval_tester(db_session, username="bob", password="b", active=True)
     # second tester needs different username - use default for first, bob for second
     h_alice = _eval_auth(tenant, "alice", "a")
-    r = tenant.post("/eval/sessions", headers=h_alice, json={"tenant_id": public_id})
+    r = tenant.post("/eval/sessions", headers=h_alice, json={"bot_id": public_id})
     assert r.status_code == 201
     sid = r.json()["id"]
 
@@ -148,7 +156,7 @@ def test_pass_verdict_rejects_error_category(tenant: TestClient, db_session: Ses
     public_id = _eligible_bot_client(tenant, db_session, email_suffix="val")
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    sid = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id}).json()["id"]
+    sid = tenant.post("/eval/sessions", headers=h, json={"bot_id": public_id}).json()["id"]
     r = tenant.post(
         f"/eval/sessions/{sid}/results",
         headers=h,
@@ -166,7 +174,7 @@ def test_fail_other_requires_comment(tenant: TestClient, db_session: Session) ->
     public_id = _eligible_bot_client(tenant, db_session, email_suffix="val2")
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    sid = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id}).json()["id"]
+    sid = tenant.post("/eval/sessions", headers=h, json={"bot_id": public_id}).json()["id"]
     r = tenant.post(
         f"/eval/sessions/{sid}/results",
         headers=h,
@@ -185,7 +193,7 @@ def test_fail_verdict_allows_empty_bot_answer(tenant: TestClient, db_session: Se
     public_id = _eligible_bot_client(tenant, db_session, email_suffix="empty-answer")
     _eval_tester(db_session)
     h = _eval_auth(tenant, "eval-tester-1", "secret123")
-    sid = tenant.post("/eval/sessions", headers=h, json={"tenant_id": public_id}).json()["id"]
+    sid = tenant.post("/eval/sessions", headers=h, json={"bot_id": public_id}).json()["id"]
     r = tenant.post(
         f"/eval/sessions/{sid}/results",
         headers=h,
@@ -243,6 +251,6 @@ def test_eval_protected_routes_reject_user_jwt(tenant: TestClient, db_session: S
     r = tenant.post(
         "/eval/sessions",
         headers={"Authorization": f"Bearer {user_jwt}"},
-        json={"tenant_id": public_id},
+        json={"bot_id": public_id},
     )
     assert r.status_code == 401

@@ -8,7 +8,7 @@ from backend.eval.schemas import EvalResultCreateRequest
 from backend.models import EvalResult, EvalSession, Tester
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
-    get_tenant_eligible_for_widget_chat,
+    get_bot_and_tenant_for_widget_chat,
 )
 
 
@@ -24,10 +24,10 @@ def authenticate_tester(username: str, password: str, db: Session) -> Tester | N
     return tester
 
 
-def assert_tenant_ready_for_widget_chat(tenant_id: str, db: Session) -> None:
+def assert_bot_ready_for_widget_chat(bot_public_id: str, db: Session) -> None:
     """Same preconditions as POST /widget/chat (shared gate in tenants.widget_chat_gate)."""
     try:
-        get_tenant_eligible_for_widget_chat(db, tenant_id)
+        get_bot_and_tenant_for_widget_chat(db, bot_public_id)
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise ValueError("bot_not_found") from e
@@ -36,9 +36,9 @@ def assert_tenant_ready_for_widget_chat(tenant_id: str, db: Session) -> None:
         raise ValueError("bot_openai_not_configured") from e
 
 
-def create_eval_session(tester_id: uuid.UUID, tenant_id: str, db: Session) -> EvalSession:
-    assert_tenant_ready_for_widget_chat(tenant_id, db)
-    session = EvalSession(tester_id=tester_id, tenant_id=tenant_id)
+def create_eval_session(tester_id: uuid.UUID, bot_id: str, db: Session) -> EvalSession:
+    assert_bot_ready_for_widget_chat(bot_id, db)
+    session = EvalSession(tester_id=tester_id, tenant_id=bot_id)
     db.add(session)
     db.commit()
     db.refresh(session)

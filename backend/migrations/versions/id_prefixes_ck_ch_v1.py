@@ -78,6 +78,11 @@ def upgrade() -> None:
         )
 
     # 3. Regenerate bots.public_id for rows without ch_ prefix.
+    # 36^18 ≈ 10^28 keyspace — collision probability is negligible, so we
+    # skip a per-row uniqueness check and rely on the UNIQUE index to
+    # surface the vanishingly-rare conflict (migration retry on rerun).
+    # Stream ids server-side to avoid loading all into memory, then issue
+    # a single executemany UPDATE.
     if bind.dialect.name == "postgresql":
         select_sql = text(
             r"SELECT id FROM bots WHERE public_id NOT LIKE 'ch\_%' ESCAPE '\'"
@@ -86,20 +91,22 @@ def upgrade() -> None:
         select_sql = text(
             "SELECT id FROM bots WHERE substr(public_id, 1, 3) <> 'ch_'"
         )
-    rows = bind.execute(select_sql).fetchall()
-    for (bot_id,) in rows:
-        new_id = _generate_bot_public_id()
-        for _ in range(5):
-            existing = bind.execute(
-                text("SELECT 1 FROM bots WHERE public_id = :p"),
-                {"p": new_id},
-            ).first()
-            if not existing:
-                break
-            new_id = _generate_bot_public_id()
+
+    updates: list[dict[str, str]] = []
+    batch_size = 1000
+    result = bind.execute(select_sql)
+    for (bot_id,) in result:
+        updates.append({"id": bot_id, "p": _generate_bot_public_id()})
+        if len(updates) >= batch_size:
+            bind.execute(
+                text("UPDATE bots SET public_id = :p WHERE id = :id"),
+                updates,
+            )
+            updates.clear()
+    if updates:
         bind.execute(
             text("UPDATE bots SET public_id = :p WHERE id = :id"),
-            {"p": new_id, "id": bot_id},
+            updates,
         )
 
 

@@ -12,8 +12,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session, touch_user_session

@@ -17,7 +17,9 @@ function DemoWidget() {
     const w = window as typeof window & {
       Chat9Config?: { widgetUrl?: string };
     };
-    w.Chat9Config = { ...(w.Chat9Config ?? {}), widgetUrl: window.location.origin };
+    const hadPriorConfig = Object.prototype.hasOwnProperty.call(w, "Chat9Config");
+    const priorConfig = w.Chat9Config;
+    w.Chat9Config = { ...(priorConfig ?? {}), widgetUrl: window.location.origin };
 
     const script = document.createElement("script");
     script.src = `${API_URL}/embed.js`;
@@ -31,6 +33,11 @@ function DemoWidget() {
       script.remove();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";
+      if (hadPriorConfig) {
+        w.Chat9Config = priorConfig;
+      } else {
+        delete w.Chat9Config;
+      }
     };
   }, []);
 

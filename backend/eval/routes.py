@@ -64,7 +64,7 @@ def eval_create_session(
     tester: Annotated[Tester, Depends(get_current_tester)],
 ) -> EvalSessionResponse:
     try:
-        session = create_eval_session(tester.id, body.tenant_id, db)
+        session = create_eval_session(tester.id, body.bot_id, db)
     except ValueError as e:
         code = str(e)
         if code == "bot_not_found":
@@ -86,7 +86,7 @@ def eval_create_session(
     return EvalSessionResponse(
         id=session.id,
         tester_id=session.tester_id,
-        tenant_id=session.tenant_id,
+        bot_id=session.tenant_id,
         started_at=session.started_at,
     )
 

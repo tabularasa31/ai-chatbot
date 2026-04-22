@@ -206,7 +206,7 @@ class Tenant(Base):
         default=uuid.uuid4,
     )
     name = Column(String(255), nullable=False)
-    api_key = Column(String(32), unique=True, nullable=False, index=True)
+    api_key = Column(String(35), unique=True, nullable=False, index=True)
     public_id = Column(
         String(21),
         unique=True,

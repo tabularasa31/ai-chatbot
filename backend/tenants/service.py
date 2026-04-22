@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
+from backend.core.utils import generate_api_key
 from backend.models import Bot, Chat, Tenant, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
@@ -32,7 +33,7 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
     """
     Create a tenant for a user.
 
-    Generates 32-char random API key. Raises 409 if user already has a tenant.
+    Generates a ck_-prefixed API key. Raises 409 if user already has a tenant.
     """
     existing = get_tenant_by_user(user_id, db)
     if existing:
@@ -40,7 +41,7 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
             status_code=409,
             detail="Tenant already exists for this user",
         )
-    api_key = secrets.token_hex(16)  # 32 chars
+    api_key = generate_api_key()
     tenant = Tenant(
         name=name,
         api_key=api_key,

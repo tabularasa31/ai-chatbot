@@ -29,7 +29,7 @@ def _create_user(db_session, email: str = "user@example.com") -> User:
 def _create_client(db_session, user: User, name: str = "Test Tenant") -> Tenant:
     tenant = Tenant(
         name=name,
-        api_key=f"{uuid.uuid4().hex[:32]}",
+        api_key=f"ck_{uuid.uuid4().hex[:32]}",
         settings={"language": "en"},
     )
     db_session.add(tenant)
@@ -108,12 +108,13 @@ def test_user_duplicate_email_constraint(db_session) -> None:
 
 
 def test_client_creation_with_api_key(db_session) -> None:
-    """Клиент должен создаваться с уникальным API-ключом длиной 32 символа."""
+    """Tenant API key: ck_ prefix + 32 hex chars = 35 total."""
     user = _create_user(db_session)
     tenant = _create_client(db_session, user)
     assert tenant.id is not None
     assert isinstance(tenant.api_key, str)
-    assert len(tenant.api_key) == 32
+    assert tenant.api_key.startswith("ck_")
+    assert len(tenant.api_key) == 35
 
 
 def test_client_user_relationship(db_session) -> None:

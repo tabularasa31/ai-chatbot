@@ -38,7 +38,7 @@ def assert_bot_ready_for_widget_chat(bot_public_id: str, db: Session) -> None:
 
 def create_eval_session(tester_id: uuid.UUID, bot_id: str, db: Session) -> EvalSession:
     assert_bot_ready_for_widget_chat(bot_id, db)
-    session = EvalSession(tester_id=tester_id, tenant_id=bot_id)
+    session = EvalSession(tester_id=tester_id, bot_id=bot_id)
     db.add(session)
     db.commit()
     db.refresh(session)

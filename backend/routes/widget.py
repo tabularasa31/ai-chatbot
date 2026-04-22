@@ -12,10 +12,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.chat.service import process_chat_message
-from backend.contact_sessions.service import start_user_session, touch_user_session
+from backend.contact_sessions.service import start_user_session
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
@@ -39,7 +40,6 @@ from backend.widget.service import (
     SESSION_INVALID_CODE,
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
-    find_resumable_identified_chat,
     sanitize_locale,
     widget_session_error_detail,
 )
@@ -129,52 +129,26 @@ def widget_session_init(
 
     ctx, fail_reason = _resolve_widget_identity(tenant, body.identity_token)
     if ctx is not None:
-        resumable_chat = find_resumable_identified_chat(
+        merged = apply_identity_context_patch(
+            {"user_id": ctx["user_id"]},
+            ctx,
+            browser_locale=locale,
+        )
+        chat = Chat(
+            tenant_id=tenant.id,
+            session_id=session_id,
+            user_context=merged,
+        )
+        db.add(chat)
+        db.flush()
+        start_user_session(
             db,
             tenant_id=tenant.id,
-            user_id=ctx["user_id"],
+            user_context=merged,
+            started_at=chat.created_at,
         )
-        if resumable_chat is not None:
-            session_id = resumable_chat.session_id
-            resumable_chat.user_context = apply_identity_context_patch(
-                resumable_chat.user_context,
-                ctx,
-                browser_locale=locale,
-            )
-            db.add(resumable_chat)
-            touch_user_session(
-                db,
-                tenant_id=tenant.id,
-                user_context=resumable_chat.user_context,
-                started_at=resumable_chat.created_at,
-            )
-            db.commit()
-            logger.info("kyc_session_resumed: tenant_id=%s", tenant.id)
-        else:
-            merged = apply_identity_context_patch(
-                {"user_id": ctx["user_id"]},
-                ctx,
-                browser_locale=locale,
-            )
-            chat = Chat(
-                tenant_id=tenant.id,
-                session_id=session_id,
-                user_context=merged,
-            )
-            db.add(chat)
-            db.flush()
-            start_user_session(
-                db,
-                tenant_id=tenant.id,
-                user_context=merged,
-                started_at=chat.created_at,
-            )
-            db.commit()
-            logger.info(
-                "kyc_session_resume_skipped: tenant_id=%s reason=no_resumable_session",
-                tenant.id,
-            )
-            logger.info("kyc_session_created: tenant_id=%s", tenant.id)
+        db.commit()
+        logger.info("kyc_session_created: tenant_id=%s", tenant.id)
         mode = "identified"
     elif body.identity_token and body.identity_token.strip():
         reason = fail_reason or "invalid_token"
@@ -214,27 +188,6 @@ def widget_chat(
     resolved_message = body.message if body is not None else None
     if resolved_message is not None:
         resolved_message = resolved_message.strip()
-    if not resolved_message:
-        logger.info(
-            "widget_message_rejected",
-            extra={"reason": "empty", "length": 0},
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "message_required", "message": "message is required"},
-        )
-    if len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
-        logger.info(
-            "widget_message_rejected",
-            extra={"reason": "too_long", "length": len(resolved_message)},
-        )
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "code": "message_too_long",
-                "max_chars": _WIDGET_MESSAGE_MAX_CHARS,
-            },
-        )
 
     locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
 
@@ -264,7 +217,11 @@ def widget_chat(
             ) from None
         existing_chat = (
             db.query(Chat)
-            .filter(Chat.tenant_id == tenant.id, Chat.session_id == sid)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.session_id == sid,
+                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+            )
             .first()
         )
         if existing_chat is None:
@@ -275,6 +232,10 @@ def widget_chat(
                     "Session not found",
                 ),
             )
+        if existing_chat.bot_id is None:
+            existing_chat.bot_id = _bot.id
+            db.add(existing_chat)
+            db.commit()
         if existing_chat.ended_at is not None:
             raise HTTPException(
                 status_code=409,
@@ -286,6 +247,30 @@ def widget_chat(
     else:
         sid = uuid.uuid4()
 
+    if not resolved_message:
+        if session_id:
+            logger.info(
+                "widget_message_rejected",
+                extra={"reason": "empty", "length": 0},
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "message_required", "message": "message is required"},
+            )
+        resolved_message = ""
+    elif len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "too_long", "length": len(resolved_message)},
+        )
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "message_too_long",
+                "max_chars": _WIDGET_MESSAGE_MAX_CHARS,
+            },
+        )
+
     process_kwargs = dict(
         tenant_id=tenant.id,
         question=resolved_message,
@@ -294,6 +279,7 @@ def widget_chat(
         user_context=None,
         browser_locale=locale_hint,
         disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
+        bot_id=_bot.id,
         bot_public_id=getattr(_bot, "public_id", None),
     )
 

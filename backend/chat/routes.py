@@ -39,6 +39,7 @@ from backend.core.limiter import limiter
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
+    Bot,
     Chat,
     EscalationTrigger,
     Message,
@@ -117,16 +118,17 @@ def _resolve_debug_client(
     *,
     db: Session,
     current_user: User,
-    tenant_id: str,
+    bot_id: str,
 ) -> Tenant:
-    tenant = (
-        db.query(Tenant)
-        .filter(Tenant.public_id == tenant_id, Tenant.id == current_user.tenant_id)
+    row = (
+        db.query(Bot, Tenant)
+        .join(Tenant, Bot.tenant_id == Tenant.id)
+        .filter(Bot.public_id == bot_id, Tenant.id == current_user.tenant_id)
         .first()
     )
-    if not tenant:
+    if not row:
         raise HTTPException(status_code=404, detail="Bot not found")
-    return tenant
+    return row[1]
 
 
 def _require_original_access(current_user: User) -> None:
@@ -196,13 +198,13 @@ def chat_debug(
     body: DebugRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: Annotated[str, Query(min_length=1)],
+    bot_id: Annotated[str, Query(min_length=1)],
 ) -> ChatDebugResponse:
     """
     Debug endpoint: run RAG pipeline without persisting to DB.
     JWT auth required. Returns answer + retrieval debug info.
     """
-    tenant = _resolve_debug_client(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _resolve_debug_client(db=db, current_user=current_user, bot_id=bot_id)
     if not tenant.openai_api_key:
         raise HTTPException(
             status_code=400,

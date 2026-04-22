@@ -743,6 +743,7 @@ def run_chat_pipeline(
     precomputed_injection: Any | None = None,
     tenant_public_id: str | None = None,
     bot_public_id: str | None = None,
+    retry_bot_id: str | None = None,
     chat_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
 ) -> ChatPipelineResult:
@@ -1044,6 +1045,7 @@ def run_chat_pipeline(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         trace=trace,
+        retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
     )
 
@@ -1261,6 +1263,7 @@ def generate_answer(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     trace: TraceHandle | None = None,
+    retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, int]:
     """
@@ -1332,13 +1335,17 @@ def generate_answer(
         completion_tokens_raw = 0
         finish_reason: str | None = None
         if stream_callback is not None:
-            stream = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.2,
-                max_tokens=500,
-                stream=True,
-                stream_options={"include_usage": True},
+            stream = call_openai_with_retry(
+                "chat_generate_stream",
+                lambda: openai_client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=messages,
+                    temperature=0.2,
+                    max_tokens=500,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                ),
+                bot_id=retry_bot_id,
             )
             chunks: list[str] = []
             total_tokens = 0
@@ -1366,6 +1373,7 @@ def generate_answer(
                     temperature=0.2,
                     max_tokens=500,
                 ),
+                bot_id=retry_bot_id,
             )
             answer_text = response.choices[0].message.content or ""
             total_tokens = response.usage.total_tokens if response.usage else 0
@@ -1759,6 +1767,7 @@ def process_chat_message(
     user_context: dict | None = None,
     browser_locale: str | None = None,
     disclosure_config: dict | None = _DISCLOSURE_UNSET,  # type: ignore[assignment]
+    bot_id: uuid.UUID | None = None,
     bot_public_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
@@ -1795,6 +1804,7 @@ def process_chat_message(
             uc.setdefault("browser_locale", browser_locale)
         chat = Chat(
             tenant_id=tenant_id,
+            bot_id=bot_id,
             session_id=session_id,
             user_context=uc,
         )
@@ -1808,13 +1818,23 @@ def process_chat_message(
         )
         db.commit()
         db.refresh(chat)
-    elif browser_locale and not (chat.user_context or {}).get("browser_locale"):
-        ctx = dict(chat.user_context or {})
-        ctx["browser_locale"] = browser_locale
-        chat.user_context = ctx
-        db.add(chat)
-        db.commit()
-        db.refresh(chat)
+    else:
+        chat_updated = False
+        if bot_id is not None:
+            if chat.bot_id is None:
+                chat.bot_id = bot_id
+                chat_updated = True
+            elif chat.bot_id != bot_id:
+                raise ValueError("Session belongs to another bot")
+        if browser_locale and not (chat.user_context or {}).get("browser_locale"):
+            ctx = dict(chat.user_context or {})
+            ctx["browser_locale"] = browser_locale
+            chat.user_context = ctx
+            chat_updated = True
+        if chat_updated:
+            db.add(chat)
+            db.commit()
+            db.refresh(chat)
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
@@ -2386,6 +2406,7 @@ def process_chat_message(
         precomputed_injection=injection_result,
         tenant_public_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         bot_public_id=bot_public_id,
+        retry_bot_id=str(bot_id) if bot_id is not None else None,
         chat_id=str(chat.id) if chat is not None else None,
         stream_callback=stream_callback,
     )

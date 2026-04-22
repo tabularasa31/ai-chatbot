@@ -206,7 +206,7 @@ class Tenant(Base):
         default=uuid.uuid4,
     )
     name = Column(String(255), nullable=False)
-    api_key = Column(String(32), unique=True, nullable=False, index=True)
+    api_key = Column(String(35), unique=True, nullable=False, index=True)
     public_id = Column(
         String(21),
         unique=True,
@@ -676,6 +676,12 @@ class Chat(Base):
         nullable=False,
         index=True,
     )
+    bot_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     session_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
     user_context = Column(JSON, nullable=True)
     tokens_used = Column(
@@ -706,6 +712,7 @@ class Chat(Base):
     )
 
     tenant = relationship("Tenant", back_populates="chats")
+    bot = relationship("Bot")
     messages = relationship(
         "Message",
         back_populates="chat",
@@ -1272,7 +1279,7 @@ class EvalSession(Base):
         nullable=False,
         index=True,
     )
-    tenant_id = Column(String(64), nullable=False, index=True)
+    bot_id = Column(String(64), nullable=False, index=True)
     started_at = Column(DateTime, nullable=False, default=_utcnow)
 
     tester = relationship("Tester", back_populates="sessions")

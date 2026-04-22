@@ -24,7 +24,8 @@ def test_create_client_success(tenant: TestClient, db_session: Session) -> None:
     assert "id" in data
     assert data["name"] == "My Tenant"
     assert "api_key" in data
-    assert len(data["api_key"]) == 32
+    assert data["api_key"].startswith("ck_")
+    assert len(data["api_key"]) == 35
     assert "created_at" in data
     assert "updated_at" in data
 
@@ -227,8 +228,8 @@ def test_validate_api_key_invalid(tenant: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_api_key_is_32_chars(tenant: TestClient, db_session: Session) -> None:
-    """Verify api_key length is 32 characters."""
+def test_api_key_is_ck_prefixed(tenant: TestClient, db_session: Session) -> None:
+    """Verify api_key is ck_-prefixed, 35 chars total."""
     token = register_and_verify_user(tenant, db_session, email="len@example.com")
     response = tenant.post(
         "/tenants",
@@ -236,7 +237,9 @@ def test_api_key_is_32_chars(tenant: TestClient, db_session: Session) -> None:
         json={"name": "Len Check"},
     )
     assert response.status_code == 201
-    assert len(response.json()["api_key"]) == 32
+    key = response.json()["api_key"]
+    assert key.startswith("ck_")
+    assert len(key) == 35
 
 
 def test_support_settings_default_falls_back_to_owner_email(

@@ -31,9 +31,10 @@ from backend.auth.service import (
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter
+from backend.core.security import generate_kyc_token
 from backend.email.service import send_email
 from backend.models import User
-from backend.tenants.service import ensure_tenant_for_user
+from backend.tenants.service import ensure_tenant_for_user, get_kyc_decrypted_keys_for_validation, get_tenant_by_user
 
 auth_router = APIRouter(tags=["auth"])
 
@@ -212,6 +213,35 @@ def reset_password_endpoint(
     return ResetPasswordResponse(
         message="Password updated successfully. You can now log in."
     )
+
+
+@auth_router.get("/me/widget-token")
+def get_widget_token(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict:
+    """
+    Generate a short-lived widget identity token for the authenticated user.
+
+    Returns a signed token that can be passed to the widget session init
+    so the bot knows who the user is (identified mode).
+    Requires the tenant to have a KYC secret configured.
+    """
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    keys = get_kyc_decrypted_keys_for_validation(tenant)
+    if not keys:
+        raise HTTPException(
+            status_code=404,
+            detail="No identity secret configured. Generate one in Settings → Widget.",
+        )
+
+    secret = keys[0][0]
+    user_context = {"user_id": str(current_user.id), "email": current_user.email}
+    token = generate_kyc_token(user_context, secret, ttl_seconds=300)
+    return {"identity_token": token}
 
 
 @auth_router.get("/me", response_model=UserResponse)

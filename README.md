@@ -102,7 +102,7 @@ npm run dev
 
 ## CI (GitHub Actions)
 
-On every **push** and **pull request** to **`main`** and **`deploy`**, GitHub runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): **Ruff** + **pytest** for the backend (from the repo root, suite in `tests/`) and **ESLint** + **`next build`** for the frontend.
+On every **push** to **`main`** and every **pull request** targeting **`main`**, GitHub runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml): **Ruff** + **pytest** for the backend (from the repo root, suite in `tests/`) and **ESLint** + **`next build`** for the frontend.
 
 For grouped developer-focused test commands (P0 smoke, auth reset, escalation, RAG edge cases, pgvector), see [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md).
 

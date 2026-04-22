@@ -105,12 +105,12 @@
 | Rate limiting | `/validate`, `/search`, `/chat`, widget | `backend/core/limiter.py`, routes |
 | CORS | Production allowlist | app config |
 | pgvector + HNSW | Native vector column + index | migration `dd643d1a544a`, `embeddings.vector` |
-| **FI-026** | GitHub Actions on `main` + `deploy`: backend Ruff + pytest + coverage; frontend ESLint + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
+| **FI-026** | GitHub Actions on push to `main` + pull requests to `main`: backend Ruff + pytest + coverage; frontend ESLint + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
 | Coverage hardening (2026-03-24) | Added high-risk regression tests for escalation state machine, manual escalation endpoint, auth reset flow, and retrieval edge/error paths; stable `/search` OpenAI error contract (`503`) | `tests/test_chat.py`, `tests/test_escalation.py`, `tests/test_auth.py`, `tests/test_search.py`, `tests/pgvector_tests/test_search_pgvector.py`, `backend/search/routes.py` |
 | Retrieval observability (2026-03-28) | Root traces for chat + `/search`; query-variant cost/latency fields; explicit BM25 expansion metadata (`bm25_expansion_mode`, variant eval counts, merged hit counts); tenant-tag-preserving variant segmentation; regression coverage for sampled/deferred traces and symmetric BM25 retrieval behavior | `backend/observability/service.py`, `backend/search/service.py`, `tests/test_observability.py`, `tests/test_search.py`, `tests/test_chat.py`, `tests/pgvector_tests/test_search_pgvector.py` |
 | Full trace capture toggle (2026-03-29) | `FULL_CAPTURE_MODE` env (default `true`) disables adaptive sampling for early/low-traffic setups; `false` keeps prior heuristics. Traces get `sampling_mode` metadata + tag | `backend/core/config.py`, `backend/observability/service.py`, `tests/test_observability.py`, `docs/07-observability-rollout.md`, `docs/04-features.md` |
 | Developer test runbook | Engineer-focused grouped test commands for local/CI runs | `docs/06-developer-test-runbook.md` |
-| Deploy | `main` vs `deploy`, Vercel + Railway; promote via PR after green CI | see `PROGRESS.md` → Infrastructure |
+| Deploy | `main` is the current production branch for Vercel + Railway | see `PROGRESS.md` → Infrastructure |
 
 ---
 
@@ -118,7 +118,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| **FI-026** | GitHub Actions on `main` + `deploy`: backend `ruff` + `pytest tests/` + coverage; frontend `eslint` + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
+| **FI-026** | GitHub Actions on push to `main` + pull requests to `main`: backend `ruff` + `pytest tests/` + coverage; frontend `eslint` + `next build` | `.github/workflows/ci.yml`, `backend/ruff.toml` |
 
 ---
 

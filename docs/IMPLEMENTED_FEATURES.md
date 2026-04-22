@@ -77,7 +77,7 @@
 | Clarification quick replies | Widget renders structured clarification options as quick-reply buttons only for the latest assistant clarification turn; button clicks send the visible label plus structured `option_id` when available | `frontend/components/ChatWidget.tsx`, `frontend/lib/widget-conversation.ts`, `frontend/app/widget/chat/route.ts` |
 | **FI-038** | “Powered by Chat9” footer | `frontend/components/ChatWidget.tsx` |
 | Widget rate limits | 20/min on `POST /widget/session/init`, `/widget/chat`, `/widget/escalate` | slowapi, `backend/routes/widget.py` |
-| **Widget chat gate** | Single eligibility check (exists, active, OpenAI key non-empty) for `/widget/chat`, `/widget/escalate`, and eval session create | `backend/clients/widget_chat_gate.py` |
+| **Widget chat gate** | Single eligibility check (exists, active, OpenAI key non-empty) for `/widget/chat`, `/widget/escalate`, and eval session create | `backend/tenants/widget_chat_gate.py` |
 | **embed.js** | Passes `navigator.language` as `locale` into iframe URL | `backend/static/embed.js` |
 
 ---

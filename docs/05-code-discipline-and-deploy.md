@@ -358,16 +358,19 @@ Visit https://app.yourdomain.com
 
 ### Widget (served from API)
 
-**Script:** `GET /embed.js` — loader injects an iframe pointing at `/widget?clientId=…`.
+**Script:** `GET /embed.js` — loader injects an iframe pointing at `/widget?botId=…`.
 
-**Typical snippet (public `clientId` like `ch_…` from the dashboard):**
+**Typical snippet (bot's `public_id` from the dashboard, passed via `data-bot-id`):**
 ```html
-<script src="https://api.yourdomain.com/embed.js?clientId=YOUR_PUBLIC_CLIENT_ID"></script>
+<script
+  src="https://api.yourdomain.com/embed.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
 When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashboard “Copy embed code” may add `window.Chat9Config = { widgetUrl: "…" }` before the script tag.
 
-**Smoke test:** paste the snippet into a static HTML page with a real `clientId` and open in the browser.
+**Smoke test:** paste the snippet into a static HTML page with a real bot `public_id` and open in the browser.
 
 ---
 
@@ -387,7 +390,7 @@ When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashb
   - All show "ready" status
 
 ✅ Embed widget
-  - Copy embed code from dashboard (`embed.js?clientId=ch_…`)
+  - Copy embed code from dashboard (`embed.js` + `data-bot-id="…"`)
   - Paste into test.html
   - Open in browser → iframe widget visible
 
@@ -442,7 +445,7 @@ When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashb
 ### Security ✅
 - Users only see own clients
 - Clients only see own documents
-- Dashboard/API chat uses API key; public widget uses `clientId` — tenant isolation in both paths
+- Dashboard/API chat uses API key; public widget uses bot `public_id` via `data-bot-id` — tenant isolation in both paths
 - No sensitive data in logs
 
 ---

@@ -7,14 +7,22 @@ description: How to add the Chat9 chat widget to your site, plus identified sess
 
 Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. It loads a small script from your API host and points the iframe UI at the Chat9 app.
 
-Example (placeholders — the Dashboard fills in your real public bot ID and may adjust URLs; the script param remains `clientId` for compatibility):
+Example (placeholders — the Dashboard fills in your real bot public ID and URLs):
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
+<script
+  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
-`clientId` is the legacy embed parameter that currently carries your public bot ID (`ch_…`), not the secret API key.
+`data-bot-id` carries your bot's `public_id`, not the secret API key. It is safe to ship in page HTML.
+
+You can choose between two modes on the [Embed page](https://getchat9.live/embed):
+
+- **Bubble** (default) — floating chat button in the bottom-right corner.
+- **Inline** — renders the widget inside an existing container on your page. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
 ## What the widget does
 
@@ -34,7 +42,7 @@ Language behavior:
 ## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the **Dashboard** home (`/dashboard`). The widget loads your public bot ID (`public_id`, `ch_…`); in the legacy embed snippet that value currently appears as **`clientId`**.
+2. Copy the embed block from the **Dashboard** home (`/dashboard`). The widget loads your bot's `public_id` from the `data-bot-id` attribute on the script tag.
 
 ## CORS
 
@@ -67,7 +75,7 @@ Clarification behavior:
 
 ## Security
 
-The public bot ID (`ch_…`) in the script URL identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.
+The bot `public_id` in the `data-bot-id` attribute identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.
 
 ---
 
@@ -152,7 +160,7 @@ function makeWidgetIdentityToken({
 
 Required payload fields:
 
-- `tenant_id` — your bot public ID, for example `ch_...`
+- `tenant_id` — your bot's `public_id` (same value as `data-bot-id`)
 - `user_id` — any non-empty string
 - `exp` — expiry time, Unix timestamp in seconds
 - `iat` — issued-at time, Unix timestamp in seconds
@@ -218,7 +226,9 @@ If the token is missing or invalid, Chat9 still returns a session but with:
 Use the `session_id` from `session/init` in later chat requests:
 
 ```bash
-curl -X POST "https://YOUR_API_HOST/widget/chat?client_id=ch_YOUR_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe&message=Hello"
+curl -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Hello"}'
 ```
 
 Public widget responses may now include:
@@ -234,7 +244,7 @@ When the widget receives structured clarification options, it can render them as
 
 | Field | Required | Type | Constraints |
 |---|---|---|---|
-| `tenant_id` | yes | string | must equal your bot public ID (`ch_...`) |
+| `tenant_id` | yes | string | your bot's `public_id` (same value as `data-bot-id`) |
 | `user_id` | yes | string | non-empty, non-whitespace |
 | `exp` | yes | integer | Unix timestamp in seconds |
 | `iat` | yes | integer | Unix timestamp in seconds |

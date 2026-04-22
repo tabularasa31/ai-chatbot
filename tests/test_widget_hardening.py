@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import ChatTurnOutcome
-from backend.models import Tenant
+from backend.models import Chat, Tenant
 from backend.widget.service import apply_identity_context_patch, sanitize_locale
 from tests.conftest import register_and_verify_user, set_client_openai_key
 from tests.test_widget import _create_bot, _seed_rag_chunk
@@ -76,7 +76,17 @@ def test_widget_chat_rejects_empty_message(
         email="widget-hardening-empty@example.com",
         name="Widget Hardening Empty",
     )
-    response = _post_widget_chat(tenant, body["bot_public_id"], message="")
+    existing_chat = Chat(
+        tenant_id=uuid.UUID(body["id"]),
+        session_id=uuid.uuid4(),
+        user_context={},
+    )
+    db_session.add(existing_chat)
+    db_session.commit()
+    response = tenant.post(
+        f"/widget/chat?bot_id={body['bot_public_id']}&session_id={existing_chat.session_id}",
+        json={"message": ""},
+    )
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "message_required"
 

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.service import ChatTurnOutcome
-from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, ContactSession
+from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, DocumentType, Embedding
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -167,11 +167,56 @@ def test_widget_chat_empty_message_returns_422(
     )
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
+    client_uuid = uuid.UUID(cl_resp.json()["id"])
     bot_public_id = _create_bot(tenant, token)
+    existing_chat = Chat(
+        tenant_id=client_uuid,
+        session_id=uuid.uuid4(),
+        user_context={},
+    )
+    db_session.add(existing_chat)
+    db_session.commit()
 
-    r = _post_widget_chat(tenant, bot_public_id, message="")
+    r = _post_widget_chat(
+        tenant,
+        bot_public_id,
+        message="",
+        session_id=str(existing_chat.session_id),
+    )
     assert r.status_code == 422
     assert r.json()["detail"]["code"] == "message_required"
+
+
+def test_widget_chat_empty_message_bootstraps_new_session(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="widget-bootstrap@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Bootstrap Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
+    monkeypatch.setattr(
+        "backend.routes.widget.process_chat_message",
+        lambda *args, **kwargs: ChatTurnOutcome(
+            text="Hello from bootstrap",
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        ),
+    )
+
+    r = _post_widget_chat(tenant, bot_public_id, message="")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["text"] == "Hello from bootstrap"
+    assert data["session_id"]
 
 
 def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
@@ -307,6 +352,41 @@ def test_widget_chat_foreign_session_id_returns_not_found(
     bot_public_id_b = _create_bot(tenant, token_b)
     foreign_chat = Chat(
         tenant_id=client_a_uuid,
+        session_id=uuid.uuid4(),
+        user_context={},
+    )
+    db_session.add(foreign_chat)
+    db_session.commit()
+
+    r = tenant.post(
+        f"/widget/chat?bot_id={bot_public_id_b}&session_id={foreign_chat.session_id}",
+        json={"message": "hello"},
+    )
+    assert r.status_code == 409
+    assert r.json()["detail"]["code"] == "session_not_found"
+
+
+def test_widget_chat_same_tenant_other_bot_session_returns_not_found(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="widget-same-tenant-bots@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Same Tenant Bots"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+
+    tenant_uuid = uuid.UUID(cl_resp.json()["id"])
+    bot_public_id_a = _create_bot(tenant, token)
+    bot_public_id_b = _create_bot(tenant, token)
+    bot_a = db_session.query(Bot).filter(Bot.public_id == bot_public_id_a).first()
+    assert bot_a is not None
+    foreign_chat = Chat(
+        tenant_id=tenant_uuid,
+        bot_id=bot_a.id,
         session_id=uuid.uuid4(),
         user_context={},
     )

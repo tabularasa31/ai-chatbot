@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session, touch_user_session
@@ -214,27 +215,6 @@ def widget_chat(
     resolved_message = body.message if body is not None else None
     if resolved_message is not None:
         resolved_message = resolved_message.strip()
-    if not resolved_message:
-        logger.info(
-            "widget_message_rejected",
-            extra={"reason": "empty", "length": 0},
-        )
-        raise HTTPException(
-            status_code=422,
-            detail={"code": "message_required", "message": "message is required"},
-        )
-    if len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
-        logger.info(
-            "widget_message_rejected",
-            extra={"reason": "too_long", "length": len(resolved_message)},
-        )
-        raise HTTPException(
-            status_code=413,
-            detail={
-                "code": "message_too_long",
-                "max_chars": _WIDGET_MESSAGE_MAX_CHARS,
-            },
-        )
 
     locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
 
@@ -264,7 +244,11 @@ def widget_chat(
             ) from None
         existing_chat = (
             db.query(Chat)
-            .filter(Chat.tenant_id == tenant.id, Chat.session_id == sid)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.session_id == sid,
+                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+            )
             .first()
         )
         if existing_chat is None:
@@ -275,6 +259,10 @@ def widget_chat(
                     "Session not found",
                 ),
             )
+        if existing_chat.bot_id is None:
+            existing_chat.bot_id = _bot.id
+            db.add(existing_chat)
+            db.commit()
         if existing_chat.ended_at is not None:
             raise HTTPException(
                 status_code=409,
@@ -286,6 +274,30 @@ def widget_chat(
     else:
         sid = uuid.uuid4()
 
+    if not resolved_message:
+        if session_id:
+            logger.info(
+                "widget_message_rejected",
+                extra={"reason": "empty", "length": 0},
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "message_required", "message": "message is required"},
+            )
+        resolved_message = ""
+    elif len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
+        logger.info(
+            "widget_message_rejected",
+            extra={"reason": "too_long", "length": len(resolved_message)},
+        )
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "message_too_long",
+                "max_chars": _WIDGET_MESSAGE_MAX_CHARS,
+            },
+        )
+
     process_kwargs = dict(
         tenant_id=tenant.id,
         question=resolved_message,
@@ -294,6 +306,7 @@ def widget_chat(
         user_context=None,
         browser_locale=locale_hint,
         disclosure_config=_bot.disclosure_config if isinstance(_bot.disclosure_config, dict) else None,
+        bot_id=_bot.id,
         bot_public_id=getattr(_bot, "public_id", None),
     )
 

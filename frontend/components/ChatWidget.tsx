@@ -364,12 +364,16 @@ export function ChatWidget({
         ]);
       })
       .finally(() => {
+        // Always reset loading. Omitting `loading` from deps prevents React from
+        // cleaning up (cancelled=true) the moment setLoading(true) triggers a
+        // re-render, which would leave the input permanently disabled.
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [chatClosed, fetchGreeting, loading, messages.length, sessionHydrated, sessionId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatClosed, fetchGreeting, messages.length, sessionHydrated, sessionId]);
 
   const handleStartNewChat = useCallback(() => {
     setInput("");

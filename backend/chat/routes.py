@@ -123,7 +123,11 @@ def _resolve_debug_client(
     row = (
         db.query(Bot, Tenant)
         .join(Tenant, Bot.tenant_id == Tenant.id)
-        .filter(Bot.public_id == bot_id, Tenant.id == current_user.tenant_id)
+        .filter(
+            Bot.public_id == bot_id,
+            Tenant.id == current_user.tenant_id,
+            Bot.is_active.is_(True),
+        )
         .first()
     )
     if not row:

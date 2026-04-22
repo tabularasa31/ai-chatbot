@@ -86,7 +86,7 @@ def eval_create_session(
     return EvalSessionResponse(
         id=session.id,
         tester_id=session.tester_id,
-        bot_id=session.tenant_id,
+        bot_id=session.bot_id,
         started_at=session.started_at,
     )
 

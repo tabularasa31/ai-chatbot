@@ -1272,7 +1272,7 @@ class EvalSession(Base):
         nullable=False,
         index=True,
     )
-    tenant_id = Column(String(64), nullable=False, index=True)
+    bot_id = Column(String(64), nullable=False, index=True)
     started_at = Column(DateTime, nullable=False, default=_utcnow)
 
     tester = relationship("Tester", back_populates="sessions")

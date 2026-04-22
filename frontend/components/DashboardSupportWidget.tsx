@@ -5,8 +5,8 @@ import { MessageCircle, X } from "lucide-react";
 import { ChatWidget } from "./ChatWidget";
 import { getToken } from "@/lib/api";
 
-const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID ?? "ch_3qorhsh561ua36ixga";
-const API_KEY = process.env.NEXT_PUBLIC_CHAT9_API_KEY ?? "ck_5db01fab10531e6a78ff373ec5f73b20";
+const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
+const API_KEY = process.env.NEXT_PUBLIC_CHAT9_API_KEY;
 
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
@@ -14,6 +14,7 @@ export function DashboardSupportWidget() {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!BOT_ID || !API_KEY) return;
     const token = getToken();
     if (!token) return;
 
@@ -26,6 +27,8 @@ export function DashboardSupportWidget() {
       })
       .catch(() => {/* fall through to anonymous */});
   }, []);
+
+  if (!BOT_ID || !API_KEY) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">

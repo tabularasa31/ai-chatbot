@@ -485,6 +485,66 @@ def _resolve_fallback_locale(
     return None
 
 
+def _handle_small_talk_early_exit(
+    *,
+    redacted_question: str,
+    question: str,
+    chat: Chat,
+    tenant_row: Any,
+    tenant_id: uuid.UUID,
+    language_context: Any,
+    api_key: str,
+    db: Session,
+    trace: Any,
+    optional_entity_types: set[str] | None,
+) -> ChatTurnOutcome | None:
+    """Return a ChatTurnOutcome for single-word inputs that are not injections, else None.
+
+    Skipped when the chat has a pending escalation followup so that
+    one-word replies ("yes", "no") reach the followup handler.
+    """
+    if chat.escalation_followup_pending:
+        return None
+    if len(redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
+        return None
+    if detect_injection_structural(redacted_question).detected:
+        return None
+
+    small_talk_result = _build_greeting_result(
+        product_name=_resolve_product_name(tenant=tenant_row, db=db),
+        response_language=language_context.response_language,
+        api_key=api_key,
+    )
+    _persist_turn_with_response_language(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        response_language=language_context.response_language,
+        resolution_reason=language_context.response_language_resolution_reason,
+        user_content=question,
+        assistant_content=small_talk_result.text,
+        document_ids=[],
+        extra_tokens=small_talk_result.tokens_used,
+        optional_entity_types=optional_entity_types,
+    )
+    trace.update(
+        output={"answer": small_talk_result.text, "source": "small_talk"},
+        metadata={
+            "chat_ended": False,
+            "escalated": False,
+            "small_talk": True,
+            "question": redacted_question,
+            "response_language": language_context.response_language,
+        },
+    )
+    return ChatTurnOutcome(
+        text=small_talk_result.text,
+        document_ids=[],
+        tokens_used=small_talk_result.tokens_used,
+        chat_ended=False,
+    )
+
+
 def _build_greeting_result(
     *,
     product_name: str,
@@ -1845,47 +1905,19 @@ def process_chat_message(
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
 
-    # Short-message early exit: ≤ _SHORT_TURN_MAX_WORDS words → skip expensive LLM guards
-    # and return a friendly invite. Structural injection check (regex, ~0 ms) still runs
-    # to guard against obfuscated payloads that happen to be short.
-    # Skip when the chat is in an escalation followup state — the user's reply ("yes"/"no")
-    # must reach the followup handler even if it is a single word.
-    if len(redacted_question.split()) <= _SHORT_TURN_MAX_WORDS and not chat.escalation_followup_pending:
-        structural_result = detect_injection_structural(redacted_question)
-        if not structural_result.detected:
-            small_talk_result = _build_greeting_result(
-                product_name=_resolve_product_name(tenant=tenant_row, db=db),
-                response_language=language_context.response_language,
-                api_key=api_key,
-            )
-            _persist_turn_with_response_language(
-                db=db,
-                chat=chat,
-                tenant_id=tenant_id,
-                response_language=language_context.response_language,
-                resolution_reason=language_context.response_language_resolution_reason,
-                user_content=question,
-                assistant_content=small_talk_result.text,
-                document_ids=[],
-                extra_tokens=small_talk_result.tokens_used,
-                optional_entity_types=optional_entity_types,
-            )
-            trace.update(
-                output={"answer": small_talk_result.text, "source": "small_talk"},
-                metadata={
-                    "chat_ended": False,
-                    "escalated": False,
-                    "small_talk": True,
-                    "question": redacted_question,
-                    "response_language": language_context.response_language,
-                },
-            )
-            return ChatTurnOutcome(
-                text=small_talk_result.text,
-                document_ids=[],
-                tokens_used=small_talk_result.tokens_used,
-                chat_ended=False,
-            )
+    if outcome := _handle_small_talk_early_exit(
+        redacted_question=redacted_question,
+        question=question,
+        chat=chat,
+        tenant_row=tenant_row,
+        tenant_id=tenant_id,
+        language_context=language_context,
+        api_key=api_key,
+        db=db,
+        trace=trace,
+        optional_entity_types=optional_entity_types,
+    ):
+        return outcome
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
 

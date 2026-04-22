@@ -11,6 +11,8 @@ from backend.chat.language import (
 )
 from backend.models import TenantProfile as TenantProfileModel
 
+_SOFT_REJECT_MAX_WORDS = 2  # short inputs get an invite instead of a blunt refusal
+
 
 class RejectReason(enum.Enum):
     INJECTION_DETECTED = "injection"
@@ -67,7 +69,7 @@ def _build_canonical_reject_response(
     # NOT_RELEVANT and LOW_RETRIEVAL_SCORE — out-of-domain bucket.
     # Short inputs (≤ 2 words) are likely greetings or vague prompts that slipped past
     # the small-talk early exit; use a soft invite rather than a blunt refusal.
-    if question is not None and len(question.split()) <= 2:
+    if question is not None and len(question.split()) <= _SOFT_REJECT_MAX_WORDS:
         return f"Hi! I'm here to help with {product_name} questions. What would you like to know?"
     if topic_hint:
         return (

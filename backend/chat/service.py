@@ -501,10 +501,10 @@ def _handle_small_talk_early_exit(
 ) -> ChatTurnOutcome | None:
     """Return a ChatTurnOutcome for single-word inputs that are not injections, else None.
 
-    Skipped when the chat has a pending escalation followup so that
-    one-word replies ("yes", "no") reach the followup handler.
+    Skipped when the chat is in any escalation or closed state so that
+    single-word inputs (yes/no replies, email addresses) reach the correct handler.
     """
-    if chat.escalation_followup_pending:
+    if chat.escalation_followup_pending or chat.escalation_awaiting_ticket_id or chat.ended_at:
         return None
     if len(redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
         return None
@@ -528,16 +528,17 @@ def _handle_small_talk_early_exit(
         extra_tokens=small_talk_result.tokens_used,
         optional_entity_types=optional_entity_types,
     )
-    trace.update(
-        output={"answer": small_talk_result.text, "source": "small_talk"},
-        metadata={
-            "chat_ended": False,
-            "escalated": False,
-            "small_talk": True,
-            "question": redacted_question,
-            "response_language": language_context.response_language,
-        },
-    )
+    if trace is not None:
+        trace.update(
+            output={"answer": small_talk_result.text, "source": "small_talk"},
+            metadata={
+                "chat_ended": False,
+                "escalated": False,
+                "small_talk": True,
+                "question": redacted_question,
+                "response_language": language_context.response_language,
+            },
+        )
     return ChatTurnOutcome(
         text=small_talk_result.text,
         document_ids=[],

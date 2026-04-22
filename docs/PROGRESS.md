@@ -303,8 +303,6 @@
 - ✅ **DemoBlock** — заменён статичный макет чата на `DemoChat`: живые API-запросы к `/widget/chat`, тёмная цветовая схема лендинга (`#2D2D44` / `#38BDF8` / `#E879F9`), аватары у сообщений бота, typing-indicator (три точки). Анимация появления переведена на `whileInView + once: true` — не сбрасывается при скролле. Скролл сообщений происходит внутри контейнера чата, не прокручивает страницу.
 - ✅ **Proxy routes fix** — `frontend/app/widget/chat/route.ts` и `escalate/route.ts`: frontend product seam accepts `botId`; при проксировании на бэкенд значение уходит как `client_id` (FastAPI ожидает snake_case). Без этого все запросы возвращали 422.
 - ✅ **ChatWidget error handling** — добавлена `formatApiDetail`: корректно читает `detail` из FastAPI-ответа в любом формате (строка, массив validation objects). Устранён `[object Object]` в сообщениях об ошибках.
-- ✅ **Config** — `NEXT_PUBLIC_LANDING_DEMO_BOT_ID` is the env for the landing demo public bot ID. При отсутствии — fallback-заглушка без падения страницы.
-- **Setup:** set `NEXT_PUBLIC_LANDING_DEMO_BOT_ID=ch_...` (public bot ID from the dashboard embed snippet).
 
 ---
 

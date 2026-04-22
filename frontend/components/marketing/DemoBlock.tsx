@@ -3,8 +3,7 @@
 import { useEffect } from "react";
 import { motion } from "framer-motion";
 
-const LANDING_DEMO_BOT_ID =
-  process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim() || "anXhrQQoNkoWCF2ty2-Tg";
+const LANDING_DEMO_BOT_ID = "ch_3qorhsh561ua36ixga";
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL?.trim() || "").replace(/\/$/, "");
 
@@ -45,7 +44,7 @@ function DemoWidget() {
 }
 
 export function DemoBlock() {
-  const ready = Boolean(LANDING_DEMO_BOT_ID && API_URL);
+  const ready = Boolean(API_URL);
 
   return (
     <section id="demo" className="max-w-7xl mx-auto px-6 py-20">
@@ -80,10 +79,6 @@ export function DemoBlock() {
                 Live demo unavailable — set{" "}
                 <code className="text-[#FAF5FF]/60 text-xs">
                   NEXT_PUBLIC_API_URL
-                </code>{" "}
-                and{" "}
-                <code className="text-[#FAF5FF]/60 text-xs">
-                  NEXT_PUBLIC_LANDING_DEMO_BOT_ID
                 </code>
                 .
               </p>

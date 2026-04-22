@@ -89,14 +89,12 @@ def upgrade() -> None:
             "SELECT id FROM bots WHERE substr(public_id, 1, 3) <> 'ch_'"
         )
 
+    _BATCH_SIZE = 1000
+    update_stmt = text("UPDATE bots SET public_id = :p WHERE id = :id")
     rows = bind.execute(select_sql).fetchall()
-    updates = [{"id": row[0], "p": _generate_bot_public_id()} for row in rows]
-    for i in range(0, len(updates), 1000):
-        batch = updates[i : i + 1000]
-        bind.execute(
-            text("UPDATE bots SET public_id = :p WHERE id = :id"),
-            batch,
-        )
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = [{"id": row[0], "p": _generate_bot_public_id()} for row in rows[i : i + _BATCH_SIZE]]
+        bind.execute(update_stmt, batch)
 
 
 def downgrade() -> None:

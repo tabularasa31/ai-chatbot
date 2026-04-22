@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+from chat9 import generateToken
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -31,10 +32,13 @@ from backend.auth.service import (
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter
-from chat9 import generateToken
 from backend.email.service import send_email
 from backend.models import User
-from backend.tenants.service import ensure_tenant_for_user, get_kyc_decrypted_keys_for_validation, get_tenant_by_user
+from backend.tenants.service import (
+    ensure_tenant_for_user,
+    get_kyc_decrypted_keys_for_validation,
+    get_tenant_by_user,
+)
 
 auth_router = APIRouter(tags=["auth"])
 

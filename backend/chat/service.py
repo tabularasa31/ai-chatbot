@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import uuid
 from collections.abc import Callable
@@ -1010,22 +1009,14 @@ def run_chat_pipeline(
     )
 
     # --- 6. Low-retrieval guard ---
-    try:
-        threshold = float(os.getenv("RELEVANCE_RETRIEVAL_THRESHOLD", "0.35"))
-    except Exception:
-        threshold = 0.35
-
-    try:
-        reranker_bypass = float(os.getenv("RERANKER_BYPASS_THRESHOLD", "0.5"))
-    except Exception:
-        reranker_bypass = 0.5
+    threshold = settings.relevance_retrieval_threshold
 
     # Bypass the low-retrieval guard when the reranker assigned a confident score.
     # Raw vector similarities are computed before reranking and can be low even when
     # the reranker finds a genuinely relevant chunk (e.g. broad onboarding queries).
     _reranker_rescued = (
         retrieval.best_rank_score is not None
-        and retrieval.best_rank_score >= reranker_bypass
+        and retrieval.best_rank_score >= settings.reranker_bypass_threshold
     )
 
     if (

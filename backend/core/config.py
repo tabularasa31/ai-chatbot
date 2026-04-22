@@ -130,6 +130,16 @@ class Settings(BaseSettings):
         alias="INJECTION_SEMANTIC_ENABLED",
     )
 
+    # ── Retrieval guards ─────────────────────────────────────────────────────
+    relevance_retrieval_threshold: float = Field(
+        0.35,
+        alias="RELEVANCE_RETRIEVAL_THRESHOLD",
+    )
+    reranker_bypass_threshold: float = Field(
+        0.5,
+        alias="RERANKER_BYPASS_THRESHOLD",
+    )
+
     # ── Phase 4: Chat-log analysis ─────────────────────────────────────────
     # Messages fetched per analysis job run
     log_analysis_batch_size: int = Field(1000, alias="LOG_ANALYSIS_BATCH_SIZE")

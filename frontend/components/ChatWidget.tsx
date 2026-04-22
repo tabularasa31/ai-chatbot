@@ -364,12 +364,17 @@ export function ChatWidget({
         ]);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        // Unconditionally reset loading: the React flush microtask triggered by
+        // setMessages/setSessionId inside fetchGreeting runs before .finally(),
+        // so `cancelled` is already true here even on success. Keeping the guard
+        // would leave loading stuck at true and the input permanently disabled.
+        setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [chatClosed, fetchGreeting, loading, messages.length, sessionHydrated, sessionId]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatClosed, fetchGreeting, messages.length, sessionHydrated, sessionId]);
 
   const handleStartNewChat = useCallback(() => {
     setInput("");

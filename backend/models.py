@@ -676,6 +676,12 @@ class Chat(Base):
         nullable=False,
         index=True,
     )
+    bot_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("bots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     session_id = Column(PG_UUID(as_uuid=True), nullable=False, index=True)
     user_context = Column(JSON, nullable=True)
     tokens_used = Column(
@@ -706,6 +712,7 @@ class Chat(Base):
     )
 
     tenant = relationship("Tenant", back_populates="chats")
+    bot = relationship("Bot")
     messages = relationship(
         "Message",
         back_populates="chat",

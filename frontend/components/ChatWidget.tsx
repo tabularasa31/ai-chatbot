@@ -213,12 +213,17 @@ export function ChatWidget({
   }) => {
     const params = new URLSearchParams({
       botId,
-      message,
     });
     if (attemptSessionId) params.set("session_id", attemptSessionId);
-    if (localeParam) params.set("locale", localeParam);
 
-    const res = await fetch(`/widget/chat?${params}`, { method: "POST" });
+    const res = await fetch(`/widget/chat?${params}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        locale: localeParam,
+      }),
+    });
 
     if (!res.ok || !res.body) {
       const payload = (await res.json().catch(() => ({}))) as {
@@ -261,7 +266,10 @@ export function ChatWidget({
           onChunk?.(parsed.text);
         }
       } else if (parsed.type === "error") {
-        payload.detail = parsed.message ?? "stream_error";
+        payload.detail = {
+          code: parsed.code,
+          message: parsed.message ?? "stream_error",
+        };
       }
     };
 
@@ -282,6 +290,10 @@ export function ChatWidget({
         }
       }
       if (done) break;
+    }
+
+    if (payload.detail !== undefined) {
+      throw new Error(formatApiDetail(payload.detail, "Stream error"));
     }
 
     return { res, payload };

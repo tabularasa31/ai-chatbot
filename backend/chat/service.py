@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
+from openai import APIConnectionError, APITimeoutError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from backend.chat.language import (
@@ -304,17 +305,29 @@ def retrieve_context(
     - vector similarity for escalation confidence
     tenant_id filtering enforced at DB level.
     """
-    bundle = search_similar_chunks_detailed(
-        tenant_id=tenant_id,
-        query=question,
-        top_k=top_k,
-        db=db,
-        api_key=api_key,
-        trace=trace,
-        precomputed_query_variants=precomputed_query_variants,
-        precomputed_variant_vectors=precomputed_variant_vectors,
-        precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
-    )
+    try:
+        bundle = search_similar_chunks_detailed(
+            tenant_id=tenant_id,
+            query=question,
+            top_k=top_k,
+            db=db,
+            api_key=api_key,
+            trace=trace,
+            precomputed_query_variants=precomputed_query_variants,
+            precomputed_variant_vectors=precomputed_variant_vectors,
+            precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
+        )
+    except (APITimeoutError, APIConnectionError):
+        logger.warning("retrieve_context_embedding_failed", exc_info=True)
+        return RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+        )
     results = bundle.results
 
     if not results:

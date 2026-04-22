@@ -122,7 +122,7 @@ class Settings(BaseSettings):
         alias="INJECTION_SEMANTIC_THRESHOLD",
     )
     injection_semantic_timeout_sec: float = Field(
-        2.0,
+        0.5,
         alias="INJECTION_SEMANTIC_TIMEOUT_SEC",
     )
     injection_semantic_enabled: bool = Field(

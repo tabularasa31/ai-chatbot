@@ -798,12 +798,26 @@ def run_chat_pipeline(
             trace=trace,
         )
 
+        _inj_start = perf_counter()
+        _inj_span = (
+            trace.span(name="injection_check", input={"question_preview": question[:80]})
+            if trace is not None and precomputed_injection is None
+            else None
+        )
         if precomputed_injection is not None:
             injection_result = precomputed_injection
         else:
             injection_result = _guard_pool.submit(
                 detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
             ).result()
+        if _inj_span is not None:
+            _inj_span.end(output={
+                "detected": injection_result.detected,
+                "level": injection_result.level,
+                "method": injection_result.method,
+                "latency_ms": round((perf_counter() - _inj_start) * 1000, 2),
+                "semantic_score": injection_result.score,
+            })
 
         if injection_result.detected:
             _rel_future.cancel()
@@ -1001,8 +1015,22 @@ def run_chat_pipeline(
     except Exception:
         threshold = 0.35
 
+    try:
+        reranker_bypass = float(os.getenv("RERANKER_BYPASS_THRESHOLD", "0.5"))
+    except Exception:
+        reranker_bypass = 0.5
+
+    # Bypass the low-retrieval guard when the reranker assigned a confident score.
+    # Raw vector similarities are computed before reranking and can be low even when
+    # the reranker finds a genuinely relevant chunk (e.g. broad onboarding queries).
+    _reranker_rescued = (
+        retrieval.best_rank_score is not None
+        and retrieval.best_rank_score >= reranker_bypass
+    )
+
     if (
-        retrieval.vector_similarities is not None
+        not _reranker_rescued
+        and retrieval.vector_similarities is not None
         and retrieval.vector_similarities
         and all(sim is not None for sim in retrieval.vector_similarities)
         and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
@@ -1867,6 +1895,7 @@ def process_chat_message(
         session_id=str(session_id),
         tenant_id=str(tenant_id),
         user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
+        input=redacted_question or None,
         metadata={
             "tenant_id": str(tenant_id),
             "session_id": str(session_id),
@@ -1959,73 +1988,6 @@ def process_chat_message(
         return outcome
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)
-
-    injection_start = perf_counter()
-    injection_span = trace.span(
-        name="injection_check",
-        input={"question_preview": redacted_question[:80]},
-    )
-    injection_result = detect_injection(
-        redacted_question,
-        tenant_id=str(tenant_id),
-        api_key=api_key,
-    )
-    injection_latency_ms = round((perf_counter() - injection_start) * 1000, 2)
-    injection_span.end(output={
-        "detected": injection_result.detected,
-        "level": injection_result.level,
-        "method": injection_result.method,
-        "latency_ms": injection_latency_ms,
-        "semantic_score": injection_result.score,
-    })
-
-    if injection_result.detected:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INJECTION_DETECTED,
-            profile=None,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        user_message, assistant_message = _persist_turn_with_response_language(
-            db=db,
-            chat=chat,
-            tenant_id=tenant_id,
-            response_language=language_context.response_language,
-            resolution_reason=language_context.response_language_resolution_reason,
-            user_content=question,
-            assistant_content=reject_result.text,
-            document_ids=[],
-            extra_tokens=reject_result.tokens_used,
-            optional_entity_types=optional_entity_types,
-        )
-        _try_ingest_gap_signal(
-            chat=chat,
-            tenant_id=tenant_id,
-            session_id=session_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            question_text=redacted_question,
-            answer_confidence=None,
-            was_rejected=True,
-            had_fallback=False,
-            was_escalated=False,
-            language=language_context.response_language,
-        )
-        trace.update(
-            output={"answer": reject_result.text, "source": "guard_reject_injection"},
-            metadata={
-                "chat_ended": False,
-                "escalated": False,
-                "reject_reason": "injection",
-                "response_language": language_context.response_language,
-            },
-        )
-        return ChatTurnOutcome(
-            text=reject_result.text,
-            document_ids=[],
-            tokens_used=reject_result.tokens_used,
-            chat_ended=False,
-        )
 
     # --- Chat closed ---
     if chat.ended_at is not None:
@@ -2403,7 +2365,7 @@ def process_chat_message(
         user_context_line=user_context_line,
         disclosure_config=disclosure_cfg,
         trace=trace,
-        precomputed_injection=injection_result,
+        precomputed_injection=None,
         tenant_public_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         bot_public_id=bot_public_id,
         retry_bot_id=str(bot_id) if bot_id is not None else None,

@@ -31,7 +31,7 @@ from backend.auth.service import (
 from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.limiter import limiter
-from backend.core.security import generate_kyc_token
+from chat9 import generateToken
 from backend.email.service import send_email
 from backend.models import User
 from backend.tenants.service import ensure_tenant_for_user, get_kyc_decrypted_keys_for_validation, get_tenant_by_user
@@ -239,8 +239,11 @@ def get_widget_token(
         )
 
     secret = keys[0][0]
-    user_context = {"user_id": str(current_user.id), "email": current_user.email}
-    token = generate_kyc_token(user_context, secret, ttl_seconds=300)
+    token = generateToken({
+        "secret": secret,
+        "user": {"user_id": str(current_user.id), "email": current_user.email},
+        "options": {"ttl": 300},
+    })
     return {"identity_token": token}
 
 

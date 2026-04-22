@@ -122,12 +122,22 @@ class Settings(BaseSettings):
         alias="INJECTION_SEMANTIC_THRESHOLD",
     )
     injection_semantic_timeout_sec: float = Field(
-        2.0,
+        0.5,
         alias="INJECTION_SEMANTIC_TIMEOUT_SEC",
     )
     injection_semantic_enabled: bool = Field(
         True,
         alias="INJECTION_SEMANTIC_ENABLED",
+    )
+
+    # ── Retrieval guards ─────────────────────────────────────────────────────
+    relevance_retrieval_threshold: float = Field(
+        0.35,
+        alias="RELEVANCE_RETRIEVAL_THRESHOLD",
+    )
+    reranker_bypass_threshold: float = Field(
+        0.5,
+        alias="RERANKER_BYPASS_THRESHOLD",
     )
 
     # ── Phase 4: Chat-log analysis ─────────────────────────────────────────

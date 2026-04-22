@@ -12,6 +12,13 @@ const TARGET_ID = "chat9-landing-demo";
 
 function DemoWidget() {
   useEffect(() => {
+    // Widget iframe is served by Next.js at /widget on this origin,
+    // not by the API host that serves embed.js.
+    const w = window as typeof window & {
+      Chat9Config?: { widgetUrl?: string };
+    };
+    w.Chat9Config = { ...(w.Chat9Config ?? {}), widgetUrl: window.location.origin };
+
     const script = document.createElement("script");
     script.src = `${API_URL}/embed.js`;
     script.async = true;

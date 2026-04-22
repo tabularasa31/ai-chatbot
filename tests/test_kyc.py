@@ -15,7 +15,7 @@ from backend.core.security import (
     validate_kyc_token,
     validate_kyc_token_detail,
 )
-from backend.models import Chat, Tenant, ContactSession
+from backend.models import Chat, ContactSession
 from tests.conftest import register_and_verify_user
 
 
@@ -115,7 +115,6 @@ def test_widget_session_init_identified_and_anonymous(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
     client_uuid = uuid.UUID(cr.json()["id"])
 
     sk_resp = tenant.post(
@@ -202,8 +201,6 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     )
     assert sk_resp.status_code == 200
     secret_hex = sk_resp.json()["secret_key"]
-    public_id = cr.json()["public_id"]
-
     bad = generate_kyc_token(
         {"user_id": "u"},
         secret_hex,
@@ -221,7 +218,7 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     assert any("kyc_validation_failed" in rec.message for rec in caplog.records)
 
 
-def test_widget_session_init_resumes_identified_session_and_patches_context(
+def test_widget_session_init_creates_new_identified_session_and_patches_context(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -233,8 +230,6 @@ def test_widget_session_init_resumes_identified_session_and_patches_context(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
-
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -269,24 +264,31 @@ def test_widget_session_init_resumes_identified_session_and_patches_context(
         json={"api_key": api_key, "identity_token": second_token, "locale": "de-DE"},
     )
     assert r2.status_code == 200
-    assert uuid.UUID(r2.json()["session_id"]) == first_sid
+    second_sid = uuid.UUID(r2.json()["session_id"])
+    assert second_sid != first_sid
 
-    chats = db_session.query(Chat).filter(Chat.session_id == first_sid).all()
-    assert len(chats) == 1
-    chat = chats[0]
-    assert chat.user_context is not None
-    assert chat.user_context.get("user_id") == "ext-42"
-    assert chat.user_context.get("email") == "person@example.com"
-    assert chat.user_context.get("plan_tier") == "enterprise"
-    assert chat.user_context.get("browser_locale") == "de-DE"
+    first_chat = db_session.query(Chat).filter(Chat.session_id == first_sid).first()
+    second_chat = db_session.query(Chat).filter(Chat.session_id == second_sid).first()
+    assert first_chat is not None
+    assert second_chat is not None
+    assert first_chat.user_context is not None
+    assert second_chat.user_context is not None
+    assert first_chat.user_context.get("plan_tier") == "growth"
+    assert second_chat.user_context.get("user_id") == "ext-42"
+    assert second_chat.user_context.get("email") == "person@example.com"
+    assert second_chat.user_context.get("plan_tier") == "enterprise"
+    assert second_chat.user_context.get("browser_locale") == "de-DE"
     rows = (
         db_session.query(ContactSession)
         .filter(ContactSession.tenant_id == uuid.UUID(cr.json()["id"]), ContactSession.contact_id == "ext-42")
+        .order_by(ContactSession.session_started_at.asc())
         .all()
     )
-    assert len(rows) == 1
-    assert rows[0].email == "person@example.com"
-    assert rows[0].plan_tier == "enterprise"
+    assert len(rows) == 2
+    assert rows[0].session_ended_at is not None
+    assert rows[1].session_ended_at is None
+    assert rows[1].email == "person@example.com"
+    assert rows[1].plan_tier == "enterprise"
 
 
 def test_widget_session_init_closed_identified_chat_gets_new_session(
@@ -301,8 +303,6 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
-
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -356,8 +356,6 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
-
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -398,7 +396,7 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
     assert rows[1].session_ended_at is None
 
 
-def test_widget_session_init_resumes_latest_eligible_identified_session(
+def test_widget_session_init_ignores_existing_identified_sessions(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -410,7 +408,6 @@ def test_widget_session_init_resumes_latest_eligible_identified_session(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
     client_uuid = uuid.UUID(cr.json()["id"])
 
     sk_resp = tenant.post(
@@ -450,10 +447,11 @@ def test_widget_session_init_resumes_latest_eligible_identified_session(
         json={"api_key": api_key, "identity_token": id_token},
     )
     assert r.status_code == 200
-    assert uuid.UUID(r.json()["session_id"]) == newer_sid
+    fresh_sid = uuid.UUID(r.json()["session_id"])
+    assert fresh_sid not in {older_sid, newer_sid}
 
 
-def test_widget_session_init_prefers_open_session_over_newer_closed_one(
+def test_widget_session_init_does_not_reuse_open_or_closed_sessions(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -465,7 +463,6 @@ def test_widget_session_init_prefers_open_session_over_newer_closed_one(
     )
     assert cr.status_code == 201
     api_key = cr.json()["api_key"]
-    public_id = cr.json()["public_id"]
     client_uuid = uuid.UUID(cr.json()["id"])
 
     sk_resp = tenant.post(
@@ -506,7 +503,8 @@ def test_widget_session_init_prefers_open_session_over_newer_closed_one(
         json={"api_key": api_key, "identity_token": id_token},
     )
     assert r.status_code == 200
-    assert uuid.UUID(r.json()["session_id"]) == open_sid
+    fresh_sid = uuid.UUID(r.json()["session_id"])
+    assert fresh_sid not in {open_sid, closed_sid}
 
 
 def test_kyc_rotate_returns_new_secret(
@@ -525,9 +523,6 @@ def test_kyc_rotate_returns_new_secret(
     r1 = tenant.post("/tenants/me/kyc/secret", headers={"Authorization": f"Bearer {token}"})
     assert r1.status_code == 200
     old_secret = r1.json()["secret_key"]
-    me = tenant.get("/tenants/me", headers={"Authorization": f"Bearer {token}"})
-    public_id = me.json()["public_id"]
-
     r2 = tenant.post("/tenants/me/kyc/rotate", headers={"Authorization": f"Bearer {token}"})
     assert r2.status_code == 200
     new_secret = r2.json()["secret_key"]

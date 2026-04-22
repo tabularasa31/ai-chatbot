@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -163,6 +163,11 @@ class Settings(BaseSettings):
     embedding_batch_delay_sec: float = Field(0.5, alias="EMBEDDING_BATCH_DELAY_SEC")
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
+
+    @field_validator("posthog_host", mode="before")
+    @classmethod
+    def _strip_posthog_host(cls, v: str) -> str:
+        return v.strip().strip("'\"")
 
     @property
     def effective_widget_chat_per_client_rate(self) -> str:

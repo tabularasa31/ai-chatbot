@@ -791,8 +791,8 @@ Brevo       (transactional email: verification, password reset, escalation notif
 ```
 
 **Git branching:**
-- `main` — development; no auto-deploy
-- `deploy` — production; Vercel and Railway listen to this branch
+- `main` — default branch and current production branch; Vercel and Railway auto-deploy from `main`
+- feature/fix branches — open PRs into `main`
 
 ---
 

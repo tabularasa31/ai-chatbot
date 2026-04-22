@@ -99,7 +99,7 @@ IF YOU NEED TO CHANGE FROZEN CODE:
 
 ### Rule #3: Branch per Phase
 
-This repo uses **`main`** for ongoing work; production deploys often track a **`deploy`** branch (Vercel / Railway). There may be no `develop` branch—treat **`main`** as the default base.
+This repo uses **`main`** as both the default base branch and the current production branch. Vercel and Railway deploy from **`main`**.
 
 ```bash
 git checkout main
@@ -107,9 +107,8 @@ git pull origin main
 git checkout -b feature/documents
 # … work, commit, pytest locally …
 git push -u origin feature/documents
-# Open PR into main (or agreed base)
-
-# After merge: merge or fast-forward into `deploy` when cutting a production release (your process).
+# Open PR into main
+# After merge to main, production deploy follows the configured Git integration.
 # Avoid destructive cleanup commands unless you have explicitly confirmed the worktree state first.
 ```
 
@@ -248,7 +247,7 @@ git config user.email "your@email.com"
 
 git checkout main
 git pull origin main
-# Optional: maintain `deploy` for production triggers
+# `main` is the current production branch
 ```
 
 ### Per-Phase Workflow
@@ -271,7 +270,7 @@ git commit -m "test(documents): extend coverage"
 git push -u origin feature/documents
 
 # 5. After approval: merge to main
-# 6. Production: merge main → deploy when ready (per team process)
+# 6. Production: Vercel and Railway deploy from main
 
 # If branch state needs cleanup after feedback:
 # inspect the worktree first and prefer non-destructive recovery commands
@@ -312,7 +311,7 @@ ENCRYPTION_KEY=<Fernet key for per-client OpenAI key storage>
 
 **Step 4: Deploy**
 ```bash
-# Railway: deploy from the configured branch (often `deploy` or `main`)
+# Railway: deploy from the configured production branch (`main`)
 # Check logs in Railway dashboard
 ```
 
@@ -345,7 +344,7 @@ NEXT_PUBLIC_API_URL=https://api.yourdomain.com
 
 **Step 4: Deploy**
 ```bash
-# Vercel: production branch is often `deploy` (confirm in project settings)
+# Vercel: production branch is `main` (confirm in project settings)
 ```
 
 **Step 5: Test**

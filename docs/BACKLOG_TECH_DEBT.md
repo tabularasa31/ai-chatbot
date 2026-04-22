@@ -34,7 +34,7 @@ Key recommendations added to this backlog:
 - Frontend polls `GET /documents/{id}` every 2 s until status leaves `embedding`.
 
 ### ~~[FI-026] GitHub Actions CI (pytest + ruff + eslint)~~ ✅ Done (2026-03-22)
-- `.github/workflows/ci.yml` on `main` + `deploy`: backend Ruff + `pytest tests/` из корня репо; frontend eslint + `next build`.
+- `.github/workflows/ci.yml` on push to `main` + pull requests to `main`: backend Ruff + `pytest tests/` из корня репо; frontend eslint + `next build`.
 - Подробности: `PROGRESS.md` (блок FI-026), [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md).
 - Опционально позже: тесты для `build_rag_prompt()` и `validate/{api_key}`.
 

@@ -1,8 +1,10 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
-    branches: [main, deploy]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -45,7 +47,7 @@ jobs:
   backend:
     name: Backend (pytest + ruff)
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.base_ref == 'deploy'
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
 
     env:
@@ -81,7 +83,7 @@ jobs:
   backend-pgvector:
     name: Backend pgvector (pg integration tests)
     needs: changes
-    if: needs.changes.outputs.pgvector == 'true' || github.base_ref == 'deploy'
+    if: needs.changes.outputs.pgvector == 'true'
     runs-on: ubuntu-latest
 
     services:
@@ -134,7 +136,7 @@ jobs:
   frontend:
     name: Frontend (eslint + build)
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.base_ref == 'deploy'
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
 
     steps:

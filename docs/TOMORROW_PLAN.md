@@ -22,9 +22,9 @@
 - Фронтенд polling каждые 2 сек; live-обновление статуса
 
 ### ~~3. FI-026: CI/CD (GitHub Actions)~~ ✅ Done (2026-03-22)
-- `.github/workflows/ci.yml`: `main` + `deploy` — backend **Ruff** + **pytest** из корня (`tests/`), frontend **eslint** + **next build**
+- `.github/workflows/ci.yml`: push to `main` + pull requests to `main` — backend **Ruff** + **pytest** из корня (`tests/`), frontend **eslint** + **next build**
 - `backend/ruff.toml`; в `backend/requirements.txt`: **ruff**, **pgvector**
-- Промот в прод: PR **`main` → `deploy`** после зелёного CI (опционально ruleset на `deploy`)
+- Прод: merge to `main` после зелёного CI
 - Справка: [`.github/workflows/ci.yml`](../.github/workflows/ci.yml), [`docs/06-developer-test-runbook.md`](06-developer-test-runbook.md)
 
 ---
@@ -59,11 +59,11 @@ _(пусто — фичи перенесены в backlog)_
 ## 🚀 Deploy checklist
 
 **Vercel:**
-- [x] Settings → Git → Production Branch = `deploy`
+- [x] Settings → Git → Production Branch = `main`
 - [x] Settings → Environment Variables → `NEXT_PUBLIC_API_URL` задан для Production (значение: Railway backend URL)
 
 **Railway:**
-- [x] Service → Settings → Branch = `deploy`
+- [x] Service → Settings → Branch = `main`
 
 **Проверено.** Redeploy на Vercel — только если позже меняли переменные.
 
@@ -76,7 +76,7 @@ _(пусто — фичи перенесены в backlog)_
 **Это не бэкенд-ошибка** — запрос не дошёл до сервера. Браузерная ошибка сети.
 
 **Проверено:**
-- [x] Vercel → Environment Variables → `NEXT_PUBLIC_API_URL` есть (`https://…railway.app`), для `main` (dev) и `deploy` (production)
+- [x] Vercel → Environment Variables → `NEXT_PUBLIC_API_URL` есть (`https://…railway.app`) для production branch `main`
 - [x] DevTools → Network → `PATCH /clients/me` — полный URL корректный, ответ от backend
 - [x] Относительный `/clients/me` без домена не воспроизводится
 

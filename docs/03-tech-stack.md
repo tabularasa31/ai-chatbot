@@ -52,7 +52,7 @@
   
 - **Deployment:** Railway
   - PostgreSQL + app in one place
-  - Production release usually follows the repo branch workflow (`main` for development, `deploy` for production)
+  - Production deploys currently track `main`
   
 ---
 
@@ -321,9 +321,9 @@ When `message_type != answer`, the payload also includes structured
 └──────────┘ └──────────┘
 ```
 
-- **Backend:** Railway serves FastAPI; production releases typically flow through the repo branch strategy (`main` / `deploy`)
-- **Frontend:** Vercel serves Next.js; production branch often tracks `deploy`
-- **CI (FI-026):** GitHub Actions on `push` / `pull_request` to `main` and `deploy` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
+- **Backend:** Railway serves FastAPI; production deploys currently track `main`
+- **Frontend:** Vercel serves Next.js; production branch currently tracks `main`
+- **CI (FI-026):** GitHub Actions on `push` to `main` and `pull_request` targeting `main` — backend Ruff + pytest (`tests/`), frontend ESLint + `next build` (`.github/workflows/ci.yml`)
 - **Database:** PostgreSQL on Railway
 - **Email:** Brevo HTTP API (transactional + future daily reports)
 - **Secrets:** Environment variables (.env)

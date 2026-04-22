@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
@@ -58,7 +59,7 @@ from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
 )
-from backend.guards.relevance_checker import check_relevance_precheck
+from backend.guards.relevance_checker import check_relevance_with_profile
 from backend.models import (
     Bot,
     Chat,
@@ -778,13 +779,36 @@ def run_chat_pipeline(
             browser_locale=None,
         )
 
-    # --- 1. Injection detection ---
-    injection_result = (
-        precomputed_injection
-        if precomputed_injection is not None
-        else detect_injection(question, tenant_id=str(tenant_id), api_key=api_key)
-    )
+    # --- 1 + 4. Injection detection and relevance pre-check — run concurrently.
+    # The profile is pre-fetched on the main thread to avoid sharing a SQLAlchemy
+    # session across threads (sessions are not thread-safe).
+    _guard_profile = db.get(TenantProfile, tenant_id)
+
+    _guard_pool = ThreadPoolExecutor(max_workers=2)
+    try:
+        _rel_future = _guard_pool.submit(
+            check_relevance_with_profile,
+            tenant_id=tenant_id,
+            user_question=question,
+            profile=_guard_profile,
+            api_key=api_key,
+            trace=trace,
+        )
+
+        if precomputed_injection is not None:
+            injection_result = precomputed_injection
+        else:
+            _inj_future = _guard_pool.submit(
+                detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
+            )
+            injection_result = _inj_future.result()
+    except Exception:
+        _guard_pool.shutdown(wait=False)
+        raise
+
     if injection_result.detected:
+        _rel_future.cancel()
+        _guard_pool.shutdown(wait=False)
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
@@ -878,6 +902,8 @@ def run_chat_pipeline(
         )
 
     if faq_match.strategy == "faq_direct":
+        _rel_future.cancel()
+        _guard_pool.shutdown(wait=False)
         direct_answer_result = render_direct_faq_answer_result(
             answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
             response_language=language_context.response_language,
@@ -901,14 +927,12 @@ def run_chat_pipeline(
             language_context=language_context,
         )
 
-    # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
-    relevant, _, profile = check_relevance_precheck(
-        tenant_id=tenant_id,
-        user_question=question,
-        db=db,
-        api_key=api_key,
-        trace=trace,
-    )
+    # --- 4. Relevance pre-check (result from concurrent future started at step 1) ---
+    # faq_direct already returned above, so we always need the relevance decision here.
+    try:
+        relevant, _, profile = _rel_future.result()
+    finally:
+        _guard_pool.shutdown(wait=False)
     if not relevant:
         reject_result = build_reject_response_result(
             reason=RejectReason.NOT_RELEVANT,

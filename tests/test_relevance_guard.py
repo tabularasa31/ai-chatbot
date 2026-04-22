@@ -53,7 +53,7 @@ def test_injection_rejects_before_rag(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
     )
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_precheck",
+        "backend.chat.service.check_relevance_with_profile",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("relevance called")),
     )
     monkeypatch.setattr(
@@ -91,7 +91,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
     )
     profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_precheck",
+        "backend.chat.service.check_relevance_with_profile",
         lambda **kwargs: (True, "ok", profile),
     )
 
@@ -152,7 +152,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     )
     profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_precheck",
+        "backend.chat.service.check_relevance_with_profile",
         lambda **kwargs: (True, "ok", profile),
     )
 

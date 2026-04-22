@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
@@ -58,7 +59,7 @@ from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
 )
-from backend.guards.relevance_checker import check_relevance_precheck
+from backend.guards.relevance_checker import check_relevance_with_profile
 from backend.models import (
     Bot,
     Chat,
@@ -76,6 +77,7 @@ from backend.models import (
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
+_GUARD_POOL_WORKERS = 2   # concurrent threads for injection + relevance guards
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -500,10 +502,10 @@ def _handle_small_talk_early_exit(
 ) -> ChatTurnOutcome | None:
     """Return a ChatTurnOutcome for single-word inputs that are not injections, else None.
 
-    Skipped when the chat has a pending escalation followup so that
-    one-word replies ("yes", "no") reach the followup handler.
+    Skipped when the chat is in any escalation or closed state so that
+    single-word inputs (yes/no replies, email addresses) reach the correct handler.
     """
-    if chat.escalation_followup_pending:
+    if chat.escalation_followup_pending or chat.escalation_awaiting_ticket_id or chat.ended_at:
         return None
     if len(redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
         return None
@@ -527,16 +529,17 @@ def _handle_small_talk_early_exit(
         extra_tokens=small_talk_result.tokens_used,
         optional_entity_types=optional_entity_types,
     )
-    trace.update(
-        output={"answer": small_talk_result.text, "source": "small_talk"},
-        metadata={
-            "chat_ended": False,
-            "escalated": False,
-            "small_talk": True,
-            "question": redacted_question,
-            "response_language": language_context.response_language,
-        },
-    )
+    if trace is not None:
+        trace.update(
+            output={"answer": small_talk_result.text, "source": "small_talk"},
+            metadata={
+                "chat_ended": False,
+                "escalated": False,
+                "small_talk": True,
+                "question": redacted_question,
+                "response_language": language_context.response_language,
+            },
+        )
     return ChatTurnOutcome(
         text=small_talk_result.text,
         document_ids=[],
@@ -778,137 +781,153 @@ def run_chat_pipeline(
             browser_locale=None,
         )
 
-    # --- 1. Injection detection ---
-    injection_result = (
-        precomputed_injection
-        if precomputed_injection is not None
-        else detect_injection(question, tenant_id=str(tenant_id), api_key=api_key)
-    )
-    if injection_result.detected:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INJECTION_DETECTED,
-            profile=None,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="injection",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            language_context=language_context,
-        )
-
-    # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
-    query_variants = expand_query(question)
-    if trace is not None:
-        _embed_span = trace.span(
-            name="query-embedding",
-            input={
-                "query_variants": query_variants,
-                "query_variant_count": len(query_variants),
-                "variant_mode": "multi" if len(query_variants) > 1 else "single",
-                "upstream_precomputed": True,
-            },
-        )
-    _embed_start = perf_counter()
-    variant_vectors = embed_queries(query_variants, api_key=api_key)
-    if trace is not None:
-        _embed_span.end(
-            output={
-                "embedded_query_count": len(variant_vectors),
-                "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
-                "embedding_api_request_count": 1,
-                "extra_embedding_api_requests": 0,
-                "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
-                "upstream_precomputed": True,
-            }
-        )
-    base_question_embedding = variant_vectors[0] if variant_vectors else []
-
-    # --- 3. FAQ matching ---
+    # --- 1 + 4. Injection detection and relevance pre-check — run concurrently.
+    # Profile is pre-fetched on the main thread: SQLAlchemy sessions are not thread-safe.
+    # A single try...finally ensures the pool is shut down exactly once regardless of
+    # which early-return path (injection, faq_direct, not_relevant) is taken.
+    _guard_profile = db.get(TenantProfile, tenant_id)
+    _guard_pool = ThreadPoolExecutor(max_workers=_GUARD_POOL_WORKERS)
     try:
-        faq_match = match_faq(
+        _rel_future = _guard_pool.submit(
+            check_relevance_with_profile,
             tenant_id=tenant_id,
-            question=question,
-            question_embedding=base_question_embedding,
-            db=db,
-        )
-    except Exception:
-        faq_match = FAQMatchResult(
-            strategy="rag_only",
-            faq_items=[],
-            top_score=None,
-            selected_score=None,
-            selected_faq_id=None,
-            direct_guard_used=False,
-            direct_guard_passed=False,
-            decision_reason="faq_match_error_degraded_to_rag_only",
-        )
-
-    if trace is not None:
-        _faq_span = trace.span(
-            name="faq_match",
-            input={"question_preview": question[:80]},
-        )
-        _retrieval_skipped = faq_match.strategy == "faq_direct"
-        _faq_span.end(
-            metadata={
-                "tenant_id": str(tenant_id),
-                "strategy": faq_match.strategy,
-                "top_score": faq_match.top_score,
-                "selected_score": faq_match.selected_score,
-                "faq_ids": [str(item.id) for item in faq_match.faq_items],
-                "selected_faq_id": faq_match.selected_faq_id,
-                "direct_guard_used": faq_match.direct_guard_used,
-                "direct_guard_passed": faq_match.direct_guard_passed,
-                "decision_reason": faq_match.decision_reason,
-                "retrieval_skipped": _retrieval_skipped,
-                "generation_skipped": _retrieval_skipped,
-            },
-        )
-
-    if faq_match.strategy == "faq_direct":
-        direct_answer_result = render_direct_faq_answer_result(
-            answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
-            response_language=language_context.response_language,
+            user_question=question,
+            profile=_guard_profile,
             api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=direct_answer_result.text,
-            final_answer=direct_answer_result.text,
-            tokens_used=direct_answer_result.tokens_used,
-            strategy="faq_direct",
-            reject_reason=None,
-            is_reject=False,
-            is_faq_direct=True,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
+            trace=trace,
         )
 
-    # --- 4. Relevance pre-check (skipped when faq_direct already short-circuited above) ---
-    relevant, _, profile = check_relevance_precheck(
-        tenant_id=tenant_id,
-        user_question=question,
-        db=db,
-        api_key=api_key,
-        trace=trace,
-    )
+        if precomputed_injection is not None:
+            injection_result = precomputed_injection
+        else:
+            injection_result = _guard_pool.submit(
+                detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
+            ).result()
+
+        if injection_result.detected:
+            _rel_future.cancel()
+            reject_result = build_reject_response_result(
+                reason=RejectReason.INJECTION_DETECTED,
+                profile=None,
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=reject_result.text,
+                final_answer=reject_result.text,
+                tokens_used=reject_result.tokens_used,
+                strategy="guard_reject",
+                reject_reason="injection",
+                is_reject=True,
+                is_faq_direct=False,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=None,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                language_context=language_context,
+            )
+
+        # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
+        query_variants = expand_query(question)
+        if trace is not None:
+            _embed_span = trace.span(
+                name="query-embedding",
+                input={
+                    "query_variants": query_variants,
+                    "query_variant_count": len(query_variants),
+                    "variant_mode": "multi" if len(query_variants) > 1 else "single",
+                    "upstream_precomputed": True,
+                },
+            )
+        _embed_start = perf_counter()
+        variant_vectors = embed_queries(query_variants, api_key=api_key)
+        if trace is not None:
+            _embed_span.end(
+                output={
+                    "embedded_query_count": len(variant_vectors),
+                    "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
+                    "embedding_api_request_count": 1,
+                    "extra_embedding_api_requests": 0,
+                    "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
+                    "upstream_precomputed": True,
+                }
+            )
+        base_question_embedding = variant_vectors[0] if variant_vectors else []
+
+        # --- 3. FAQ matching ---
+        try:
+            faq_match = match_faq(
+                tenant_id=tenant_id,
+                question=question,
+                question_embedding=base_question_embedding,
+                db=db,
+            )
+        except Exception:
+            faq_match = FAQMatchResult(
+                strategy="rag_only",
+                faq_items=[],
+                top_score=None,
+                selected_score=None,
+                selected_faq_id=None,
+                direct_guard_used=False,
+                direct_guard_passed=False,
+                decision_reason="faq_match_error_degraded_to_rag_only",
+            )
+
+        if trace is not None:
+            _faq_span = trace.span(
+                name="faq_match",
+                input={"question_preview": question[:80]},
+            )
+            _retrieval_skipped = faq_match.strategy == "faq_direct"
+            _faq_span.end(
+                metadata={
+                    "tenant_id": str(tenant_id),
+                    "strategy": faq_match.strategy,
+                    "top_score": faq_match.top_score,
+                    "selected_score": faq_match.selected_score,
+                    "faq_ids": [str(item.id) for item in faq_match.faq_items],
+                    "selected_faq_id": faq_match.selected_faq_id,
+                    "direct_guard_used": faq_match.direct_guard_used,
+                    "direct_guard_passed": faq_match.direct_guard_passed,
+                    "decision_reason": faq_match.decision_reason,
+                    "retrieval_skipped": _retrieval_skipped,
+                    "generation_skipped": _retrieval_skipped,
+                },
+            )
+
+        if faq_match.strategy == "faq_direct":
+            _rel_future.cancel()
+            direct_answer_result = render_direct_faq_answer_result(
+                answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=direct_answer_result.text,
+                final_answer=direct_answer_result.text,
+                tokens_used=direct_answer_result.tokens_used,
+                strategy="faq_direct",
+                reject_reason=None,
+                is_reject=False,
+                is_faq_direct=True,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=None,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                faq_match=faq_match,
+                language_context=language_context,
+            )
+
+        # --- 4. Relevance pre-check (result from the future started at step 1) ---
+        relevant, _, profile = _rel_future.result()
+    finally:
+        _guard_pool.shutdown(wait=False)
+
     if not relevant:
         reject_result = build_reject_response_result(
             reason=RejectReason.NOT_RELEVANT,

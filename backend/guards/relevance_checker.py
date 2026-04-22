@@ -69,22 +69,22 @@ def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
     )
 
 
-def check_relevance_precheck(
+def check_relevance_with_profile(
     *,
     tenant_id: uuid.UUID,
     user_question: str,
-    db: Session,
+    profile: TenantProfileModel | None,
     api_key: str,
     trace: TraceHandle | None = None,
 ) -> tuple[bool, str, TenantProfileModel | None]:
-    """
-    Relevance pre-check before RAG.
+    """Relevance pre-check using an already-loaded profile (no DB access).
+
+    Callers that need to run this concurrently should pre-fetch the profile
+    on the main thread and pass it here to avoid sharing a SQLAlchemy session
+    across threads.
 
     Returns: (relevant, reason, profile_for_guard)
-    If profile is empty → returns (True, "no_profile", None) to pass through.
-    If LLM times out or errors → returns (True, "timeout_or_error", None) to pass through.
     """
-    profile = db.get(TenantProfileModel, tenant_id)
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
 
@@ -180,3 +180,27 @@ def check_relevance_precheck(
 
     _cache_set(cache_key, relevant, reason)
     return relevant, reason, profile
+
+
+def check_relevance_precheck(
+    *,
+    tenant_id: uuid.UUID,
+    user_question: str,
+    db: Session,
+    api_key: str,
+    trace: TraceHandle | None = None,
+) -> tuple[bool, str, TenantProfileModel | None]:
+    """Relevance pre-check before RAG.
+
+    Thin wrapper around check_relevance_with_profile that loads the profile
+    from the DB. Use check_relevance_with_profile directly when the profile
+    has already been fetched (e.g. for concurrent execution).
+    """
+    profile = db.get(TenantProfileModel, tenant_id)
+    return check_relevance_with_profile(
+        tenant_id=tenant_id,
+        user_question=user_question,
+        profile=profile,
+        api_key=api_key,
+        trace=trace,
+    )

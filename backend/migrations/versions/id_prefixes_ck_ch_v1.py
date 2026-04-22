@@ -89,22 +89,12 @@ def upgrade() -> None:
             "SELECT id FROM bots WHERE substr(public_id, 1, 3) <> 'ch_'"
         )
 
-    updates: list[dict[str, str]] = []
-    batch_size = 1000
-    result = bind.execution_options(stream_results=True).execute(select_sql)
-    for (bot_id,) in result:
-        updates.append({"id": bot_id, "p": _generate_bot_public_id()})
-        if len(updates) >= batch_size:
-            bind.execute(
-                text("UPDATE bots SET public_id = :p WHERE id = :id"),
-                updates,
-            )
-            updates.clear()
-    if updates:
-        bind.execute(
-            text("UPDATE bots SET public_id = :p WHERE id = :id"),
-            updates,
-        )
+    _BATCH_SIZE = 1000
+    update_stmt = text("UPDATE bots SET public_id = :p WHERE id = :id")
+    rows = bind.execute(select_sql).fetchall()
+    for i in range(0, len(rows), _BATCH_SIZE):
+        batch = [{"id": row[0], "p": _generate_bot_public_id()} for row in rows[i : i + _BATCH_SIZE]]
+        bind.execute(update_stmt, batch)
 
 
 def downgrade() -> None:

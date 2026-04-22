@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Literal
 
-from openai import APIConnectionError, APITimeoutError
+from openai import APIConnectionError, APITimeoutError, RateLimitError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from backend.chat.language import (
@@ -305,6 +305,7 @@ def retrieve_context(
     - vector similarity for escalation confidence
     tenant_id filtering enforced at DB level.
     """
+    _retrieval_start = perf_counter()
     try:
         bundle = search_similar_chunks_detailed(
             tenant_id=tenant_id,
@@ -317,7 +318,8 @@ def retrieve_context(
             precomputed_variant_vectors=precomputed_variant_vectors,
             precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
         )
-    except (APITimeoutError, APIConnectionError):
+    except (APITimeoutError, APIConnectionError, RateLimitError):
+        retrieval_duration_ms = round((perf_counter() - _retrieval_start) * 1000, 2)
         logger.warning("retrieve_context_embedding_failed", exc_info=True)
         return RetrievalContext(
             chunk_texts=[],
@@ -327,6 +329,7 @@ def retrieve_context(
             best_rank_score=None,
             best_confidence_score=None,
             confidence_source="none",
+            retrieval_duration_ms=retrieval_duration_ms,
         )
     results = bundle.results
 
@@ -856,7 +859,11 @@ def run_chat_pipeline(
                 },
             )
         _embed_start = perf_counter()
-        variant_vectors = embed_queries(query_variants, api_key=api_key)
+        try:
+            variant_vectors = embed_queries(query_variants, api_key=api_key)
+        except (APITimeoutError, APIConnectionError, RateLimitError):
+            logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
+            variant_vectors = []
         if trace is not None:
             _embed_span.end(
                 output={

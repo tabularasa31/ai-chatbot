@@ -24,6 +24,10 @@ interface ChatWidgetProps {
   botId: string;
   locale?: string | null;
   compact?: boolean;
+  /** When provided, session init is called first to enable identified mode. */
+  identityToken?: string | null;
+  /** Required alongside identityToken for session init. */
+  apiKey?: string | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
 }
@@ -140,6 +144,8 @@ export function ChatWidget({
   botId,
   locale,
   compact = false,
+  identityToken,
+  apiKey,
   renderBelowAssistant,
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
@@ -158,11 +164,34 @@ export function ChatWidget({
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
 
   useEffect(() => {
-    setSessionId(readStoredSession(botId));
-    setSessionHydrated(true);
+    setSessionHydrated(false);
     setChatClosed(false);
     setActiveTicket(null);
-  }, [botId]);
+
+    const stored = readStoredSession(botId);
+
+    if (identityToken && apiKey && !stored) {
+      fetch("/api/widget-session/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey, identity_token: identityToken }),
+      })
+        .then((r) => r.json())
+        .then((data: { session_id?: string }) => {
+          if (data.session_id) {
+            persistSession(botId, data.session_id);
+            setSessionId(data.session_id);
+          }
+        })
+        .catch(() => {
+          // fall through to anonymous session
+        })
+        .finally(() => setSessionHydrated(true));
+    } else {
+      setSessionId(stored);
+      setSessionHydrated(true);
+    }
+  }, [botId, identityToken, apiKey]);
 
   useEffect(() => {
     const el = messagesRef.current;

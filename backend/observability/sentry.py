@@ -42,16 +42,14 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
     )
 
     if error_kind and tenant_id:
-        key = (str(error_kind), str(tenant_id))
+        key = (f"app:{error_kind}", str(tenant_id))
     else:
-        exc_values = (
-            (event.get("exception") or {}).get("values") or []
-        )
+        exc_values = (event.get("exception") or {}).get("values") or []
         exc_type = exc_values[-1].get("type") if exc_values else None
         transaction = event.get("transaction") or ""
         if not exc_type:
             return event
-        key = (str(exc_type), transaction)
+        key = (f"exc:{exc_type}", transaction)
     now = time.monotonic()
     with _dedup_lock:
         last = _recent_fingerprints.get(key)

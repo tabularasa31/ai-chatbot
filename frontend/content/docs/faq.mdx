@@ -86,6 +86,28 @@ No. It is an internal operator tool. It helps your team review gaps, dismiss noi
 
 ---
 
+## Escalation
+
+**When does the bot escalate to a human?**
+Escalation happens automatically or on request:
+
+- **Automatically** — when the bot can't find a relevant answer in your documentation (low retrieval confidence), or when no documents are indexed at all, or when the generated answer fails quality validation.
+- **On request** — when the user explicitly asks for a human: "talk to a human", "connect me to support", "хочу с оператором", and similar phrases in any language.
+
+**What does the user see when escalated?**
+The chat is closed. The widget shows a **"Start new chat"** button. The existing conversation transcript stays visible above it.
+
+**What does the operator see?**
+A ticket appears in **Dashboard → Escalations** with the trigger type, a sequential ticket number (e.g. `ESC-42`), and a link to the full conversation log. A notification email is sent to the support email configured in Settings.
+
+**Can I set the support email?**
+Yes. Go to **Dashboard → Settings** and enter the email address that should receive escalation notifications.
+
+**Can ticket priority be elevated for premium users?**
+Yes, if you use identified sessions. Pass `plan_tier: "enterprise"` or `plan_tier: "pro"` in the identity token. User-request escalations from those users are marked **Critical** (vs High for standard users). See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional).
+
+---
+
 ## Identified sessions and the SDK
 
 **What is an identified session?**

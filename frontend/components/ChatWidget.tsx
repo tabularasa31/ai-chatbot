@@ -1,7 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
+
+const MD_COMPONENTS: Components = {
+  a: ({ node: _node, ...props }) => (
+    <a {...props} target="_blank" rel="noopener noreferrer" />
+  ),
+  img: () => null,
+};
 import {
   MessageCircle,
   Send,
@@ -551,7 +558,7 @@ export function ChatWidget({
                           <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
                         ) : (
                           <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                            <ReactMarkdown>{msg.text}</ReactMarkdown>
+                            <ReactMarkdown components={MD_COMPONENTS}>{msg.text}</ReactMarkdown>
                           </div>
                         )}
                       </div>
@@ -574,7 +581,7 @@ export function ChatWidget({
               <div className="flex items-end gap-3">
                 <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
                   <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                    <ReactMarkdown>{streamingText}</ReactMarkdown>
+                    <ReactMarkdown components={MD_COMPONENTS}>{streamingText}</ReactMarkdown>
                   </div>
                 </div>
               </div>

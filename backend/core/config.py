@@ -132,7 +132,7 @@ class Settings(BaseSettings):
 
     # ── Retrieval guards ─────────────────────────────────────────────────────
     relevance_retrieval_threshold: float = Field(
-        0.35,
+        0.22,
         alias="RELEVANCE_RETRIEVAL_THRESHOLD",
     )
     reranker_bypass_threshold: float = Field(

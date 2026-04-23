@@ -4,8 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import ReactMarkdown, { type Components } from "react-markdown";
 
 const MD_COMPONENTS: Components = {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  a: ({ node, ...props }) => (
+  a: ({ node: _node, ...props }) => (
     <a {...props} target="_blank" rel="noopener noreferrer" />
   ),
   img: () => null,

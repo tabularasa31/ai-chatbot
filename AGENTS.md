@@ -58,6 +58,34 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 - `pipelines/` must not import `orchestrator`
 - `_repo/` must not import `pipelines/` or `orchestrator`
 
+---
+
+## Guards (`backend/guards/`)
+
+Every chat turn passes through two synchronous guards **before** LLM generation. Either guard can short-circuit the request with a reject response.
+
+| Guard | File | What it does |
+|---|---|---|
+| Injection detector | `injection_detector.py` | 2-level: (1) structural regex/unicode patterns (~0 ms), (2) semantic embedding similarity vs. seed corpus (~50–100 ms, timeout-gated). Any level match → immediate reject. |
+| Relevance checker | `relevance_checker.py` | LLM-based relevance classification against the tenant's domain (gpt-4o-mini, 3 s timeout, LRU+TTL cache). Low-relevance messages → guard reject. |
+
+Key config knobs (all in `backend/core/config.py`):
+- `INJECTION_SEMANTIC_THRESHOLD` (default 0.82), `INJECTION_SEMANTIC_TIMEOUT_SEC` (0.5), `INJECTION_SEMANTIC_ENABLED`
+- `RELEVANCE_RETRIEVAL_THRESHOLD` (0.35), `RERANKER_BYPASS_THRESHOLD` (0.5)
+
+---
+
+## Language behavior
+
+The service is **language-agnostic**: the bot must reply in whatever language the user writes in.
+
+- Before the first real user question, greetings and fallback-only turns use `user_context.locale → user_context.browser_locale → English`.
+- After the first real question, bot replies **follow the language of that question** — do not force English.
+- Soft rejections, clarification prompts, and escalation fallbacks are localized via the shared helper in `backend/chat/language.py`.
+- New hardcoded strings (error messages, fallback copy, etc.) must go through this helper — never hardcode English-only text in the chat pipeline.
+
+---
+
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:
 
 - `answer`
@@ -66,13 +94,22 @@ Chat responses now support structured clarification outcomes in addition to plai
 
 For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
-Language behavior is now:
+Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`. Optional by group:
 
-- before the first real user question, default greeting and other fallback-only turns use `user_context.locale -> user_context.browser_locale -> English`
-- after the first real question, bot replies should follow the language of the question itself
-- soft rejections / clarification prompts / escalation fallbacks are localized through the shared helper in `backend/chat/language.py`
+| Group | Key env vars |
+|---|---|
+| Observability | `LANGFUSE_*`, `POSTHOG_API_KEY`, `SENTRY_DSN`, `GIT_SHA` |
+| Trace sampling | `FULL_CAPTURE_MODE`, `TRACE_SAMPLE_RATE`, `TRACE_HIGH_VOLUME_*`, `TRACE_NEW_TENANT_THRESHOLD`, `OBSERVABILITY_CAPTURE_FULL_PROMPTS` |
+| Guards | `INJECTION_SEMANTIC_THRESHOLD`, `INJECTION_SEMANTIC_TIMEOUT_SEC`, `INJECTION_SEMANTIC_ENABLED`, `RELEVANCE_RETRIEVAL_THRESHOLD`, `RERANKER_BYPASS_THRESHOLD` |
+| Chat behavior | `CLARIFICATION_TURN_LIMIT`, `LANGUAGE_DETECTION_RELIABILITY_THRESHOLD`, `LOCALIZATION_MODEL`, `WIDGET_MESSAGE_MAX_CHARS`, `WIDGET_CHAT_PER_CLIENT_RATE` |
+| Contradiction adjudication | `CONTRADICTION_ADJUDICATION_ENABLED`, `CONTRADICTION_ADJUDICATION_MODEL`, `CONTRADICTION_ADJUDICATION_*` |
+| RAG / BM25 | `BM25_EXPANSION_MODE` |
+| OpenAI | `OPENAI_API_KEY`, `OPENAI_REQUEST_TIMEOUT_SECONDS`, `OPENAI_USER_RETRY_*` |
+| Gap Analyzer jobs | `GAP_TRANSIENT_MAX_ATTEMPTS`, `GAP_BASE_DELAY_SECONDS`, `GAP_MAX_DELAY_SECONDS` |
+| Log analysis | `LOG_ANALYSIS_BATCH_SIZE`, `LOG_CLUSTER_*`, `MAX_FAQ_PER_RUN`, `FAQ_CONFIDENCE_AUTO_ACCEPT`, `LOG_ANALYSIS_CRON_HOURS`, `LOG_ANALYSIS_THRESHOLD_MESSAGES`, `LOG_EMBEDDINGS_RETENTION_DAYS`, `EMBEDDING_BATCH_*`, `MAX_JOB_DURATION_SEC`, `ALIAS_MIN_*` |
+| Email | `BREVO_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` |
 
-Deployment: typically Railway (API + Postgres), frontend on Vercel. Environment variables: `backend/core/config.py` (required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`, etc.). Langfuse / trace sampling knobs include `FULL_CAPTURE_MODE` and `TRACE_*` (see `docs/07-observability-rollout.md`).
+See `docs/07-observability-rollout.md` for Langfuse/trace rollout details.
 
 ---
 
@@ -93,12 +130,21 @@ ai-chatbot/
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
 │   ├── routes/               # cross-cutting public routes: embed.js loader, widget
-│   └── migrations/           # Alembic: versions/, env.py (~40 migrations)
+│   └── migrations/           # Alembic: versions/, env.py (43+ migrations)
 ├── frontend/                 # Next.js app
-│   └── app/                  # App Router: (marketing), (auth), (app), widget/, layout.tsx
+│   └── app/                  # App Router: (marketing), (auth), (app), widget/, eval/, layout.tsx
+│       └── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
+│                             #   escalations/, gap-analyzer/, knowledge/, logs/,
+│                             #   review/, settings/, widget-settings/
 ├── docs/                     # product and technical docs (no need to copy the full stack here)
 └── …                         # other assets (widget scripts, etc.)
 ```
+
+Notable non-obvious modules:
+- `backend/knowledge/` — extracts and serves the tenant's knowledge profile (topics) from indexed documents; dashboard `/knowledge` page.
+- `backend/tenant_knowledge/` — low-level FAQ and `TenantProfile` service helpers used by the chat pipeline.
+- `backend/eval/` — QA eval pipeline; uses a separate `EVAL_JWT_SECRET`; routes under `/eval/`.
+- `backend/contact_sessions/` — tracks contact-level session state across escalation flows.
 
 Run the API from the repo root with `PYTHONPATH` pointing at the root so `backend.*` imports resolve.
 

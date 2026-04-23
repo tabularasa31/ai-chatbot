@@ -16,19 +16,25 @@ from backend.bots.schemas import (
     DisclosureConfigResponse,
     DisclosureConfigUpdate,
 )
+from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
-from backend.models import User
+from backend.models import Tenant, User
 
 bots_router = APIRouter(prefix="/bots", tags=["bots"])
 
 
-def _tenant_id(
+def _current_user(
     current_user: Annotated[User, Depends(require_verified_user)],
-) -> uuid.UUID:
-    """Return tenant_id directly from the already-loaded user — no extra DB query."""
+) -> User:
     if not current_user.tenant_id:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    return current_user.tenant_id
+    return current_user
+
+
+def _tenant_id(
+    current_user: Annotated[User, Depends(_current_user)],
+) -> uuid.UUID:
+    return current_user.tenant_id  # type: ignore[return-value]
 
 
 @bots_router.get("", response_model=BotList)
@@ -43,10 +49,26 @@ def list_bots(
 @bots_router.post("", response_model=BotResponse, status_code=201)
 def create_bot(
     body: BotCreate,
-    tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
+    current_user: Annotated[User, Depends(_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
-    return bots_service.create_bot(tenant_id, body.name, db)
+    tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
+    api_key: str | None = None
+    if body.website_url:
+        tenant = db.get(Tenant, tenant_id)
+        if tenant and tenant.openai_api_key:
+            try:
+                api_key = decrypt_value(tenant.openai_api_key)
+            except Exception:
+                api_key = None
+    return bots_service.create_bot(
+        tenant_id,
+        body.name,
+        db,
+        agent_instructions=body.agent_instructions,
+        website_url=body.website_url,
+        api_key=api_key,
+    )
 
 
 @bots_router.get("/{bot_id}", response_model=BotResponse)
@@ -66,7 +88,12 @@ def update_bot(
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
     return bots_service.update_bot(
-        bot_id, tenant_id, db, name=body.name, is_active=body.is_active
+        bot_id,
+        tenant_id,
+        db,
+        name=body.name,
+        is_active=body.is_active,
+        agent_instructions=body.agent_instructions,
     )
 
 

@@ -288,6 +288,7 @@ class Bot(Base):
     )
     is_active = Column(Boolean, nullable=False, default=True)
     disclosure_config = Column(JSON, nullable=True, default=None)
+    agent_instructions = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 

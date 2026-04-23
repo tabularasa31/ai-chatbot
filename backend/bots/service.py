@@ -5,6 +5,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.chat.presets import PRESET_SUPPORT_AGENT
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.models import Bot
 
@@ -24,8 +25,27 @@ def get_bot_by_public_id(public_id: str, db: Session) -> Bot | None:
     return db.query(Bot).filter(Bot.public_id == public_id).first()
 
 
-def create_bot(tenant_id: uuid.UUID, name: str, db: Session) -> Bot:
-    bot = Bot(tenant_id=tenant_id, name=name)
+def create_bot(
+    tenant_id: uuid.UUID,
+    name: str,
+    db: Session,
+    *,
+    agent_instructions: str | None = None,
+    website_url: str | None = None,
+    api_key: str | None = None,
+) -> Bot:
+    instructions = agent_instructions
+
+    if website_url and api_key and instructions is None:
+        from backend.onboarding.extractor import extract_company_description
+        description = extract_company_description(website_url, api_key)
+        if description:
+            instructions = f"{description}\n\n{PRESET_SUPPORT_AGENT}"
+
+    if instructions is None:
+        instructions = PRESET_SUPPORT_AGENT
+
+    bot = Bot(tenant_id=tenant_id, name=name, agent_instructions=instructions)
     db.add(bot)
     db.commit()
     db.refresh(bot)
@@ -39,6 +59,7 @@ def update_bot(
     *,
     name: str | None = None,
     is_active: bool | None = None,
+    agent_instructions: str | None = None,
 ) -> Bot:
     bot = get_bot_by_id(bot_id, tenant_id, db)
     if is_active is False and bot.is_active:
@@ -57,6 +78,8 @@ def update_bot(
         bot.name = name
     if is_active is not None:
         bot.is_active = is_active
+    if agent_instructions is not None:
+        bot.agent_instructions = agent_instructions
     db.commit()
     db.refresh(bot)
     return bot

@@ -15,6 +15,7 @@ class BotResponse(BaseModel):
     name: str
     public_id: str
     is_active: bool
+    agent_instructions: str | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
 
@@ -23,11 +24,14 @@ class BotResponse(BaseModel):
 
 class BotCreate(BaseModel):
     name: str
+    agent_instructions: str | None = None
+    website_url: str | None = None
 
 
 class BotUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
+    agent_instructions: str | None = None
 
 
 class BotList(BaseModel):

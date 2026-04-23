@@ -174,6 +174,9 @@ class Settings(BaseSettings):
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
+    # ── Agent instructions ─────────────────────────────────────────────────
+    enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")
+
     @field_validator("posthog_host", mode="before")
     @classmethod
     def _strip_posthog_host(cls, v: str) -> str:

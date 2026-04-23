@@ -3826,7 +3826,7 @@ def test_run_chat_pipeline_not_relevant(
     )
     monkeypatch.setattr(
         "backend.chat.service.embed_queries",
-        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+        lambda queries, *, api_key, timeout=None: [[0.1] * 10 for _ in queries],
     )
     monkeypatch.setattr(
         "backend.chat.service.match_faq",
@@ -3944,7 +3944,7 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     monkeypatch.setattr("backend.chat.service.expand_query", lambda q: [q])
     monkeypatch.setattr(
         "backend.chat.service.embed_queries",
-        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+        lambda queries, *, api_key, timeout=None: [[0.1] * 10 for _ in queries],
     )
     monkeypatch.setattr(
         "backend.chat.service.match_faq",
@@ -4064,7 +4064,7 @@ def test_run_chat_pipeline_validates_quick_answers_as_supporting_context(
     monkeypatch.setattr("backend.chat.service.expand_query", lambda q: [q])
     monkeypatch.setattr(
         "backend.chat.service.embed_queries",
-        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+        lambda queries, *, api_key, timeout=None: [[0.1] * 10 for _ in queries],
     )
     monkeypatch.setattr(
         "backend.chat.service.match_faq",
@@ -4153,7 +4153,7 @@ def test_run_debug_does_not_create_db_records(
     monkeypatch.setattr("backend.chat.service.expand_query", lambda q: [q])
     monkeypatch.setattr(
         "backend.chat.service.embed_queries",
-        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+        lambda queries, *, api_key, timeout=None: [[0.1] * 10 for _ in queries],
     )
     monkeypatch.setattr(
         "backend.chat.service.match_faq",
@@ -4297,7 +4297,7 @@ def test_chat_debug_endpoint_exposes_pipeline_fields(
     monkeypatch.setattr("backend.chat.service.expand_query", lambda q: [q])
     monkeypatch.setattr(
         "backend.chat.service.embed_queries",
-        lambda queries, api_key: [[0.1] * 10 for _ in queries],
+        lambda queries, *, api_key, timeout=None: [[0.1] * 10 for _ in queries],
     )
     monkeypatch.setattr(
         "backend.chat.service.match_faq",

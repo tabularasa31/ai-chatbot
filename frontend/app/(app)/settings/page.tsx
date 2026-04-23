@@ -28,6 +28,8 @@ const DISCLOSURE_OPTIONS: {
   },
 ];
 
+const MAX_INSTRUCTIONS_LENGTH = 3000;
+
 const PRESETS: { id: string; label: string; content: string }[] = [
   {
     id: "support_agent",
@@ -352,7 +354,11 @@ export default function SettingsPage() {
               const matched = PRESETS.find((p) => e.target.value.trim() === p.content.trim());
               setSelectedPreset(matched?.id ?? null);
             }}
-            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400 font-mono resize-y leading-relaxed"
+            className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
+              agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH
+                ? "border-red-300 focus:border-red-400"
+                : "border-slate-200 focus:border-slate-400"
+            }`}
           />
           {selectedPreset && agentInstructions.trim() !== (PRESETS.find(p => p.id === selectedPreset)?.content ?? "").trim() && (
             <button
@@ -365,16 +371,21 @@ export default function SettingsPage() {
           )}
         </div>
 
-        <p className="text-xs text-slate-500">
-          Use{" "}
-          <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
-          to insert your product name. These instructions are prepended to every chat turn.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <p className="text-xs text-slate-500">
+            Use{" "}
+            <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
+            to insert your product name. These instructions are prepended to every chat turn.
+          </p>
+          <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
+            {agentInstructions.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
+          </span>
+        </div>
 
         <button
           type="button"
           onClick={saveAgentInstructions}
-          disabled={instructionsSaving}
+          disabled={instructionsSaving || agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH}
           className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
         >
           {instructionsSaving ? "Saving…" : "Save instructions"}

@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 
 LLM_MODEL = "gpt-4o-mini"
 TIMEOUT_SECONDS = 2.0
+TEMPERATURE_STRICT = 0
+MAX_TOKENS_DETECTION = 30
 CACHE_TTL_SECONDS = 5 * 60
 MAX_CACHE_SIZE = 2048
+_CACHE_EVICT_BATCH = max(1, MAX_CACHE_SIZE // 10)
 
 _cache: dict[str, tuple[float, bool]] = {}
+_cache_lock = threading.Lock()
 
 _SYSTEM_PROMPT = (
     "You are a classifier for a customer support bot. "
@@ -24,26 +28,29 @@ _SYSTEM_PROMPT = (
 
 
 def _cache_get(key: str) -> bool | None:
-    item = _cache.get(key)
-    if not item:
-        return None
-    expires_at, result = item
-    if time.time() > expires_at:
-        _cache.pop(key, None)
-        return None
-    return result
+    with _cache_lock:
+        item = _cache.get(key)
+        if not item:
+            return None
+        expires_at, result = item
+        if time.time() > expires_at:
+            _cache.pop(key, None)
+            return None
+        return result
 
 
 def _cache_set(key: str, result: bool) -> None:
-    if len(_cache) >= MAX_CACHE_SIZE and key not in _cache:
-        expired_keys = [k for k, v in _cache.items() if time.time() > v[0]]
-        if expired_keys:
-            for k in expired_keys[: max(1, len(expired_keys))]:
+    with _cache_lock:
+        now = time.time()
+        if len(_cache) >= MAX_CACHE_SIZE and key not in _cache:
+            expired = [k for k, v in _cache.items() if now > v[0]]
+            for k in expired:
                 _cache.pop(k, None)
-        if len(_cache) >= MAX_CACHE_SIZE:
-            oldest_key = min(_cache.items(), key=lambda item: item[1][0])[0]
-            _cache.pop(oldest_key, None)
-    _cache[key] = (time.time() + CACHE_TTL_SECONDS, result)
+            # If still full after expiry sweep, evict oldest batch to amortize future scans.
+            if len(_cache) >= MAX_CACHE_SIZE:
+                for k in list(_cache.keys())[:_CACHE_EVICT_BATCH]:
+                    _cache.pop(k, None)
+        _cache[key] = (now + CACHE_TTL_SECONDS, result)
 
 
 def detect_capability_question(question: str, *, api_key: str) -> bool:
@@ -58,7 +65,7 @@ def detect_capability_question(question: str, *, api_key: str) -> bool:
     if cached is not None:
         return cached
 
-    def _call_llm() -> bool:
+    try:
         client = get_openai_client(api_key)
         response = call_openai_with_retry(
             "guard_capability_check",
@@ -68,30 +75,17 @@ def detect_capability_question(question: str, *, api_key: str) -> bool:
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": f'User message: "{question}"'},
                 ],
-                temperature=0,
-                max_tokens=30,
+                temperature=TEMPERATURE_STRICT,
+                max_tokens=MAX_TOKENS_DETECTION,
                 response_format={"type": "json_object"},
+                timeout=TIMEOUT_SECONDS,
             ),
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)
-        return bool(parsed.get("is_capability_question", False))
-
-    ex = ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(_call_llm)
-    try:
-        result = future.result(timeout=TIMEOUT_SECONDS)
-    except (TimeoutError, Exception):
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
+        result = bool(parsed.get("is_capability_question", False))
+    except Exception:
         return False
-    else:
-        try:
-            ex.shutdown(wait=False)
-        except Exception:
-            pass
 
     _cache_set(cache_key, result)
     return result

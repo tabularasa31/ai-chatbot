@@ -16,7 +16,6 @@ Formatting:
 - Only link to URLs that appear verbatim in the provided context.
 - When you can't answer: "I don't have that information in the documentation. Feel free to reach out to the support team directly."
 
-Follow the internal reasoning steps defined in the system configuration before every response.\
 """
 
 COT_REASONING_BLOCK = """\
@@ -28,5 +27,5 @@ Before each response, follow these steps silently:
 3. Identify the highest-rated chunks. If none are high or medium — say you \
 don't have that information rather than guessing.
 4. Draft your answer using only high and medium chunks.
-Only output step 4 to the user.\
+Output ONLY the final answer text. Do not include any reasoning steps, headers, or step numbers in your response.\
 """

@@ -112,7 +112,7 @@ def check_relevance_with_profile(
         f"The support bot is for: {product_name}\n"
         f"Known topics: {modules_list}\n"
         f"Key terms: {glossary_terms_list}\n"
-        f'User question: "{user_question}"\n'
+        f"User question: {json.dumps(user_question)}\n"
         "Is this question related to this product or its use?"
     )
 

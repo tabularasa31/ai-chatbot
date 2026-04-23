@@ -6,7 +6,7 @@ from collections import defaultdict
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from openai import APIError
+from openai import APIError, RateLimitError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -36,6 +36,8 @@ from backend.chat.service import (
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter
+from backend.core.openai_client import is_quota_exceeded
+from backend.email.service import send_email
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
@@ -48,12 +50,69 @@ from backend.models import (
     PiiEvent,
     PiiEventDirection,
     Tenant,
+    TenantProfile,
     User,
 )
 from backend.privacy_schemas import DeletedCountResponse
 from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 
 logger = logging.getLogger(__name__)
+
+
+def _notify_quota_exceeded(tenant: "Tenant", db: "Session") -> str:
+    """Log OpenAI quota-exceeded event to Sentry and email the tenant admin once.
+
+    Returns the user-facing error detail string (includes support email if known).
+    """
+    logger.error(
+        "openai_quota_exceeded: tenant_id=%s tenant_name=%s",
+        tenant.id,
+        tenant.name,
+    )
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.new_scope() as scope:
+            scope.set_tag("error_kind", "openai_quota_exceeded")
+            scope.set_context("tenant", {"tenant_id": str(tenant.id), "tenant_name": tenant.name})
+            sentry_sdk.capture_message(
+                f"OpenAI quota exceeded for tenant '{tenant.name}'",
+                level="error",
+                scope=scope,
+            )
+    except Exception:
+        pass
+
+    profile = db.get(TenantProfile, tenant.id)
+    support_email: str | None = profile.support_email if profile else None
+
+    admin = (
+        db.query(User)
+        .filter(User.tenant_id == tenant.id, User.is_admin.is_(True))
+        .first()
+    )
+    if admin:
+        try:
+            send_email(
+                to=admin.email,
+                subject="[Chat9] OpenAI quota exceeded — action required",
+                body=(
+                    "Hello,\n\n"
+                    "Your OpenAI API key has run out of credits. "
+                    "Chat9 cannot generate responses for your users until you top up your balance.\n\n"
+                    "Please visit https://platform.openai.com/settings/organization/billing "
+                    "to add credits.\n\n"
+                    "— Chat9"
+                ),
+            )
+        except Exception:
+            logger.warning("quota_exceeded_email_failed: tenant_id=%s", tenant.id)
+
+    contact = f" at {support_email}" if support_email else ""
+    return (
+        "We're currently experiencing technical difficulties and are unable to respond via chat. "
+        f"We apologize for the inconvenience — please contact our support team{contact} by email."
+    )
 
 
 class DebugRequest(BaseModel):
@@ -176,6 +235,13 @@ def chat(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except RateLimitError as exc:
+        if is_quota_exceeded(exc):
+            raise HTTPException(
+                status_code=402,
+                detail=_notify_quota_exceeded(tenant, db),
+            ) from None
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
         raise HTTPException(
             status_code=503,
@@ -218,6 +284,13 @@ def chat_debug(
             db=db,
             api_key=tenant.openai_api_key,
         )
+    except RateLimitError as exc:
+        if is_quota_exceeded(exc):
+            raise HTTPException(
+                status_code=402,
+                detail=_notify_quota_exceeded(tenant, db),
+            ) from None
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
         raise HTTPException(
             status_code=503,
@@ -323,6 +396,13 @@ def chat_escalate(
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found") from None
+    except RateLimitError as exc:
+        if is_quota_exceeded(exc):
+            raise HTTPException(
+                status_code=402,
+                detail=_notify_quota_exceeded(tenant, db),
+            ) from None
+        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     return ManualEscalateResponse(message=msg, ticket_number=tnum)

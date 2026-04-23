@@ -14,5 +14,18 @@ Ground rules:
 Formatting:
 - Use Markdown when it adds clarity (lists, code blocks, headings).
 - Only link to URLs that appear verbatim in the provided context.
-- When you can't answer: "I don't have that information in the documentation. Feel free to reach out to the support team directly."\
+- When you can't answer: "I don't have that information in the documentation. Feel free to reach out to the support team directly."
+
+"""
+
+COT_REASONING_BLOCK = """\
+## Internal reasoning (never expose to user)
+
+Before each response, follow these steps silently:
+1. Restate what the user is asking in one sentence.
+2. For each context chunk, rate relevance: high / medium / low / none.
+3. Identify the highest-rated chunks. If none are high or medium — say you \
+don't have that information rather than guessing.
+4. Draft your answer using only high and medium chunks.
+Output ONLY the final answer text. Do not include any reasoning steps, headers, or step numbers in your response.\
 """

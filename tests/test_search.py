@@ -128,6 +128,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
         "query_variant_count": 1,
         "variant_mode": "single",
         "extra_variant_count": 0,
+        "rewritten_variant": None,
     }
     assert trace.spans[1].output == {
         "embedded_query_count": 1,

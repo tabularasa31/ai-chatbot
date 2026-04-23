@@ -357,7 +357,7 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
     assert call_kwargs["temperature"] == 0.2
-    assert call_kwargs["max_tokens"] == 500
+    assert call_kwargs["max_tokens"] == 800
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:
@@ -437,7 +437,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     ]
     assert trace.generation_metadata == {
         "temperature": 0.2,
-        "max_tokens": 500,
+        "max_tokens": 800,
         "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,

@@ -63,6 +63,7 @@ class ChatResponse(BaseModel):
     tokens_used: int
     validation: dict | None = None
     chat_ended: bool = False
+    ticket_number: str | None = None
 
 
 class MessageResponse(BaseModel):

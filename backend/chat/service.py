@@ -152,6 +152,7 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
+
 _PRICING_QUESTION_RE = re.compile(
     r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
 )
@@ -474,6 +475,7 @@ class ChatTurnOutcome:
     document_ids: list[uuid.UUID]
     tokens_used: int
     chat_ended: bool
+    ticket_number: str | None = None
 
 
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
@@ -1172,6 +1174,7 @@ def run_chat_pipeline(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=retrieval.reliability.score == "low",
         trace=trace,
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
@@ -1260,6 +1263,7 @@ def build_rag_prompt(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -1343,6 +1347,15 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
 
 {quick_answers_block}
 """
+    if low_context:
+        system_rules = (
+            f"{system_rules}\n"
+            "IMPORTANT: The retrieved context has low relevance to this question. "
+            "If the answer is not clearly supported by the context below, respond in the "
+            "SAME LANGUAGE as the user's question by saying you don't have that information "
+            "in the documentation and inviting the user to contact support or ask something else. "
+            "Do NOT claim you are unable to help — explain that the information is simply not in the docs.\n"
+        )
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -1373,6 +1386,7 @@ def build_rag_messages(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -1386,6 +1400,7 @@ def build_rag_messages(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=low_context,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -1407,6 +1422,7 @@ def generate_answer(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -1438,6 +1454,7 @@ def generate_answer(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=low_context,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -2472,6 +2489,7 @@ def process_chat_message(
                 document_ids=[],
                 tokens_used=out.tokens_used,
                 chat_ended=False,
+                ticket_number=ticket.ticket_number,
             )
         except Exception as e:
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
@@ -2596,6 +2614,7 @@ def process_chat_message(
                 "promotion_reason": "low_reliability_or_escalation",
             }
         )
+    created_ticket_number: str | None = None
     if escalate and esc_trigger is not None:
         try:
             preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
@@ -2626,6 +2645,7 @@ def process_chat_message(
             )
             answer = answer + "\n\n" + esc.message_to_user
             tokens_used = tokens_used + esc.tokens_used
+            created_ticket_number = ticket.ticket_number
             if not ticket.user_email:
                 chat.escalation_awaiting_ticket_id = ticket.id
             else:
@@ -2710,6 +2730,7 @@ def process_chat_message(
         document_ids=document_ids,
         tokens_used=tokens_used,
         chat_ended=bool(chat.ended_at),
+        ticket_number=created_ticket_number,
     )
 
 

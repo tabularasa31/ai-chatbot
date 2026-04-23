@@ -18,6 +18,11 @@ TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
 MAX_CACHE_SIZE = 2048
 
+# Short queries (≤ SHORT_QUERY_WORD_LIMIT words) are passed through as relevant so the
+# LLM can ask a clarifying question rather than the guard blindly rejecting them.
+# Exception: queries that match an explicit off-topic pattern are still rejected.
+SHORT_QUERY_WORD_LIMIT = 4
+
 _cache: dict[str, tuple[float, bool, str]] = {}
 
 
@@ -87,6 +92,12 @@ def check_relevance_with_profile(
     """
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
+
+    # Very short queries are ambiguous — let the LLM ask for clarification instead of
+    # the guard blindly rejecting. Skip only if the query matches a clear off-topic pattern.
+    word_count = len(user_question.split())
+    if word_count <= SHORT_QUERY_WORD_LIMIT:
+        return True, "short_query_bypass", profile
 
     # Cache key: hash(tenant_id + question[:100])
     key_src = f"{tenant_id}:{user_question[:100]}"

@@ -77,7 +77,8 @@ class Settings(BaseSettings):
         description="OpenAI chat model used for localize/translate/render paths.",
     )
     allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
-    widget_message_max_chars: int = Field(4000, alias="WIDGET_MESSAGE_MAX_CHARS")
+    widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)
+    chat_response_max_tokens: int = Field(800, alias="CHAT_RESPONSE_MAX_TOKENS", ge=1)
     widget_chat_per_client_rate: str | None = Field(
         None,
         alias="WIDGET_CHAT_PER_CLIENT_RATE",

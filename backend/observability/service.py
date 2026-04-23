@@ -526,6 +526,8 @@ class ObservabilityService:
     def __init__(self) -> None:
         self._client: _TraceClientProtocol | None = None
         self._enabled = False
+        self._release: str | None = None
+        self._version: str | None = None
         self._client_query_counts: dict[str, int] = defaultdict(int)
         self._client_recent_queries: dict[str, deque[float]] = defaultdict(deque)
 
@@ -536,6 +538,8 @@ class ObservabilityService:
     def reset(self) -> None:
         self._client = None
         self._enabled = False
+        self._release = None
+        self._version = None
 
     def init(self) -> None:
         if self._client is not None or self._enabled:
@@ -589,11 +593,16 @@ class ObservabilityService:
                 except Exception:
                     logger.exception("Langfuse auth_check failed")
             self._enabled = True
+            sha = settings.git_sha
+            self._version = sha
+            self._release = settings.pipeline_release or (sha[:7] if sha else None)
             logger.warning(
                 "Langfuse observability initialized",
                 extra={
                     "langfuse_host": _safe_host_preview(settings.langfuse_host),
                     "langfuse_auth_check": auth_check,
+                    "pipeline_release": self._release,
+                    "pipeline_version": self._version,
                 },
             )
         except Exception:
@@ -682,6 +691,8 @@ class ObservabilityService:
             input=init_kwargs.get("input"),
             metadata=merged_metadata,
             tags=merged_tags,
+            release=self._release,
+            version=self._version,
         )
         if trace_obj is None:
             return None

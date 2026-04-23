@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     posthog_host: str = Field("https://us.i.posthog.com", alias="POSTHOG_HOST")
     sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
     git_sha: str | None = Field(None, alias="GIT_SHA")
+    pipeline_release: str | None = Field(None, alias="PIPELINE_RELEASE")
     observability_capture_full_prompts: bool = Field(
         False,
         alias="OBSERVABILITY_CAPTURE_FULL_PROMPTS",

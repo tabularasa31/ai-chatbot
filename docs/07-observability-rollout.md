@@ -27,6 +27,8 @@ Configure `chat9-api` env:
 - `TRACE_HIGH_VOLUME_SAMPLE_RATE`
 - `TRACE_NEW_TENANT_THRESHOLD`
 - `TRACE_RATE_WINDOW_SECONDS`
+- `GIT_SHA` — full git commit SHA; set automatically by Railway at build time; used as fallback `version` on traces
+- `PIPELINE_RELEASE` — optional human-readable label (e.g. `v1.3.0`); if absent, the first 7 chars of `GIT_SHA` are used as `release`
 
 Configure `langfuse` env:
 
@@ -48,6 +50,8 @@ Implemented in code:
 - root `search-request` traces for direct `/search` calls
 - `quick-answers-check` placeholder stage
 - `faq_match` decision span for FAQ hybrid routing (`faq_direct` / `faq_context` / `rag_only`)
+- `guard_capability_check` — LLM classifier span (capability question detection)
+- `strategy` metadata field on root trace (`greeting`, `capability_response`, `faq_direct`, `faq_context`, `rag_only`, `guard_reject`)
 - `query-expansion`
 - `query-embedding`
 - `vector-search`
@@ -245,6 +249,24 @@ No restart/recovery test against a real Langfuse deployment has been added yet.
 
 `AC-12` Partial.
 Sampling logic and forced-promotion rules exist; an explicit `FULL_CAPTURE_MODE` switch can disable adaptive sampling for full capture environments. Shared/distributed rate tracking is not implemented.
+
+## Pipeline Version Tracking
+
+Every Langfuse trace carries two top-level fields that identify which version of the code produced it:
+
+| Field | Value | Set from |
+|---|---|---|
+| `version` | Full git SHA (40 chars) | `GIT_SHA` env var (auto-set by Railway) |
+| `release` | Human label or short SHA | `PIPELINE_RELEASE` env var, or `GIT_SHA[:7]` as fallback |
+
+**Using releases to compare pipeline versions:**
+
+1. In Langfuse UI → **Traces** → filter by `Release` to isolate a specific deploy
+2. Compare `strategy` distribution (e.g. how many `guard_reject` vs `rag_only`)
+3. Compare avg `confidence` metadata field
+4. Compare `latency` between releases
+
+Since Railway auto-sets `GIT_SHA` on every deploy, `release` always resolves to a unique short SHA without any manual configuration. `PIPELINE_RELEASE` is optional — use it when you want a human-readable label (e.g. after a significant feature ship).
 
 ## Remaining Gaps
 

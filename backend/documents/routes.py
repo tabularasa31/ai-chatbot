@@ -48,6 +48,7 @@ documents_router = APIRouter(tags=["documents"])
 EXT_TO_TYPE = {
     ".pdf": "pdf",
     ".md": "markdown",
+    ".mdx": "markdown",
     ".json": "swagger",
     ".yaml": "swagger",
     ".yml": "swagger",
@@ -137,7 +138,7 @@ def upload_document_route(
     if not file_type:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: .pdf, .md, .json, .yaml, .yml",
+            detail="Unsupported file type. Allowed: .pdf, .md, .mdx, .json, .yaml, .yml",
         )
 
     content = file.file.read()

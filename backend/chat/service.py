@@ -80,6 +80,7 @@ from backend.models import (
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
 _GUARD_POOL_WORKERS = 3   # concurrent threads for injection + relevance + capability guards
+_DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -749,6 +750,32 @@ def _persist_assistant_message_with_response_language(
     )
 
 
+def _make_capability_result(
+    loc: LocalizationResult,
+    language_context: ResolvedLanguageContext,
+    *,
+    faq_match: Any = None,
+) -> ChatPipelineResult:
+    return ChatPipelineResult(
+        raw_answer=loc.text,
+        final_answer=loc.text,
+        tokens_used=loc.tokens_used,
+        strategy="capability_response",
+        reject_reason=None,
+        is_reject=False,
+        is_faq_direct=False,
+        is_capability=True,
+        validation_applied=False,
+        validation_outcome=None,
+        retrieval=None,
+        validation=None,
+        escalation_recommended=False,
+        escalation_trigger=None,
+        faq_match=faq_match,
+        language_context=language_context,
+    )
+
+
 def run_chat_pipeline(
     tenant_id: uuid.UUID,
     question: str,
@@ -873,7 +900,7 @@ def run_chat_pipeline(
         # was running, short-circuit before embedding (saves ~1s per capability turn).
         try:
             _cap_early = _cap_future.result(timeout=0)
-        except Exception:
+        except TimeoutError:
             _cap_early = False
         if _cap_early:
             _rel_future.cancel()
@@ -883,23 +910,7 @@ def run_chat_pipeline(
                 api_key=api_key,
                 question=question,
             )
-            return ChatPipelineResult(
-                raw_answer=_cap_early_result.text,
-                final_answer=_cap_early_result.text,
-                tokens_used=_cap_early_result.tokens_used,
-                strategy="capability_response",
-                reject_reason=None,
-                is_reject=False,
-                is_faq_direct=False,
-                is_capability=True,
-                validation_applied=False,
-                validation_outcome=None,
-                retrieval=None,
-                validation=None,
-                escalation_recommended=False,
-                escalation_trigger=None,
-                language_context=language_context,
-            )
+            return _make_capability_result(_cap_early_result, language_context)
 
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
@@ -1012,24 +1023,7 @@ def run_chat_pipeline(
                 api_key=api_key,
                 question=question,
             )
-            return ChatPipelineResult(
-                raw_answer=cap_result.text,
-                final_answer=cap_result.text,
-                tokens_used=cap_result.tokens_used,
-                strategy="capability_response",
-                reject_reason=None,
-                is_reject=False,
-                is_faq_direct=False,
-                is_capability=True,
-                validation_applied=False,
-                validation_outcome=None,
-                retrieval=None,
-                validation=None,
-                escalation_recommended=False,
-                escalation_trigger=None,
-                faq_match=faq_match,
-                language_context=language_context,
-            )
+            return _make_capability_result(cap_result, language_context, faq_match=faq_match)
         relevant, _, profile = _rel_future.result()
     finally:
         _guard_pool.shutdown(wait=False)

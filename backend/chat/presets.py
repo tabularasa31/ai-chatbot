@@ -26,6 +26,8 @@ Before each response, follow these steps silently:
 2. For each context chunk, rate relevance: high / medium / low / none.
 3. Identify the highest-rated chunks. If none are high or medium — say you \
 don't have that information rather than guessing.
-4. Draft your answer using only high and medium chunks.
+4. Synthesize: for each high and medium chunk, note in one phrase why it \
+answers the question.
+5. Draft your answer using only those chunks.
 Output ONLY the final answer text. Do not include any reasoning steps, headers, or step numbers in your response.\
 """

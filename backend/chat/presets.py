@@ -19,15 +19,20 @@ Formatting:
 """
 
 COT_REASONING_BLOCK = """\
-## Internal reasoning (never expose to user)
+## Internal reasoning
 
-Before each response, follow these steps silently:
-1. Restate what the user is asking in one sentence.
-2. For each context chunk, rate relevance: high / medium / low / none.
-3. Identify the highest-rated chunks. If none are high or medium — say you \
-don't have that information rather than guessing.
-4. Synthesize: for each high and medium chunk, note in one phrase why it \
-answers the question.
-5. Draft your answer using only those chunks.
-Output ONLY the final answer text. Do not include any reasoning steps, headers, or step numbers in your response.\
+Before each response, work through these steps. Wrap your reasoning in \
+<thought>...</thought> tags — the backend will strip them before the user \
+sees the reply.
+
+<thought>
+1. What is the user asking? (one sentence)
+2. Rate each context chunk: high / medium / low / none.
+3. List the high and medium chunks and note in one phrase why each answers \
+the question. If none qualify, the answer is "I don't have that information."
+4. Synthesize: which chunks are most relevant and why?
+</thought>
+
+After </thought>, write ONLY the final answer. No step numbers, no headers, \
+no reasoning text outside the tags.\
 """

@@ -1209,6 +1209,11 @@ def run_chat_pipeline(
     )
 
 
+def _strip_thought_tags(text: str) -> str:
+    """Remove <thought>...</thought> blocks the model may emit for CoT reasoning."""
+    return re.sub(r"<thought>.*?</thought>\s*", "", text, flags=re.DOTALL).strip()
+
+
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
     """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4)."""
     if not ctx:
@@ -1484,7 +1489,7 @@ def generate_answer(
                 if delta:
                     chunks.append(delta)
                     stream_callback(delta)
-            answer_text = "".join(chunks)
+            answer_text = _strip_thought_tags("".join(chunks))
         else:
             response = call_openai_with_retry(
                 "chat_generate",
@@ -1496,7 +1501,7 @@ def generate_answer(
                 ),
                 bot_id=retry_bot_id,
             )
-            answer_text = response.choices[0].message.content or ""
+            answer_text = _strip_thought_tags(response.choices[0].message.content or "")
             total_tokens = response.usage.total_tokens if response.usage else 0
             if response.usage:
                 prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0

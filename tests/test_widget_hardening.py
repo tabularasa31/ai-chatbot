@@ -64,7 +64,7 @@ def test_widget_chat_rejects_oversized_message(
     )
     response = _post_widget_chat(tenant, body["bot_public_id"], message="x" * 5000)
     assert response.status_code == 413
-    assert response.json()["detail"] == {"code": "message_too_long", "max_chars": 4000}
+    assert response.json()["detail"] == {"code": "message_too_long", "max_chars": 1000}
 
 
 def test_widget_chat_rejects_empty_message(

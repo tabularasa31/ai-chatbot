@@ -450,7 +450,7 @@ def upload_document(
         raise HTTPException(
             status_code=409,
             detail=f"This file has already been uploaded (as '{name}'). Delete the existing document first to re-upload.",
-        )
+        ) from None
     db.refresh(doc)
 
     try:

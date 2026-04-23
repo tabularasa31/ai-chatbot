@@ -54,9 +54,11 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
+from backend.guards.capability_detector import detect_capability_question
 from backend.guards.injection_detector import detect_injection, detect_injection_structural
 from backend.guards.reject_response import (
     RejectReason,
+    build_capability_response_result,
     build_reject_response_result,
 )
 from backend.guards.relevance_checker import check_relevance_with_profile
@@ -77,7 +79,7 @@ from backend.models import (
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
-_GUARD_POOL_WORKERS = 2   # concurrent threads for injection + relevance guards
+_GUARD_POOL_WORKERS = 3   # concurrent threads for injection + relevance + capability guards
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -425,7 +427,7 @@ class ChatPipelineResult:
     final_answer: str
     tokens_used: int
     # decision
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
+    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject", "capability_response"]
     reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None
     is_reject: bool
     is_faq_direct: bool
@@ -439,6 +441,7 @@ class ChatPipelineResult:
     escalation_recommended: bool
     escalation_trigger: Any  # EscalationTrigger | None
     # debug extras
+    is_capability: bool = False
     faq_match: Any = None  # FAQMatchResult | None
     # language_context is always populated by run_chat_pipeline; None only for
     # callers that construct ChatPipelineResult directly without this field.
@@ -782,7 +785,7 @@ def run_chat_pipeline(
             browser_locale=None,
         )
 
-    # --- 1 + 4. Injection detection and relevance pre-check — run concurrently.
+    # --- 1 + 4. Injection detection, relevance pre-check, and capability detection — run concurrently.
     # Profile is pre-fetched on the main thread: SQLAlchemy sessions are not thread-safe.
     # A single try...finally ensures the pool is shut down exactly once regardless of
     # which early-return path (injection, faq_direct, not_relevant) is taken.
@@ -797,6 +800,11 @@ def run_chat_pipeline(
             api_key=api_key,
             trace=trace,
         )
+        _cap_future = _guard_pool.submit(
+            detect_capability_question,
+            question,
+            api_key=api_key,
+        )
 
         if precomputed_injection is not None:
             injection_result = precomputed_injection
@@ -807,6 +815,7 @@ def run_chat_pipeline(
 
         if injection_result.detected:
             _rel_future.cancel()
+            _cap_future.cancel()
             reject_result = build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
                 profile=None,
@@ -901,6 +910,7 @@ def run_chat_pipeline(
 
         if faq_match.strategy == "faq_direct":
             _rel_future.cancel()
+            _cap_future.cancel()
             direct_answer_result = render_direct_faq_answer_result(
                 answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
                 response_language=language_context.response_language,
@@ -924,8 +934,9 @@ def run_chat_pipeline(
                 language_context=language_context,
             )
 
-        # --- 4. Relevance pre-check (result from the future started at step 1) ---
+        # --- 4. Relevance pre-check and capability detection (futures from step 1) ---
         relevant, _, profile = _rel_future.result()
+        is_capability = _cap_future.result()
     finally:
         _guard_pool.shutdown(wait=False)
 
@@ -944,6 +955,33 @@ def run_chat_pipeline(
             reject_reason="not_relevant",
             is_reject=True,
             is_faq_direct=False,
+            validation_applied=False,
+            validation_outcome=None,
+            retrieval=None,
+            validation=None,
+            escalation_recommended=False,
+            escalation_trigger=None,
+            faq_match=faq_match,
+            language_context=language_context,
+        )
+
+    # --- 5. Capability question short-circuit ---
+    if is_capability:
+        cap_result = build_capability_response_result(
+            profile=profile or _guard_profile,
+            response_language=language_context.response_language,
+            api_key=api_key,
+            question=question,
+        )
+        return ChatPipelineResult(
+            raw_answer=cap_result.text,
+            final_answer=cap_result.text,
+            tokens_used=cap_result.tokens_used,
+            strategy="capability_response",
+            reject_reason=None,
+            is_reject=False,
+            is_faq_direct=False,
+            is_capability=True,
             validation_applied=False,
             validation_outcome=None,
             retrieval=None,
@@ -2411,8 +2449,8 @@ def process_chat_message(
         stream_callback=stream_callback,
     )
 
-    # Guard rejects and faq_direct: persist and return immediately (no escalation).
-    if result.is_reject or result.is_faq_direct:
+    # Guard rejects, faq_direct, and capability responses: persist and return immediately (no escalation).
+    if result.is_reject or result.is_faq_direct or result.is_capability:
         user_message, assistant_message = _persist_turn_with_response_language(
             db=db,
             chat=chat,
@@ -2445,11 +2483,12 @@ def process_chat_message(
             "not_relevant": "guard_reject_not_relevant",
             "low_retrieval": "guard_reject_low_retrieval",
         }
-        source = (
-            source_map.get(result.reject_reason or "", "guard_reject")
-            if result.is_reject
-            else "faq_direct"
-        )
+        if result.is_reject:
+            source = source_map.get(result.reject_reason or "", "guard_reject")
+        elif result.is_capability:
+            source = "capability_response"
+        else:
+            source = "faq_direct"
         trace.update(
             output={"answer": result.final_answer, "source": source},
             metadata={

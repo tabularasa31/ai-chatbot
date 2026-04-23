@@ -83,6 +83,61 @@ def _build_canonical_reject_response(
     )
 
 
+def _build_capability_response(
+    *,
+    profile: TenantProfileModel | None,
+) -> str:
+    product_name = (
+        profile.product_name if profile and profile.product_name else None
+    ) or "this product"
+
+    topic_hint = ""
+    if profile is not None:
+        modules = profile.modules or []
+        if isinstance(modules, list) and modules:
+            topic_hint = ", ".join([str(m) for m in modules[:3] if str(m).strip()])
+
+    if topic_hint:
+        return (
+            f"I can help you with {product_name} questions! "
+            f"For example, I can answer questions about {topic_hint}. "
+            f"What would you like to know?"
+        )
+    return (
+        f"I can help you with {product_name} questions. "
+        f"What would you like to know?"
+    )
+
+
+def build_capability_response_result(
+    *,
+    profile: TenantProfileModel | None,
+    response_language: str | None = None,
+    api_key: str | None = None,
+    question: str | None = None,
+    fallback_locale: str | None = None,
+) -> LocalizationResult:
+    canonical_text = _build_capability_response(profile=profile)
+    if response_language is None:
+        target_language = _resolve_reject_target_language(
+            question=question,
+            fallback_locale=fallback_locale,
+        )
+        return localize_text_to_language_result(
+            canonical_text=canonical_text,
+            target_language=target_language,
+            api_key=api_key,
+            fallback_locale=fallback_locale,
+            operation="capability_response",
+        )
+    return localize_text_result(
+        canonical_text=canonical_text,
+        response_language=response_language,
+        api_key=api_key,
+        operation="capability_response",
+    )
+
+
 def build_reject_response(
     *,
     reason: RejectReason,

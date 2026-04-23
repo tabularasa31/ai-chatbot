@@ -468,7 +468,21 @@ User message
   ↓
 PII redaction (regex)
   ↓
-Hybrid search → top-k chunks
+Small-talk early exit  (greeting / off-topic one-liner → return immediately)
+  ↓
+Parallel guard pool (3 threads, ~2 s budget):
+  ├─ injection_check   — semantic + pattern detector
+  ├─ relevance_check   — vector similarity pre-filter (threshold 0.22)
+  └─ capability_check  — LLM classifier: is user asking what the bot can do?
+  ↓
+Guard decisions (in priority order):
+  1. injection detected          → guard_reject / injection
+  2. capability question         → capability_response  (positive "I can help with…")
+  3. FAQ direct match            → faq_direct  (skip retrieval)
+  4. relevance score < threshold → guard_reject / low_retrieval
+  5. relevance check failed      → guard_reject / not_relevant
+  ↓
+Hybrid search → top-k chunks  (vector + BM25 + RRF)
   ↓
 Build RAG prompt (system + context + history + question)
   ↓
@@ -478,6 +492,28 @@ Answer validation (second gpt-4o-mini call)
   ↓
 Store message → return response
 ```
+
+**Pipeline strategies** — the `strategy` field on every Langfuse trace:
+
+| Strategy | Meaning |
+|---|---|
+| `greeting` | Empty/greeting turn before first real question |
+| `capability_response` | User asked what the bot can do — returns positive description |
+| `faq_direct` | High-confidence FAQ match; retrieval skipped |
+| `faq_context` | FAQ match used as extra context alongside retrieved chunks |
+| `rag_only` | Standard full RAG path |
+| `guard_reject` | Blocked by injection / relevance / retrieval guard |
+
+**Guard reject reasons** (`reject_reason` on trace metadata):
+
+| Reason | Trigger |
+|---|---|
+| `injection` | Prompt injection pattern detected |
+| `not_relevant` | Relevance LLM check returned false |
+| `low_retrieval` | Best vector similarity below `RELEVANCE_RETRIEVAL_THRESHOLD` (default 0.22) |
+| `insufficient_confidence` | Answer validation confidence below threshold |
+
+**Cross-lingual note:** Russian / other non-English queries against English docs produce cosine similarities of 0.22–0.27 even when content is perfectly relevant. The default threshold of 0.22 is calibrated for this. Set `RELEVANCE_RETRIEVAL_THRESHOLD` env var to override.
 
 ### PII redaction (FI-043)
 

@@ -316,6 +316,7 @@ class Document(Base):
         index=True,
     )
     filename = Column(String(255), nullable=False)
+    content_hash = Column(String(64), nullable=True, index=False)
     source_url = Column(Text, nullable=True)
     file_type = Column(
         Enum(DocumentType, native_enum=False),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import re
 import uuid
 from typing import Any
@@ -400,10 +401,27 @@ def upload_document(
             detail="File too large. Maximum size is 50MB",
         )
 
+    content_hash = hashlib.sha256(content).hexdigest()
+    duplicate = (
+        db.query(Document)
+        .filter(
+            Document.tenant_id == tenant_id,
+            Document.content_hash == content_hash,
+            Document.source_id.is_(None),
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This file has already been uploaded (as '{duplicate.filename}'). Delete the existing document first to re-upload.",
+        )
+
     doc_type = DocumentType[file_type]
     doc = Document(
         tenant_id=tenant_id,
         filename=filename,
+        content_hash=content_hash,
         file_type=doc_type,
         status=DocumentStatus.processing,
     )

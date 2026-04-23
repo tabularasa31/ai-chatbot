@@ -74,6 +74,8 @@ Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM 
 Upload endpoint: `POST /documents` (multipart/form-data, max 50 MB).
 Supported OpenAPI extensions: `.json`, `.yaml`, `.yml`.
 
+**Duplicate detection:** before saving, the backend computes a SHA-256 hash of the raw file bytes and checks whether the tenant already has a file-upload document with the same hash. If a duplicate is found, the API returns `409 Conflict` with a message identifying the existing document by name. URL-crawled pages are excluded from this check.
+
 ### Processing pipeline
 
 1. File is saved and parsed to `parsed_text`

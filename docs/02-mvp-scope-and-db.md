@@ -160,6 +160,7 @@ documents
 ├─ id (PK, UUID)
 ├─ workspace_id (FK → workspaces, NOT NULL)
 ├─ filename (VARCHAR, NOT NULL)
+├─ content_hash (VARCHAR(64), nullable) — SHA-256 hex of raw file bytes; NULL for URL-crawled pages
 ├─ file_type (ENUM: pdf, markdown, swagger)
 ├─ original_content (TEXT, raw file content)
 ├─ parsed_text (TEXT, extracted text)
@@ -170,7 +171,8 @@ documents
 
 Indexes:
 ├─ (workspace_id)
-└─ (status)
+├─ (status)
+└─ (tenant_id, content_hash) — deduplication index for file uploads
 ```
 
 #### Embeddings (Vector Chunks)

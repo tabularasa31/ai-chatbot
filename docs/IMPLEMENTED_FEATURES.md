@@ -33,7 +33,7 @@
 
 | ID / area | What shipped | Code / API |
 |-----------|--------------|------------|
-| Upload / parse | PDF (pypdf), MD, Swagger/OpenAPI | `backend/documents/`, `POST /documents` |
+| Upload / parse | PDF (pypdf), MD, Swagger/OpenAPI; SHA-256 duplicate detection — `409 Conflict` if identical file already uploaded | `backend/documents/`, `POST /documents` |
 | **FI-009** | Sentence-aware chunking, chunk metadata | `backend/embeddings/service.py` (`chunk_text`), migrations |
 | **TD-033** | Per-doc-type chunking: `swagger` 500 chars/0 overlap, `markdown` 700/1, `pdf` 1000/1; `CHUNKING_CONFIG` dict — tune in one place, no client UI | `backend/embeddings/service.py` |
 | **FI-021** | Async embeddings: `202 Accepted` immediately, `BackgroundTasks` with own DB session, status `ready → embedding → ready/error`; frontend polls every 2 s | `backend/embeddings/routes.py`, `service.py`, `frontend/app/(app)/knowledge/page.tsx` |

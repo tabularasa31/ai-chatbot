@@ -83,10 +83,10 @@ class Settings(BaseSettings):
     FRONTEND_URL: str = Field("http://localhost:3000", alias="FRONTEND_URL")
     BREVO_API_KEY: str | None = Field(None, alias="BREVO_API_KEY")
 
-    # Transport-level request timeout for OpenAI HTTP calls.
-    # Helps avoid tail latency accumulation on logical (application-level) timeouts.
+    # Read timeout for OpenAI HTTP calls (waiting for response headers / first streaming chunk).
+    # Connect/write/pool timeouts are fixed at 10 s in openai_client.py.
     openai_request_timeout_seconds: float = Field(
-        10.0,
+        60.0,
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
     )
     openai_user_retry_max_attempts: int = Field(

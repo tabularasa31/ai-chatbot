@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 from fastapi import HTTPException
 from openai import OpenAI
 
@@ -15,8 +16,8 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
 
     Args:
         encrypted_key: Encrypted value from client.openai_api_key (DB).
-        timeout: Optional per-client HTTP timeout (seconds). When omitted, uses
-            ``OPENAI_REQUEST_TIMEOUT_SECONDS``.
+        timeout: Optional total read timeout override (seconds). When omitted, uses
+            ``OPENAI_REQUEST_TIMEOUT_SECONDS`` as the read timeout.
 
     Raises:
         HTTPException 400: Key not configured.
@@ -34,11 +35,17 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
             status_code=500,
             detail="Failed to decrypt OpenAI API key.",
         ) from e
-    effective_timeout = (
-        timeout if timeout is not None else settings.openai_request_timeout_seconds
+    read_timeout = timeout if timeout is not None else settings.openai_request_timeout_seconds
+    # Separate connect vs read: connect failure surfaces fast; slow LLM responses
+    # (including the wait for the first streaming chunk) get the full read budget.
+    httpx_timeout = httpx.Timeout(
+        connect=10.0,
+        read=read_timeout,
+        write=10.0,
+        pool=10.0,
     )
     return OpenAI(
         api_key=decrypted_key,
-        timeout=effective_timeout,
+        timeout=httpx_timeout,
         max_retries=0,
     )

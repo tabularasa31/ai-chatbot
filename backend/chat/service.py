@@ -26,6 +26,7 @@ from backend.chat.language import (
     resolve_language_context,
 )
 from backend.chat.pii import redact
+from backend.chat.presets import COT_REASONING_BLOCK
 from backend.contact_sessions.service import record_user_session_turn, touch_user_session
 from backend.core import db as core_db
 from backend.core.config import settings
@@ -1324,6 +1325,8 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
             f"Question: {question}\n\n"
             "Answer:"
         )
+    if settings.enable_cot_reasoning:
+        system_rules = f"{system_rules}\n\n{COT_REASONING_BLOCK}"
     context_block = "\n\n---\n\n".join(context_chunks)
     return (
         f"{system_rules}\n\n"

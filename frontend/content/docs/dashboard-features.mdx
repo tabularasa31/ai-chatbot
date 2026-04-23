@@ -18,12 +18,32 @@ Formerly `/documents` — **that route is removed**; use **Knowledge**.
 
 - **Supported formats:** PDF, Markdown, Swagger/OpenAPI (`.json`, `.yaml`, `.yml`).
 - **Profile tab:** review the extracted product profile, glossary, and editable **topics** derived from your docs. These topics are documentation themes, not necessarily strict product module names.
+- **FAQ tab:** review auto-generated FAQ candidates extracted from your knowledge base. Approve, reject, or edit each candidate — approved FAQs are used to answer common questions directly without a full retrieval pass. "Accept all" is available for quick bulk moderation.
 - **OpenAPI ingestion:** API specs are split into operation-aware chunks, with extra request/response schema detail for larger endpoints.
 - **Limits:** e.g. max file size 50 MB (see product limits); embedding runs asynchronously after upload/trigger.
 - **Status:** Documents move through `ready` → `embedding` → `ready` or `error`; the UI polls the API until embedding finishes.
-- **Health:** After embedding, health indicators and re-check actions (see FI-032).
+- **Health:** After embedding, each document gets a health score (0–100). Chat9 runs a set of rule-based checks and flags issues that can hurt retrieval quality:
+
+  | Issue | Severity | What it means |
+  |---|---|---|
+  | Empty or too short | High / Medium | No readable text, or under ~80 words — too little content for reliable retrieval |
+  | Parse / extraction issue | High / Medium | Null or replacement characters, or the text is noisy and symbol-heavy — suggests the file didn't extract cleanly |
+  | Poor structure (Markdown) | High / Medium | A section is very long without subheadings, or a long document has almost no headings — different topics end up in the same chunks |
+  | Incomplete section | Medium / Low | An empty heading, an unclosed code block, TODO/coming-soon placeholders, or the document ends mid-sentence |
+
+  A **Re-check** button runs the health check again after you've improved the document. Health issues are informational — the document still works, but fixing them improves answer accuracy.
+
 - **Delete:** Removes the document and its embeddings.
-- **URL sources:** Add a documentation website by URL, track crawl/index status, review recent runs, and manage exclusions.
+- **URL sources:** Add a documentation website by URL, track crawl/index status, review recent runs, and manage exclusions. When adding a source you can set a crawl schedule:
+
+  | Schedule | Behavior |
+  |---|---|
+  | Weekly (default) | Chat9 automatically re-crawls the source once a week |
+  | Daily | Re-crawls every day |
+  | Manual | No automatic re-crawl; you trigger it yourself |
+
+  You can also trigger a **manual refresh** at any time from the source row. There is a 1-hour cooldown between manual refresh requests to prevent accidental hammering.
+
 - **Indexed pages:** Inside a URL source, you can remove one indexed page without deleting the whole source. Removed pages stay excluded from future refreshes for that source.
 - **External sources:** Cards for future connectors (e.g. GitHub) plus a unified table of indexed sources.
 - **Reliability visibility:** retrieval/debug flows keep overlap and contradiction evidence available for investigation without changing the visible dashboard contract shape.
@@ -41,8 +61,17 @@ Gap Analyzer is the operator backlog for things your documentation may be missin
 
 ## Agents (`/settings`)
 
-- **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks.
-- Save, update, or remove the key from this page.
+- **OpenAI API key** — per-client key, encrypted at rest; required for embeddings, chat, and document health checks. Save, update, or remove the key from this page.
+
+- **Agent instructions** — the system prompt that shapes how your bot communicates: its persona, tone, ground rules, and formatting preferences. Edited in a textarea (max 3 000 characters) with a character counter.
+  - A **Support Agent** preset is available — click it to fill in the standard customer-support persona. If you modify a preset and want to start over, re-apply it from the preset button.
+  - The placeholder `{product_name}` is replaced at runtime with the product name extracted from your knowledge base.
+  - Clearing the field (saving empty) resets to the default Support Agent preset.
+  - When you create a bot and provide a **website URL** at signup, Chat9 auto-extracts a short company description from that page and prepends it to the preset instructions in the background.
+
+- **Response detail level** — Detailed / Standard / Corporate. Controls how much technical depth the bot includes in answers. This setting also lives on this page; see the description of each level when selecting it.
+
+- **Escalation settings** — support email address that receives L2 escalation tickets, and an optional escalation language override.
 
 ## Chat Logs (`/logs`)
 
@@ -77,9 +106,13 @@ Test your bot directly in the dashboard.
 - Clarification-aware debug metadata shows whether the turn would answer directly or trigger a clarification / partial-with-clarification path.
 - **Answer** is shown in a code-style block with an inline **copy** icon.
 
-## Response controls (`/settings/disclosure`)
+## Response controls
 
-Set the client-wide **response detail level** (Detailed / Standard / Corporate) for FI-DISC v1.
+Set the **response detail level** (Detailed / Standard / Corporate) from **Dashboard → Settings**. The three levels:
+
+- **Detailed** — full technical depth: paths, diagnostics, vendor/tool names.
+- **Standard** — plain language; avoids internal paths, stack traces, and vendor error names.
+- **Corporate** — polished, non-technical tone; no ETAs or deep technical detail; offers a support contact for ongoing issues.
 
 ## Widget API (`/settings/widget`)
 
@@ -88,10 +121,42 @@ Set the client-wide **response detail level** (Detailed / Standard / Corporate) 
 - Server-side token example (Python) with copy-to-clipboard on the snippet block.
 - See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional) for the full integration guide and SDK reference.
 
+## Privacy (`/settings/privacy`)
+
+- View a log of all PII redaction events — every time a user message contained detected personal information (email, phone, etc.) that was masked before being sent to OpenAI.
+- Download the log as a CSV for audit or compliance purposes.
+- Original (pre-redaction) message content is stored encrypted and can be accessed or permanently deleted from this page.
+
 ## Escalations (`/escalations`)
 
-- L2 ticket inbox (FI-ESC): open/resolved, triggers, link to session.
-- Resolve tickets from the UI.
+L2 ticket inbox. A ticket is created automatically whenever a conversation is escalated.
+
+**What triggers escalation:**
+
+| Trigger | When it fires |
+|---|---|
+| No documents | No knowledge documents are loaded — the bot has nothing to search |
+| Low confidence | The best retrieval score is below the threshold (bot can't find a relevant answer) |
+| Answer rejected | The LLM-generated answer failed internal quality validation |
+| User request | The user explicitly asks for a human — e.g. "talk to a human", "connect me to support", "хочу с оператором" |
+
+**What happens when a ticket is created:**
+
+- The active chat is closed (`chat_ended`). The widget shows a "Start new chat" button.
+- An email notification is sent to the support email configured in Settings.
+- A ticket appears in this inbox with a sequential number (e.g. `ESC-42`), the trigger, and a link to the conversation log.
+
+**Ticket priority** (shown in the inbox):
+
+| Trigger | Standard user | Enterprise / Pro user |
+|---|---|---|
+| User request | High | Critical |
+| Low confidence / no docs | Medium | High |
+| Answer rejected | Medium | Medium |
+
+Priority is set from the `plan_tier` field in the user's KYC identity token (`enterprise` or `pro` → elevated priority).
+
+**Resolving tickets:** Click **Resolve** on any open ticket to close it. Resolved tickets remain visible with a filter toggle.
 
 ## Admin (`/admin/metrics`)
 

@@ -262,6 +262,18 @@ When the widget receives structured clarification options, it can render them as
 | `identified` | The token was valid and Chat9 attached the user context to the session |
 | `anonymous` | No token was provided, or validation failed, so the widget continues without KYC context |
 
+### `plan_tier` and escalation priority
+
+When the bot escalates a conversation to a human, Chat9 uses `plan_tier` from the token to set the ticket priority:
+
+| Trigger | `plan_tier` not set | `plan_tier: "pro"` or `"enterprise"` |
+|---|---|---|
+| User explicitly requests a human | High | **Critical** |
+| Bot can't find a relevant answer | Medium | **High** |
+| Answer rejected by quality check | Medium | Medium |
+
+Pass `plan_tier` in the identity token to make sure premium users' escalation tickets surface first in your Escalations inbox.
+
 ### What Chat9 uses from KYC
 
 Stored in chat context:

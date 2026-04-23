@@ -20,6 +20,7 @@ from backend.chat.language import (
     STICKY_WINDOW,
     LocalizationResult,
     ResolvedLanguageContext,
+    generate_greeting_in_language_result,
     localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
@@ -569,14 +570,15 @@ def _build_greeting_result(
     response_language: str,
     api_key: str,
 ) -> LocalizationResult:
-    canonical_text = (
+    fallback_text = (
         f"I'm the {product_name} assistant and can help with documentation, "
         "product setup, integrations, and finding the right information. Ask your question."
     )
-    return localize_text_to_language_result(
-        canonical_text=canonical_text,
+    return generate_greeting_in_language_result(
+        product_name=product_name,
         target_language=response_language,
         api_key=api_key,
+        fallback_text=fallback_text,
     )
 
 

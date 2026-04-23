@@ -22,7 +22,7 @@ from backend.search.service import (
     ContradictionPair,
     ContradictionAdjudicationEvidence,
     SourceOverlapPair,
-    _translate_query_to_english,
+    _rewrite_query_for_retrieval,
     apply_script_boost,
     bm25_search_chunks,
     build_reliability_assessment,
@@ -3237,41 +3237,41 @@ def test_search_skips_vector_with_wrong_dimension(
 # --- Unit tests for cross-lingual query expansion ---
 
 
-def test_translate_query_to_english_returns_translation() -> None:
-    """Happy path: LLM responds with an English translation."""
+def test_rewrite_query_for_retrieval_returns_rewritten_query() -> None:
+    """Happy path: LLM returns a documentation-style keyword phrase in the same language."""
     from unittest.mock import MagicMock, patch
 
     mock_response = MagicMock()
-    mock_response.choices[0].message.content = "Why doesn't the bot respond in Russian?"
+    mock_response.choices[0].message.content = "определение языка мультиязычная поддержка"
 
     with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
         "backend.search.service.call_openai_with_retry", return_value=mock_response
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _translate_query_to_english(
+        result = _rewrite_query_for_retrieval(
             "Почему бот не отвечает на русском?", api_key="test-key"
         )
 
-    assert result == "Why doesn't the bot respond in Russian?"
+    assert result == "определение языка мультиязычная поддержка"
 
 
-def test_translate_query_to_english_returns_none_on_error() -> None:
-    """Translation failures degrade gracefully — None means caller skips the variant."""
+def test_rewrite_query_for_retrieval_returns_none_on_error() -> None:
+    """Rewrite failures degrade gracefully — None means caller skips the variant."""
     from unittest.mock import MagicMock, patch
 
     with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
         "backend.search.service.call_openai_with_retry", side_effect=RuntimeError("timeout")
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _translate_query_to_english(
+        result = _rewrite_query_for_retrieval(
             "Почему бот не отвечает на русском?", api_key="test-key"
         )
 
     assert result is None
 
 
-def test_translate_query_to_english_returns_none_on_empty_response() -> None:
-    """Empty LLM output (e.g. content=None) does not yield a blank variant."""
+def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
+    """Empty LLM output does not yield a blank variant."""
     from unittest.mock import MagicMock, patch
 
     mock_response = MagicMock()
@@ -3281,27 +3281,6 @@ def test_translate_query_to_english_returns_none_on_empty_response() -> None:
         "backend.search.service.call_openai_with_retry", return_value=mock_response
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _translate_query_to_english("", api_key="test-key")
+        result = _rewrite_query_for_retrieval("", api_key="test-key")
 
     assert result is None
-
-
-@pytest.mark.parametrize(
-    "query,expect_translated",
-    [
-        ("Почему бот не отвечает на русском?", True),       # Russian → translate
-        ("Comment réinitialiser mon mot de passe?", True),  # French → translate
-        ("如何重置密码", True),                               # Chinese → translate
-        ("How do I reset my password?", False),             # English → skip
-        ("How to delete?", False),                          # English → skip
-    ],
-)
-def test_cross_lingual_expansion_triggers_for_non_english_only(
-    query: str, expect_translated: bool
-) -> None:
-    """Expansion fires for any reliably detected non-English query, not just Cyrillic."""
-    from backend.chat.language import detect_language
-
-    result = detect_language(query)
-    is_non_english = result.is_reliable and result.detected_language not in ("en", "unknown")
-    assert is_non_english == expect_translated

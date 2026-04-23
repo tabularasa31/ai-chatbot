@@ -20,7 +20,18 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column("documents", sa.Column("content_hash", sa.String(64), nullable=True))
-    op.create_index("ix_documents_tenant_content_hash", "documents", ["tenant_id", "content_hash"])
+    # Partial unique index — covers only direct file uploads (source_id IS NULL).
+    # URL-crawled pages are excluded so re-indexing the same page doesn't conflict.
+    # Backfill is not possible: original file bytes are not persisted; the service
+    # falls back to filename matching for pre-migration rows (content_hash IS NULL).
+    op.create_index(
+        "ix_documents_tenant_content_hash",
+        "documents",
+        ["tenant_id", "content_hash"],
+        unique=True,
+        postgresql_where=sa.text("source_id IS NULL AND content_hash IS NOT NULL"),
+        sqlite_where=sa.text("source_id IS NULL AND content_hash IS NOT NULL"),
+    )
 
 
 def downgrade() -> None:

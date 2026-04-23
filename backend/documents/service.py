@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -402,12 +403,18 @@ def upload_document(
         )
 
     content_hash = hashlib.sha256(content).hexdigest()
+
+    # Check by content hash (primary). Also check by filename for pre-migration
+    # rows where content_hash IS NULL (original bytes are not stored, so backfill
+    # is impossible; filename match prevents obvious re-uploads of legacy files).
     duplicate = (
         db.query(Document)
         .filter(
             Document.tenant_id == tenant_id,
-            Document.content_hash == content_hash,
             Document.source_id.is_(None),
+            (Document.content_hash == content_hash) | (
+                (Document.content_hash.is_(None)) & (Document.filename == filename)
+            ),
         )
         .first()
     )
@@ -426,7 +433,24 @@ def upload_document(
         status=DocumentStatus.processing,
     )
     db.add(doc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = (
+            db.query(Document)
+            .filter(
+                Document.tenant_id == tenant_id,
+                Document.content_hash == content_hash,
+                Document.source_id.is_(None),
+            )
+            .first()
+        )
+        name = existing.filename if existing else filename
+        raise HTTPException(
+            status_code=409,
+            detail=f"This file has already been uploaded (as '{name}'). Delete the existing document first to re-upload.",
+        )
     db.refresh(doc)
 
     try:

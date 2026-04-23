@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1",
+    "@tailwindcss/typography": "^0.5.19",
     "class-variance-authority": "^0.7",
     "clsx": "^2",
     "framer-motion": "^11",
@@ -21,6 +22,7 @@
     "next": "14.2.35",
     "react": "^18",
     "react-dom": "^18",
+    "react-markdown": "^10.1.0",
     "tailwind-merge": "^2"
   },
   "devDependencies": {

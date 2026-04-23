@@ -9,6 +9,11 @@ from openai import OpenAI
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
 
+# Fast timeouts for non-data phases — failures here surface quickly.
+_CONNECT_TIMEOUT_SECONDS = 10.0
+_WRITE_TIMEOUT_SECONDS = 10.0
+_POOL_TIMEOUT_SECONDS = 10.0
+
 
 def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None) -> OpenAI:
     """
@@ -38,11 +43,13 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
     read_timeout = timeout if timeout is not None else settings.openai_request_timeout_seconds
     # Separate connect vs read: connect failure surfaces fast; slow LLM responses
     # (including the wait for the first streaming chunk) get the full read budget.
+    # Note: read_timeout >> openai_user_retry_budget_seconds by design — a timeout
+    # error already exhausts the retry budget, so no retry is attempted.
     httpx_timeout = httpx.Timeout(
-        connect=10.0,
+        connect=_CONNECT_TIMEOUT_SECONDS,
         read=read_timeout,
-        write=10.0,
-        pool=10.0,
+        write=_WRITE_TIMEOUT_SECONDS,
+        pool=_POOL_TIMEOUT_SECONDS,
     )
     return OpenAI(
         api_key=decrypted_key,

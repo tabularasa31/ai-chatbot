@@ -1804,12 +1804,7 @@ def search_similar_chunks_detailed(
     # the multilingual embedding model handles cross-lingual matching from there.
     rewritten_variant: str | None = None
     if not use_precomputed and settings.query_rewrite_enabled:
-        rewrite_span = (
-            trace.span(name="query-rewrite", input={"query": query}) if trace is not None else None
-        )
         rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
-        if rewrite_span is not None:
-            rewrite_span.end(output={"rewritten_variant": rewritten_variant})
         if rewritten_variant:
             query_variants = _normalize_query_variants([*query_variants, rewritten_variant])
 

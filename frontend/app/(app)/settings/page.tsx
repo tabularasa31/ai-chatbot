@@ -28,6 +28,8 @@ const DISCLOSURE_OPTIONS: {
   },
 ];
 
+const MAX_INSTRUCTIONS_LENGTH = 3000;
+
 const PRESETS: { id: string; label: string; content: string }[] = [
   {
     id: "support_agent",
@@ -353,7 +355,7 @@ export default function SettingsPage() {
               setSelectedPreset(matched?.id ?? null);
             }}
             className={`w-full px-3 py-2.5 border rounded-lg text-sm text-slate-800 outline-none placeholder:text-slate-400 font-mono resize-y leading-relaxed ${
-              agentInstructions.length > 3000
+              agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH
                 ? "border-red-300 focus:border-red-400"
                 : "border-slate-200 focus:border-slate-400"
             }`}
@@ -375,15 +377,15 @@ export default function SettingsPage() {
             <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
             to insert your product name. These instructions are prepended to every chat turn.
           </p>
-          <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.length > 3000 ? "text-red-500 font-medium" : "text-slate-400"}`}>
-            {agentInstructions.length} / 3000
+          <span className={`text-xs shrink-0 tabular-nums ${agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH ? "text-red-500 font-medium" : "text-slate-400"}`}>
+            {agentInstructions.trim().length} / {MAX_INSTRUCTIONS_LENGTH}
           </span>
         </div>
 
         <button
           type="button"
           onClick={saveAgentInstructions}
-          disabled={instructionsSaving || agentInstructions.length > 3000}
+          disabled={instructionsSaving || agentInstructions.trim().length > MAX_INSTRUCTIONS_LENGTH}
           className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
         >
           {instructionsSaving ? "Saving…" : "Save instructions"}

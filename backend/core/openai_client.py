@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 from fastapi import HTTPException
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
@@ -56,3 +56,12 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
         timeout=httpx_timeout,
         max_retries=0,
     )
+
+
+def is_quota_exceeded(exc: RateLimitError) -> bool:
+    """Return True when the OpenAI error is an insufficient_quota / billing error."""
+    body = getattr(exc, "body", None) or {}
+    if isinstance(body, dict):
+        error = body.get("error") or {}
+        return error.get("code") == "insufficient_quota"
+    return "insufficient_quota" in str(body)

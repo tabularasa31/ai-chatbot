@@ -87,6 +87,7 @@ from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
+    EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
     _normalize_query_variants,
     _rewrite_query_for_retrieval,
@@ -934,7 +935,7 @@ def run_chat_pipeline(
             )
         _embed_start = perf_counter()
         try:
-            variant_vectors = embed_queries(query_variants, api_key=api_key)
+            variant_vectors = embed_queries(query_variants, api_key=api_key, timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS)
         except (APITimeoutError, APIConnectionError, RateLimitError):
             logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
             variant_vectors = []

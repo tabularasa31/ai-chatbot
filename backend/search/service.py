@@ -53,6 +53,8 @@ BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 # settings.openai_user_retry_budget_seconds (default 1.5s) — this value only
 # matters if the retry budget is raised above it.
 QUERY_REWRITE_HTTP_TIMEOUT_SECONDS = 3.0
+# Embeddings are fast (<1s normally); bail early and degrade to keyword search.
+EMBEDDING_HTTP_TIMEOUT_SECONDS = 5.0
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap", "contradiction"]
@@ -1198,12 +1200,12 @@ def embed_queries(
 
 
 def embed_queries_with_stats(
-    queries: list[str], *, api_key: str
+    queries: list[str], *, api_key: str, timeout: float | None = None
 ) -> tuple[list[list[float]], int]:
     """Embed multiple queries and return the actual API request count used."""
     if not queries:
         return [], 0
-    vectors = embed_queries(queries, api_key=api_key)
+    vectors = embed_queries(queries, api_key=api_key, timeout=timeout)
     return vectors, 1
 
 
@@ -1780,6 +1782,7 @@ def search_similar_chunks_detailed(
     precomputed_query_variants: list[str] | None = None,
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
+    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
 ) -> SearchResultBundle:
     """
     Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
@@ -1839,6 +1842,7 @@ def search_similar_chunks_detailed(
         variant_vectors, embedding_api_request_count = embed_queries_with_stats(
             query_variants,
             api_key=api_key,
+            timeout=embedding_timeout,
         )
         query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
         embedded_query_count = len(query_variants)

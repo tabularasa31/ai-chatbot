@@ -27,7 +27,12 @@ _dedup_lock = threading.Lock()
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
-    """Drop duplicate (error_kind, tenant_id) within a 60s window."""
+    """Drop duplicate errors within a 60s window.
+
+    Primary key: (error_kind tag, tenant_id) for app-tagged errors.
+    Fallback key: (exception type, transaction) for OpenAI instrumentation
+    errors that lack app context (e.g. APITimeoutError captured inside spans).
+    """
     tags = event.get("tags") or {}
     error_kind = tags.get("error_kind") if isinstance(tags, dict) else None
     contexts = event.get("contexts") or {}
@@ -35,9 +40,18 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
     tenant_id = (
         tenant_ctx.get("tenant_id") if isinstance(tenant_ctx, dict) else None
     )
-    if not error_kind or not tenant_id:
-        return event
-    key = (str(error_kind), str(tenant_id))
+
+    if error_kind and tenant_id:
+        key = (str(error_kind), str(tenant_id))
+    else:
+        exc_values = (
+            (event.get("exception") or {}).get("values") or []
+        )
+        exc_type = exc_values[-1].get("type") if exc_values else None
+        transaction = event.get("transaction") or ""
+        if not exc_type:
+            return event
+        key = (str(exc_type), transaction)
     now = time.monotonic()
     with _dedup_lock:
         last = _recent_fingerprints.get(key)

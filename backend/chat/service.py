@@ -21,7 +21,6 @@ from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
     generate_greeting_in_language_result,
-    localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
     resolve_language_context,

@@ -580,7 +580,8 @@ def generate_greeting_in_language_result(
                         "role": "user",
                         "content": (
                             f"Product name: {product_name}\n"
-                            "Capabilities: documentation, product setup, integrations."
+                            "Capabilities: documentation, product setup, integrations, and finding the right information. "
+                            "The message should end by inviting the user to ask their question."
                         ),
                     },
                 ],

@@ -3284,3 +3284,24 @@ def test_translate_query_to_english_returns_none_on_empty_response() -> None:
         result = _translate_query_to_english("", api_key="test-key")
 
     assert result is None
+
+
+@pytest.mark.parametrize(
+    "query,expect_translated",
+    [
+        ("Почему бот не отвечает на русском?", True),       # Russian → translate
+        ("Comment réinitialiser mon mot de passe?", True),  # French → translate
+        ("如何重置密码", True),                               # Chinese → translate
+        ("How do I reset my password?", False),             # English → skip
+        ("How to delete?", False),                          # English → skip
+    ],
+)
+def test_cross_lingual_expansion_triggers_for_non_english_only(
+    query: str, expect_translated: bool
+) -> None:
+    """Expansion fires for any reliably detected non-English query, not just Cyrillic."""
+    from backend.chat.language import detect_language
+
+    result = detect_language(query)
+    is_non_english = result.is_reliable and result.detected_language not in ("en", "unknown")
+    assert is_non_english == expect_translated

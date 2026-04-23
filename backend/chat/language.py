@@ -540,6 +540,64 @@ def _resolve_language_context_inner(
     )
 
 
+def generate_greeting_in_language_result(
+    *,
+    product_name: str,
+    target_language: str,
+    api_key: str | None,
+    fallback_text: str,
+    operation: str = "generate_greeting",
+) -> LocalizationResult:
+    """Generate a support-bot greeting directly in target_language.
+
+    Skips the LLM when target_language matches English or api_key is absent,
+    returning fallback_text (the English canonical greeting) instead.
+    Falls back to fallback_text on any LLM failure.
+    """
+    normalized_target = _normalize_language_tag(target_language) or "en"
+
+    if not api_key or _language_matches(normalized_target, "en"):
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
+        return LocalizationResult(text=fallback_text, tokens_used=0)
+
+    try:
+        client = get_openai_client(api_key)
+        response = call_openai_with_retry(
+            operation,
+            lambda: client.chat.completions.create(
+                model=settings.localization_model,
+                temperature=0,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Write a single brief welcome message for a customer support assistant "
+                            f"in {normalized_target}. Preserve the product name exactly. "
+                            "Return only the message, no explanation."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Product name: {product_name}\n"
+                            "Capabilities: documentation, product setup, integrations, and finding the right information. "
+                            "The message should end by inviting the user to ask their question."
+                        ),
+                    },
+                ],
+            ),
+        )
+        tokens_used = response.usage.total_tokens if response.usage else 0
+        log_llm_tokens(operation=operation, target_language=normalized_target, tokens=tokens_used)
+        if not response.choices:
+            return LocalizationResult(text=fallback_text, tokens_used=tokens_used)
+        generated = (response.choices[0].message.content or "").strip()
+        return LocalizationResult(text=generated or fallback_text, tokens_used=tokens_used)
+    except Exception as exc:
+        logger.warning("generate_greeting_in_language failed; using fallback: %s", exc)
+        return LocalizationResult(text=fallback_text, tokens_used=0)
+
+
 def localize_text_result(
     *,
     canonical_text: str,

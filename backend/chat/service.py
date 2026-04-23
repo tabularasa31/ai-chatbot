@@ -151,16 +151,6 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
-# Patterns that indicate the LLM used a capability-refusal tone instead of a doc-gap phrase.
-# These should never appear in a RAG answer; validate_answer flags them as invalid.
-_CAPABILITY_REFUSAL_RE = re.compile(
-    r"(не могу помочь с эт|не в состоянии помочь"  # noqa: RUF001
-    r"|unable to (assist|help with this)"
-    r"|can't help with this"
-    r"|cannot help with this"
-    r"|i'm not able to help)",
-    re.IGNORECASE,
-)
 
 _PRICING_QUESTION_RE = re.compile(
     r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
@@ -1170,6 +1160,7 @@ def run_chat_pipeline(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=retrieval.reliability.score == "low",
         trace=trace,
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
@@ -1258,6 +1249,7 @@ def build_rag_prompt(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -1341,6 +1333,15 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
 
 {quick_answers_block}
 """
+    if low_context:
+        system_rules = (
+            f"{system_rules}\n"
+            "IMPORTANT: The retrieved context has low relevance to this question. "
+            "If the answer is not clearly supported by the context below, respond in the "
+            "SAME LANGUAGE as the user's question by saying you don't have that information "
+            "in the documentation and inviting the user to contact support or ask something else. "
+            "Do NOT claim you are unable to help — explain that the information is simply not in the docs.\n"
+        )
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
@@ -1371,6 +1372,7 @@ def build_rag_messages(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -1384,6 +1386,7 @@ def build_rag_messages(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=low_context,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -1405,6 +1408,7 @@ def generate_answer(
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
+    low_context: bool = False,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -1436,6 +1440,7 @@ def generate_answer(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
+        low_context=low_context,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -1618,13 +1623,6 @@ def validate_answer(
             "confidence": float(result.get("confidence", 1.0)),
             "reason": str(result.get("reason", "")),
         }
-        # A capability-refusal tone ("I can't help with this") in a RAG answer is always
-        # wrong — the prompt requires the doc-gap phrase instead. Override regardless of
-        # what the validation LLM decided.
-        if result["is_valid"] and _CAPABILITY_REFUSAL_RE.search(answer):
-            result["is_valid"] = False
-            result["confidence"] = 0.0
-            result["reason"] = "capability_refusal_tone"
         if validation_span is not None:
             validation_span.end(
                 output=result,

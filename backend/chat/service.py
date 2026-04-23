@@ -87,6 +87,7 @@ from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
+    EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
     _normalize_query_variants,
     _rewrite_query_for_retrieval,
@@ -934,7 +935,7 @@ def run_chat_pipeline(
             )
         _embed_start = perf_counter()
         try:
-            variant_vectors = embed_queries(query_variants, api_key=api_key)
+            variant_vectors = embed_queries(query_variants, api_key=api_key, timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS)
         except (APITimeoutError, APIConnectionError, RateLimitError):
             logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
             variant_vectors = []
@@ -1090,17 +1091,30 @@ def run_chat_pipeline(
     )
 
     # --- 5. Retrieve context ---
-    retrieval = retrieve_context(
-        tenant_id=tenant_id,
-        question=question,
-        db=db,
-        api_key=api_key,
-        top_k=5,
-        trace=trace,
-        precomputed_query_variants=query_variants,
-        precomputed_variant_vectors=variant_vectors,
-        precomputed_embedding_api_request_count=1,
-    )
+    # When embedding failed upstream, skip retrieve_context entirely to avoid a
+    # redundant second embedding attempt (and another 5s timeout) inside it.
+    if not variant_vectors:
+        retrieval = RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+        )
+    else:
+        retrieval = retrieve_context(
+            tenant_id=tenant_id,
+            question=question,
+            db=db,
+            api_key=api_key,
+            top_k=5,
+            trace=trace,
+            precomputed_query_variants=query_variants,
+            precomputed_variant_vectors=variant_vectors,
+            precomputed_embedding_api_request_count=1,
+        )
 
     # --- 6. Low-retrieval guard ---
     threshold = settings.relevance_retrieval_threshold

@@ -80,6 +80,7 @@ from backend.models import (
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
 _GUARD_POOL_WORKERS = 3   # concurrent threads for injection + relevance + capability guards
+_DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
 from backend.observability.metrics import capture_event
@@ -749,6 +750,32 @@ def _persist_assistant_message_with_response_language(
     )
 
 
+def _make_capability_result(
+    loc: LocalizationResult,
+    language_context: ResolvedLanguageContext,
+    *,
+    faq_match: Any = None,
+) -> ChatPipelineResult:
+    return ChatPipelineResult(
+        raw_answer=loc.text,
+        final_answer=loc.text,
+        tokens_used=loc.tokens_used,
+        strategy="capability_response",
+        reject_reason=None,
+        is_reject=False,
+        is_faq_direct=False,
+        is_capability=True,
+        validation_applied=False,
+        validation_outcome=None,
+        retrieval=None,
+        validation=None,
+        escalation_recommended=False,
+        escalation_trigger=None,
+        faq_match=faq_match,
+        language_context=language_context,
+    )
+
+
 def run_chat_pipeline(
     tenant_id: uuid.UUID,
     question: str,
@@ -869,6 +896,22 @@ def run_chat_pipeline(
                 language_context=language_context,
             )
 
+        # Non-blocking capability check: if the classifier finished while injection
+        # was running, short-circuit before embedding (saves ~1s per capability turn).
+        try:
+            _cap_early = _cap_future.result(timeout=0)
+        except TimeoutError:
+            _cap_early = False
+        if _cap_early:
+            _rel_future.cancel()
+            _cap_early_result = build_capability_response_result(
+                profile=_guard_profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+                question=question,
+            )
+            return _make_capability_result(_cap_early_result, language_context)
+
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
         if trace is not None:
@@ -968,9 +1011,20 @@ def run_chat_pipeline(
                 language_context=language_context,
             )
 
-        # --- 4. Relevance pre-check and capability detection (futures from step 1) ---
-        relevant, _, profile = _rel_future.result()
+        # --- 4. Capability detection + relevance pre-check ---
+        # Check capability first: if True, cancel relevance to avoid waiting for its
+        # timeout (relevance can block up to 3s; capability is usually faster).
         is_capability = _cap_future.result()
+        if is_capability:
+            _rel_future.cancel()
+            cap_result = build_capability_response_result(
+                profile=_guard_profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+                question=question,
+            )
+            return _make_capability_result(cap_result, language_context, faq_match=faq_match)
+        relevant, _, profile = _rel_future.result()
     finally:
         _guard_pool.shutdown(wait=False)
 
@@ -989,33 +1043,6 @@ def run_chat_pipeline(
             reject_reason="not_relevant",
             is_reject=True,
             is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    # --- 5. Capability question short-circuit ---
-    if is_capability:
-        cap_result = build_capability_response_result(
-            profile=profile or _guard_profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-            question=question,
-        )
-        return ChatPipelineResult(
-            raw_answer=cap_result.text,
-            final_answer=cap_result.text,
-            tokens_used=cap_result.tokens_used,
-            strategy="capability_response",
-            reject_reason=None,
-            is_reject=False,
-            is_faq_direct=False,
-            is_capability=True,
             validation_applied=False,
             validation_outcome=None,
             retrieval=None,

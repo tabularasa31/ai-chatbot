@@ -347,12 +347,14 @@ def _widget_chat_stream(
         final_text = outcome.text if outcome is not None else ""
         if not streamed_any and final_text:
             yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
-        done_payload = {
+        done_payload: dict[str, Any] = {
             "type": "done",
             "session_id": str(sid),
             "chat_ended": bool(outcome.chat_ended) if outcome is not None else False,
             "text": final_text,
         }
+        if outcome is not None and outcome.ticket_number:
+            done_payload["ticket_number"] = outcome.ticket_number
         yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(

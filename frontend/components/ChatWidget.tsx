@@ -41,7 +41,6 @@ interface ChatWidgetProps {
 }
 
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
-const ESC_TICKET_RE = /\[\[escalation_ticket:([^\]]+)\]\]/;
 const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
@@ -106,15 +105,6 @@ function persistSession(botId: string, sessionId: string): void {
   } catch {
     // Persistence is best-effort; widget can continue without browser storage.
   }
-}
-
-function parseEscalationTicket(content: string): string | null {
-  const match = content.match(ESC_TICKET_RE);
-  return match ? match[1].trim() : null;
-}
-
-function stripEscalationToken(content: string): string {
-  return content.replace(/\[\[escalation_ticket:[^\]]+\]\]\s*/g, "").trim();
 }
 
 function formatApiDetail(detail: unknown, fallback: string): string {
@@ -224,15 +214,13 @@ export function ChatWidget({
     payload: {
       text: string;
       chat_ended?: boolean;
+      ticket_number?: string | null;
     },
   ) => {
-    const raw = payload.text;
-    const ticket = parseEscalationTicket(raw);
-    if (ticket) setActiveTicket(ticket);
-    const display = stripEscalationToken(raw) || raw;
+    if (payload.ticket_number) setActiveTicket(payload.ticket_number);
     setMessages((prev) => [
       ...prev,
-      createTextMessage("assistant", display),
+      createTextMessage("assistant", payload.text),
     ]);
     if (payload.chat_ended === true) {
       handleChatEnded();
@@ -281,12 +269,13 @@ export function ChatWidget({
       text?: string;
       session_id?: string;
       chat_ended?: boolean;
+      ticket_number?: string | null;
     } = {};
 
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
       if (!raw) return;
-      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; message?: string; code?: number };
+      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number };
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -299,6 +288,7 @@ export function ChatWidget({
         payload.text = typeof parsed.text === "string" ? parsed.text : fullText;
         payload.session_id = parsed.session_id;
         payload.chat_ended = parsed.chat_ended;
+        payload.ticket_number = parsed.ticket_number ?? null;
         if (typeof parsed.text === "string" && parsed.text !== fullText) {
           onChunk?.(parsed.text);
         }
@@ -348,6 +338,7 @@ export function ChatWidget({
       text: string;
       session_id: string;
       chat_ended?: boolean;
+      ticket_number?: string | null;
     };
     applyAssistantMessage(data);
     if (data.chat_ended !== true) {

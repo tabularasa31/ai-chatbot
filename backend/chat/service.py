@@ -151,6 +151,17 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
     "I don't have enough information in my knowledge base to answer this question accurately."
 )
 
+# Patterns that indicate the LLM used a capability-refusal tone instead of a doc-gap phrase.
+# These should never appear in a RAG answer; validate_answer flags them as invalid.
+_CAPABILITY_REFUSAL_RE = re.compile(
+    r"(не могу помочь с эт|не в состоянии помочь"
+    r"|unable to (assist|help with this)"
+    r"|can't help with this"
+    r"|cannot help with this"
+    r"|i'm not able to help)",
+    re.IGNORECASE,
+)
+
 _PRICING_QUESTION_RE = re.compile(
     r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
 )
@@ -473,6 +484,7 @@ class ChatTurnOutcome:
     document_ids: list[uuid.UUID]
     tokens_used: int
     chat_ended: bool
+    ticket_number: str | None = None
 
 
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
@@ -1606,6 +1618,13 @@ def validate_answer(
             "confidence": float(result.get("confidence", 1.0)),
             "reason": str(result.get("reason", "")),
         }
+        # A capability-refusal tone ("I can't help with this") in a RAG answer is always
+        # wrong — the prompt requires the doc-gap phrase instead. Override regardless of
+        # what the validation LLM decided.
+        if result["is_valid"] and _CAPABILITY_REFUSAL_RE.search(answer):
+            result["is_valid"] = False
+            result["confidence"] = 0.0
+            result["reason"] = "capability_refusal_tone"
         if validation_span is not None:
             validation_span.end(
                 output=result,
@@ -2458,6 +2477,7 @@ def process_chat_message(
                 document_ids=[],
                 tokens_used=out.tokens_used,
                 chat_ended=False,
+                ticket_number=ticket.ticket_number,
             )
         except Exception as e:
             logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
@@ -2582,6 +2602,7 @@ def process_chat_message(
                 "promotion_reason": "low_reliability_or_escalation",
             }
         )
+    created_ticket_number: str | None = None
     if escalate and esc_trigger is not None:
         try:
             preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
@@ -2612,6 +2633,7 @@ def process_chat_message(
             )
             answer = answer + "\n\n" + esc.message_to_user
             tokens_used = tokens_used + esc.tokens_used
+            created_ticket_number = ticket.ticket_number
             if not ticket.user_email:
                 chat.escalation_awaiting_ticket_id = ticket.id
             else:
@@ -2696,6 +2718,7 @@ def process_chat_message(
         document_ids=document_ids,
         tokens_used=tokens_used,
         chat_ended=bool(chat.ended_at),
+        ticket_number=created_ticket_number,
     )
 
 

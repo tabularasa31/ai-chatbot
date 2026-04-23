@@ -57,15 +57,6 @@ def _format_thread(chat_messages: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _append_ticket_token(text: str, ticket_number: str | None) -> str:
-    if not ticket_number:
-        return text
-    token = f"[[escalation_ticket:{ticket_number}]]"
-    if token in text:
-        return text
-    return text.rstrip() + "\n\n" + token
-
-
 def complete_escalation_openai_turn(
     *,
     phase: EscalationPhase,
@@ -128,9 +119,6 @@ def complete_escalation_openai_turn(
         followup: Literal["yes", "no", "unclear"] | None = None
         if fd in ("yes", "no", "unclear"):
             followup = fd  # type: ignore[assignment]
-        tn = fact_json.get("ticket_number")
-        if isinstance(tn, str):
-            msg = _append_ticket_token(msg, tn)
         return EscalationLlmResult(
             message_to_user=msg,
             followup_decision=followup,
@@ -138,7 +126,6 @@ def complete_escalation_openai_turn(
         )
     except Exception as e:
         logger.exception("complete_escalation_openai_turn failed: %s", e)
-        tn = fact_json.get("ticket_number")
         log_llm_tokens(
             operation="escalate_draft",
             target_language=escalation_language,
@@ -150,11 +137,8 @@ def complete_escalation_openai_turn(
             target_language=escalation_language,
             api_key=api_key,
         )
-        fb = localization.text
-        if isinstance(tn, str):
-            fb = _append_ticket_token(fb, tn)
         return EscalationLlmResult(
-            message_to_user=fb,
+            message_to_user=localization.text,
             followup_decision=None,
             tokens_used=localization.tokens_used,
         )

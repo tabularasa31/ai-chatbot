@@ -22,6 +22,7 @@ from backend.search.service import (
     ContradictionPair,
     ContradictionAdjudicationEvidence,
     SourceOverlapPair,
+    _rewrite_query_for_retrieval,
     apply_script_boost,
     bm25_search_chunks,
     build_reliability_assessment,
@@ -127,6 +128,7 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
         "query_variant_count": 1,
         "variant_mode": "single",
         "extra_variant_count": 0,
+        "rewritten_variant": None,
     }
     assert trace.spans[1].output == {
         "embedded_query_count": 1,
@@ -3231,3 +3233,55 @@ def test_search_skips_vector_with_wrong_dimension(
     )
     assert response.status_code == 200
     assert response.json()["results"] == []
+
+
+# --- Unit tests for cross-lingual query expansion ---
+
+
+def test_rewrite_query_for_retrieval_returns_rewritten_query() -> None:
+    """Happy path: LLM returns a documentation-style keyword phrase in the same language."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "определение языка мультиязычная поддержка"
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _rewrite_query_for_retrieval(
+            "Почему бот не отвечает на русском?", api_key="test-key"
+        )
+
+    assert result == "определение языка мультиязычная поддержка"
+
+
+def test_rewrite_query_for_retrieval_returns_none_on_error() -> None:
+    """Rewrite failures degrade gracefully — None means caller skips the variant."""
+    from unittest.mock import MagicMock, patch
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", side_effect=RuntimeError("timeout")
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _rewrite_query_for_retrieval(
+            "Почему бот не отвечает на русском?", api_key="test-key"
+        )
+
+    assert result is None
+
+
+def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
+    """Empty LLM output does not yield a blank variant."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = ""
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _rewrite_query_for_retrieval("", api_key="test-key")
+
+    assert result is None

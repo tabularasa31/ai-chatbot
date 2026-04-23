@@ -49,6 +49,10 @@ CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
 LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
 MAX_OVERLAP_CHECK_CANDIDATES = 5
 BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
+# HTTP timeout for the query-rewrite LLM call. The effective latency cap is
+# settings.openai_user_retry_budget_seconds (default 1.5s) — this value only
+# matters if the retry budget is raised above it.
+QUERY_REWRITE_HTTP_TIMEOUT_SECONDS = 3.0
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap", "contradiction"]
@@ -1052,6 +1056,45 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
     return detect_query_script_bucket(embedding.chunk_text or "")
 
 
+def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
+    """
+    Rephrase a user question as documentation-style keywords in the same language.
+
+    Bridges the semantic gap between problem-description phrasing ("bot doesn't
+    respond in Russian") and feature-name phrasing in docs ("language detection").
+    Language-agnostic: stays in the original language so the multilingual embedding
+    model can match chunks regardless of what language the docs are in.
+    Fails silently — returns None on any error so retrieval degrades gracefully.
+    """
+    try:
+        client = get_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
+        response = call_openai_with_retry(
+            "query_rewrite_for_retrieval",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a search query optimizer for a product knowledge base.\n"
+                            "Rewrite the user's question as 3-5 keywords or a short noun phrase "
+                            "that would appear as a topic or heading in product documentation.\n"
+                            "Keep the same language as the input.\n"
+                            "Output only the rewritten query, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+                temperature=0,
+                max_tokens=60,
+            ),
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        return rewritten if rewritten else None
+    except Exception:
+        return None
+
+
 def expand_query(query: str) -> list[str]:
     """Generate lightweight query variants without changing user intent."""
     variants: list[str] = []
@@ -1754,6 +1797,17 @@ def search_similar_chunks_detailed(
     )
 
     query_variants = precomputed_query_variants if use_precomputed else expand_query(query)
+
+    # Semantic query rewriting: add a documentation-style keyword variant of the
+    # user's question (in the same language). Bridges the framing gap between
+    # user problem-descriptions and feature-name headings in docs. Language-agnostic —
+    # the multilingual embedding model handles cross-lingual matching from there.
+    rewritten_variant: str | None = None
+    if not use_precomputed and settings.query_rewrite_enabled:
+        rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
+        if rewritten_variant:
+            query_variants = _normalize_query_variants([*query_variants, rewritten_variant])
+
     query_variant_count = len(query_variants)
     variant_mode = _variant_mode_for_count(query_variant_count)
     extra_variant_count = max(query_variant_count - 1, 0)
@@ -1767,6 +1821,7 @@ def search_similar_chunks_detailed(
                 "query_variant_count": query_variant_count,
                 "variant_mode": variant_mode,
                 "extra_variant_count": extra_variant_count,
+                "rewritten_variant": rewritten_variant,
             }
         )
 

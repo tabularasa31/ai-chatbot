@@ -278,6 +278,10 @@ def mock_openai_client():
          patch(
              "backend.escalation.openai_escalation.get_openai_client",
              return_value=mock_esc_client,
+         ), \
+         patch(
+             "backend.search.service._rewrite_query_for_retrieval",
+             return_value=None,
          ):
         yield mock_client
 

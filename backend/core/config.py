@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
+    query_rewrite_enabled: bool = Field(
+        True,
+        alias="QUERY_REWRITE_ENABLED",
+    )
+    query_rewrite_model: str = Field(
+        "gpt-4o-mini",
+        alias="QUERY_REWRITE_MODEL",
+    )
     contradiction_adjudication_enabled: bool = Field(
         False,
         alias="CONTRADICTION_ADJUDICATION_ENABLED",

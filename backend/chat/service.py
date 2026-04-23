@@ -88,6 +88,8 @@ from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
     RetrievalReliability,
+    _normalize_query_variants,
+    _rewrite_query_for_retrieval,
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
@@ -916,6 +918,10 @@ def run_chat_pipeline(
 
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
+        if settings.query_rewrite_enabled:
+            _rewritten = _rewrite_query_for_retrieval(question, api_key=api_key)
+            if _rewritten:
+                query_variants = _normalize_query_variants([*query_variants, _rewritten])
         if trace is not None:
             _embed_span = trace.span(
                 name="query-embedding",

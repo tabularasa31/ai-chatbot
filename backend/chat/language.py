@@ -491,17 +491,7 @@ def _resolve_language_context_inner(
     if previous_root and previous_root != winner:
         previous_score = votes.get(previous_root, 0)
         winner_score = votes.get(winner, 0)
-        # If the current turn is itself reliably detected as the winner language,
-        # trust the switch even without a score margin — a clear signal on the
-        # current message should override history.  Otherwise keep the full margin
-        # to avoid jitter from short/ambiguous messages.
-        current_root = (
-            _language_root(detection.detected_language)
-            if detection.is_reliable and detection.detected_language != "unknown"
-            else None
-        )
-        effective_margin = 0 if current_root == winner else _STICKY_SWITCH_MARGIN
-        if winner_score - previous_score < effective_margin:
+        if winner_score - previous_score < _STICKY_SWITCH_MARGIN:
             return ResolvedLanguageContext(
                 detected_language=detection.detected_language,
                 confidence=detection.confidence,

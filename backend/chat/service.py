@@ -154,7 +154,7 @@ FALLBACK_LOW_CONFIDENCE_ANSWER = (
 # Patterns that indicate the LLM used a capability-refusal tone instead of a doc-gap phrase.
 # These should never appear in a RAG answer; validate_answer flags them as invalid.
 _CAPABILITY_REFUSAL_RE = re.compile(
-    r"(не могу помочь с эт|не в состоянии помочь"
+    r"(не могу помочь с эт|не в состоянии помочь"  # noqa: RUF001
     r"|unable to (assist|help with this)"
     r"|can't help with this"
     r"|cannot help with this"

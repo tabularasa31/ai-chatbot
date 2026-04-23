@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
@@ -20,6 +21,7 @@ from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
 from backend.models import Tenant, User
 
+logger = logging.getLogger(__name__)
 bots_router = APIRouter(prefix="/bots", tags=["bots"])
 
 
@@ -37,6 +39,25 @@ def _tenant_id(
     return current_user.tenant_id  # type: ignore[return-value]
 
 
+def _enrich_bot_instructions(bot_id: uuid.UUID, tenant_id: uuid.UUID, website_url: str, api_key: str) -> None:
+    """Background task: extract company description and update bot agent_instructions."""
+    from backend.chat.presets import PRESET_SUPPORT_AGENT
+    from backend.core.db import SessionLocal
+    from backend.onboarding.extractor import extract_company_description
+
+    description = extract_company_description(website_url, api_key)
+    if not description:
+        return
+    instructions = f"{description}\n\n{PRESET_SUPPORT_AGENT}"
+    with SessionLocal() as db:
+        bots_service.update_bot(
+            bot_id,
+            tenant_id,
+            db,
+            BotUpdate(agent_instructions=instructions),
+        )
+
+
 @bots_router.get("", response_model=BotList)
 def list_bots(
     tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
@@ -49,26 +70,25 @@ def list_bots(
 @bots_router.post("", response_model=BotResponse, status_code=201)
 def create_bot(
     body: BotCreate,
+    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(_current_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
     tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
-    api_key: str | None = None
-    if body.website_url:
+    bot = bots_service.create_bot(tenant_id, body.name, db, agent_instructions=body.agent_instructions)
+
+    if body.website_url and body.agent_instructions is None:
         tenant = db.get(Tenant, tenant_id)
         if tenant and tenant.openai_api_key:
             try:
                 api_key = decrypt_value(tenant.openai_api_key)
+                background_tasks.add_task(
+                    _enrich_bot_instructions, bot.id, tenant_id, body.website_url, api_key
+                )
             except Exception:
-                api_key = None
-    return bots_service.create_bot(
-        tenant_id,
-        body.name,
-        db,
-        agent_instructions=body.agent_instructions,
-        website_url=body.website_url,
-        api_key=api_key,
-    )
+                logger.warning("create_bot: could not schedule instruction enrichment", exc_info=True)
+
+    return bot
 
 
 @bots_router.get("/{bot_id}", response_model=BotResponse)
@@ -87,14 +107,7 @@ def update_bot(
     tenant_id: Annotated[uuid.UUID, Depends(_tenant_id)],
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
-    return bots_service.update_bot(
-        bot_id,
-        tenant_id,
-        db,
-        name=body.name,
-        is_active=body.is_active,
-        agent_instructions=body.agent_instructions,
-    )
+    return bots_service.update_bot(bot_id, tenant_id, db, body)
 
 
 @bots_router.delete("/{bot_id}", status_code=204, response_model=None)

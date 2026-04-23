@@ -5,6 +5,7 @@ import uuid
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.bots.schemas import BotUpdate
 from backend.chat.presets import PRESET_SUPPORT_AGENT
 from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.models import Bot
@@ -31,21 +32,12 @@ def create_bot(
     db: Session,
     *,
     agent_instructions: str | None = None,
-    website_url: str | None = None,
-    api_key: str | None = None,
 ) -> Bot:
-    instructions = agent_instructions
-
-    if website_url and api_key and instructions is None:
-        from backend.onboarding.extractor import extract_company_description
-        description = extract_company_description(website_url, api_key)
-        if description:
-            instructions = f"{description}\n\n{PRESET_SUPPORT_AGENT}"
-
-    if instructions is None:
-        instructions = PRESET_SUPPORT_AGENT
-
-    bot = Bot(tenant_id=tenant_id, name=name, agent_instructions=instructions)
+    bot = Bot(
+        tenant_id=tenant_id,
+        name=name,
+        agent_instructions=agent_instructions if agent_instructions is not None else PRESET_SUPPORT_AGENT,
+    )
     db.add(bot)
     db.commit()
     db.refresh(bot)
@@ -56,13 +48,12 @@ def update_bot(
     bot_id: uuid.UUID,
     tenant_id: uuid.UUID,
     db: Session,
-    *,
-    name: str | None = None,
-    is_active: bool | None = None,
-    agent_instructions: str | None = None,
+    update: BotUpdate,
 ) -> Bot:
     bot = get_bot_by_id(bot_id, tenant_id, db)
-    if is_active is False and bot.is_active:
+    fields = update.model_fields_set
+
+    if "is_active" in fields and update.is_active is False and bot.is_active:
         active_count = (
             db.query(Bot)
             .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
@@ -74,12 +65,14 @@ def update_bot(
                 status_code=409,
                 detail="Cannot deactivate the last active bot of a tenant",
             )
-    if name is not None:
-        bot.name = name
-    if is_active is not None:
-        bot.is_active = is_active
-    if agent_instructions is not None:
-        bot.agent_instructions = agent_instructions
+
+    if "name" in fields:
+        bot.name = update.name  # type: ignore[assignment]
+    if "is_active" in fields:
+        bot.is_active = update.is_active  # type: ignore[assignment]
+    if "agent_instructions" in fields:
+        bot.agent_instructions = update.agent_instructions  # None clears the field
+
     db.commit()
     db.refresh(bot)
     return bot
@@ -113,9 +106,6 @@ _MIN_BOTS_PER_TENANT = 1
 
 
 def delete_bot(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> None:
-    # Lock all bot rows for this tenant before counting to prevent the race
-    # condition where two concurrent deletes both pass the count check.
-    # with_for_update() is a no-op on SQLite (which serialises writes anyway).
     bots = (
         db.query(Bot)
         .filter(Bot.tenant_id == tenant_id)

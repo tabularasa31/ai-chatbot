@@ -2025,25 +2025,18 @@ def process_chat_message(
     _resolved_bot: Bot | None = None
     if bot_id is not None:
         _resolved_bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
-    if disclosure_config is _DISCLOSURE_UNSET:
-        if _resolved_bot is None:
-            _resolved_bot = (
-                db.query(Bot)
-                .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
-                .order_by(Bot.created_at.asc())
-                .first()
-            )
-        disclosure_config = (
-            _resolved_bot.disclosure_config
-            if _resolved_bot and isinstance(_resolved_bot.disclosure_config, dict)
-            else None
-        )
-    elif _resolved_bot is None:
+    if _resolved_bot is None:
         _resolved_bot = (
             db.query(Bot)
             .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
             .order_by(Bot.created_at.asc())
             .first()
+        )
+    if disclosure_config is _DISCLOSURE_UNSET:
+        disclosure_config = (
+            _resolved_bot.disclosure_config
+            if _resolved_bot and isinstance(_resolved_bot.disclosure_config, dict)
+            else None
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
     _bot_agent_instructions: str | None = (

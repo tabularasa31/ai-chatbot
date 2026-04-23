@@ -100,15 +100,20 @@ def check_relevance_with_profile(
 
     system_prompt = (
         "You are a relevance classifier for a customer support bot.\n"
-        'Answer ONLY with a JSON object: {"relevant": true/false, "reason": "one sentence"}'
+        'Answer ONLY with a JSON object: {"relevant": true/false, "reason": "one sentence"}\n'
+        "Return relevant=true for any question that could plausibly be about the product, "
+        "its features, pricing, account management, or how to use it — even if the answer "
+        "is not in the documentation.\n"
+        "Return relevant=false ONLY for questions that are clearly unrelated to the product: "
+        "e.g. general coding tasks, math, creative writing, or unrelated tech support.\n"
+        "When in doubt, return true."
     )
     user_prompt = (
         f"The support bot is for: {product_name}\n"
         f"Known topics: {modules_list}\n"
         f"Key terms: {glossary_terms_list}\n"
-        f'User question: "{user_question}"\n'
-        "Is this question relevant to this product's documentation?\n"
-        "If uncertain — return true (prefer false negatives over false positives)."
+        f"User question: {json.dumps(user_question)}\n"
+        "Is this question related to this product or its use?"
     )
 
     start = time.perf_counter()

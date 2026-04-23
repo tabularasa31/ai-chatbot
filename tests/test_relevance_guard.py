@@ -236,7 +236,7 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     start = time.monotonic()
     relevant, reason, _profile = check_relevance_precheck(
         tenant_id=tenant_id,
-        user_question="hello",
+        user_question="how do I configure the integration here",
         db=db_session,
         api_key=api_key,
         trace=None,

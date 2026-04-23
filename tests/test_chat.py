@@ -993,7 +993,7 @@ def test_chat_no_embeddings(
     expected_prefix = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=None)
     assert data["text"].startswith(expected_prefix)
     assert "A support ticket was created for you." in data["text"]
-    assert "[[escalation_ticket:ESC-0001]]" in data["text"]
+    assert data["ticket_number"] == "ESC-0001"
     # English response_language keeps the canonical fallback text, so only the
     # mocked escalation handoff contributes tokens.
     assert data["tokens_used"] == 15
@@ -4553,7 +4553,6 @@ def test_complete_escalation_openai_turn_localizes_fallback_to_question_language
         "Nous n'avons pas pu charger une reponse complete pour le moment."
     )
     assert result.tokens_used == 17
-    assert "[[escalation_ticket:ESC-1234]]" in result.message_to_user
 
 
 def test_detect_language_is_cached_for_short_inputs(

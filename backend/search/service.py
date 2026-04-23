@@ -49,6 +49,10 @@ CYRILLIC_LANGUAGE_PREFIXES = ("ru", "uk", "bg", "sr", "mk", "be")
 LATIN_LANGUAGE_PREFIXES = ("en", "es", "fr", "de", "it", "pt", "tr", "nl")
 MAX_OVERLAP_CHECK_CANDIDATES = 5
 BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
+# HTTP timeout for the query-rewrite LLM call. The effective latency cap is
+# settings.openai_user_retry_budget_seconds (default 1.5s) — this value only
+# matters if the retry budget is raised above it.
+QUERY_REWRITE_HTTP_TIMEOUT_SECONDS = 3.0
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap", "contradiction"]
@@ -1063,7 +1067,7 @@ def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
     Fails silently — returns None on any error so retrieval degrades gracefully.
     """
     try:
-        client = get_openai_client(api_key, timeout=3.0)
+        client = get_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
         response = call_openai_with_retry(
             "query_rewrite_for_retrieval",
             lambda: client.chat.completions.create(
@@ -1800,7 +1804,12 @@ def search_similar_chunks_detailed(
     # the multilingual embedding model handles cross-lingual matching from there.
     rewritten_variant: str | None = None
     if not use_precomputed and settings.query_rewrite_enabled:
+        rewrite_span = (
+            trace.span(name="query-rewrite", input={"query": query}) if trace is not None else None
+        )
         rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
+        if rewrite_span is not None:
+            rewrite_span.end(output={"rewritten_variant": rewritten_variant})
         if rewritten_variant:
             query_variants = _normalize_query_variants([*query_variants, rewritten_variant])
 

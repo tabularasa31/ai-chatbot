@@ -792,6 +792,7 @@ def run_chat_pipeline(
     retry_bot_id: str | None = None,
     chat_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    agent_instructions: str | None = None,
 ) -> ChatPipelineResult:
     """
     Pure RAG pipeline — no DB writes, no escalation actions, no Langfuse trace mutations.
@@ -1149,6 +1150,7 @@ def run_chat_pipeline(
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
+        agent_instructions=agent_instructions,
         trace=trace,
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
@@ -1231,6 +1233,7 @@ def build_rag_prompt(
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
+    agent_instructions: str | None = None,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -1266,6 +1269,12 @@ def build_rag_prompt(
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
+
+    if agent_instructions and settings.enable_agent_instructions:
+        rendered = agent_instructions.replace(
+            "{product_name}", client_product_name or "the product"
+        )
+        system_rules = f"{rendered}\n\n{system_rules}"
 
     if client_product_name:
         hint = topic_hint or ""
@@ -1335,6 +1344,7 @@ def build_rag_messages(
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
+    agent_instructions: str | None = None,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -1347,6 +1357,7 @@ def build_rag_messages(
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
+        agent_instructions=agent_instructions,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -1367,6 +1378,7 @@ def generate_answer(
     topic_hint: str | None = None,
     faq_context_items: list[FAQRow] | None = None,
     quick_answer_items: list[str] | None = None,
+    agent_instructions: str | None = None,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -1397,6 +1409,7 @@ def generate_answer(
         topic_hint=topic_hint,
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
+        agent_instructions=agent_instructions,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -2036,19 +2049,26 @@ def process_chat_message(
 
     explicit_human_request = detect_human_request(question_for_pipeline)
 
-    if disclosure_config is _DISCLOSURE_UNSET:
-        first_bot = (
+    _resolved_bot: Bot | None = None
+    if bot_id is not None:
+        _resolved_bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
+    if _resolved_bot is None:
+        _resolved_bot = (
             db.query(Bot)
             .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
             .order_by(Bot.created_at.asc())
             .first()
         )
+    if disclosure_config is _DISCLOSURE_UNSET:
         disclosure_config = (
-            first_bot.disclosure_config
-            if first_bot and isinstance(first_bot.disclosure_config, dict)
+            _resolved_bot.disclosure_config
+            if _resolved_bot and isinstance(_resolved_bot.disclosure_config, dict)
             else None
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
+    _bot_agent_instructions: str | None = (
+        _resolved_bot.agent_instructions if _resolved_bot else None
+    )
 
     if outcome := _handle_small_talk_early_exit(
         redacted_question=redacted_question,
@@ -2448,6 +2468,7 @@ def process_chat_message(
         retry_bot_id=str(bot_id) if bot_id is not None else None,
         chat_id=str(chat.id) if chat is not None else None,
         stream_callback=stream_callback,
+        agent_instructions=_bot_agent_instructions,
     )
 
     # Guard rejects, faq_direct, and capability responses: persist and return immediately (no escalation).
@@ -2706,6 +2727,7 @@ def run_debug(
         if first_bot and isinstance(first_bot.disclosure_config, dict)
         else None
     )
+    debug_agent_instructions: str | None = first_bot.agent_instructions if first_bot else None
 
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
@@ -2728,6 +2750,7 @@ def run_debug(
         api_key=api_key,
         language_context=language_context,
         disclosure_config=debug_disclosure_cfg,
+        agent_instructions=debug_agent_instructions,
     )
     retrieval = result.retrieval
     if retrieval is not None:

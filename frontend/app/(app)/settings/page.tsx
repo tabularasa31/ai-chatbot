@@ -28,6 +28,27 @@ const DISCLOSURE_OPTIONS: {
   },
 ];
 
+const PRESETS: { id: string; label: string; content: string }[] = [
+  {
+    id: "support_agent",
+    label: "Support Agent",
+    content: `You are a support assistant for {product_name}. Your job is to help users get answers from the provided documentation — clearly, honestly, and in the user's language.
+
+Ground rules:
+- Base every answer strictly on the retrieved context. If something isn't there, say so directly rather than guessing.
+- When the context covers the question, be specific: name the exact setting, page, or section it describes.
+- If a single missing detail would make your answer wrong or incomplete, ask one focused clarifying question instead of speculating.
+- Stay on topic — politely decline anything unrelated to {product_name} and its docs.
+- Match the user's language in every reply. Never switch languages mid-response.
+- Keep it concise. Expand only when the user asks for more depth.
+
+Formatting:
+- Use Markdown when it adds clarity (lists, code blocks, headings).
+- Only link to URLs that appear verbatim in the provided context.
+- When you can't answer: "I don't have that information in the documentation. Feel free to reach out to the support team directly."`,
+  },
+];
+
 export default function SettingsPage() {
   const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
@@ -39,6 +60,10 @@ export default function SettingsPage() {
   const [keySaving, setKeySaving] = useState(false);
   const [supportSaving, setSupportSaving] = useState(false);
   const [disclosureSaving, setDisclosureSaving] = useState(false);
+  const [instructionsSaving, setInstructionsSaving] = useState(false);
+  const [instructionsSavedOk, setInstructionsSavedOk] = useState(false);
+  const [agentInstructions, setAgentInstructions] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [keySavedOk, setKeySavedOk] = useState(false);
   const [supportSavedOk, setSupportSavedOk] = useState(false);
@@ -57,6 +82,10 @@ export default function SettingsPage() {
         if (bot) {
           const disclosure = await api.bots.getDisclosure(bot.id);
           setLevel(disclosure.level);
+          const instructions = bot.agent_instructions ?? "";
+          setAgentInstructions(instructions);
+          const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
+          setSelectedPreset(matched?.id ?? null);
         }
       })
       .catch((err) => {
@@ -64,6 +93,35 @@ export default function SettingsPage() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  function applyPreset(presetId: string) {
+    const preset = PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    setSelectedPreset(presetId);
+    setAgentInstructions(preset.content);
+  }
+
+  async function saveAgentInstructions() {
+    if (!defaultBot) return;
+    setError("");
+    setInstructionsSaving(true);
+    setInstructionsSavedOk(false);
+    try {
+      const updated = await api.bots.update(defaultBot.id, {
+        agent_instructions: agentInstructions.trim() || null,
+      });
+      const instructions = updated.agent_instructions ?? "";
+      setAgentInstructions(instructions);
+      const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
+      setSelectedPreset(matched?.id ?? null);
+      setInstructionsSavedOk(true);
+      setTimeout(() => setInstructionsSavedOk(false), 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setInstructionsSaving(false);
+    }
+  }
 
   async function saveOpenaiKey() {
     setError("");
@@ -159,6 +217,9 @@ export default function SettingsPage() {
     }
   }
 
+  const activePreset = PRESETS.find((p) => p.id === selectedPreset) ?? null;
+  const isCustom = agentInstructions.trim() !== "" && !activePreset;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -182,6 +243,7 @@ export default function SettingsPage() {
         </div>
       )}
 
+      {/* Support inbox */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-800">Support inbox</h2>
@@ -206,7 +268,8 @@ export default function SettingsPage() {
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400"
           />
           <p className="text-xs text-slate-500">
-            Fallback owner email: <span className="font-medium text-slate-700">{fallbackEmail ?? "Not configured"}</span>
+            Fallback owner email:{" "}
+            <span className="font-medium text-slate-700">{fallbackEmail ?? "Not configured"}</span>
           </p>
           <input
             type="text"
@@ -239,6 +302,86 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* Agent instructions */}
+      <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-slate-800">Agent instructions</h2>
+          <p className="text-sm text-slate-500 mt-1">
+            The system prompt your bot follows on every turn. Start from a template or write your own.
+          </p>
+        </div>
+
+        {instructionsSavedOk && (
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
+            Saved.
+          </div>
+        )}
+
+        {/* Template pills */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500 mr-1">Templates:</span>
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => applyPreset(preset.id)}
+              className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                selectedPreset === preset.id
+                  ? "bg-violet-600 border-violet-600 text-white"
+                  : "bg-white border-slate-300 text-slate-600 hover:border-violet-400 hover:text-violet-700"
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+          {isCustom && (
+            <span className="px-3 py-1 rounded-full text-xs font-medium bg-slate-100 border border-slate-200 text-slate-500">
+              Custom
+            </span>
+          )}
+        </div>
+
+        {/* Textarea */}
+        <div className="relative">
+          <textarea
+            rows={14}
+            placeholder={"You are a support assistant for {product_name}.\n\nYour rules here…"}
+            value={agentInstructions}
+            onChange={(e) => {
+              setAgentInstructions(e.target.value);
+              const matched = PRESETS.find((p) => e.target.value.trim() === p.content.trim());
+              setSelectedPreset(matched?.id ?? null);
+            }}
+            className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400 font-mono resize-y leading-relaxed"
+          />
+          {selectedPreset && agentInstructions.trim() !== (PRESETS.find(p => p.id === selectedPreset)?.content ?? "").trim() && (
+            <button
+              type="button"
+              onClick={() => applyPreset(selectedPreset)}
+              className="absolute bottom-3 right-3 text-xs text-slate-400 hover:text-violet-600 transition-colors"
+            >
+              Reset to template
+            </button>
+          )}
+        </div>
+
+        <p className="text-xs text-slate-500">
+          Use{" "}
+          <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">{"{product_name}"}</code>{" "}
+          to insert your product name. These instructions are prepended to every chat turn.
+        </p>
+
+        <button
+          type="button"
+          onClick={saveAgentInstructions}
+          disabled={instructionsSaving}
+          className="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium disabled:opacity-50 hover:bg-violet-700 transition-colors"
+        >
+          {instructionsSaving ? "Saving…" : "Save instructions"}
+        </button>
+      </div>
+
+      {/* Response controls */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-800">Response controls</h2>
@@ -290,12 +433,18 @@ export default function SettingsPage() {
         </button>
       </div>
 
+      {/* AI / Providers */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
         <div>
           <h2 className="text-base font-semibold text-slate-800">AI / Providers</h2>
           <p className="text-sm text-slate-500 mt-1">
             Configure provider credentials used for embeddings and chat completions.{" "}
-            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-violet-600 hover:underline">
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-violet-600 hover:underline"
+            >
               Get yours at platform.openai.com
             </a>
           </p>

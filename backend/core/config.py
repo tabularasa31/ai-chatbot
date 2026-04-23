@@ -38,6 +38,14 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
+    cross_lingual_expansion_enabled: bool = Field(
+        True,
+        alias="CROSS_LINGUAL_EXPANSION_ENABLED",
+    )
+    cross_lingual_expansion_model: str = Field(
+        "gpt-4o-mini",
+        alias="CROSS_LINGUAL_EXPANSION_MODEL",
+    )
     contradiction_adjudication_enabled: bool = Field(
         False,
         alias="CONTRADICTION_ADJUDICATION_ENABLED",

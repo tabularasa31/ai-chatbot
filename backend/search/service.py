@@ -1052,6 +1052,37 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
     return detect_query_script_bucket(embedding.chunk_text or "")
 
 
+def _translate_query_to_english(query: str, *, api_key: str) -> str | None:
+    """
+    Translate a non-English query to English for cross-lingual retrieval.
+    Fails silently — returns None on any error so retrieval degrades gracefully.
+    """
+    try:
+        client = get_openai_client(api_key, timeout=3.0)
+        response = call_openai_with_retry(
+            "cross_lingual_expand",
+            lambda: client.chat.completions.create(
+                model=settings.cross_lingual_expansion_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Translate the user's question to English. "
+                            "Output only the English translation, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+                temperature=0,
+                max_tokens=150,
+            ),
+        )
+        translated = (response.choices[0].message.content or "").strip()
+        return translated if translated else None
+    except Exception:
+        return None
+
+
 def expand_query(query: str) -> list[str]:
     """Generate lightweight query variants without changing user intent."""
     variants: list[str] = []
@@ -1754,6 +1785,20 @@ def search_similar_chunks_detailed(
     )
 
     query_variants = precomputed_query_variants if use_precomputed else expand_query(query)
+
+    # Cross-lingual expansion: when the query is Cyrillic and docs are likely
+    # in English, add an English paraphrase so the embedding model can bridge
+    # the semantic gap between a problem description and a feature-name chunk.
+    cross_lingual_variant: str | None = None
+    if (
+        not use_precomputed
+        and settings.cross_lingual_expansion_enabled
+        and detect_query_script_bucket(query) == "cyrillic"
+    ):
+        cross_lingual_variant = _translate_query_to_english(query, api_key=api_key)
+        if cross_lingual_variant:
+            query_variants = _normalize_query_variants([*query_variants, cross_lingual_variant])
+
     query_variant_count = len(query_variants)
     variant_mode = _variant_mode_for_count(query_variant_count)
     extra_variant_count = max(query_variant_count - 1, 0)
@@ -1767,6 +1812,7 @@ def search_similar_chunks_detailed(
                 "query_variant_count": query_variant_count,
                 "variant_mode": variant_mode,
                 "extra_variant_count": extra_variant_count,
+                "cross_lingual_variant": cross_lingual_variant,
             }
         )
 

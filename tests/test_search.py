@@ -22,6 +22,7 @@ from backend.search.service import (
     ContradictionPair,
     ContradictionAdjudicationEvidence,
     SourceOverlapPair,
+    _translate_query_to_english,
     apply_script_boost,
     bm25_search_chunks,
     build_reliability_assessment,
@@ -3231,3 +3232,55 @@ def test_search_skips_vector_with_wrong_dimension(
     )
     assert response.status_code == 200
     assert response.json()["results"] == []
+
+
+# --- Unit tests for cross-lingual query expansion ---
+
+
+def test_translate_query_to_english_returns_translation() -> None:
+    """Happy path: LLM responds with an English translation."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = "Why doesn't the bot respond in Russian?"
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _translate_query_to_english(
+            "Почему бот не отвечает на русском?", api_key="test-key"
+        )
+
+    assert result == "Why doesn't the bot respond in Russian?"
+
+
+def test_translate_query_to_english_returns_none_on_error() -> None:
+    """Translation failures degrade gracefully — None means caller skips the variant."""
+    from unittest.mock import MagicMock, patch
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", side_effect=RuntimeError("timeout")
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _translate_query_to_english(
+            "Почему бот не отвечает на русском?", api_key="test-key"
+        )
+
+    assert result is None
+
+
+def test_translate_query_to_english_returns_none_on_empty_response() -> None:
+    """Empty LLM output (e.g. content=None) does not yield a blank variant."""
+    from unittest.mock import MagicMock, patch
+
+    mock_response = MagicMock()
+    mock_response.choices[0].message.content = ""
+
+    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
+        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    ):
+        mock_client_factory.return_value = MagicMock()
+        result = _translate_query_to_english("", api_key="test-key")
+
+    assert result is None

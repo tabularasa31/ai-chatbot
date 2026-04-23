@@ -10,7 +10,8 @@ This file covers **how to run, test, and work with this codebase**.
 
 ```bash
 # Database (PostgreSQL + pgvector)
-docker compose up -d db
+make db-up          # shorthand for docker compose up -d db
+# or directly: docker compose up -d db
 
 # Backend
 python -m venv venv && source venv/bin/activate
@@ -34,8 +35,15 @@ npm run dev                         # http://localhost:3000
 make smoke          # fast P0 regression (auth, chat, escalation)
 make test           # full suite: SQLite + pgvector (requires db container)
 make test-sqlite    # SQLite only (no docker needed)
-make test-pgvector  # PostgreSQL integration tests
+make test-pgvector  # PostgreSQL integration tests only (requires db)
+make pgvector-only  # same as above but skips db-up (db already running)
 make coverage       # SQLite coverage report
+make coverage-all   # full coverage: SQLite + pgvector (requires db container)
+
+# Focused suites
+make auth-reset     # forgot/reset password flows
+make escalation     # escalation edge cases
+make rag-edge       # RAG pipeline edge cases (openai_unavailable, low_vector, etc.)
 ```
 
 Run a single file: `pytest tests/test_chat.py -v`
@@ -62,9 +70,15 @@ CI runs both on every push/PR to `main` and `deploy`.
 |------|---------|
 | `backend/main.py` | FastAPI entry point, all router wiring |
 | `backend/models.py` | **All** SQLAlchemy models in one file |
-| `backend/core/config.py` | Settings and required env vars |
-| `backend/core/openai_client.py` | Per-client OpenAI client factory |
+| `backend/core/config.py` | Settings and all env vars (guards, trace, RAG knobs, etc.) |
+| `backend/core/openai_client.py` | Per-tenant OpenAI client factory |
 | `backend/search/service.py` | Hybrid RAG retrieval (pgvector + BM25 + RRF) |
+| `backend/guards/` | Injection detection (2-level) + relevance guard — gate on every chat turn |
+| `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
+| `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |
+| `backend/eval/` | QA eval pipeline; uses separate `EVAL_JWT_SECRET` |
+| `backend/knowledge/` | Tenant knowledge profile extraction and topics API |
+| `backend/tenant_knowledge/` | FAQ/tenant-profile service helpers |
 | `tests/conftest.py` | Pytest fixtures (DB session, test client) |
 | `docs/04-features.md` | Feature specs and expected behaviour |
 | `docs/06-developer-test-runbook.md` | Test command groups reference |
@@ -77,6 +91,8 @@ CI runs both on every push/PR to `main` and `deploy`.
 - All DB models go in `backend/models.py` — never create a new models file.
 - DB schema changes: Alembic migration only (`alembic revision -m "description"`).
 - Services receive `Session` from the router via `Depends(get_db)`; never import `SessionLocal` in HTTP handlers.
+- Every chat turn passes through `backend/guards/` before LLM generation: injection detector (structural → semantic, 2 levels) then relevance guard. Both are synchronous and short-circuit on failure.
+- The bot is language-agnostic: replies must be in the user's language. New hardcoded strings in the chat pipeline go through `backend/chat/language.py` — never hardcode English-only copy.
 - Frontend components: `PascalCase`; utilities: `camelCase`; Tailwind for styles.
 
 ---

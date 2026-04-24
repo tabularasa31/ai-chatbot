@@ -31,7 +31,7 @@
 ## Features
 
 - **Multi-tenant** — one platform, many clients, full data isolation
-- **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML)
+- **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML), Word (DOCX/DOC), plain text (TXT)
 - **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
 - **Structured OpenAPI ingestion** — operation-aware indexing for Swagger/OpenAPI files and structured URL sources instead of treating specs as raw text
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`

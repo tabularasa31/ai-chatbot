@@ -65,11 +65,14 @@ Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM 
 
 ### Supported formats
 
-| Format | Parser | Notes |
-|--------|--------|-------|
-| PDF | pypdf | Text extraction, multi-page |
-| Markdown | markdown lib | CommonMark |
-| Swagger / OpenAPI | PyYAML / json | JSON/YAML parse, OpenAPI validation, endpoint-aware rendering |
+| Format | Extensions | Parser | Notes |
+|--------|------------|--------|-------|
+| PDF | `.pdf` | pypdf | Text extraction, multi-page |
+| Markdown | `.md`, `.mdx` | — | CommonMark |
+| Swagger / OpenAPI | `.json`, `.yaml`, `.yml` | PyYAML / json | JSON/YAML parse, OpenAPI validation, endpoint-aware rendering |
+| Word (DOCX) | `.docx` | python-docx | Paragraph-level text extraction |
+| Word (legacy DOC) | `.doc` | antiword | Plain-text extraction via system tool |
+| Plain text | `.txt` | — | UTF-8; falls back to latin-1 |
 
 Upload endpoint: `POST /documents` (multipart/form-data, max 50 MB).
 Supported OpenAPI extensions: `.json`, `.yaml`, `.yml`.
@@ -79,7 +82,7 @@ Supported OpenAPI extensions: `.json`, `.yaml`, `.yml`.
 ### Processing pipeline
 
 1. File is saved and parsed to `parsed_text`
-   - PDF / Markdown become plain text
+   - PDF / Markdown / DOCX / DOC / TXT become plain text
    - Swagger / OpenAPI is normalized into a deterministic human-readable preview
 2. Document status → `ready`
 3. User triggers embedding via dashboard (or automatically on upload)

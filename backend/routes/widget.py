@@ -29,7 +29,7 @@ from backend.core.limiter import (
 from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
-from backend.models import Chat, EscalationTrigger, Tenant, UserContext
+from backend.models import Chat, EscalationTicket, EscalationTrigger, Message, MessageRole, Tenant, UserContext
 from backend.tenants.service import get_kyc_decrypted_keys_for_validation
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
@@ -365,6 +365,76 @@ def _widget_chat_stream(
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
         },
+    )
+
+
+class WidgetHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
+class WidgetHistoryResponse(BaseModel):
+    session_id: uuid.UUID
+    messages: list[WidgetHistoryMessage]
+    chat_ended: bool
+    ticket_number: str | None = None
+
+
+@widget_router.get("/history", response_model=WidgetHistoryResponse)
+def widget_history(
+    bot_id: Annotated[str, Query(description="Bot public ID")],
+    session_id: Annotated[str, Query(description="Chat session UUID")],
+    db: Session = Depends(get_db),
+) -> WidgetHistoryResponse:
+    """Return message history for a widget session (public, no auth)."""
+    try:
+        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Bot not found") from e
+        raise HTTPException(status_code=400, detail="Bot not available") from e
+
+    try:
+        sid = uuid.UUID(session_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid session_id") from None
+
+    chat = (
+        db.query(Chat)
+        .filter(
+            Chat.tenant_id == tenant.id,
+            Chat.session_id == sid,
+            or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+        )
+        .first()
+    )
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    messages = (
+        db.query(Message)
+        .filter(
+            Message.chat_id == chat.id,
+            Message.role.in_([MessageRole.user, MessageRole.assistant]),
+        )
+        .order_by(Message.created_at.asc())
+        .all()
+    )
+
+    ticket_number: str | None = None
+    if chat.escalation_awaiting_ticket_id is not None:
+        ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
+        if ticket is not None:
+            ticket_number = ticket.ticket_number
+
+    return WidgetHistoryResponse(
+        session_id=sid,
+        messages=[
+            WidgetHistoryMessage(role=m.role.value, content=m.content)
+            for m in messages
+        ],
+        chat_ended=chat.ended_at is not None,
+        ticket_number=ticket_number,
     )
 
 

@@ -150,6 +150,7 @@ export function ChatWidget({
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
@@ -163,6 +164,7 @@ export function ChatWidget({
 
   useEffect(() => {
     setSessionHydrated(false);
+    setHistoryLoaded(false);
     setChatClosed(false);
     setActiveTicket(null);
 
@@ -190,6 +192,49 @@ export function ChatWidget({
       setSessionHydrated(true);
     }
   }, [botId, identityToken, apiKey]);
+
+  useEffect(() => {
+    if (!sessionHydrated || !sessionId || historyLoaded) return;
+    let cancelled = false;
+    setLoading(true);
+    const params = new URLSearchParams({ botId, session_id: sessionId });
+    fetch(`/widget/history?${params}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`history_fetch_failed:${r.status}`);
+        return r.json() as Promise<{
+          messages: { role: string; content: string }[];
+          chat_ended: boolean;
+          ticket_number?: string | null;
+        }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        if (data.messages.length > 0) {
+          const hydrated = data.messages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => createTextMessage(m.role as "user" | "assistant", m.content));
+          setMessages(hydrated);
+          if (data.ticket_number) setActiveTicket(data.ticket_number);
+          if (data.chat_ended) {
+            setChatClosed(true);
+            setMessages((prev) => appendSystemMarker(prev, "conversation_ended"));
+          }
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Session invalid or expired — clear it so greeting fires
+        clearStoredSession(botId);
+        setSessionId(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHistoryLoaded(true);
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [sessionHydrated, sessionId, historyLoaded, botId]);
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -348,7 +393,9 @@ export function ChatWidget({
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
 
   useEffect(() => {
-    if (!sessionHydrated || sessionId || messages.length > 0 || loading || chatClosed) return;
+    // Wait for history fetch to complete (or determine there's no stored session)
+    const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
+    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading || chatClosed) return;
     let cancelled = false;
     setLoading(true);
     void fetchGreeting()
@@ -373,7 +420,7 @@ export function ChatWidget({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatClosed, fetchGreeting, messages.length, sessionHydrated, sessionId]);
+  }, [chatClosed, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
   const handleStartNewChat = useCallback(() => {
     setInput("");

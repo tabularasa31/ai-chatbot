@@ -38,10 +38,6 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
-    query_rewrite_enabled: bool = Field(
-        True,
-        alias="QUERY_REWRITE_ENABLED",
-    )
     query_rewrite_model: str = Field(
         "gpt-4o-mini",
         alias="QUERY_REWRITE_MODEL",
@@ -183,6 +179,13 @@ class Settings(BaseSettings):
     embedding_batch_delay_sec: float = Field(0.5, alias="EMBEDDING_BATCH_DELAY_SEC")
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
+
+    # ── Semantic query rewrite ─────────────────────────────────────────────
+    # Timeout for the concurrent LLM rewrite call (runs alongside guard checks).
+    semantic_query_rewrite_timeout_sec: float = Field(
+        2.0,
+        alias="SEMANTIC_QUERY_REWRITE_TIMEOUT_SEC",
+    )
 
     # ── Agent instructions ─────────────────────────────────────────────────
     enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")

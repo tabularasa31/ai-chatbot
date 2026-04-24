@@ -80,7 +80,7 @@ from backend.models import (
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
-_GUARD_POOL_WORKERS = 3   # concurrent threads for injection + relevance + capability guards
+_GUARD_POOL_WORKERS = 4   # concurrent threads: injection + relevance + capability + semantic rewrite
 _DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
@@ -89,8 +89,6 @@ from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
     EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
-    _normalize_query_variants,
-    _rewrite_query_for_retrieval,
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
@@ -98,6 +96,7 @@ from backend.search.service import (
     embed_queries,
     expand_query,
     search_similar_chunks_detailed,
+    semantic_query_rewrite,
 )
 from backend.support_config import public_support_config_dict
 
@@ -303,6 +302,7 @@ def retrieve_context(
     precomputed_query_variants: list[str] | None = None,
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
+    rewritten_variant: str | None = None,
 ) -> RetrievalContext:
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
@@ -324,6 +324,7 @@ def retrieve_context(
             precomputed_query_variants=precomputed_query_variants,
             precomputed_variant_vectors=precomputed_variant_vectors,
             precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
+            precomputed_rewritten_variant=rewritten_variant,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError):
         retrieval_duration_ms = round((perf_counter() - _retrieval_start) * 1000, 2)
@@ -841,6 +842,10 @@ def run_chat_pipeline(
     # which early-return path (injection, faq_direct, not_relevant) is taken.
     _guard_profile = db.get(TenantProfile, tenant_id)
     _guard_pool = ThreadPoolExecutor(max_workers=_GUARD_POOL_WORKERS)
+    # Initialise before the try so the finally block can always reference them,
+    # even if an exception fires before the assignments inside the try.
+    _rewrite_future = None
+    _rewritten_variant: str | None = None
     try:
         _rel_future = _guard_pool.submit(
             check_relevance_with_profile,
@@ -854,6 +859,18 @@ def run_chat_pipeline(
             detect_capability_question,
             question,
             api_key=api_key,
+        )
+
+        # Semantic query rewrite runs in the same guard pool (4th worker).
+        # Guards take 1-2 s; the rewrite typically finishes within that window
+        # so it adds zero extra latency to the request. Fails silently on any
+        # error so retrieval degrades gracefully to lexical variants only.
+        _rewrite_future = _guard_pool.submit(
+            semantic_query_rewrite,
+            question,
+            api_key=api_key,
+            timeout=settings.semantic_query_rewrite_timeout_sec,
+            bot_id=retry_bot_id,
         )
 
         _inj_start = perf_counter()
@@ -921,10 +938,23 @@ def run_chat_pipeline(
 
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
-        if settings.query_rewrite_enabled:
-            _rewritten = _rewrite_query_for_retrieval(question, api_key=api_key)
-            if _rewritten:
-                query_variants = _normalize_query_variants([*query_variants, _rewritten])
+
+        # Collect semantic rewrite result — guard checks ran concurrently so
+        # the rewrite is usually already finished by now (zero extra wait).
+        # _rewrite_pool is shut down in the outer finally regardless of exit path.
+        if _rewrite_future is not None:
+            try:
+                _rewritten_variant = _rewrite_future.result(
+                    timeout=settings.semantic_query_rewrite_timeout_sec
+                )
+                if _rewritten_variant and _rewritten_variant.casefold() not in {
+                    v.casefold() for v in query_variants
+                }:
+                    query_variants = [*query_variants, _rewritten_variant]
+            except Exception:
+                _rewritten_variant = None
+
+
         if trace is not None:
             _embed_span = trace.span(
                 name="query-embedding",
@@ -1116,6 +1146,7 @@ def run_chat_pipeline(
             precomputed_query_variants=query_variants,
             precomputed_variant_vectors=variant_vectors,
             precomputed_embedding_api_request_count=1,
+            rewritten_variant=_rewritten_variant,
         )
 
     # --- 6. Low-retrieval guard ---

@@ -1117,6 +1117,66 @@ def expand_query(query: str) -> list[str]:
     return variants or [query]
 
 
+# ── Semantic query rewrite ────────────────────────────────────────────────────
+
+_SEMANTIC_REWRITE_MAX_TOKENS = 40  # enough for a short keyword phrase
+
+_SEMANTIC_REWRITE_PROMPT_PREFIX = (
+    "A customer asked a product support chatbot:\n\""
+)
+_SEMANTIC_REWRITE_PROMPT_SUFFIX = (
+    "\"\n\n"
+    "Write a short technical search query (5-10 words) using product feature "
+    "terminology and technical concepts that would retrieve the relevant "
+    "documentation. Focus on the FEATURE or SETTING being asked about, not "
+    "the user's symptom. Reply with ONLY the search query, nothing else."
+)
+
+
+def semantic_query_rewrite(
+    query: str,
+    *,
+    api_key: str,
+    timeout: float = 2.0,
+    bot_id: str | None = None,
+) -> str | None:
+    """LLM-based semantic rewrite: user symptom → feature/product terminology.
+
+    Bridges the semantic gap between how users describe problems ("bot replies
+    only in Russian") and how documentation describes features ("language
+    detection multilingual settings"). Language-agnostic: the LLM stays in
+    the same language as the query so the multilingual embedding model can
+    match chunks regardless of what language the docs are in.
+
+    Returns None on any failure so the caller degrades gracefully to lexical
+    variants only. Used for vector retrieval only, not BM25.
+    """
+    if not query or not api_key:
+        return None
+    # Concatenation instead of .format() so curly braces in user input
+    # (e.g. "{name}", "{0}") don't raise KeyError / IndexError.
+    prompt = _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
+    try:
+        client = get_openai_client(api_key, timeout=timeout)
+        response = call_openai_with_retry(
+            "semantic_query_rewrite",
+            lambda: client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        # Sanity: non-empty, single line, not too long
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None
+
+
 def _normalize_query_variants(values: list[str]) -> list[str]:
     """Normalize and dedupe query variants while preserving first-seen order."""
     variants: list[str] = []
@@ -1782,6 +1842,7 @@ def search_similar_chunks_detailed(
     precomputed_query_variants: list[str] | None = None,
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
+    precomputed_rewritten_variant: str | None = None,
     embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
 ) -> SearchResultBundle:
     """
@@ -1806,7 +1867,7 @@ def search_similar_chunks_detailed(
     # user problem-descriptions and feature-name headings in docs. Language-agnostic —
     # the multilingual embedding model handles cross-lingual matching from there.
     rewritten_variant: str | None = None
-    if not use_precomputed and settings.query_rewrite_enabled:
+    if not use_precomputed:
         rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
         if rewritten_variant:
             query_variants = _normalize_query_variants([*query_variants, rewritten_variant])
@@ -1821,10 +1882,13 @@ def search_similar_chunks_detailed(
         ).end(
             output={
                 "variants": query_variants,
+                # On the precomputed path (chat pipeline), rewritten_variant stays
+                # None (the in-search rewrite is skipped); surface the value that
+                # was computed upstream so traces reflect the actual rewrite used.
+                "rewritten_variant": rewritten_variant or precomputed_rewritten_variant,
                 "query_variant_count": query_variant_count,
                 "variant_mode": variant_mode,
                 "extra_variant_count": extra_variant_count,
-                "rewritten_variant": rewritten_variant,
             }
         )
 

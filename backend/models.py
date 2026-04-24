@@ -65,6 +65,9 @@ class DocumentType(str, enum.Enum):
     markdown = "markdown"
     swagger = "swagger"
     url = "url"
+    docx = "docx"
+    doc = "doc"
+    plaintext = "plaintext"
 
 
 class DocumentStatus(str, enum.Enum):

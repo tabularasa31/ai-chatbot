@@ -52,6 +52,9 @@ EXT_TO_TYPE = {
     ".json": "swagger",
     ".yaml": "swagger",
     ".yml": "swagger",
+    ".docx": "docx",
+    ".doc": "doc",
+    ".txt": "plaintext",
 }
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
@@ -138,7 +141,7 @@ def upload_document_route(
     if not file_type:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: .pdf, .md, .mdx, .json, .yaml, .yml",
+            detail="Unsupported file type. Allowed: .pdf, .md, .mdx, .json, .yaml, .yml, .docx, .doc, .txt",
         )
 
     content = file.file.read()

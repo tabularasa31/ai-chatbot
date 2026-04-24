@@ -116,7 +116,7 @@ This project uses **self-hosted Plane** at `http://localhost`. Do NOT use Linear
 **API (works with API key for issues):**
 ```
 Base URL:  http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d
-API key header: x-api-key: plane_api_7054523303304d158c861c2de2bc720e
+API key and session credentials: see ~/.claude/CLAUDE.md
 ```
 
 **State IDs:**
@@ -132,9 +132,9 @@ API key header: x-api-key: plane_api_7054523303304d158c861c2de2bc720e
 - After PR opened → move to In Review + add PR URL to description (PATCH the issue)
 - After deploy → move to Done
 
-**Create issue:**
+**Create issue** (API key from `~/.claude/CLAUDE.md`):
 ```bash
-curl -s -H "x-api-key: plane_api_7054523303304d158c861c2de2bc720e" \
+curl -s -H "x-api-key: $PLANE_API_KEY" \
   -H "Content-Type: application/json" \
   -X POST "http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d/issues/" \
   -d '{"name":"Title","description_html":"<p>Full description</p>","state":"84727391-2611-4b56-911b-e2e0f017793c","priority":"high"}'
@@ -142,7 +142,7 @@ curl -s -H "x-api-key: plane_api_7054523303304d158c861c2de2bc720e" \
 
 **Update issue state:**
 ```bash
-curl -s -H "x-api-key: plane_api_7054523303304d158c861c2de2bc720e" \
+curl -s -H "x-api-key: $PLANE_API_KEY" \
   -H "Content-Type: application/json" \
   -X PATCH "http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d/issues/{issue_id}/" \
   -d '{"state":"fd53cd08-0693-411e-86d3-227cd895c3ed"}'

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     langfuse_public_key: str | None = Field(None, alias="LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key: str | None = Field(None, alias="LANGFUSE_SECRET_KEY")
     posthog_api_key: str | None = Field(None, alias="POSTHOG_API_KEY")
-    posthog_host: str = Field("https://us.i.posthog.com", alias="POSTHOG_HOST")
+    posthog_host: str = Field("https://eu.i.posthog.com", alias="POSTHOG_HOST")
     sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
     git_sha: str | None = Field(None, alias="GIT_SHA")
     pipeline_release: str | None = Field(None, alias="PIPELINE_RELEASE")

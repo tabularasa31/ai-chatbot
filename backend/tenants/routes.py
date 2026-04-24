@@ -10,6 +10,7 @@ from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.models import User
+from backend.observability.metrics import capture_event
 from backend.tenants.schemas import (
     CreateTenantRequest,
     KycSecretGeneratedResponse,
@@ -66,6 +67,14 @@ def create_tenant_route(
     Returns 201 Created. Error 409 if tenant already exists for this user.
     """
     tenant = create_tenant(current_user.id, body.name, db)
+    try:
+        capture_event(
+            "tenant.created",
+            distinct_id=str(tenant.public_id),
+            tenant_id=str(tenant.public_id),
+        )
+    except Exception:
+        pass
     return _tenant_to_response(tenant)
 
 
@@ -97,6 +106,15 @@ def create_kyc_secret_route(
 ) -> KycSecretGeneratedResponse:
     """Generate and store KYC signing secret (returned once)."""
     _client, raw = generate_kyc_secret_for_tenant(current_user.id, db)
+    try:
+        tenant = get_tenant_by_user(current_user.id, db)
+        capture_event(
+            "kyc.configured",
+            distinct_id=str(tenant.public_id) if tenant else str(current_user.id),
+            tenant_id=str(tenant.public_id) if tenant else None,
+        )
+    except Exception:
+        pass
     return KycSecretGeneratedResponse(secret_key=raw)
 
 

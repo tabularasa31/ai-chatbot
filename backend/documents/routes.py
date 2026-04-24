@@ -41,6 +41,7 @@ from backend.documents.url_service import (
     update_url_source,
 )
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
+from backend.observability.metrics import capture_event
 from backend.tenants.service import get_tenant_by_user
 
 documents_router = APIRouter(tags=["documents"])
@@ -157,6 +158,15 @@ def upload_document_route(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
+    try:
+        capture_event(
+            "knowledge.uploaded",
+            distinct_id=str(tenant.public_id),
+            tenant_id=str(tenant.public_id),
+            properties={"source_type": "file", "file_type": file_type},
+        )
+    except Exception:
+        pass
     return _document_response(doc)
 
 
@@ -214,6 +224,15 @@ def create_url_source_route(
     )
     if tenant.openai_api_key:
         background_tasks.add_task(crawl_url_source, source.id, tenant.openai_api_key)
+    try:
+        capture_event(
+            "knowledge.uploaded",
+            distinct_id=str(tenant.public_id),
+            tenant_id=str(tenant.public_id),
+            properties={"source_type": "url"},
+        )
+    except Exception:
+        pass
     return _url_source_response(source)
 
 

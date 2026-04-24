@@ -20,6 +20,7 @@ from backend.bots.schemas import (
 from backend.core.crypto import decrypt_value
 from backend.core.db import get_db
 from backend.models import Tenant, User
+from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 bots_router = APIRouter(prefix="/bots", tags=["bots"])
@@ -76,6 +77,17 @@ def create_bot(
 ) -> BotResponse:
     tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
     bot = bots_service.create_bot(tenant_id, body.name, db, agent_instructions=body.agent_instructions)
+
+    try:
+        tenant = db.get(Tenant, tenant_id)
+        capture_event(
+            "bot.created",
+            distinct_id=str(bot.public_id),
+            tenant_id=str(tenant.public_id) if tenant else None,
+            bot_id=str(bot.public_id),
+        )
+    except Exception:
+        pass
 
     if body.website_url and body.agent_instructions is None:
         tenant = db.get(Tenant, tenant_id)

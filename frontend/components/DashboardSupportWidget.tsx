@@ -10,6 +10,7 @@ const API_KEY = process.env.NEXT_PUBLIC_CHAT9_API_KEY;
 
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
+  const [everOpened, setEverOpened] = useState(false);
   const [identityToken, setIdentityToken] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -28,13 +29,19 @@ export function DashboardSupportWidget() {
       .catch(() => {/* fall through to anonymous */});
   }, []);
 
+  const handleToggle = () => {
+    if (!open) setEverOpened(true);
+    setOpen((v) => !v);
+  };
+
   if (!BOT_ID || !API_KEY) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
-      {open && (
+      {everOpened && (
         <div
           ref={panelRef}
+          style={{ display: open ? undefined : "none" }}
           className="w-[380px] h-[560px] rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col bg-white"
         >
           <ChatWidget
@@ -47,7 +54,7 @@ export function DashboardSupportWidget() {
 
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={handleToggle}
         aria-label={open ? "Close support chat" : "Open support chat"}
         className="w-14 h-14 rounded-full bg-[#a855f7] hover:bg-[#9333ea] shadow-lg flex items-center justify-center text-white transition-colors"
       >

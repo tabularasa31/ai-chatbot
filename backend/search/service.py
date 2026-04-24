@@ -1088,7 +1088,7 @@ def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
                     {"role": "user", "content": query},
                 ],
                 temperature=0,
-                max_tokens=60,
+                max_completion_tokens=60,
             ),
         )
         rewritten = (response.choices[0].message.content or "").strip()
@@ -1164,7 +1164,7 @@ def semantic_query_rewrite(
                 model=settings.query_rewrite_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
             bot_id=bot_id,
         )

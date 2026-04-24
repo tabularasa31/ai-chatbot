@@ -263,7 +263,7 @@ def adjudicate_contradictions(
                 model=model,
                 messages=[{"role": "user", "content": _build_prompt(sent_candidates)}],
                 temperature=0,
-                max_tokens=max_tokens,
+                max_completion_tokens=max_tokens,
                 response_format={"type": "json_object"},
             ),
         )

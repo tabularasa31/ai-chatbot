@@ -102,7 +102,7 @@ def extract_company_description(url: str, api_key: str) -> str | None:
                     ),
                 }
             ],
-            max_tokens=120,
+            max_completion_tokens=120,
             temperature=0,
         )
         return resp.choices[0].message.content.strip() or None

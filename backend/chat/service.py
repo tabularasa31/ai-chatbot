@@ -63,11 +63,9 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.capability_detector import detect_capability_question
 from backend.guards.injection_detector import detect_injection, detect_injection_structural
 from backend.guards.reject_response import (
     RejectReason,
-    build_capability_response_result,
     build_reject_response_result,
 )
 from backend.guards.relevance_checker import check_relevance_with_profile
@@ -88,7 +86,7 @@ from backend.models import (
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
-_GUARD_POOL_WORKERS = 4   # concurrent threads: injection + relevance + capability + semantic rewrite
+_GUARD_POOL_WORKERS = 3   # concurrent threads: injection + relevance + semantic rewrite
 _DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
@@ -512,7 +510,7 @@ class ChatPipelineResult:
     final_answer: str
     tokens_used: int
     # decision
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject", "capability_response"]
+    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
     reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None
     is_reject: bool
     is_faq_direct: bool
@@ -529,7 +527,6 @@ class ChatPipelineResult:
     retrieval_ms: int = 0
     llm_ms: int = 0
     # debug extras
-    is_capability: bool = False
     faq_match: Any = None  # FAQMatchResult | None
     # language_context is always populated by run_chat_pipeline; None only for
     # callers that construct ChatPipelineResult directly without this field.
@@ -823,30 +820,7 @@ def _persist_assistant_message_with_response_language(
     )
 
 
-def _make_capability_result(
-    loc: LocalizationResult,
-    language_context: ResolvedLanguageContext,
-    *,
-    faq_match: Any = None,
-) -> ChatPipelineResult:
-    return ChatPipelineResult(
-        raw_answer=loc.text,
-        final_answer=loc.text,
-        tokens_used=loc.tokens_used,
-        strategy="capability_response",
-        reject_reason=None,
-        is_reject=False,
-        is_faq_direct=False,
-        is_capability=True,
-        validation_applied=False,
-        validation_outcome=None,
-        retrieval=None,
-        validation=None,
-        escalation_recommended=False,
-        escalation_trigger=None,
-        faq_match=faq_match,
-        language_context=language_context,
-    )
+
 
 
 def run_chat_pipeline(
@@ -922,13 +896,7 @@ def run_chat_pipeline(
             api_key=api_key,
             trace=trace,
         )
-        _cap_future = _guard_pool.submit(
-            detect_capability_question,
-            question,
-            api_key=api_key,
-        )
-
-        # Semantic query rewrite runs in the same guard pool (4th worker).
+        # Semantic query rewrite runs in the same guard pool (3rd worker).
         # Guards take 1-2 s; the rewrite typically finishes within that window
         # so it adds zero extra latency to the request. Fails silently on any
         # error so retrieval degrades gracefully to lexical variants only.
@@ -963,7 +931,6 @@ def run_chat_pipeline(
 
         if injection_result.detected:
             _rel_future.cancel()
-            _cap_future.cancel()
             reject_result = build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
                 profile=None,
@@ -986,22 +953,6 @@ def run_chat_pipeline(
                 escalation_trigger=None,
                 language_context=language_context,
             )
-
-        # Non-blocking capability check: if the classifier finished while injection
-        # was running, short-circuit before embedding (saves ~1s per capability turn).
-        try:
-            _cap_early = _cap_future.result(timeout=0)
-        except TimeoutError:
-            _cap_early = False
-        if _cap_early:
-            _rel_future.cancel()
-            _cap_early_result = build_capability_response_result(
-                profile=_guard_profile,
-                response_language=language_context.response_language,
-                api_key=api_key,
-                question=question,
-            )
-            return _make_capability_result(_cap_early_result, language_context)
 
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
@@ -1095,7 +1046,6 @@ def run_chat_pipeline(
 
         if faq_match.strategy == "faq_direct":
             _rel_future.cancel()
-            _cap_future.cancel()
             direct_answer_result = render_direct_faq_answer_result(
                 answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
                 response_language=language_context.response_language,
@@ -1119,19 +1069,7 @@ def run_chat_pipeline(
                 language_context=language_context,
             )
 
-        # --- 4. Capability detection + relevance pre-check ---
-        # Check capability first: if True, cancel relevance to avoid waiting for its
-        # timeout (relevance can block up to 3s; capability is usually faster).
-        is_capability = _cap_future.result()
-        if is_capability:
-            _rel_future.cancel()
-            cap_result = build_capability_response_result(
-                profile=_guard_profile,
-                response_language=language_context.response_language,
-                api_key=api_key,
-                question=question,
-            )
-            return _make_capability_result(cap_result, language_context, faq_match=faq_match)
+        # --- 4. Relevance pre-check ---
         relevant, _, profile = _rel_future.result()
     finally:
         _guard_pool.shutdown(wait=False)
@@ -2645,8 +2583,8 @@ def process_chat_message(
         allow_clarification=allow_clarification,
     )
 
-    # Guard rejects, faq_direct, and capability responses: persist and return immediately (no escalation).
-    if result.is_reject or result.is_faq_direct or result.is_capability:
+    # Guard rejects and faq_direct: persist and return immediately (no escalation).
+    if result.is_reject or result.is_faq_direct:
         user_message, assistant_message = _persist_turn_with_response_language(
             db=db,
             chat=chat,
@@ -2681,8 +2619,6 @@ def process_chat_message(
         }
         if result.is_reject:
             source = source_map.get(result.reject_reason or "", "guard_reject")
-        elif result.is_capability:
-            source = "capability_response"
         else:
             source = "faq_direct"
         trace.update(

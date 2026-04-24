@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
     Decision,
+    DecisionKind,
     KbConfidence,
     TurnContext,
     decide,
@@ -2639,6 +2640,7 @@ def process_chat_message(
     # Build TurnContext and call decide() to get the formal policy decision.
     # This is the single authoritative classification of what this turn produced.
     faq_match_obj = result.faq_match
+    _kb_confidence = _classify_kb_confidence(retrieval)
     _turn_ctx = TurnContext(
         session_closed=(chat.ended_at is not None),
         active_escalation=(
@@ -2652,16 +2654,27 @@ def process_chat_message(
         explicit_human_request=explicit_human_request,
         faq_direct_hit=result.is_faq_direct,
         faq_top_score=faq_match_obj.top_score if faq_match_obj else None,
-        kb_confidence=_classify_kb_confidence(retrieval),
-        kb_has_partial_answer=bool(chunk_texts),
+        kb_confidence=_kb_confidence,
+        # Partial-answer signal: only medium-confidence chunks constitute a usable
+        # partial answer. Low-confidence chunks are too unreliable to caveat from;
+        # the budget-exhausted path escalates instead (clarify_loop_limit).
+        kb_has_partial_answer=_kb_confidence == "medium" and bool(chunk_texts),
         kb_contradiction_detected=False,  # not yet propagated from search layer (v1)
         low_retrieval_no_chunks=not chunk_texts,
     )
     _decision: Decision = decide(_turn_ctx)
 
+    # Enforce policy decision: clarify_loop_limit escalation must become a real escalation
+    # even when the RAG pipeline did not independently recommend it.
+    if (
+        _decision.kind == DecisionKind.escalate
+        and _decision.escalate_reason == "clarify_loop_limit"
+        and not escalate
+    ):
+        escalate = True
+        esc_trigger = EscalationTrigger.low_similarity
+
     # Increment clarification counter when the pipeline produced a blocking clarify.
-    # "blocking clarify" means decide() said clarify AND the budget allowed it
-    # (allow_clarification=True was passed to the pipeline).
     _clarification_count_before = chat.clarification_count
     if _decision.is_blocking_clarify():
         chat.clarification_count += 1

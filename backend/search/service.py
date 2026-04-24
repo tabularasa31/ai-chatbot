@@ -1161,7 +1161,7 @@ def semantic_query_rewrite(
         response = call_openai_with_retry(
             "semantic_query_rewrite",
             lambda: client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=settings.query_rewrite_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,

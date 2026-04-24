@@ -8,12 +8,12 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle
 
-LLM_MODEL = "gpt-4o-mini"
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
 MAX_CACHE_SIZE = 2048
@@ -140,7 +140,7 @@ def check_relevance_with_profile(
         response = call_openai_with_retry(
             "guard_relevance_check",
             lambda: openai_client.chat.completions.create(
-                model=LLM_MODEL,
+                model=settings.guards_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

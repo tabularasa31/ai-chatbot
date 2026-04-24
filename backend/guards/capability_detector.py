@@ -5,10 +5,10 @@ import json
 import threading
 import time
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 
-LLM_MODEL = "gpt-4o-mini"
 TIMEOUT_SECONDS = 2.0
 TEMPERATURE_STRICT = 0
 MAX_TOKENS_DETECTION = 30
@@ -70,7 +70,7 @@ def detect_capability_question(question: str, *, api_key: str) -> bool:
         response = call_openai_with_retry(
             "guard_capability_check",
             lambda: client.chat.completions.create(
-                model=LLM_MODEL,
+                model=settings.guards_model,
                 messages=[
                     {"role": "system", "content": _SYSTEM_PROMPT},
                     {"role": "user", "content": f'User message: "{question}"'},

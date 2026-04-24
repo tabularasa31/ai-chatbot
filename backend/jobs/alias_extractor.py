@@ -26,7 +26,6 @@ from backend.core.openai_client import get_openai_client
 
 logger = logging.getLogger(__name__)
 
-ALIAS_LLM_MODEL = "gpt-4o-mini"
 ALIAS_BASE_CONFIDENCE = 0.7
 ALIAS_CONFIDENCE_INCREMENT = 0.1
 ALIAS_CONFIDENCE_MAX = 0.9
@@ -99,7 +98,7 @@ async def _call_alias_llm(
         response = await loop.run_in_executor(
             None,
             lambda: oai.chat.completions.create(
-                model=ALIAS_LLM_MODEL,
+                model=settings.extraction_model,
                 messages=[
                     {"role": "system", "content": ALIAS_SYSTEM_PROMPT},
                     {"role": "user", "content": user_content},

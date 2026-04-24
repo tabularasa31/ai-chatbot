@@ -12,6 +12,7 @@ from backend.chat.language import (
     localize_text_to_language_result,
     log_llm_tokens,
 )
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 from backend.models import EscalationPhase
@@ -68,7 +69,7 @@ def complete_escalation_openai_turn(
     model: str | None = None,
 ) -> EscalationLlmResult:
     """One OpenAI JSON-object completion; never raises on API errors."""
-    model_name = model or "gpt-4o-mini"
+    model_name = model or settings.escalation_model
     facts = {**fact_json, "phase": phase.value}
     user_block = (
         f"ESCALATION_LANGUAGE:\n{escalation_language}\n\n"

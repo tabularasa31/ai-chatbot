@@ -29,7 +29,15 @@ from backend.core.limiter import (
 from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
-from backend.models import Chat, EscalationTicket, EscalationTrigger, Message, MessageRole, Tenant, UserContext
+from backend.models import (
+    Chat,
+    EscalationTicket,
+    EscalationTrigger,
+    Message,
+    MessageRole,
+    Tenant,
+    UserContext,
+)
 from backend.tenants.service import get_kyc_decrypted_keys_for_validation
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,

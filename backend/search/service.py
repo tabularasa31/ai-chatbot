@@ -1060,12 +1060,12 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
 
 def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
     """
-    Rephrase a user question as documentation-style keywords in the same language.
+    Rephrase a user question as English documentation-style keywords.
 
     Bridges the semantic gap between problem-description phrasing ("bot doesn't
     respond in Russian") and feature-name phrasing in docs ("language detection").
-    Language-agnostic: stays in the original language so the multilingual embedding
-    model can match chunks regardless of what language the docs are in.
+    Output is in English so the result can serve as the BM25 query against the
+    English corpus for non-EN user queries, and also enriches vector retrieval.
     Fails silently — returns None on any error so retrieval degrades gracefully.
     """
     try:
@@ -1079,9 +1079,9 @@ def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
                         "role": "system",
                         "content": (
                             "You are a search query optimizer for a product knowledge base.\n"
-                            "Rewrite the user's question as 3-5 keywords or a short noun phrase "
+                            "Rewrite the user's question as 3-5 English keywords or a short English noun phrase "
                             "that would appear as a topic or heading in product documentation.\n"
-                            "Keep the same language as the input.\n"
+                            "Always output in English regardless of the input language.\n"
                             "Output only the rewritten query, nothing else."
                         ),
                     },
@@ -1436,8 +1436,12 @@ def _resolve_bm25_expansion_mode() -> BM25ExpansionMode:
 
 
 def _is_en_query(query: str, query_script_bucket: str) -> bool:
-    """Return True when the query is likely English (pure ASCII Latin)."""
-    if query_script_bucket != "latin":
+    """Return True when the query is safe for English BM25 (pure ASCII).
+
+    Includes the "other" bucket (digits, punctuation, symbols) — these contain
+    no non-ASCII characters so BM25 against an English corpus is always safe.
+    """
+    if query_script_bucket not in ("latin", "other"):
         return False
     return all(ord(c) < 128 for c in query)
 

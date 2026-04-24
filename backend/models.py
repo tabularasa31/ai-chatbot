@@ -707,6 +707,7 @@ class Chat(Base):
         server_default="false",
     )
     ended_at = Column(DateTime, nullable=True)
+    clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_response_language = Column(String(16), nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(

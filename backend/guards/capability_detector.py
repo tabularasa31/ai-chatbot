@@ -20,9 +20,12 @@ _cache: dict[str, tuple[float, bool]] = {}
 _cache_lock = threading.Lock()
 
 _SYSTEM_PROMPT = (
-    "You are a classifier for a customer support bot. "
-    "Determine whether the user's message is asking the bot about its own capabilities: "
-    "what topics it covers, what it can help with, what it knows, or what it can do. "
+    "You are a classifier for a customer support bot.\n"
+    "Determine whether the user's message is asking about the bot itself as a conversational assistant "
+    "(e.g. 'what can you do?', 'what topics do you cover?', 'are you a bot?', 'can you help me with X?').\n"
+    "Answer false for questions about the PRODUCT the bot supports — its features, settings, pricing, "
+    "file formats, language support, integrations, or any other product functionality. "
+    "Those are product questions and must go through normal search.\n"
     'Answer ONLY with a JSON object: {"is_capability_question": true/false}'
 )
 

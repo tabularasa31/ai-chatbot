@@ -250,6 +250,7 @@ export default function KnowledgePage() {
   const [sources, setSources] = useState<UrlSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [submittingUrl, setSubmittingUrl] = useState(false);
   const [error, setError] = useState("");
   const [uploadError, setUploadError] = useState("");
@@ -469,22 +470,27 @@ export default function KnowledgePage() {
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
     setUploadError("");
     setUploading(true);
-    try {
-      const doc = await api.documents.upload(file);
-      setDocuments((prev) => [doc as DocumentListItem, ...prev]);
-      await api.embeddings.create(doc.id);
-      await pollUntilEmbedded(doc.id);
-      await load();
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-      e.target.value = "";
+    const errors: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      setUploadProgress({ current: i + 1, total: files.length });
+      try {
+        const doc = await api.documents.upload(files[i]);
+        setDocuments((prev) => [doc as DocumentListItem, ...prev]);
+        await api.embeddings.create(doc.id);
+        await pollUntilEmbedded(doc.id);
+      } catch (err) {
+        errors.push(`${files[i].name}: ${err instanceof Error ? err.message : "Upload failed"}`);
+      }
     }
+    await load();
+    if (errors.length > 0) setUploadError(errors.join("\n"));
+    setUploading(false);
+    setUploadProgress(null);
+    e.target.value = "";
   }
 
   async function handleCreateUrlSource() {
@@ -1034,10 +1040,15 @@ export default function KnowledgePage() {
         <div className="flex items-center gap-3">
           <label className="inline-flex items-center gap-2">
             <span className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700">
-              {uploading ? "Processing…" : "Upload file"}
+              {uploading
+                ? uploadProgress
+                  ? `Processing ${uploadProgress.current}/${uploadProgress.total}…`
+                  : "Processing…"
+                : "Upload files"}
             </span>
             <input
               type="file"
+              multiple
               accept=".pdf,.md,.mdx,.json,.yaml,.yml"
               onChange={handleUpload}
               disabled={uploading}
@@ -1132,7 +1143,7 @@ export default function KnowledgePage() {
       </div>
 
       {uploadError && (
-        <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
+        <div className="whitespace-pre-line rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
           {uploadError}
         </div>
       )}

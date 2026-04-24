@@ -78,8 +78,8 @@ def create_bot(
     tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
     bot = bots_service.create_bot(tenant_id, body.name, db, agent_instructions=body.agent_instructions)
 
+    tenant = db.get(Tenant, tenant_id)
     try:
-        tenant = db.get(Tenant, tenant_id)
         capture_event(
             "bot.created",
             distinct_id=str(bot.public_id),
@@ -90,7 +90,6 @@ def create_bot(
         pass
 
     if body.website_url and body.agent_instructions is None:
-        tenant = db.get(Tenant, tenant_id)
         if tenant and tenant.openai_api_key:
             try:
                 api_key = decrypt_value(tenant.openai_api_key)

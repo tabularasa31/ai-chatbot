@@ -1599,7 +1599,7 @@ def generate_answer(
             input=generation_input,
             metadata={
                 "temperature": 0.2,
-                "max_tokens": settings.chat_response_max_tokens,
+                "max_completion_tokens": settings.chat_response_max_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
@@ -1625,7 +1625,7 @@ def generate_answer(
                     model=settings.chat_model,
                     messages=messages,
                     temperature=0.2,
-                    max_tokens=settings.chat_response_max_tokens,
+                    max_completion_tokens=settings.chat_response_max_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
                 ),
@@ -1655,7 +1655,7 @@ def generate_answer(
                     model=settings.chat_model,
                     messages=messages,
                     temperature=0.2,
-                    max_tokens=settings.chat_response_max_tokens,
+                    max_completion_tokens=settings.chat_response_max_tokens,
                 ),
                 bot_id=retry_bot_id,
             )
@@ -1748,7 +1748,7 @@ def validate_answer(
                 model=settings.answer_validation_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=150,
+                max_completion_tokens=150,
             ),
         )
         raw = response.choices[0].message.content or ""

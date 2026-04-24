@@ -145,7 +145,7 @@ class TestSemanticQueryRewriteHappyPath:
             fn()
             create_kwargs = inner.chat.completions.create.call_args[1]
             assert create_kwargs["model"] == settings.query_rewrite_model
-            assert create_kwargs["max_tokens"] == 40
+            assert create_kwargs["max_completion_tokens"] == 40
             assert create_kwargs["temperature"] == 0
 
 

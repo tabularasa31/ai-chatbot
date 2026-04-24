@@ -94,7 +94,7 @@ def complete_escalation_openai_turn(
                 model=model_name,
                 messages=messages,
                 temperature=0.3,
-                max_tokens=600,
+                max_completion_tokens=600,
                 response_format={"type": "json_object"},
             ),
         )

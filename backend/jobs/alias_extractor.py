@@ -104,7 +104,7 @@ async def _call_alias_llm(
                     {"role": "user", "content": user_content},
                 ],
                 temperature=0.0,
-                max_tokens=512,
+                max_completion_tokens=512,
             ),
         )
 

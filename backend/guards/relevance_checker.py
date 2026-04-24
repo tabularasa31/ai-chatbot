@@ -146,7 +146,7 @@ def check_relevance_with_profile(
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
-                max_tokens=80,
+                max_completion_tokens=80,
                 response_format={"type": "json_object"},
             ),
         )

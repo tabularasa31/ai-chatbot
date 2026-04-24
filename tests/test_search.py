@@ -2314,7 +2314,7 @@ def test_adjudicate_contradictions_records_partial_malformed_item_as_error(
         model="gpt-4o-mini",
         max_facts=5,
         preview_chars=120,
-        max_tokens=300,
+        max_completion_tokens=300,
     )
 
     assert run.status == "completed_with_errors"
@@ -2349,7 +2349,7 @@ def test_adjudicate_contradictions_skips_empty_batch_without_openai_call(
         model="gpt-4o-mini",
         max_facts=0,
         preview_chars=120,
-        max_tokens=300,
+        max_completion_tokens=300,
     )
     assert run.status == "skipped_fact_limit"
     assert run.sent_count == 0

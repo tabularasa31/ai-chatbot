@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         alias="BM25_EXPANSION_MODE",
     )
     chat_model: str = Field(
-        "gpt-4.1",
+        "gpt-5-mini",
         alias="CHAT_MODEL",
         description="OpenAI model for main chat response generation.",
     )

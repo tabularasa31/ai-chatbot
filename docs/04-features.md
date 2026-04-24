@@ -500,7 +500,7 @@ Hybrid search → top-k chunks  (vector + BM25 + RRF)
   ↓
 Build RAG prompt (system + context + history + question)
   ↓
-gpt-4.1 → answer
+gpt-5-mini → answer
   ↓
 Answer validation (second gpt-4.1-mini call)
   ↓

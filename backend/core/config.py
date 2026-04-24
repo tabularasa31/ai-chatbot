@@ -185,12 +185,9 @@ class Settings(BaseSettings):
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
     # ── Semantic query rewrite ─────────────────────────────────────────────
-    # When enabled, an LLM call bridges user symptom language → feature
-    # terminology, adding a semantic variant for vector retrieval only.
-    semantic_query_rewrite_enabled: bool = Field(
-        True,
-        alias="SEMANTIC_QUERY_REWRITE_ENABLED",
-    )
+    # Timeout for the concurrent LLM rewrite call (runs alongside guard checks).
+    # Controlled by the same QUERY_REWRITE_ENABLED kill switch as the in-search
+    # rewrite so a single flag disables all LLM-based query expansion.
     semantic_query_rewrite_timeout_sec: float = Field(
         2.0,
         alias="SEMANTIC_QUERY_REWRITE_TIMEOUT_SEC",

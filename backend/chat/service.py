@@ -864,10 +864,9 @@ def run_chat_pipeline(
         # Semantic query rewrite runs in the same guard pool (4th worker).
         # Guards take 1-2 s; the rewrite typically finishes within that window
         # so it adds zero extra latency to the request.
-        # Note: SEMANTIC_QUERY_REWRITE_ENABLED is a separate flag from
-        # QUERY_REWRITE_ENABLED — the latter controls the in-search fallback
-        # in search_similar_chunks_detailed for non-chat callers.
-        if settings.semantic_query_rewrite_enabled:
+        # Gated on QUERY_REWRITE_ENABLED — the single kill switch for all
+        # LLM-based query expansion (in-search rewrite uses the same flag).
+        if settings.query_rewrite_enabled:
             _rewrite_future = _guard_pool.submit(
                 semantic_query_rewrite,
                 question,

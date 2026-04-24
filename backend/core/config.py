@@ -38,8 +38,33 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
+    chat_model: str = Field(
+        "gpt-5-mini",
+        alias="CHAT_MODEL",
+        description="OpenAI model for main chat response generation.",
+    )
+    guards_model: str = Field(
+        "gpt-4.1-mini",
+        alias="GUARDS_MODEL",
+        description="OpenAI model for relevance and capability guard checks.",
+    )
+    extraction_model: str = Field(
+        "gpt-4.1-mini",
+        alias="EXTRACTION_MODEL",
+        description="OpenAI model for knowledge extraction, gap analysis, and alias extraction.",
+    )
+    escalation_model: str = Field(
+        "gpt-4.1-mini",
+        alias="ESCALATION_MODEL",
+        description="OpenAI model for escalation turn completions.",
+    )
+    answer_validation_model: str = Field(
+        "gpt-4.1-mini",
+        alias="ANSWER_VALIDATION_MODEL",
+        description="OpenAI model for answer grounding validation.",
+    )
     query_rewrite_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="QUERY_REWRITE_MODEL",
     )
     contradiction_adjudication_enabled: bool = Field(
@@ -47,7 +72,7 @@ class Settings(BaseSettings):
         alias="CONTRADICTION_ADJUDICATION_ENABLED",
     )
     contradiction_adjudication_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="CONTRADICTION_ADJUDICATION_MODEL",
     )
     contradiction_adjudication_max_facts: int = Field(
@@ -68,7 +93,7 @@ class Settings(BaseSettings):
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",
     )
     localization_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="LOCALIZATION_MODEL",
         description="OpenAI chat model used for localize/translate/render paths.",
     )

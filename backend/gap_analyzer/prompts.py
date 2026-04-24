@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 
-EXTRACTION_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 
@@ -43,7 +43,7 @@ def extract_mode_a_candidates(
     )
 
     response = openai_client.chat.completions.create(
-        model=EXTRACTION_MODEL,
+        model=settings.extraction_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

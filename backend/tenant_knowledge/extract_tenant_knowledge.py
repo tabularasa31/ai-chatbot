@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentType, Embedding, TenantProfile
 from backend.tenant_knowledge.faq_service import (
@@ -18,7 +19,6 @@ from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
 
-EXTRACTION_MODEL = "gpt-4o-mini"
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,7 @@ def run_extract_client_knowledge_for_document(
         )
 
         response = openai_client.chat.completions.create(
-            model=EXTRACTION_MODEL,
+            model=settings.extraction_model,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             response_format={"type": "json_object"},
             temperature=0.2,

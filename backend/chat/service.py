@@ -1547,7 +1547,7 @@ def generate_answer(
     stream_callback: Callable[[str], None] | None = None,
 ) -> tuple[str, int]:
     """
-    Call OpenAI gpt-4o-mini with RAG prompt.
+    Call OpenAI chat model with RAG prompt.
 
     Args:
         question: User question.
@@ -1596,7 +1596,7 @@ def generate_answer(
             }
         generation = trace.generation(
             name="llm-generation",
-            model="gpt-4o-mini",
+            model=settings.chat_model,
             input=generation_input,
             metadata={
                 "temperature": 0.2,
@@ -1623,7 +1623,7 @@ def generate_answer(
             stream = call_openai_with_retry(
                 "chat_generate_stream",
                 lambda: openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=settings.chat_model,
                     messages=messages,
                     temperature=0.2,
                     max_tokens=settings.chat_response_max_tokens,
@@ -1653,7 +1653,7 @@ def generate_answer(
             response = call_openai_with_retry(
                 "chat_generate",
                 lambda: openai_client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=settings.chat_model,
                     messages=messages,
                     temperature=0.2,
                     max_tokens=settings.chat_response_max_tokens,
@@ -1671,7 +1671,7 @@ def generate_answer(
             operation="generate",
             target_language=response_language,
             tokens=total_tokens,
-            model="gpt-4o-mini",
+            model=settings.chat_model,
         )
         if generation is not None:
             generation.end(
@@ -1693,7 +1693,7 @@ def generate_answer(
             operation="generate",
             target_language=response_language,
             tokens=0,
-            model="gpt-4o-mini",
+            model=settings.chat_model,
         )
         if generation is not None:
             generation.end(
@@ -1746,7 +1746,7 @@ def validate_answer(
         response = call_openai_with_retry(
             "chat_validate_answer",
             lambda: openai_client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=settings.answer_validation_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
                 max_tokens=150,

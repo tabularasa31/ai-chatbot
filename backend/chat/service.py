@@ -114,7 +114,7 @@ logger = logging.getLogger(__name__)
 RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE = "escalation_override"
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
-_ESCALATION_THRESHOLD = 0.45  # mirrors escalation/service.py ESCALATION_THRESHOLD
+_ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
 
 
 def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
@@ -2663,7 +2663,7 @@ def process_chat_message(
     # "blocking clarify" means decide() said clarify AND the budget allowed it
     # (allow_clarification=True was passed to the pipeline).
     _clarification_count_before = chat.clarification_count
-    if _decision.is_blocking_clarify() and allow_clarification:
+    if _decision.is_blocking_clarify():
         chat.clarification_count += 1
         db.add(chat)
         # Counter is committed in the same transaction as the assistant message below.

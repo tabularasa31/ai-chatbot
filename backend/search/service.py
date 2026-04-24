@@ -787,7 +787,7 @@ def _build_contradiction_adjudication_evidence(
         model=model,
         max_facts=max_facts,
         preview_chars=settings.contradiction_adjudication_preview_chars,
-        max_tokens=settings.contradiction_adjudication_max_tokens,
+        max_completion_tokens=settings.contradiction_adjudication_max_tokens,
     )
 
     if run.sent_count == 0:

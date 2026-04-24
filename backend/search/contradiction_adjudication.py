@@ -208,7 +208,7 @@ def adjudicate_contradictions(
     model: str,
     max_facts: int,
     preview_chars: int,
-    max_tokens: int,
+    max_completion_tokens: int,
 ) -> ContradictionAdjudicationRun:
     """Adjudicate the first N contradiction facts in one JSON-only request."""
 
@@ -263,7 +263,7 @@ def adjudicate_contradictions(
                 model=model,
                 messages=[{"role": "user", "content": _build_prompt(sent_candidates)}],
                 temperature=0,
-                max_completion_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
                 response_format={"type": "json_object"},
             ),
         )

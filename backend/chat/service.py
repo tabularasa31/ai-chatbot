@@ -1599,7 +1599,7 @@ def generate_answer(
             input=generation_input,
             metadata={
                 "temperature": 0.2,
-                "max_tokens": settings.chat_response_max_tokens,
+                "max_completion_tokens": settings.chat_response_max_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),

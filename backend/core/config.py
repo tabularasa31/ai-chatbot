@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
     widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)
     chat_response_max_tokens: int = Field(800, alias="CHAT_RESPONSE_MAX_TOKENS", ge=1)
+    chat_response_max_tokens_reasoning: int = Field(
+        4096,
+        alias="CHAT_RESPONSE_MAX_TOKENS_REASONING",
+        ge=1,
+        description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family) that consume tokens for internal chain-of-thought.",
+    )
     widget_chat_per_client_rate: str | None = Field(
         None,
         alias="WIDGET_CHAT_PER_CLIENT_RATE",

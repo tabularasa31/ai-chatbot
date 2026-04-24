@@ -1584,6 +1584,11 @@ def generate_answer(
     openai_client = get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _temperature: float | None = None if _reasoning else 0.2
+    _max_completion_tokens = (
+        settings.chat_response_max_tokens_reasoning
+        if _reasoning
+        else settings.chat_response_max_tokens
+    )
     generation = None
     if trace is not None:
         generation_input: Any
@@ -1601,7 +1606,7 @@ def generate_answer(
             input=generation_input,
             metadata={
                 **({"temperature": _temperature} if _temperature is not None else {}),
-                "max_completion_tokens": settings.chat_response_max_tokens,
+                "max_completion_tokens": _max_completion_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
@@ -1627,7 +1632,7 @@ def generate_answer(
                     model=settings.chat_model,
                     messages=messages,
                     **({} if _reasoning else {"temperature": 0.2}),
-                    max_completion_tokens=settings.chat_response_max_tokens,
+                    max_completion_tokens=_max_completion_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
                 ),
@@ -1657,7 +1662,7 @@ def generate_answer(
                     model=settings.chat_model,
                     messages=messages,
                     **({} if _reasoning else {"temperature": 0.2}),
-                    max_completion_tokens=settings.chat_response_max_tokens,
+                    max_completion_tokens=_max_completion_tokens,
                 ),
                 bot_id=retry_bot_id,
             )

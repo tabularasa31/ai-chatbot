@@ -356,9 +356,9 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["model"] == settings.chat_model
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
-    # gpt-5-mini is a reasoning model — temperature is omitted
+    # gpt-5-mini is a reasoning model — temperature is omitted, larger token budget used
     assert "temperature" not in call_kwargs
-    assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens
+    assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens_reasoning
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:
@@ -437,8 +437,8 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         {"role": "user", "content": user_message},
     ]
     assert trace.generation_metadata == {
-        # gpt-5-mini is a reasoning model — temperature is omitted from metadata
-        "max_completion_tokens": settings.chat_response_max_tokens,
+        # gpt-5-mini is a reasoning model — temperature omitted, larger token budget
+        "max_completion_tokens": settings.chat_response_max_tokens_reasoning,
         "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,

@@ -365,24 +365,10 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 Public response contracts:
 
-- `POST /chat` returns canonical `text`, `message_type`, and optional `clarification`
-- `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
+- `POST /chat` and `POST /widget/chat` return `text` (canonical) plus legacy aliases (`answer` / `response` respectively)
 - both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
 
-Clarification payloads can include:
-
-- `reason`
-- `type`
-- `options`
-- `requested_fields`
-- `original_user_message`
-- `turn_index`
-
-For the website widget:
-
-- clarification options render as quick-reply buttons
-- only the latest assistant clarification keeps active quick replies
-- button clicks send the visible option label and, when available, a structured `option_id`
+v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
 
 ### Knowledge dashboard API and UI (Phase 3)
 

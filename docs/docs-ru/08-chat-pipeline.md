@@ -279,34 +279,14 @@ v1-ограничение: неоднозначный intent и отсутств
 
 **Публичный контракт ответа**
 
-Для `POST /chat` и `POST /widget/chat` ответ теперь может содержать:
+`POST /chat` и `POST /widget/chat` возвращают `text` (канонический ответ) и текстовые алиасы для обратной совместимости: `answer` для `/chat`, `response` для `/widget/chat`.
 
-- `text` — канонический текст для отображения;
-- `message_type` — `answer`, `clarification`, `partial_with_clarification`;
-- `clarification` — структурный payload с:
-  - `reason`;
-  - `type`;
-  - `options`;
-  - `requested_fields`;
-  - `original_user_message`;
-  - `turn_index`.
-
-При этом для обратной совместимости сохраняются текстовые алиасы:
-
-- `answer` для `/chat`;
-- `response` для `/widget/chat`.
+Структурный `clarification`-payload (`message_type`, `options`, `option_id` и т. д.) **в v1 не реализован** — structured clarification отключён. Бот может задать уточняющий вопрос в plain text как часть обычного ответа, quick-reply кнопки в виджете не генерируются.
 
 Дополнительно:
 
-- новая пустая сессия может вернуть обычный `answer` с локализованным greeting;
-- clarification, soft rejection и другие deterministic-ветки используют тот же
-  language contract, что и обычные ответы.
-
-**Что это меняет для виджета**
-
-- если пришёл `clarification` с `options`, виджет показывает quick replies;
-- активными остаются только quick replies у **последнего** assistant clarification;
-- при клике отправляется видимый label и, если есть, структурный `option_id`.
+- новая пустая сессия может вернуть `answer` с локализованным greeting;
+- все ответы (clarification plain-text, caveat, escalation fallback) используют тот же language contract, что и обычные ответы.
 
 ---
 

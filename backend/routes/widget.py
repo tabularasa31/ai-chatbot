@@ -389,7 +389,9 @@ class WidgetHistoryResponse(BaseModel):
 
 
 @widget_router.get("/history", response_model=WidgetHistoryResponse)
+@limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
 def widget_history(
+    request: Request,
     bot_id: Annotated[str, Query(description="Bot public ID")],
     session_id: Annotated[str, Query(description="Chat session UUID")],
     db: Session = Depends(get_db),

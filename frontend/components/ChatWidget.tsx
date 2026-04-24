@@ -38,6 +38,8 @@ interface ChatWidgetProps {
   apiKey?: string | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
+  /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
+  isOpen?: boolean;
 }
 
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
@@ -145,6 +147,7 @@ export function ChatWidget({
   identityToken,
   apiKey,
   renderBelowAssistant,
+  isOpen = true,
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
@@ -199,8 +202,19 @@ export function ChatWidget({
     setLoading(true);
     const params = new URLSearchParams({ botId, session_id: sessionId });
     fetch(`/widget/history?${params}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`history_fetch_failed:${r.status}`);
+      .then(async (r) => {
+        if (r.status === 404) {
+          // Session no longer exists on the backend — start fresh
+          if (!cancelled) {
+            clearStoredSession(botId);
+            setSessionId(null);
+          }
+          return null;
+        }
+        if (!r.ok) {
+          // Transient error (5xx, network) — keep session, silently skip history
+          return null;
+        }
         return r.json() as Promise<{
           messages: { role: string; content: string }[];
           chat_ended: boolean;
@@ -208,7 +222,7 @@ export function ChatWidget({
         }>;
       })
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || !data) return;
         if (data.messages.length > 0) {
           const hydrated = data.messages
             .filter((m) => m.role === "user" || m.role === "assistant")
@@ -222,10 +236,7 @@ export function ChatWidget({
         }
       })
       .catch(() => {
-        if (cancelled) return;
-        // Session invalid or expired — clear it so greeting fires
-        clearStoredSession(botId);
-        setSessionId(null);
+        // Network-level failure — keep session for next page load
       })
       .finally(() => {
         if (!cancelled) {
@@ -237,10 +248,11 @@ export function ChatWidget({
   }, [sessionHydrated, sessionId, historyLoaded, botId]);
 
   useEffect(() => {
+    if (!isOpen) return;
     const el = messagesRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, loading]);
+  }, [messages, loading, isOpen]);
 
   const appendSystemMessage = useCallback((subtype: "conversation_ended" | "new_conversation") => {
     setMessages((prev) => {

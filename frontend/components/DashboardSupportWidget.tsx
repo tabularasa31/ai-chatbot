@@ -48,6 +48,7 @@ export function DashboardSupportWidget() {
             botId={BOT_ID}
             apiKey={API_KEY}
             identityToken={identityToken}
+            isOpen={open}
           />
         </div>
       )}

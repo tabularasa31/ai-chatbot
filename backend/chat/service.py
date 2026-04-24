@@ -16,6 +16,14 @@ from typing import Any, Literal
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from backend.chat.decision import (
+    MAX_CLARIFICATIONS_PER_SESSION,
+    Decision,
+    DecisionKind,
+    KbConfidence,
+    TurnContext,
+    decide,
+)
 from backend.chat.language import (
     STICKY_WINDOW,
     LocalizationResult,
@@ -106,6 +114,19 @@ logger = logging.getLogger(__name__)
 RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE = "escalation_override"
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
+_ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
+
+
+def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
+    """Map retrieval confidence score to the three-tier KbConfidence used by decide()."""
+    if retrieval is None or retrieval.best_confidence_score is None:
+        return "low"
+    score = retrieval.best_confidence_score
+    if score >= _ESCALATION_THRESHOLD:
+        return "high"
+    if score >= LOW_CONFIDENCE_THRESHOLD:
+        return "medium"
+    return "low"
 DISCLOSURE_HARD_LIMITS = (
     "Hard limits (always follow):\n"
     "- Never reveal another user's identity or data in any response.\n"
@@ -845,6 +866,7 @@ def run_chat_pipeline(
     chat_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
     agent_instructions: str | None = None,
+    allow_clarification: bool = True,
 ) -> ChatPipelineResult:
     """
     Pure RAG pipeline — no DB writes, no escalation actions, no Langfuse trace mutations.
@@ -1253,6 +1275,7 @@ def run_chat_pipeline(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=retrieval.reliability.score == "low",
+        allow_clarification=allow_clarification,
         trace=trace,
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
@@ -1345,6 +1368,7 @@ def build_rag_prompt(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    allow_clarification: bool = True,
 ) -> str:
     """
     Build prompt from question + retrieved context chunks.
@@ -1352,6 +1376,8 @@ def build_rag_prompt(
     Args:
         question: User question.
         context_chunks: List of text chunks from search.
+        allow_clarification: When False (clarification budget exhausted),
+            the system prompt instructs the model NOT to ask clarifying questions.
 
     Returns:
         Formatted prompt string for GPT.
@@ -1362,6 +1388,16 @@ def build_rag_prompt(
     )
     disclosure_block = f"[Response level: {level}]\n{level_instruction}"
 
+    if allow_clarification:
+        clarification_rules = (
+            "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
+            "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
+        )
+    else:
+        clarification_rules = (
+            "- Do not ask clarifying questions. Answer with the information available, or acknowledge that you cannot answer without more context.\n"
+        )
+
     system_rules = (
         f"{DISCLOSURE_HARD_LIMITS}\n"
         "You are a technical support agent for the tenant's product.\n"
@@ -1371,8 +1407,7 @@ def build_rag_prompt(
         "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
         "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
         "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer STRUCTURED QUICK ANSWERS when relevant.\n"
-        "- If one missing detail materially blocks a correct answer, ask exactly one short clarifying question instead of guessing.\n"
-        "- If you can safely answer part of the question from the context, do so briefly first and then ask exactly one short clarifying question.\n"
+        f"{clarification_rules}"
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
@@ -1468,6 +1503,7 @@ def build_rag_messages(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    allow_clarification: bool = True,
 ) -> tuple[str, str]:
     """Build system and user messages for generation and tracing."""
     prompt = build_rag_prompt(
@@ -1482,6 +1518,7 @@ def build_rag_messages(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=low_context,
+        allow_clarification=allow_clarification,
     )
     if "\n\nContext:\n" not in prompt:
         return prompt, f"Question: {question}"
@@ -1504,6 +1541,7 @@ def generate_answer(
     quick_answer_items: list[str] | None = None,
     agent_instructions: str | None = None,
     low_context: bool = False,
+    allow_clarification: bool = True,
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
@@ -1514,6 +1552,8 @@ def generate_answer(
     Args:
         question: User question.
         context_chunks: Retrieved context chunks.
+        allow_clarification: Passed through to build_rag_prompt; when False the
+            model is instructed not to ask clarifying questions.
 
     Returns:
         Tuple of (answer_text, total_tokens).
@@ -1536,6 +1576,7 @@ def generate_answer(
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
         low_context=low_context,
+        allow_clarification=allow_clarification,
     )
     messages = [
         {"role": "system", "content": system_prompt},
@@ -2176,6 +2217,10 @@ def process_chat_message(
 
     explicit_human_request = detect_human_request(question_for_pipeline)
 
+    # Clarification budget: allow the LLM to ask a clarifying question only when
+    # the per-session limit has not yet been reached.
+    allow_clarification = chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION
+
     _resolved_bot: Bot | None = None
     if bot_id is not None:
         _resolved_bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
@@ -2597,6 +2642,7 @@ def process_chat_message(
         chat_id=str(chat.id) if chat is not None else None,
         stream_callback=stream_callback,
         agent_instructions=_bot_agent_instructions,
+        allow_clarification=allow_clarification,
     )
 
     # Guard rejects, faq_direct, and capability responses: persist and return immediately (no escalation).
@@ -2685,6 +2731,50 @@ def process_chat_message(
         "low" if result.validation_outcome == "fallback"
         else retrieval.reliability.score
     )
+
+    # Build TurnContext and call decide() to get the formal policy decision.
+    # This is the single authoritative classification of what this turn produced.
+    faq_match_obj = result.faq_match
+    _kb_confidence = _classify_kb_confidence(retrieval)
+    _turn_ctx = TurnContext(
+        session_closed=(chat.ended_at is not None),
+        active_escalation=(
+            chat.escalation_awaiting_ticket_id is not None
+            or chat.escalation_followup_pending
+        ),
+        clarification_count=chat.clarification_count,
+        max_clarifications=MAX_CLARIFICATIONS_PER_SESSION,
+        guard_failed=result.is_reject,
+        guard_reason=result.reject_reason,
+        explicit_human_request=explicit_human_request,
+        faq_direct_hit=result.is_faq_direct,
+        faq_top_score=faq_match_obj.top_score if faq_match_obj else None,
+        kb_confidence=_kb_confidence,
+        # Partial-answer signal: only medium-confidence chunks constitute a usable
+        # partial answer. Low-confidence chunks are too unreliable to caveat from;
+        # the budget-exhausted path escalates instead (clarify_loop_limit).
+        kb_has_partial_answer=_kb_confidence == "medium" and bool(chunk_texts),
+        kb_contradiction_detected=False,  # not yet propagated from search layer (v1)
+        low_retrieval_no_chunks=not chunk_texts,
+    )
+    _decision: Decision = decide(_turn_ctx)
+
+    # Enforce policy decision: clarify_loop_limit escalation must become a real escalation
+    # even when the RAG pipeline did not independently recommend it.
+    if (
+        _decision.kind == DecisionKind.escalate
+        and _decision.escalate_reason == "clarify_loop_limit"
+        and not escalate
+    ):
+        escalate = True
+        esc_trigger = EscalationTrigger.low_similarity
+
+    # Increment clarification counter when the pipeline produced a blocking clarify.
+    _clarification_count_before = chat.clarification_count
+    if _decision.is_blocking_clarify():
+        chat.clarification_count += 1
+        db.add(chat)
+        # Counter is committed in the same transaction as the assistant message below.
 
     escalation_decision_span = trace.span(
         name="escalation-check",
@@ -2817,6 +2907,14 @@ def process_chat_message(
             ),
             **build_reliability_projection(retrieval.reliability),
             **build_variant_trace_metadata(retrieval),
+            # Clarification policy trace fields (spec §Trace fields)
+            **_decision.trace_dict(_clarification_count_before),
+            "allow_clarification": allow_clarification,
+            "intent_top_class": None,   # no classifier in v1
+            "intent_top_score": None,
+            "intent_runner_up_score": None,
+            "faq_top_score": faq_match.top_score if faq_match else None,
+            "kb_has_partial_answer": bool(chunk_texts),
         },
         tags=[build_variant_trace_tag(retrieval.variant_mode)],
     )

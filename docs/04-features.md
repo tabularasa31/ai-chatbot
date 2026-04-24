@@ -326,40 +326,49 @@ Archive semantics are intentionally source-specific:
 
 Clarification is intentionally narrow. The bot does not ask follow-up questions by default; it does so only when the current request is not sufficiently answerable under the existing pipeline signals and one of these deterministic trigger families is matched:
 
-- ambiguous intent
-- missing critical slot
-- low retrieval confidence
+- low retrieval confidence (retrieved chunks exist but score is below the high-confidence threshold)
+- multiple conflicting matches (contradiction detected between retrieved sources)
 
-Current MVP behavior:
+v1 limitation: ambiguous intent and missing critical slot are not yet emitted (no intent classifier). These paths fall back to the best-effort answer.
 
-- only one clarification question is asked per active clarification flow
-- clarification state is stored in `chats.user_context["clarification_state"]`
-- a short follow-up reply is first classified as either:
-  - continuation of the active clarification flow
-  - new unrelated intent
-- continuation replies are normalized back into the standard chat pipeline rather than handled by a separate mini-pipeline
-- unsupported ambiguity or missing-slot patterns do not trigger speculative clarification; they fall back to the existing best-effort answer path
+**Decision engine (`backend/chat/decision.py`)**
+
+Every chat turn is routed by a single authoritative `decide(turn: TurnContext) -> Decision` function. Block rules are evaluated in order; the first match wins:
+
+1. Guard failure → `reject`
+2. Explicit human-agent request → `escalate(explicit_human_request)`
+3. Session closed → `acknowledge_closed_or_start_new`
+4. Active escalation ticket → `forward_to_active_ticket`
+5. Clarification budget exhausted (see below) → `answer_with_caveat` or `escalate(clarify_loop_limit)`
+6. FAQ direct hit → `answer_from_faq`
+7. Medium-confidence KB + partial answer → `answer_with_caveat_and_inline_clarify` (budget-free)
+
+After these: high-confidence KB → `answer_with_citations`; remaining low-confidence → `clarify(blocking)` or `escalate(low_confidence_no_path)`.
+
+**Clarification budget**
+
+- Maximum **1 blocking clarifying question per session** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var).
+- `chats.clarification_count` tracks how many blocking clarifications have been issued in the session.
+- Counter increments only on `Decision.clarify(type=blocking)`, atomically in the same DB transaction as the assistant message.
+- Inline clarifications (`type=inline`, appended after a partial answer) are budget-free and never increment the counter.
+- When the budget is exhausted and the turn would otherwise produce a blocking clarify:
+  - if medium-confidence chunks are available → `answer_with_caveat` (caveated answer, no follow-up question)
+  - otherwise → `escalate(clarify_loop_limit)` (real support ticket created)
+
+**Clarify types**
+
+| type | counted toward budget | description |
+|------|----------------------|-------------|
+| `blocking` | yes | bot stops and asks one question before answering |
+| `inline` | no | bot gives a partial answer and appends a soft follow-up question |
+| `safety_confirm` | no | reserved for future safety-sensitive confirmations |
 
 Public response contracts:
 
-- `POST /chat` now returns canonical `text`, `message_type`, and optional `clarification`
-- `POST /widget/chat` returns canonical `text`, `message_type`, and optional `clarification`
+- `POST /chat` and `POST /widget/chat` return `text` (canonical) plus legacy aliases (`answer` / `response` respectively)
 - both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
 
-Clarification payloads can include:
-
-- `reason`
-- `type`
-- `options`
-- `requested_fields`
-- `original_user_message`
-- `turn_index`
-
-For the website widget:
-
-- clarification options render as quick-reply buttons
-- only the latest assistant clarification keeps active quick replies
-- button clicks send the visible option label and, when available, a structured `option_id`
+v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
 
 ### Knowledge dashboard API and UI (Phase 3)
 

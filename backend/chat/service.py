@@ -1582,6 +1582,8 @@ def generate_answer(
         {"role": "user", "content": user_message},
     ]
     openai_client = get_openai_client(api_key)
+    _reasoning = is_reasoning_model(settings.chat_model)
+    _temperature: float | None = None if _reasoning else 0.2
     generation = None
     if trace is not None:
         generation_input: Any
@@ -1593,8 +1595,6 @@ def generate_answer(
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
             }
-        _reasoning = is_reasoning_model(settings.chat_model)
-        _temperature: float | None = None if _reasoning else 0.2
         generation = trace.generation(
             name="llm-generation",
             model=settings.chat_model,

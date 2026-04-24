@@ -316,31 +316,92 @@ def _emit_chat_turn_event(
     llm_ms: int = 0,
     reliability_score: str | None = None,
     best_confidence_score: float | None = None,
+    decision: Decision | None = None,
+    escalation_trigger: str | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
+    props: dict = {
+        "chat_id": chat_id,
+        "strategy": strategy,
+        "reject_reason": reject_reason,
+        "is_reject": is_reject,
+        "escalated": escalated,
+        "identified": identified,
+        "latency_ms": latency_ms,
+        "retrieval_ms": retrieval_ms,
+        "llm_ms": llm_ms,
+        "reliability_score": reliability_score,
+        "best_confidence_score": best_confidence_score,
+        "escalation_trigger": escalation_trigger,
+    }
+    if decision is not None:
+        props["decision"] = decision.kind.value
+        props["decision_reason"] = decision.clarify_reason or decision.escalate_reason or "n/a"
+        props["clarify_type"] = decision.clarify_type
+        props["clarify_reason"] = decision.clarify_reason
+        props["budget_blocked"] = decision.budget_blocked
+        props["escalation_reason"] = decision.escalate_reason
     try:
         capture_event(
             "chat.turn",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
-            properties={
-                "chat_id": chat_id,
-                "strategy": strategy,
-                "reject_reason": reject_reason,
-                "is_reject": is_reject,
-                "escalated": escalated,
-                "identified": identified,
-                "latency_ms": latency_ms,
-                "retrieval_ms": retrieval_ms,
-                "llm_ms": llm_ms,
-                "reliability_score": reliability_score,
-                "best_confidence_score": best_confidence_score,
-            },
+            properties=props,
         )
     except Exception:
         logger.warning("Failed to emit chat.turn event", exc_info=True)
+
+
+def _emit_chat_escalated_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    escalation_reason: str,
+    escalation_trigger: str | None = None,
+) -> None:
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "chat_escalated",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "escalation_reason": escalation_reason,
+                "escalation_trigger": escalation_trigger,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit chat_escalated event", exc_info=True)
+
+
+def _emit_chat_session_ended_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    outcome: str,
+) -> None:
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "chat_session_ended",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "outcome": outcome,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit chat_session_ended event", exc_info=True)
 
 
 def _safe_int(value: Any) -> int:
@@ -2493,6 +2554,12 @@ def process_chat_message(
                         "escalation_language": language_context.escalation_language,
                     },
                 )
+                _emit_chat_session_ended_event(
+                    tenant_public_id=getattr(tenant_row, "public_id", None),
+                    bot_public_id=bot_public_id,
+                    chat_id=str(chat.id) if chat is not None else None,
+                    outcome="resolved",
+                )
                 return ChatTurnOutcome(
                     text=out.message_to_user,
                     document_ids=[],
@@ -2610,6 +2677,19 @@ def process_chat_message(
                     "escalated": True,
                     "escalation_language": language_context.escalation_language,
                 },
+            )
+            _emit_chat_escalated_event(
+                tenant_public_id=getattr(tenant_row, "public_id", None),
+                bot_public_id=bot_public_id,
+                chat_id=str(chat.id) if chat is not None else None,
+                escalation_reason="explicit_human_request",
+                escalation_trigger=EscalationTrigger.user_request.value,
+            )
+            _emit_chat_session_ended_event(
+                tenant_public_id=getattr(tenant_row, "public_id", None),
+                bot_public_id=bot_public_id,
+                chat_id=str(chat.id) if chat is not None else None,
+                outcome="escalated",
             )
             return ChatTurnOutcome(
                 text=out.message_to_user,
@@ -2837,6 +2917,19 @@ def process_chat_message(
                 chat.escalation_followup_pending = True
             db.add(chat)
             db.commit()
+            _emit_chat_escalated_event(
+                tenant_public_id=getattr(tenant_row, "public_id", None),
+                bot_public_id=bot_public_id,
+                chat_id=str(chat.id) if chat is not None else None,
+                escalation_reason=_decision.escalate_reason or esc_trigger.value,
+                escalation_trigger=esc_trigger.value,
+            )
+            _emit_chat_session_ended_event(
+                tenant_public_id=getattr(tenant_row, "public_id", None),
+                bot_public_id=bot_public_id,
+                chat_id=str(chat.id) if chat is not None else None,
+                outcome="escalated",
+            )
         except Exception as e:
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
@@ -2932,6 +3025,8 @@ def process_chat_message(
         llm_ms=result.llm_ms,
         reliability_score=reliability_score,
         best_confidence_score=retrieval.best_confidence_score,
+        decision=_decision,
+        escalation_trigger=esc_trigger.value if esc_trigger else None,
     )
     return ChatTurnOutcome(
         text=answer,

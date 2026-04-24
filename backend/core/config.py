@@ -184,6 +184,18 @@ class Settings(BaseSettings):
     # Maximum job duration before timeout (seconds)
     max_job_duration_sec: int = Field(300, alias="MAX_JOB_DURATION_SEC")
 
+    # ── Semantic query rewrite ─────────────────────────────────────────────
+    # When enabled, an LLM call bridges user symptom language → feature
+    # terminology, adding a semantic variant for vector retrieval only.
+    semantic_query_rewrite_enabled: bool = Field(
+        True,
+        alias="SEMANTIC_QUERY_REWRITE_ENABLED",
+    )
+    semantic_query_rewrite_timeout_sec: float = Field(
+        2.0,
+        alias="SEMANTIC_QUERY_REWRITE_TIMEOUT_SEC",
+    )
+
     # ── Agent instructions ─────────────────────────────────────────────────
     enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")
     enable_cot_reasoning: bool = Field(True, alias="ENABLE_COT_REASONING")

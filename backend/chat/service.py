@@ -90,7 +90,6 @@ from backend.search.service import (
     EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
     _normalize_query_variants,
-    _rewrite_query_for_retrieval,
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
@@ -98,6 +97,7 @@ from backend.search.service import (
     embed_queries,
     expand_query,
     search_similar_chunks_detailed,
+    semantic_query_rewrite,
 )
 from backend.support_config import public_support_config_dict
 
@@ -303,6 +303,7 @@ def retrieve_context(
     precomputed_query_variants: list[str] | None = None,
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
+    rewritten_variant: str | None = None,
 ) -> RetrievalContext:
     """
     Retrieve context chunks for RAG plus a separate confidence signal for escalation.
@@ -324,6 +325,7 @@ def retrieve_context(
             precomputed_query_variants=precomputed_query_variants,
             precomputed_variant_vectors=precomputed_variant_vectors,
             precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
+            precomputed_rewritten_variant=rewritten_variant,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError):
         retrieval_duration_ms = round((perf_counter() - _retrieval_start) * 1000, 2)
@@ -841,6 +843,11 @@ def run_chat_pipeline(
     # which early-return path (injection, faq_direct, not_relevant) is taken.
     _guard_profile = db.get(TenantProfile, tenant_id)
     _guard_pool = ThreadPoolExecutor(max_workers=_GUARD_POOL_WORKERS)
+    # Initialise before the try so the finally block can always reference them,
+    # even if an exception fires before the assignments inside the try.
+    _rewrite_pool: ThreadPoolExecutor | None = None
+    _rewrite_future = None
+    _rewritten_variant: str | None = None
     try:
         _rel_future = _guard_pool.submit(
             check_relevance_with_profile,
@@ -855,6 +862,18 @@ def run_chat_pipeline(
             question,
             api_key=api_key,
         )
+
+        # Semantic query rewrite runs in a dedicated thread, concurrent with
+        # guard checks (which take 1-2 s). By the time guards finish, the
+        # rewrite is typically already done, so it adds zero extra latency.
+        if settings.semantic_query_rewrite_enabled:
+            _rewrite_pool = ThreadPoolExecutor(max_workers=1)
+            _rewrite_future = _rewrite_pool.submit(
+                semantic_query_rewrite,
+                question,
+                api_key=api_key,
+                timeout=settings.semantic_query_rewrite_timeout_sec,
+            )
 
         _inj_start = perf_counter()
         _inj_span = (
@@ -921,10 +940,23 @@ def run_chat_pipeline(
 
         # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
         query_variants = expand_query(question)
-        if settings.query_rewrite_enabled:
-            _rewritten = _rewrite_query_for_retrieval(question, api_key=api_key)
-            if _rewritten:
-                query_variants = _normalize_query_variants([*query_variants, _rewritten])
+
+        # Collect semantic rewrite result — guard checks ran concurrently so
+        # the rewrite is usually already finished by now (zero extra wait).
+        # _rewrite_pool is shut down in the outer finally regardless of exit path.
+        if _rewrite_future is not None:
+            try:
+                _rewritten_variant = _rewrite_future.result(
+                    timeout=settings.semantic_query_rewrite_timeout_sec
+                )
+                if _rewritten_variant and _rewritten_variant.casefold() not in {
+                    v.casefold() for v in query_variants
+                }:
+                    query_variants = [*query_variants, _rewritten_variant]
+            except Exception:
+                _rewritten_variant = None
+
+
         if trace is not None:
             _embed_span = trace.span(
                 name="query-embedding",
@@ -1038,6 +1070,12 @@ def run_chat_pipeline(
         relevant, _, profile = _rel_future.result()
     finally:
         _guard_pool.shutdown(wait=False)
+        # _rewrite_pool is separate — shut it down regardless of which exit path
+        # was taken (injection reject, capability, relevance reject, or normal flow).
+        # wait=False: let the thread finish in background; result already collected
+        # (or discarded) before this point on the normal path.
+        if _rewrite_pool is not None:
+            _rewrite_pool.shutdown(wait=False)
 
     if not relevant:
         reject_result = build_reject_response_result(
@@ -1116,6 +1154,7 @@ def run_chat_pipeline(
             precomputed_query_variants=query_variants,
             precomputed_variant_vectors=variant_vectors,
             precomputed_embedding_api_request_count=1,
+            rewritten_variant=_rewritten_variant,
         )
 
     # --- 6. Low-retrieval guard ---

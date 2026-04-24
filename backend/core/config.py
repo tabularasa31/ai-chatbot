@@ -38,10 +38,6 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
-    query_rewrite_enabled: bool = Field(
-        True,
-        alias="QUERY_REWRITE_ENABLED",
-    )
     query_rewrite_model: str = Field(
         "gpt-4o-mini",
         alias="QUERY_REWRITE_MODEL",
@@ -186,8 +182,6 @@ class Settings(BaseSettings):
 
     # ── Semantic query rewrite ─────────────────────────────────────────────
     # Timeout for the concurrent LLM rewrite call (runs alongside guard checks).
-    # Controlled by the same QUERY_REWRITE_ENABLED kill switch as the in-search
-    # rewrite so a single flag disables all LLM-based query expansion.
     semantic_query_rewrite_timeout_sec: float = Field(
         2.0,
         alias="SEMANTIC_QUERY_REWRITE_TIMEOUT_SEC",

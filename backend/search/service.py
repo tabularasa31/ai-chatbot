@@ -1867,7 +1867,7 @@ def search_similar_chunks_detailed(
     # user problem-descriptions and feature-name headings in docs. Language-agnostic —
     # the multilingual embedding model handles cross-lingual matching from there.
     rewritten_variant: str | None = None
-    if not use_precomputed and settings.query_rewrite_enabled:
+    if not use_precomputed:
         rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
         if rewritten_variant:
             query_variants = _normalize_query_variants([*query_variants, rewritten_variant])

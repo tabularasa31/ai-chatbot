@@ -274,7 +274,7 @@ def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
     pg_db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Symmetric BM25 runs extra lexical-safe evals on PG without regressing the final relevant hit."""
+    """Non-EN query routes BM25 through the EN rewrite, producing lexical signal against English corpus."""
     from tests.test_models import _create_client, _create_user
     from backend.search.service import search_similar_chunks_detailed
 
@@ -282,52 +282,40 @@ def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
     cl = _create_client(pg_db_session, user, name="Hybrid Symmetric")
     doc_id = _make_document(pg_db_session, cl.id)
 
-    query_vec = [1.0] + [0.0] * 1535
+    query_vec = [0.5] + [0.0] * 1535
     monkeypatch.setattr(
         "backend.search.service.embed_queries",
         lambda queries, **kwargs: [query_vec for _ in queries],
     )
+    # Simulate query rewrite: Cyrillic query → EN keyword phrase
+    monkeypatch.setattr(
+        "backend.search.service._rewrite_query_for_retrieval",
+        lambda query, **kwargs: "reset password instructions",
+    )
 
-    _insert_embedding(pg_db_session, doc_id, "unrelated foo instructions", [1.0] + [0.0] * 1535)
+    _insert_embedding(pg_db_session, doc_id, "unrelated foo content", [0.5] + [0.0] * 1535)
     _insert_embedding(
         pg_db_session,
         doc_id,
         "reset password instructions",
-        [0.0, 1.0] + [0.0] * 1534,
+        [0.5] + [0.0] * 1535,
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.settings.bm25_expansion_mode",
-        "asymmetric",
-    )
-    asymmetric = search_similar_chunks_detailed(
+    # Russian query — non-EN, BM25 must use the EN rewrite to find lexical matches
+    result = search_similar_chunks_detailed(
         cl.id,
-        "reset-password foo",
-        top_k=1,
+        "сброс пароля",
+        top_k=2,
         db=pg_db_session,
         api_key="sk-test",
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.settings.bm25_expansion_mode",
-        "symmetric_variants",
-    )
-    symmetric = search_similar_chunks_detailed(
-        cl.id,
-        "reset-password foo",
-        top_k=1,
-        db=pg_db_session,
-        api_key="sk-test",
-    )
-
-    assert asymmetric.has_lexical_signal is True
-    assert symmetric.best_keyword_score is not None
-    assert symmetric.has_lexical_signal is True
-    assert asymmetric.bm25_query_variant_count == 1
-    assert asymmetric.bm25_variant_eval_count == 1
-    assert symmetric.bm25_query_variant_count > asymmetric.bm25_query_variant_count
-    assert symmetric.bm25_variant_eval_count > asymmetric.bm25_variant_eval_count
-    assert symmetric.results[0][0].chunk_text == "reset password instructions"
+    assert result.bm25_query_variant_count == 1
+    assert result.bm25_variant_eval_count == 1
+    assert result.has_lexical_signal is True
+    assert result.best_keyword_score is not None
+    result_texts = [emb.chunk_text for emb, _ in result.results]
+    assert "reset password instructions" in result_texts
 
 
 @pytest.mark.pgvector
@@ -336,7 +324,7 @@ def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_result
     pg_db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Symmetric lexical-safe evaluation can add variant work without changing user-visible ranking."""
+    """EN query uses original query for BM25; ranking is stable with or without a rewrite variant."""
     from tests.test_models import _create_client, _create_user
     from backend.search.service import search_similar_chunks_detailed
 
@@ -363,34 +351,38 @@ def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_result
         [0.7, 0.3] + [0.0] * 1534,
     )
 
+    # EN query with no rewrite (None returned) — BM25 uses the original query
     monkeypatch.setattr(
-        "backend.search.service.settings.bm25_expansion_mode",
-        "asymmetric",
+        "backend.search.service._rewrite_query_for_retrieval",
+        lambda query, **kwargs: None,
     )
-    asymmetric = search_similar_chunks_detailed(
+    no_rewrite = search_similar_chunks_detailed(
         cl.id,
-        "cors settings!!",
+        "cors settings",
         top_k=2,
         db=pg_db_session,
         api_key="sk-test",
     )
 
+    # EN query with a rewrite present — BM25 still uses the original EN query (rewrite ignored for EN)
     monkeypatch.setattr(
-        "backend.search.service.settings.bm25_expansion_mode",
-        "symmetric_variants",
+        "backend.search.service._rewrite_query_for_retrieval",
+        lambda query, **kwargs: "cors origin configuration allow list",
     )
-    symmetric = search_similar_chunks_detailed(
+    with_rewrite = search_similar_chunks_detailed(
         cl.id,
-        "cors settings!!",
+        "cors settings",
         top_k=2,
         db=pg_db_session,
         api_key="sk-test",
     )
 
-    assert symmetric.bm25_query_variant_count > asymmetric.bm25_query_variant_count
-    assert symmetric.bm25_variant_eval_count > asymmetric.bm25_variant_eval_count
-    assert [embedding.id for embedding, _ in symmetric.results] == [
-        embedding.id for embedding, _ in asymmetric.results
+    # Both runs use 1 BM25 query variant (the original EN query)
+    assert no_rewrite.bm25_query_variant_count == 1
+    assert with_rewrite.bm25_query_variant_count == 1
+    # Ranking is stable regardless of the rewrite
+    assert [embedding.id for embedding, _ in with_rewrite.results] == [
+        embedding.id for embedding, _ in no_rewrite.results
     ]
 
 

@@ -89,7 +89,6 @@ from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
     EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
-    _normalize_query_variants,
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,

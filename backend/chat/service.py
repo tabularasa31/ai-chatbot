@@ -80,7 +80,7 @@ from backend.models import (
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
 _SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
-_GUARD_POOL_WORKERS = 3   # concurrent threads for injection + relevance + capability guards
+_GUARD_POOL_WORKERS = 4   # concurrent threads: injection + relevance + capability + semantic rewrite
 _DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.formatters import truncate_text
@@ -844,7 +844,6 @@ def run_chat_pipeline(
     _guard_pool = ThreadPoolExecutor(max_workers=_GUARD_POOL_WORKERS)
     # Initialise before the try so the finally block can always reference them,
     # even if an exception fires before the assignments inside the try.
-    _rewrite_pool: ThreadPoolExecutor | None = None
     _rewrite_future = None
     _rewritten_variant: str | None = None
     try:
@@ -862,16 +861,19 @@ def run_chat_pipeline(
             api_key=api_key,
         )
 
-        # Semantic query rewrite runs in a dedicated thread, concurrent with
-        # guard checks (which take 1-2 s). By the time guards finish, the
-        # rewrite is typically already done, so it adds zero extra latency.
+        # Semantic query rewrite runs in the same guard pool (4th worker).
+        # Guards take 1-2 s; the rewrite typically finishes within that window
+        # so it adds zero extra latency to the request.
+        # Note: SEMANTIC_QUERY_REWRITE_ENABLED is a separate flag from
+        # QUERY_REWRITE_ENABLED — the latter controls the in-search fallback
+        # in search_similar_chunks_detailed for non-chat callers.
         if settings.semantic_query_rewrite_enabled:
-            _rewrite_pool = ThreadPoolExecutor(max_workers=1)
-            _rewrite_future = _rewrite_pool.submit(
+            _rewrite_future = _guard_pool.submit(
                 semantic_query_rewrite,
                 question,
                 api_key=api_key,
                 timeout=settings.semantic_query_rewrite_timeout_sec,
+                bot_id=retry_bot_id,
             )
 
         _inj_start = perf_counter()
@@ -1069,12 +1071,6 @@ def run_chat_pipeline(
         relevant, _, profile = _rel_future.result()
     finally:
         _guard_pool.shutdown(wait=False)
-        # _rewrite_pool is separate — shut it down regardless of which exit path
-        # was taken (injection reject, capability, relevance reject, or normal flow).
-        # wait=False: let the thread finish in background; result already collected
-        # (or discarded) before this point on the normal path.
-        if _rewrite_pool is not None:
-            _rewrite_pool.shutdown(wait=False)
 
     if not relevant:
         reject_result = build_reject_response_result(

@@ -1119,6 +1119,8 @@ def expand_query(query: str) -> list[str]:
 
 # ── Semantic query rewrite ────────────────────────────────────────────────────
 
+_SEMANTIC_REWRITE_MAX_TOKENS = 40  # enough for a short keyword phrase
+
 _SEMANTIC_REWRITE_PROMPT_PREFIX = (
     "A customer asked a product support chatbot:\n\""
 )
@@ -1136,16 +1138,18 @@ def semantic_query_rewrite(
     *,
     api_key: str,
     timeout: float = 2.0,
+    bot_id: str | None = None,
 ) -> str | None:
     """LLM-based semantic rewrite: user symptom → feature/product terminology.
 
     Bridges the semantic gap between how users describe problems ("bot replies
-    in English") and how documentation describes features ("language detection
-    multilingual settings"). Returns None on any failure so the caller can
-    continue safely with lexical variants only.
+    only in Russian") and how documentation describes features ("language
+    detection multilingual settings"). Language-agnostic: the LLM stays in
+    the same language as the query so the multilingual embedding model can
+    match chunks regardless of what language the docs are in.
 
-    The rewrite is intentionally in English to match documentation language
-    and is only used for vector retrieval, not BM25.
+    Returns None on any failure so the caller degrades gracefully to lexical
+    variants only. Used for vector retrieval only, not BM25.
     """
     if not query or not api_key:
         return None
@@ -1160,8 +1164,9 @@ def semantic_query_rewrite(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0,
-                max_tokens=40,
+                max_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
+            bot_id=bot_id,
         )
         rewrite = (response.choices[0].message.content or "").strip()
         # Sanity: non-empty, single line, not too long
@@ -1877,8 +1882,10 @@ def search_similar_chunks_detailed(
         ).end(
             output={
                 "variants": query_variants,
-                "precomputed_rewritten_variant": precomputed_rewritten_variant,
-                "rewritten_variant": rewritten_variant,
+                # On the precomputed path (chat pipeline), rewritten_variant stays
+                # None (the in-search rewrite is skipped); surface the value that
+                # was computed upstream so traces reflect the actual rewrite used.
+                "rewritten_variant": rewritten_variant or precomputed_rewritten_variant,
                 "query_variant_count": query_variant_count,
                 "variant_mode": variant_mode,
                 "extra_variant_count": extra_variant_count,

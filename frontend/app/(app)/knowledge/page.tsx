@@ -1048,6 +1048,7 @@ export default function KnowledgePage() {
             </span>
             <input
               type="file"
+              multiple
               accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt"
               onChange={handleUpload}
               disabled={uploading}

@@ -82,20 +82,23 @@ def parse_docx(content: bytes) -> str:
         raise ValueError(f"DOCX is corrupted or unreadable: {e}") from e
 
 
+_ANTIWORD_TIMEOUT = 30
+
+
 def parse_doc(content: bytes) -> str:
     """Extract text from a legacy .doc file using antiword."""
     try:
-        with tempfile.NamedTemporaryFile(suffix=".doc", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".doc") as tmp:
             tmp.write(content)
-            tmp_path = tmp.name
-        result = subprocess.run(
-            ["antiword", tmp_path],
-            capture_output=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            raise ValueError(result.stderr.decode(errors="replace").strip() or "antiword failed")
-        return result.stdout.decode("utf-8", errors="replace")
+            tmp.flush()
+            result = subprocess.run(
+                ["antiword", tmp.name],
+                capture_output=True,
+                timeout=_ANTIWORD_TIMEOUT,
+            )
+            if result.returncode != 0:
+                raise ValueError(result.stderr.decode(errors="replace").strip() or "antiword failed")
+            return result.stdout.decode("utf-8", errors="replace")
     except ValueError:
         raise
     except Exception as e:

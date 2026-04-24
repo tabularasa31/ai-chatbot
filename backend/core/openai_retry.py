@@ -39,6 +39,13 @@ def call_openai_with_retry(
     last_exc: Exception | None = None
 
     for attempt in range(1, max_attempts + 1):
+        _emit_call_attempt(
+            operation=operation,
+            attempt=attempt,
+            elapsed=time.monotonic() - started,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        )
         try:
             return fn()
         except Exception as exc:
@@ -106,7 +113,7 @@ def call_openai_with_retry(
                     "status_code": classified.status_code,
                 },
             )
-            _emit_retry_attempt(
+            _emit_retry_scheduled(
                 operation=operation,
                 attempt=attempt,
                 delay_seconds=delay,
@@ -167,7 +174,32 @@ def _retry_distinct_id(tenant_id: str | None, bot_id: str | None) -> str:
     return bot_id or tenant_id or "system"
 
 
-def _emit_retry_attempt(
+def _emit_call_attempt(
+    *,
+    operation: str,
+    attempt: int,
+    elapsed: float,
+    tenant_id: str | None,
+    bot_id: str | None,
+) -> None:
+    """Fired once per API call attempt (before fn() executes)."""
+    try:
+        capture_event(
+            "openai_retry.attempt",
+            distinct_id=_retry_distinct_id(tenant_id, bot_id),
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            properties={
+                "operation": operation,
+                "attempt": attempt,
+                "elapsed_ms": int(elapsed * 1000),
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit openai_retry.attempt event", exc_info=True)
+
+
+def _emit_retry_scheduled(
     *,
     operation: str,
     attempt: int,
@@ -178,9 +210,10 @@ def _emit_retry_attempt(
     tenant_id: str | None,
     bot_id: str | None,
 ) -> None:
+    """Fired when a retry sleep is scheduled (attempt failed, will try again)."""
     try:
         capture_event(
-            "openai_retry.attempt",
+            "openai_retry.retry_scheduled",
             distinct_id=_retry_distinct_id(tenant_id, bot_id),
             tenant_id=tenant_id,
             bot_id=bot_id,
@@ -195,7 +228,7 @@ def _emit_retry_attempt(
             },
         )
     except Exception:
-        logger.warning("Failed to emit openai_retry.attempt event", exc_info=True)
+        logger.warning("Failed to emit openai_retry.retry_scheduled event", exc_info=True)
 
 
 def _emit_retry_exhausted(

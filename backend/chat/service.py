@@ -821,8 +821,6 @@ def _persist_assistant_message_with_response_language(
 
 
 
-
-
 def run_chat_pipeline(
     tenant_id: uuid.UUID,
     question: str,
@@ -931,6 +929,8 @@ def run_chat_pipeline(
 
         if injection_result.detected:
             _rel_future.cancel()
+            if _rewrite_future:
+                _rewrite_future.cancel()
             reject_result = build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
                 profile=None,

@@ -38,6 +38,8 @@ interface ChatWidgetProps {
   apiKey?: string | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
+  /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
+  isOpen?: boolean;
 }
 
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
@@ -145,11 +147,13 @@ export function ChatWidget({
   identityToken,
   apiKey,
   renderBelowAssistant,
+  isOpen = true,
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionHydrated, setSessionHydrated] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
@@ -163,6 +167,7 @@ export function ChatWidget({
 
   useEffect(() => {
     setSessionHydrated(false);
+    setHistoryLoaded(false);
     setChatClosed(false);
     setActiveTicket(null);
 
@@ -192,10 +197,62 @@ export function ChatWidget({
   }, [botId, identityToken, apiKey]);
 
   useEffect(() => {
+    if (!sessionHydrated || !sessionId || historyLoaded) return;
+    let cancelled = false;
+    setLoading(true);
+    const params = new URLSearchParams({ botId, session_id: sessionId });
+    fetch(`/widget/history?${params}`)
+      .then(async (r) => {
+        if (r.status === 404) {
+          // Session no longer exists on the backend — start fresh
+          if (!cancelled) {
+            clearStoredSession(botId);
+            setSessionId(null);
+          }
+          return null;
+        }
+        if (!r.ok) {
+          // Transient error (5xx, network) — keep session, silently skip history
+          return null;
+        }
+        return r.json() as Promise<{
+          messages: { role: string; content: string }[];
+          chat_ended: boolean;
+          ticket_number?: string | null;
+        }>;
+      })
+      .then((data) => {
+        if (cancelled || !data) return;
+        if (data.messages.length > 0) {
+          const hydrated = data.messages
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => createTextMessage(m.role as "user" | "assistant", m.content));
+          setMessages(hydrated);
+          if (data.ticket_number) setActiveTicket(data.ticket_number);
+          if (data.chat_ended) {
+            setChatClosed(true);
+            setMessages((prev) => appendSystemMarker(prev, "conversation_ended"));
+          }
+        }
+      })
+      .catch(() => {
+        // Network-level failure — keep session for next page load
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHistoryLoaded(true);
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [sessionHydrated, sessionId, historyLoaded, botId]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     const el = messagesRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, loading]);
+  }, [messages, loading, isOpen]);
 
   const appendSystemMessage = useCallback((subtype: "conversation_ended" | "new_conversation") => {
     setMessages((prev) => {
@@ -348,7 +405,9 @@ export function ChatWidget({
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
 
   useEffect(() => {
-    if (!sessionHydrated || sessionId || messages.length > 0 || loading || chatClosed) return;
+    // Wait for history fetch to complete (or determine there's no stored session)
+    const needsHistoryFetch = sessionHydrated && sessionId && !historyLoaded;
+    if (!sessionHydrated || needsHistoryFetch || sessionId || messages.length > 0 || loading || chatClosed) return;
     let cancelled = false;
     setLoading(true);
     void fetchGreeting()
@@ -373,7 +432,7 @@ export function ChatWidget({
       cancelled = true;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatClosed, fetchGreeting, messages.length, sessionHydrated, sessionId]);
+  }, [chatClosed, fetchGreeting, historyLoaded, messages.length, sessionHydrated, sessionId]);
 
   const handleStartNewChat = useCallback(() => {
     setInput("");

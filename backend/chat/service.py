@@ -321,28 +321,28 @@ def _emit_chat_turn_event(
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
-    props: dict = {
-        "chat_id": chat_id,
-        "strategy": strategy,
-        "reject_reason": reject_reason,
-        "is_reject": is_reject,
-        "escalated": escalated,
-        "identified": identified,
-        "latency_ms": latency_ms,
-        "retrieval_ms": retrieval_ms,
-        "llm_ms": llm_ms,
-        "reliability_score": reliability_score,
-        "best_confidence_score": best_confidence_score,
-        "escalation_trigger": escalation_trigger,
-    }
-    if decision is not None:
-        props["decision"] = decision.kind.value
-        props["decision_reason"] = decision.clarify_reason or decision.escalate_reason or "n/a"
-        props["clarify_type"] = decision.clarify_type
-        props["clarify_reason"] = decision.clarify_reason
-        props["budget_blocked"] = decision.budget_blocked
-        props["escalation_reason"] = decision.escalate_reason
     try:
+        props: dict = {
+            "chat_id": chat_id,
+            "strategy": strategy,
+            "reject_reason": reject_reason,
+            "is_reject": is_reject,
+            "escalated": escalated,
+            "identified": identified,
+            "latency_ms": latency_ms,
+            "retrieval_ms": retrieval_ms,
+            "llm_ms": llm_ms,
+            "reliability_score": reliability_score,
+            "best_confidence_score": best_confidence_score,
+            "escalation_trigger": escalation_trigger,
+        }
+        if decision is not None:
+            props["decision"] = decision.kind.value
+            props["decision_reason"] = decision.clarify_reason or decision.escalate_reason or "n/a"
+            props["clarify_type"] = decision.clarify_type
+            props["clarify_reason"] = decision.clarify_reason
+            props["budget_blocked"] = decision.budget_blocked
+            props["escalation_reason"] = decision.escalate_reason
         capture_event(
             "chat.turn",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
@@ -2557,7 +2557,7 @@ def process_chat_message(
                 _emit_chat_session_ended_event(
                     tenant_public_id=getattr(tenant_row, "public_id", None),
                     bot_public_id=bot_public_id,
-                    chat_id=str(chat.id) if chat is not None else None,
+                    chat_id=str(chat.id),
                     outcome="resolved",
                 )
                 return ChatTurnOutcome(
@@ -2681,14 +2681,14 @@ def process_chat_message(
             _emit_chat_escalated_event(
                 tenant_public_id=getattr(tenant_row, "public_id", None),
                 bot_public_id=bot_public_id,
-                chat_id=str(chat.id) if chat is not None else None,
+                chat_id=str(chat.id),
                 escalation_reason="explicit_human_request",
                 escalation_trigger=EscalationTrigger.user_request.value,
             )
             _emit_chat_session_ended_event(
                 tenant_public_id=getattr(tenant_row, "public_id", None),
                 bot_public_id=bot_public_id,
-                chat_id=str(chat.id) if chat is not None else None,
+                chat_id=str(chat.id),
                 outcome="escalated",
             )
             return ChatTurnOutcome(
@@ -2920,14 +2920,14 @@ def process_chat_message(
             _emit_chat_escalated_event(
                 tenant_public_id=getattr(tenant_row, "public_id", None),
                 bot_public_id=bot_public_id,
-                chat_id=str(chat.id) if chat is not None else None,
+                chat_id=str(chat.id),
                 escalation_reason=_decision.escalate_reason or esc_trigger.value,
                 escalation_trigger=esc_trigger.value,
             )
             _emit_chat_session_ended_event(
                 tenant_public_id=getattr(tenant_row, "public_id", None),
                 bot_public_id=bot_public_id,
-                chat_id=str(chat.id) if chat is not None else None,
+                chat_id=str(chat.id),
                 outcome="escalated",
             )
         except Exception as e:

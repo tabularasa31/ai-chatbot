@@ -1435,6 +1435,39 @@ def _resolve_bm25_expansion_mode() -> BM25ExpansionMode:
     return "asymmetric"
 
 
+def _is_en_query(query: str, query_script_bucket: str) -> bool:
+    """Return True when the query is likely English (pure ASCII Latin)."""
+    if query_script_bucket != "latin":
+        return False
+    return all(ord(c) < 128 for c in query)
+
+
+def _bm25_queries_for_script(
+    query: str,
+    query_variants: list[str],
+    query_script_bucket: str,
+) -> list[str]:
+    """Select BM25 query list based on script bucket.
+
+    English queries use the original text — lexical signal is accurate against
+    the English corpus.  Non-EN queries (Cyrillic, CJK, non-ASCII Latin like
+    Polish/French/German) skip the original text and use only the EN rewrite
+    variant, so BM25 operates on English terms that actually match the corpus
+    instead of producing false positives from loanword collisions.
+    """
+    if _is_en_query(query, query_script_bucket):
+        return [query]
+    rewritten = next(
+        (
+            v
+            for v in reversed(query_variants)
+            if _is_en_query(v, detect_query_script_bucket(v))
+        ),
+        None,
+    )
+    return [rewritten] if rewritten else []
+
+
 def _format_bm25_trace_results(
     results: list[tuple[Embedding, float]],
     *,
@@ -1579,19 +1612,26 @@ def rerank_candidates(
     *,
     vector_scores: dict[uuid.UUID, float] | None = None,
     bm25_scores: dict[uuid.UUID, float] | None = None,
+    lexical_query: str | None = None,
     top_k: int,
 ) -> list[tuple[Embedding, float]]:
-    """Apply an interim heuristic reranking stage over fused candidates."""
+    """Apply an interim heuristic reranking stage over fused candidates.
+
+    lexical_query: when the user query is non-EN, pass the EN rewrite here so
+    that _lexical_overlap_score operates against English corpus text instead of
+    always returning ~0 for non-ASCII queries.
+    """
     if not candidates:
         return []
 
     max_rrf = max(score for _, score in candidates)
     vector_scores = vector_scores or {}
     bm25_scores = bm25_scores or {}
+    effective_lexical_query = lexical_query or query
 
     rescored: list[tuple[Embedding, float]] = []
     for embedding, rrf_score in candidates:
-        lexical_score = _lexical_overlap_score(query, embedding.chunk_text or "")
+        lexical_score = _lexical_overlap_score(effective_lexical_query, embedding.chunk_text or "")
         vector_score = vector_scores.get(embedding.id, 0.0)
         bm25_score = bm25_scores.get(embedding.id, 0.0)
         normalized_rrf = rrf_score / max_rrf if max_rrf else 0.0
@@ -1950,10 +1990,14 @@ def search_similar_chunks_detailed(
     vector_search_call_count = vector_candidate_set.call_count
     vector_duration_ms = vector_candidate_set.duration_ms
     extra_vector_search_calls = max(vector_search_call_count - 1, 0)
-    bm25_variant_queries = (
-        [query]
-        if bm25_expansion_mode == "asymmetric"
-        else lexical_safe_query_variants(query, base_variants=query_variants)
+    bm25_variant_queries = _bm25_queries_for_script(
+        query, query_variants, query_script_bucket
+    )
+    # EN rewrite to use for lexical scoring in reranker when query is non-EN.
+    rerank_lexical_query: str | None = (
+        None
+        if _is_en_query(query, query_script_bucket)
+        else (bm25_variant_queries[0] if bm25_variant_queries else None)
     )
 
     if not vector_candidates:
@@ -2113,6 +2157,7 @@ def search_similar_chunks_detailed(
         fused_results,
         vector_scores=_collect_score_map(vector_candidates),
         bm25_scores=_collect_score_map(bm25_results),
+        lexical_query=rerank_lexical_query,
         top_k=top_k,
     )
     if trace is not None:

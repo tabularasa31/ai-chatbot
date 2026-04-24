@@ -13,7 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-from backend.documents.parsers import parse_doc, parse_docx, parse_markdown, parse_pdf, parse_swagger, parse_txt
+from backend.documents.parsers import (
+    parse_doc,
+    parse_docx,
+    parse_markdown,
+    parse_pdf,
+    parse_swagger,
+    parse_txt,
+)
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
 

@@ -353,7 +353,7 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert tokens == 100
     mock_openai_client.chat.completions.create.assert_called_once()
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["model"] == "gpt-4o-mini"
+    assert call_kwargs["model"] == settings.chat_model
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
     assert call_kwargs["temperature"] == 0.2
@@ -3573,7 +3573,7 @@ def test_localize_still_calls_llm_when_language_unknown(
     )
 
     assert result == LocalizationResult(text="Bonjour", tokens_used=7)
-    assert captured["model"] == "gpt-4o-mini"
+    assert captured["model"] == settings.localization_model
 
 
 def test_translate_skips_when_already_in_target(
@@ -4682,7 +4682,7 @@ def test_generate_answer_logs_tokens_with_operation_generate(
         getattr(record, "operation", None) == "generate"
         and getattr(record, "target_language", None) == "fr"
         and getattr(record, "tokens", None) == 100
-        and getattr(record, "model", None) == "gpt-4o-mini"
+        and getattr(record, "model", None) == settings.chat_model
         for record in caplog.records
         if record.msg == "llm_tokens_used"
     )

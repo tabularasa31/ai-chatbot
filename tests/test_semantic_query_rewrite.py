@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from backend.core.config import settings
 from backend.search.service import semantic_query_rewrite
 
 
@@ -121,7 +122,7 @@ class TestSemanticQueryRewriteHappyPath:
         assert result == "feature settings config"
 
     def test_uses_gpt4o_mini(self):
-        """Always uses gpt-4o-mini (cheap + fast) for the rewrite."""
+        """Uses the configured query_rewrite_model for the rewrite."""
         with (
             patch("backend.search.service.get_openai_client") as mock_client,
             patch("backend.search.service.call_openai_with_retry") as mock_retry,
@@ -143,7 +144,7 @@ class TestSemanticQueryRewriteHappyPath:
             inner.chat.completions.create.return_value = _make_openai_response("x")
             fn()
             create_kwargs = inner.chat.completions.create.call_args[1]
-            assert create_kwargs["model"] == "gpt-4o-mini"
+            assert create_kwargs["model"] == settings.query_rewrite_model
             assert create_kwargs["max_tokens"] == 40
             assert create_kwargs["temperature"] == 0
 

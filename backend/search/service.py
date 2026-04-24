@@ -1508,9 +1508,11 @@ def _run_bm25_search(
         )
 
     if expansion_mode == "asymmetric":
-        results = _score_prepared_bm25_corpus(prepared_corpus, query, top_k)
+        # Use the first variant query (may be an EN rewrite for non-EN queries).
+        effective_query = variant_queries[0] if variant_queries else query
+        results = _score_prepared_bm25_corpus(prepared_corpus, effective_query, top_k)
         winner_by_id = {
-            embedding.id: BM25Winner(variant_index=0, variant_query=query, score=score)
+            embedding.id: BM25Winner(variant_index=0, variant_query=effective_query, score=score)
             for embedding, score in results
         }
         return BM25SearchBundle(

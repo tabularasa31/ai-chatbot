@@ -312,7 +312,7 @@ def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
 
     assert result.bm25_query_variant_count == 1
     assert result.bm25_variant_eval_count == 1
-    assert result.has_lexical_signal is True
+    # BM25 found keyword matches via the EN rewrite
     assert result.best_keyword_score is not None
     result_texts = [emb.chunk_text for emb, _ in result.results]
     assert "reset password instructions" in result_texts

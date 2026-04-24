@@ -280,6 +280,48 @@ def _emit_quick_answer_lookup_event(
         logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)
 
 
+def _emit_chat_turn_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    strategy: str,
+    reject_reason: str | None,
+    is_reject: bool,
+    escalated: bool,
+    identified: bool = False,
+    latency_ms: int | None = None,
+    retrieval_ms: int = 0,
+    llm_ms: int = 0,
+    reliability_score: str | None = None,
+    best_confidence_score: float | None = None,
+) -> None:
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "chat.turn",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "strategy": strategy,
+                "reject_reason": reject_reason,
+                "is_reject": is_reject,
+                "escalated": escalated,
+                "identified": identified,
+                "latency_ms": latency_ms,
+                "retrieval_ms": retrieval_ms,
+                "llm_ms": llm_ms,
+                "reliability_score": reliability_score,
+                "best_confidence_score": best_confidence_score,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit chat.turn event", exc_info=True)
+
+
 def _safe_int(value: Any) -> int:
     """Convert SDK usage fields to int without trusting mock-like objects."""
     if isinstance(value, bool):
@@ -462,6 +504,9 @@ class ChatPipelineResult:
     # escalation (pure computation, no side effects)
     escalation_recommended: bool
     escalation_trigger: Any  # EscalationTrigger | None
+    # pipeline timing (ms); 0 means the stage was skipped
+    retrieval_ms: int = 0
+    llm_ms: int = 0
     # debug extras
     is_capability: bool = False
     faq_match: Any = None  # FAQMatchResult | None
@@ -1188,11 +1233,13 @@ def run_chat_pipeline(
             validation=None,
             escalation_recommended=False,
             escalation_trigger=None,
+            retrieval_ms=int(retrieval.retrieval_duration_ms),
             faq_match=faq_match,
             language_context=language_context,
         )
 
     # --- 7. Generate answer ---
+    _llm_start = perf_counter()
     raw_answer, tokens_used = generate_answer(
         question,
         retrieval.chunk_texts,
@@ -1210,6 +1257,7 @@ def run_chat_pipeline(
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
     )
+    _llm_ms = int((perf_counter() - _llm_start) * 1000)
 
     # --- 8. Validate answer ---
     validation_context = retrieval.chunk_texts + quick_answer_items
@@ -1258,6 +1306,8 @@ def run_chat_pipeline(
         validation=validation,
         escalation_recommended=escalate,
         escalation_trigger=esc_trigger,
+        retrieval_ms=int(retrieval.retrieval_duration_ms),
+        llm_ms=_llm_ms,
         faq_match=faq_match,
         language_context=language_context,
     )
@@ -1971,6 +2021,7 @@ def process_chat_message(
     Returns:
         Typed turn outcome. The object is also iterable for legacy tuple-style callers.
     """
+    _turn_started_at = perf_counter()
     tenant_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redaction = redact(question, optional_entity_types=optional_entity_types)
@@ -2599,6 +2650,19 @@ def process_chat_message(
                 "response_language": language_context.response_language,
             },
         )
+        _emit_chat_turn_event(
+            tenant_public_id=getattr(tenant_row, "public_id", None),
+            bot_public_id=bot_public_id,
+            chat_id=str(chat.id) if chat is not None else None,
+            strategy=result.strategy,
+            reject_reason=result.reject_reason,
+            is_reject=result.is_reject,
+            escalated=False,
+            identified=bool(user_context),
+            latency_ms=int((perf_counter() - _turn_started_at) * 1000),
+            retrieval_ms=result.retrieval_ms,
+            llm_ms=result.llm_ms,
+        )
         return ChatTurnOutcome(
             text=result.final_answer,
             document_ids=[],
@@ -2755,6 +2819,21 @@ def process_chat_message(
             **build_variant_trace_metadata(retrieval),
         },
         tags=[build_variant_trace_tag(retrieval.variant_mode)],
+    )
+    _emit_chat_turn_event(
+        tenant_public_id=getattr(tenant_row, "public_id", None),
+        bot_public_id=bot_public_id,
+        chat_id=str(chat.id) if chat is not None else None,
+        strategy=result.strategy,
+        reject_reason=None,
+        is_reject=False,
+        escalated=bool(escalate),
+        identified=bool(user_context),
+        latency_ms=int((perf_counter() - _turn_started_at) * 1000),
+        retrieval_ms=result.retrieval_ms,
+        llm_ms=result.llm_ms,
+        reliability_score=reliability_score,
+        best_confidence_score=retrieval.best_confidence_score,
     )
     return ChatTurnOutcome(
         text=answer,

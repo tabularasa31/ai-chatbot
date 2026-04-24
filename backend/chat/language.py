@@ -117,6 +117,8 @@ def _emit_language_resolved_event(
     bot_id: str | None,
     chat_id: str | None,
 ) -> None:
+    if tenant_id is None and bot_id is None:
+        return
     capture_event(
         "language.resolved",
         distinct_id=_metrics_distinct_id(bot_id, tenant_id),

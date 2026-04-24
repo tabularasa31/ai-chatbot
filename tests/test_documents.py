@@ -158,6 +158,58 @@ paths:
     assert data["status"] == "ready"
 
 
+def _make_minimal_docx() -> bytes:
+    """Create a minimal valid .docx file in memory for testing."""
+    import docx as docx_lib
+
+    doc = docx_lib.Document()
+    doc.add_paragraph("Hello from docx test document.")
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def test_upload_docx_success(tenant: TestClient, db_session: Session) -> None:
+    """Upload .docx file, status=ready."""
+    token = register_and_verify_user(tenant, db_session, email="docx@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "DOCX Tenant"},
+    )
+    response = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("report.docx", _make_minimal_docx(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["filename"] == "report.docx"
+    assert data["file_type"] == "docx"
+    assert data["status"] == "ready"
+
+
+def test_upload_txt_success(tenant: TestClient, db_session: Session) -> None:
+    """Upload .txt file, status=ready."""
+    token = register_and_verify_user(tenant, db_session, email="txt@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "TXT Tenant"},
+    )
+    txt_content = b"This is a plain text document.\n\nIt has multiple paragraphs."
+    response = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("notes.txt", txt_content, "text/plain")},
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["filename"] == "notes.txt"
+    assert data["file_type"] == "plaintext"
+    assert data["status"] == "ready"
+
+
 def test_upload_unsupported_type(tenant: TestClient, db_session: Session) -> None:
     """Upload .exe → 400."""
     token = register_and_verify_user(tenant, db_session, email="exe@example.com")

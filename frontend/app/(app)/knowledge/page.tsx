@@ -1049,7 +1049,7 @@ export default function KnowledgePage() {
             <input
               type="file"
               multiple
-              accept=".pdf,.md,.mdx,.json,.yaml,.yml"
+              accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt"
               onChange={handleUpload}
               disabled={uploading}
               className="sr-only"

@@ -13,7 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-from backend.documents.parsers import parse_markdown, parse_pdf, parse_swagger
+from backend.documents.parsers import (
+    parse_doc,
+    parse_docx,
+    parse_markdown,
+    parse_pdf,
+    parse_swagger,
+    parse_txt,
+)
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
 
@@ -356,7 +363,7 @@ def run_document_health_check(
         return err_result
 
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-ALLOWED_TYPES = {"pdf", "markdown", "swagger"}
+ALLOWED_TYPES = {"pdf", "markdown", "swagger", "docx", "doc", "plaintext"}
 
 
 def _parse_content(content: bytes, file_type: str) -> str:
@@ -367,6 +374,12 @@ def _parse_content(content: bytes, file_type: str) -> str:
         return parse_markdown(content)
     if file_type == "swagger":
         return parse_swagger(content)
+    if file_type == "docx":
+        return parse_docx(content)
+    if file_type == "doc":
+        return parse_doc(content)
+    if file_type == "plaintext":
+        return parse_txt(content)
     raise ValueError(f"Unsupported file type: {file_type}")
 
 
@@ -394,7 +407,7 @@ def upload_document(
     if file_type not in ALLOWED_TYPES:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Allowed: pdf, markdown, swagger",
+            detail="Unsupported file type. Allowed: pdf, markdown, swagger, docx, doc, plaintext",
         )
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(

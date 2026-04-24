@@ -39,7 +39,7 @@ from backend.contact_sessions.service import record_user_session_turn, touch_use
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
-from backend.core.openai_client import get_openai_client
+from backend.core.openai_client import get_openai_client, is_reasoning_model
 from backend.core.openai_retry import call_openai_with_retry
 from backend.disclosure_config import resolve_level
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
@@ -1582,6 +1582,8 @@ def generate_answer(
         {"role": "user", "content": user_message},
     ]
     openai_client = get_openai_client(api_key)
+    _reasoning = is_reasoning_model(settings.chat_model)
+    _temperature: float | None = None if _reasoning else 0.2
     generation = None
     if trace is not None:
         generation_input: Any
@@ -1598,7 +1600,7 @@ def generate_answer(
             model=settings.chat_model,
             input=generation_input,
             metadata={
-                "temperature": 0.2,
+                **({"temperature": _temperature} if _temperature is not None else {}),
                 "max_completion_tokens": settings.chat_response_max_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
@@ -1624,7 +1626,7 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    temperature=0.2,
+                    **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=settings.chat_response_max_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
@@ -1654,7 +1656,7 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    temperature=0.2,
+                    **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=settings.chat_response_max_tokens,
                 ),
                 bot_id=retry_bot_id,

@@ -58,6 +58,16 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
     )
 
 
+# Reasoning / o-series models that reject custom temperature and other params.
+_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def is_reasoning_model(model: str) -> bool:
+    """Return True for OpenAI reasoning models that restrict sampling parameters."""
+    m = model.lower()
+    return any(m == p or m.startswith(p + "-") for p in _REASONING_MODEL_PREFIXES)
+
+
 def is_quota_exceeded(exc: RateLimitError) -> bool:
     """Return True when the OpenAI error is an insufficient_quota / billing error."""
     body = getattr(exc, "body", None) or {}

@@ -139,7 +139,7 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 - Specs:              `2kzmw49f-538`
 - Archive:            `2kzmw49f-558`
 
-**MCP tools** (use via `mcp__e99deeb1-b53c-476a-be64-b4f18d8f0be6__clickup_*`):
+**MCP tools** (use the available ClickUp MCP tools — `clickup_*`):
 - Create task: `clickup_create_task` — always include full business description (WHY, WHAT, acceptance criteria)
 - Update task status: `clickup_update_task` with `status` field
 - Add comment: `clickup_create_task_comment`

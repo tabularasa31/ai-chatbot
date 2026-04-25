@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.chat.language import detect_language, get_string
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
@@ -59,7 +60,7 @@ from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 logger = logging.getLogger(__name__)
 
 
-def _notify_quota_exceeded(tenant: "Tenant", db: "Session") -> str:
+def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en") -> str:
     """Log OpenAI quota-exceeded event to Sentry and email the tenant admin once.
 
     Returns the user-facing error detail string (includes support email if known).
@@ -109,10 +110,7 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session") -> str:
             logger.warning("quota_exceeded_email_failed: tenant_id=%s", tenant.id)
 
     contact = f" at {support_email}" if support_email else ""
-    return (
-        "We're currently experiencing technical difficulties and are unable to respond via chat. "
-        f"We apologize for the inconvenience — please contact our support team{contact} by email."
-    )
+    return get_string("quota_exceeded_user", lang).format(contact=contact)
 
 
 class DebugRequest(BaseModel):
@@ -237,9 +235,10 @@ def chat(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except RateLimitError as exc:
         if is_quota_exceeded(exc):
+            lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db),
+                detail=_notify_quota_exceeded(tenant, db, lang=lang),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
@@ -287,9 +286,10 @@ def chat_debug(
         )
     except RateLimitError as exc:
         if is_quota_exceeded(exc):
+            lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db),
+                detail=_notify_quota_exceeded(tenant, db, lang=lang),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:

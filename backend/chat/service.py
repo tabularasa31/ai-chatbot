@@ -29,6 +29,7 @@ from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
     generate_greeting_in_language_result,
+    get_string,
     log_llm_tokens,
     render_direct_faq_answer_result,
     resolve_language_context,
@@ -165,11 +166,6 @@ Check if the answer is:
 
 Respond ONLY with JSON (no markdown, no explanation):
 {{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
-
-FALLBACK_LOW_CONFIDENCE_ANSWER = (
-    "I don't have enough information in my knowledge base to answer this question accurately."
-)
-
 
 _PRICING_QUESTION_RE = re.compile(
     r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
@@ -1556,12 +1552,12 @@ def generate_answer(
 
     Returns:
         Tuple of (answer_text, total_tokens).
-        If context_chunks is empty, returns ("I don't have information about this.", 0).
+        If context_chunks is empty, returns a localized no-information string with 0 tokens.
     """
     # For faq_context strategy we may intentionally have no retrieval chunks,
     # but still want generation to use VERIFIED FAQ CANDIDATES hints.
     if not context_chunks and not faq_context_items and not quick_answer_items:
-        return ("I don't have information about this.", 0)
+        return (get_string("no_information", response_language), 0)
 
     system_prompt, user_message = build_rag_messages(
         question,

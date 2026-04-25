@@ -554,6 +554,15 @@ def _resolve_language_context_inner(
     escalation_language_source = "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
 
     if is_bootstrap_turn:
+        # Fixed contract — must not be reordered.
+        # Bootstrap (no user message yet) resolves response_language as:
+        #   1. user_context.locale  (KYC, tenant-passed via identity_token)
+        #   2. browser_locale       (Accept-Language / widget hint)
+        #   3. English              (final fallback)
+        # KYC outranks browser deliberately: it reflects what the tenant's
+        # own system says about this specific user. See
+        # docs/04-features.md "Bootstrap locale chain — fixed contract"
+        # and docs/docs-ru/08-chat-pipeline.md for the rationale.
         bootstrap_language = _normalize_config_language(bootstrap_user_locale)
         if bootstrap_language:
             return ResolvedLanguageContext(

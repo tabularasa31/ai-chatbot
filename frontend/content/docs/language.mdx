@@ -1,0 +1,94 @@
+---
+title: Language Support
+description: How Chat9 chooses the language to reply in, and how to control it via browser locale, KYC, and dashboard settings.
+---
+
+Chat9 is language-agnostic. End users can write in any language and the bot replies in the same language. This page explains exactly how the language is determined and what knobs you have to influence it.
+
+## TL;DR
+
+- **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via the identity token → the browser's reported locale → English.
+- **As soon as the user sends a message, the bot replies in the language of that message.** This is the default and covers the vast majority of cases.
+- **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language. To switch languages mid-conversation, end users start a new chat.
+- **Tickets and support-team artifacts** can be pinned to a fixed language from your dashboard, independent of what language end users write in.
+
+## What the user sees
+
+### 1. The default greeting (before any message is typed)
+
+When the widget opens a fresh session, Chat9 can show a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
+
+1. **KYC `locale`** — if your integration is using identified sessions and you passed `locale` inside the signed `identity_token`, that wins. This is the strongest signal because your own system told us about this specific user.
+2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
+3. **English** — final fallback when no signal is available.
+
+The greeting itself is rendered in the language picked from this chain. For example, if you pass `locale: "es-ES"` via KYC, the greeting opens in Spanish; if you pass nothing and the user's browser is in `de-DE`, the greeting opens in German; if neither is available, the greeting opens in English.
+
+This chain is a fixed product contract. It is documented internally and will not be reordered.
+
+### 2. After the user's first message — language follows the user
+
+As soon as an end user sends a real message, Chat9 detects the language of that message and the bot replies in the same language from that point onward. This applies to every user-facing reply path:
+
+- normal RAG answers from your documentation
+- soft rejections ("I can't help with that")
+- clarification questions
+- escalation handoffs ("I've forwarded your request — please share your email")
+- ticket confirmations
+- post-close replies after the chat has been resolved
+
+You don't need to do anything to enable this. It works for any language Chat9's detection model recognizes — Spanish, German, French, Italian, Portuguese, Russian, Polish, Turkish, Dutch, Japanese, Chinese, Korean, Arabic, and more.
+
+The detected language of the user's first real message overrides whatever language was used for the greeting. So if the greeting opened in English (because no KYC or browser hint was available) and the user types their first message in French, the bot's reply to that message — and every subsequent reply — is in French.
+
+### 3. The language locks once it's clear
+
+Real conversations sometimes have a single off-language turn — for example, a user who writes Spanish for several turns might paste an English error message they got from your software, or send a one-word reply like "ok". Chat9 doesn't flip the conversation language on a single turn like that. Instead, once the language is clear, the chat **locks** to that language for the rest of the session.
+
+How the lock fires:
+
+- **Clearly non-English first message** (Cyrillic, Japanese/Chinese/Korean, Arabic, or Latin-script messages with diacritics or recognizable non-English vocabulary like Spanish/German/French/Italian/Portuguese) → the chat locks to that language **immediately** on turn 1.
+- **English first message, or an ambiguous one** → no lock yet. The lock fires the moment a second turn confirms the same language. In practice this means an English-speaking user is locked into English by their second turn.
+
+After lock:
+
+- The bot replies in the locked language regardless of what the user types in subsequent turns. An English error message dropped into a Spanish chat doesn't change anything — the bot keeps replying in Spanish.
+- Detection runs only as a low-cost telemetry signal; it cannot override the lock.
+
+To switch languages mid-conversation, the end user clicks **Start new chat** (or your integration starts a new session). The new session goes through the full chain again and may settle on a different language. This is intentional: real bilingual switches mid-conversation are rare in support, and the lock prevents the much-more-common annoyance of the bot flip-flopping between languages on noisy turns.
+
+## What you can control
+
+### From the dashboard — Agents → Escalation settings
+
+You can set an **escalation language override** in **Dashboard → Agents → Escalation settings**. This pins a fixed language for tenant-side escalation artifacts — the email notification your team receives, ticket summaries in the dashboard, and similar internal text — independently of what language end users write in.
+
+A typical use case: your end-user audience is multilingual (Spanish, German, French customers), but your support team works in English. With the escalation language pinned to English:
+
+- Spanish customers continue to see the bot reply in Spanish in the chat widget.
+- Your support team sees ticket details and email notifications in English, regardless of which language the customer wrote in.
+
+This separation lets one bot serve a multilingual audience without forcing your support staff to triage tickets across languages.
+
+If you don't set an override, escalation artifacts default to English.
+
+### From the widget integration — KYC `locale`
+
+If you use identified sessions and have a clear language preference for the user from your own system (for example, a registered locale in your account profile), pass it as `locale` inside the signed `identity_token`. Chat9 will use it as the bootstrap greeting language and as a stronger initial language signal than the browser default. See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional).
+
+### From the widget integration — `Accept-Language` / `locale` query
+
+For anonymous sessions, the widget passes the browser's locale automatically. You don't need to do anything for the common case. If you want to override the browser locale in a specific deployment context, you can pass `locale` in the request to `POST /widget/session/init` or as a query parameter to `POST /widget/chat`.
+
+## Edge cases worth knowing
+
+- **Mixed-language input** ("Hello, ¿necesito ayuda?") — Chat9 picks the dominant signal and replies on that side. Strong English markers like greetings can win even when the rest of the message is in another language. If the chat ends up locked to a language the user didn't expect, they can start a new session.
+- **Very short messages** ("ok", "no", numbers, an email address by itself) — these don't carry enough signal to lock on their own. If sent before the chat has locked, they don't move the needle; if sent after lock, they don't change the language anyway.
+- **ASCII-only languages without diacritics** (Spanish "Quiero hablar con un agente", German "Nein, ich brauche noch Hilfe") — fully supported. Chat9's language detection covers Latin-script languages without requiring users to type accented characters, and the chat locks to the right language on turn 1.
+- **Unsupported / regional languages** (Welsh, some African or South Asian languages) — Chat9 detects what it confidently recognizes and falls back to English when uncertain. If you have a specific language requirement that isn't behaving correctly, contact support.
+
+## How to verify
+
+- Open your widget on a test page with a non-English browser locale set, send a message in that language, and confirm the bot replies in the same language.
+- Use **Dashboard → Chat Logs** to see the language each turn was answered in. The conversation transcript shows the actual reply text, which is the easiest signal to verify quickly.
+- For identified sessions, sanity-check the `locale` field you're putting into the `identity_token` — Chat9 normalizes locale tags such as `es-MX`, `pt-BR`, `de-AT` automatically.

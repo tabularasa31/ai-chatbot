@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from backend.chat.schemas import ChatTurnResponse
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session
 from backend.core import db as core_db
@@ -173,7 +174,24 @@ def widget_session_init(
     return WidgetSessionInitResponse(session_id=session_id, mode=mode)
 
 
-@widget_router.post("/chat")
+@widget_router.post(
+    "/chat",
+    responses={
+        200: {
+            "description": (
+                "Server-sent events stream (`text/event-stream`). Each frame is "
+                "`type: 'chunk'` (incremental text) or `type: 'done'`; the `done` "
+                "frame's payload conforms to `ChatTurnResponse` with trace fields "
+                "(`source_documents`, `tokens_used`) omitted."
+            ),
+            "content": {
+                "text/event-stream": {
+                    "schema": {"$ref": "#/components/schemas/ChatTurnResponse"},
+                },
+            },
+        }
+    },
+)
 @limiter.limit(
     settings.effective_widget_chat_per_client_rate,
     key_func=widget_bot_rate_limit_key,
@@ -355,14 +373,20 @@ def _widget_chat_stream(
         final_text = outcome.text if outcome is not None else ""
         if not streamed_any and final_text:
             yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
+        turn_response = ChatTurnResponse(
+            text=final_text,
+            session_id=sid,
+            chat_ended=bool(outcome.chat_ended) if outcome is not None else False,
+            ticket_number=outcome.ticket_number if outcome is not None else None,
+        )
         done_payload: dict[str, Any] = {
             "type": "done",
-            "session_id": str(sid),
-            "chat_ended": bool(outcome.chat_ended) if outcome is not None else False,
-            "text": final_text,
+            **turn_response.model_dump(
+                exclude={"source_documents", "tokens_used"},
+                exclude_none=True,
+                mode="json",
+            ),
         }
-        if outcome is not None and outcome.ticket_number:
-            done_payload["ticket_number"] = outcome.ticket_number
         yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(

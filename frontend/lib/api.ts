@@ -940,11 +940,11 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Chat failed"));
       return data as {
         text: string;
-        answer: string;
         session_id: string;
-        source_documents?: string[];
-        tokens_used?: number;
         chat_ended?: boolean;
+        ticket_number?: string | null;
+        source_documents?: string[] | null;
+        tokens_used?: number | null;
       };
     },
     async manualEscalate(

@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Literal
 
 from rank_bm25 import BM25Okapi
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
@@ -38,6 +39,9 @@ EMBEDDING_DIM = 1536
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
+# Cap for the standalone bm25_search_chunks() prefilter: bounds memory and CPU
+# even when a query token matches a large fraction of a tenant's corpus.
+BM25_PREFILTER_CANDIDATE_LIMIT = 1000
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 RERANK_LEXICAL_WEIGHT = 0.35
 RERANK_VECTOR_WEIGHT = 0.25
@@ -1332,17 +1336,48 @@ def bm25_search_chunks(
 ) -> list[tuple[Embedding, float]]:
     """
     BM25 full-text search over chunk_text for a tenant.
-    Fetches all tenant chunks from DB, then delegates scoring to _bm25_score_candidates.
-    Public API preserved for direct use and tests.
+
+    Performs DB-side prefiltering: only chunks containing at least one query
+    token (case-insensitive substring match) are fetched and scored. Chunks
+    with no token overlap would receive a BM25 score of zero and contribute
+    nothing to the ranking, so excluding them at the SQL layer keeps memory
+    and CPU bounded even on large tenant corpora.
     """
+    tokens = _bm25_prefilter_tokens(query)
+    if not tokens:
+        return []
+
+    token_conditions = [
+        func.lower(Embedding.chunk_text).like(
+            f"%{_escape_like(token)}%", escape="\\"
+        )
+        for token in tokens
+    ]
     embeddings = (
         db.query(Embedding)
         .join(Document, Embedding.document_id == Document.id)
         .filter(Document.tenant_id == tenant_id)
         .filter(Embedding.chunk_text.isnot(None))
+        .filter(or_(*token_conditions))
+        .limit(BM25_PREFILTER_CANDIDATE_LIMIT)
         .all()
     )
     return _bm25_score_candidates(embeddings, query, top_k)
+
+
+def _bm25_prefilter_tokens(query: str) -> list[str]:
+    """Unique, casefolded word tokens used for the bm25_search_chunks prefilter."""
+    raw_tokens = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)
+    return list(dict.fromkeys(raw_tokens))
+
+
+def _escape_like(token: str) -> str:
+    """Escape SQL LIKE wildcards so query tokens match literally."""
+    return (
+        token.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
 
 
 def _prepare_bm25_corpus(candidates: list[Embedding]) -> PreparedBM25Corpus:

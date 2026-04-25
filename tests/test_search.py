@@ -2931,7 +2931,15 @@ def test_bm25_search_chunks_finds_match(db_session) -> None:
     db_session.commit()
 
     results = bm25_search_chunks(cl.id, "cors settings", top_k=5, db=db_session)
-    assert len(results) == 3
+    # decoy_one ("Billing export guide for invoices") shares no tokens with the
+    # query and is filtered out at the SQL layer; only chunks containing at
+    # least one query token are scored.
+    assert len(results) == 2
+    chunk_texts = {emb.chunk_text for emb, _ in results}
+    assert chunk_texts == {
+        "CORS settings: allow_origins, allow_methods",
+        "Rotate API keys in dashboard settings",
+    }
     assert results[0][0].chunk_text == "CORS settings: allow_origins, allow_methods"
     assert 0 < results[0][1] <= 1.0
     assert results[0][1] > results[-1][1]

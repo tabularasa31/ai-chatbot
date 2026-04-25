@@ -13,7 +13,7 @@ from backend.chat.language import (
     log_llm_tokens,
 )
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client
+from backend.core.openai_client import get_openai_client, is_reasoning_model
 from backend.core.openai_retry import call_openai_with_retry
 from backend.models import EscalationPhase
 
@@ -95,12 +95,13 @@ def complete_escalation_openai_turn(
 
     try:
         client = get_openai_client(api_key)
+        _esc_reasoning = is_reasoning_model(model_name)
         response = call_openai_with_retry(
             "escalation_complete_turn",
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
-                temperature=0.3,
+                **({} if _esc_reasoning else {"temperature": 0.3}),
                 max_completion_tokens=600,
                 response_format={"type": "json_object"},
             ),

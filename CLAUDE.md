@@ -148,9 +148,9 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 
 **Task lifecycle — mandatory for every agent session:**
 
-1. **Session start / task picked up** → move status to `in progress` immediately
+1. **Session start / task picked up** → move status to `In Progress` immediately
 2. **During work** → add a comment with a link to the current Claude session (so progress is traceable)
-3. **PR opened** → move status to `in review` + add comment with PR URL
-4. **After deploy / work done** → move status to `done`
+3. **PR opened** → move status to `In Review` + add comment with PR URL
+4. **After deploy / work done** → move status to `Done`
 
-Never leave a task in `to do` while actively working on it. Never finish a session without updating the status and dropping a comment with the session/PR link.
+Never leave a task in `To Do` while actively working on it. Never finish a session without updating the status and dropping a comment with the session/PR link.

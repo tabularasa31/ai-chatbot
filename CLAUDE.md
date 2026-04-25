@@ -146,6 +146,12 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 - Create doc page: `clickup_create_document_page`
 - Search: `clickup_search`
 
+**Status flow:** `Backlog` → `To Do` → `In Progress` → `In Review` → `Done`
+
+- **Backlog** — all new tasks land here by default
+- **To Do** — owner manually moves here when taking into focus
+- Agents never touch `Backlog` → `To Do` transition (that's the owner's call)
+
 **Task lifecycle — mandatory for every agent session:**
 
 1. **Session start / task picked up** → move status to `In Progress` immediately

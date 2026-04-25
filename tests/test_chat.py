@@ -949,7 +949,7 @@ def test_chat_empty_question_uses_browser_locale_for_greeting(
     api_key = cl_resp.json()["api_key"]
 
     monkeypatch.setattr(
-        "backend.chat.service.generate_greeting_in_language_result",
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
         lambda **kwargs: LocalizationResult(
             text="Je suis l'assistant Greeting Locale Tenant. Posez votre question.",
             tokens_used=9,
@@ -4505,7 +4505,7 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
         return LocalizationResult(text="Bonjour", tokens_used=4)
 
     monkeypatch.setattr(
-        "backend.chat.service.generate_greeting_in_language_result",
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
         fake_localize_text_to_question_language_result,
     )
 

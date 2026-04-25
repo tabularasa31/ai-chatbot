@@ -24,13 +24,21 @@ from backend.chat.decision import (
     TurnContext,
     decide,
 )
+from backend.chat.handlers import (
+    ChatTurnOutcome,
+    HandlerContext,
+    HandlerRouter,
+    default_router,
+)
+from backend.chat.handlers.greeting import (
+    _build_greeting_result,
+    _resolve_product_name,
+)
 from backend.chat.language import (
     STICKY_WINDOW,
     LanguageDetectionResult,
-    LocalizationResult,
     ResolvedLanguageContext,
     _decide_language_lock,
-    generate_greeting_in_language_result,
     localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
@@ -118,6 +126,10 @@ logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 _ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
+
+# Pipeline handler chain. PR 1/4 wires only GreetingHandler; subsequent PRs add
+# SmallTalk / RAG / Escalation handlers and shrink process_chat_message accordingly.
+_HANDLER_ROUTER: HandlerRouter = default_router()
 
 
 def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
@@ -594,31 +606,10 @@ class ChatPipelineResult:
     language_context: ResolvedLanguageContext | None = None
 
 
-@dataclass(frozen=True)
-class ChatTurnOutcome:
-    text: str
-    document_ids: list[uuid.UUID]
-    tokens_used: int
-    chat_ended: bool
-    ticket_number: str | None = None
-
-
 def _trace_event(trace: TraceHandle | None, name: str, metadata: dict[str, Any]) -> None:
     if trace is None:
         return
     trace.span(name=name, metadata=metadata).end(output=metadata)
-
-
-def _resolve_product_name(
-    *,
-    tenant: Tenant | None,
-    db: Session,
-) -> str:
-    profile = db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first() if tenant else None
-    product_name = (profile.product_name if profile and profile.product_name else None) or (
-        tenant.name if tenant and tenant.name else None
-    )
-    return product_name or "this product"
 
 
 def _resolve_fallback_locale(
@@ -696,24 +687,6 @@ def _handle_small_talk_early_exit(
         document_ids=[],
         tokens_used=small_talk_result.tokens_used,
         chat_ended=False,
-    )
-
-
-def _build_greeting_result(
-    *,
-    product_name: str,
-    response_language: str,
-    api_key: str,
-) -> LocalizationResult:
-    fallback_text = (
-        f"I'm the {product_name} assistant and can help with documentation, "
-        "product setup, integrations, and finding the right information. Ask your question."
-    )
-    return generate_greeting_in_language_result(
-        product_name=product_name,
-        target_language=response_language,
-        api_key=api_key,
-        fallback_text=fallback_text,
     )
 
 
@@ -2310,42 +2283,26 @@ def process_chat_message(
     if not question_text:
         if not is_new_session:
             raise ValueError("Question is required")
-        greeting = _build_greeting_result(
-            product_name=_resolve_product_name(tenant=tenant_row, db=db),
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        # Persist only the assistant greeting.  Storing an empty user-message row
-        # would pollute analytics and include a blank turn in the OpenAI transcript.
-        # Bootstrap detection on the next call relies on bool(chat.messages): any
-        # persisted message (even just the assistant greeting) marks the session as
-        # no longer new, so a second empty request is correctly rejected.
-        _persist_assistant_message_with_response_language(
-            db=db,
-            chat=chat,
+        handler_ctx = HandlerContext(
             tenant_id=tenant_id,
-            response_language=language_context.response_language,
-            resolution_reason=language_context.response_language_resolution_reason,
-            assistant_content=greeting.text,
-            extra_tokens=greeting.tokens_used,
-            optional_entity_types=optional_entity_types,
+            chat=chat,
+            tenant_row=tenant_row,
+            question=question,
+            redacted_question=redacted_question,
+            question_text=question_text,
             language_context=language_context,
+            api_key=api_key,
+            optional_entity_types=optional_entity_types,
+            is_new_session=is_new_session,
+            trace=trace,
+            db=db,
         )
-        trace.update(
-            output={"answer": greeting.text, "source": "greeting"},
-            metadata={
-                "chat_ended": False,
-                "escalated": False,
-                "greeting": True,
-                "response_language": language_context.response_language,
-            },
-        )
-        return ChatTurnOutcome(
-            text=greeting.text,
-            document_ids=[],
-            tokens_used=greeting.tokens_used,
-            chat_ended=False,
-        )
+        outcome = _HANDLER_ROUTER.dispatch(handler_ctx)
+        if outcome is None:
+            # Unreachable in normal operation: GreetingHandler always handles
+            # an empty new-session turn.
+            raise RuntimeError("Pipeline router did not produce an outcome for greeting turn")
+        return outcome
 
     user_context_line = _user_context_prompt_line(effective_user_ctx)
     question_for_pipeline = redacted_question

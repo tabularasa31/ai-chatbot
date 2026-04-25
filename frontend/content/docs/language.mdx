@@ -7,16 +7,28 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 ## TL;DR
 
-- **Once the user has typed a question, the bot replies in the language of that question.** This is the default and covers the vast majority of cases.
-- **Before the user types anything** (greeting on a fresh session), the bot uses, in order: the `locale` you passed via the identity token → the browser's reported locale → English.
+- **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via the identity token → the browser's reported locale → English.
+- **As soon as the user sends a message, the bot replies in the language of that message.** This is the default and covers the vast majority of cases.
 - **A single off-language message in the middle of a conversation does not flip the language** — the bot keeps replying in whatever language the conversation has been in (sticky retention). Two consecutive consistent off-language messages will switch.
 - **Tickets and support-team artifacts** can be pinned to a fixed language from your dashboard, independent of what language end users write in.
 
 ## What the user sees
 
-### After the first question — language follows the user
+### 1. The default greeting (before any message is typed)
 
-As soon as an end user sends a real message, the bot detects the language of that message and replies in the same language. This applies to every user-facing reply path:
+When the widget opens a fresh session, Chat9 can show a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
+
+1. **KYC `locale`** — if your integration is using identified sessions and you passed `locale` inside the signed `identity_token`, that wins. This is the strongest signal because your own system told us about this specific user.
+2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
+3. **English** — final fallback when no signal is available.
+
+The greeting itself is rendered in the language picked from this chain. For example, if you pass `locale: "es-ES"` via KYC, the greeting opens in Spanish; if you pass nothing and the user's browser is in `de-DE`, the greeting opens in German; if neither is available, the greeting opens in English.
+
+This chain is a fixed product contract. It is documented internally and will not be reordered.
+
+### 2. After the user's first message — language follows the user
+
+As soon as an end user sends a real message, Chat9 detects the language of that message and the bot replies in the same language from that point onward. This applies to every user-facing reply path:
 
 - normal RAG answers from your documentation
 - soft rejections ("I can't help with that")
@@ -27,17 +39,9 @@ As soon as an end user sends a real message, the bot detects the language of tha
 
 You don't need to do anything to enable this. It works for any language Chat9's detection model recognizes — Spanish, German, French, Italian, Portuguese, Russian, Polish, Turkish, Dutch, Japanese, Chinese, Korean, Arabic, and more.
 
-### Before the first question — bootstrap locale chain
+The detected language of the user's first real message overrides whatever language was used for the greeting. So if the greeting opened in English (because no KYC or browser hint was available) and the user types their first message in French, the bot's reply to that message — and every subsequent reply — is in French.
 
-When the widget opens a fresh session and shows a default greeting before the user has typed anything, Chat9 can't detect a language from a message that doesn't exist yet. It falls back to a fixed chain:
-
-1. **KYC `locale`** — if your integration is using identified sessions and you passed `locale` inside the signed `identity_token`, that wins. This is the strongest signal because your own system told us about this specific user.
-2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
-3. **English** — final fallback when no signal is available.
-
-This chain is a fixed product contract. It is documented internally and will not be reordered.
-
-### Sticky retention across turns
+### 3. Sticky retention across turns
 
 Real conversations sometimes have a single off-language turn — for example, a user who writes Spanish for several turns might paste an English error message they got from your software, or send a one-word reply like "ok". Chat9 doesn't flip the conversation language on a single turn like that.
 

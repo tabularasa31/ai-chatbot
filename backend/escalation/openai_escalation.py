@@ -38,7 +38,7 @@ You must output a single JSON object with keys:
   Set to "yes", "no", or "unclear" based on the latest user message.
 
 Rules:
-- Write message_to_user ONLY in the requested ESCALATION_LANGUAGE tag.
+- Write message_to_user ONLY in the requested RESPONSE_LANGUAGE tag (this is the language the user is writing in).
 - Use only facts from the JSON block: ticket_number, sla_hours, user_email, trigger, phase, clarify_round. Never invent ticket numbers, emails, or SLA.
 - Explain that the request was passed to human support; they will reply by email at the given email when user_email is present; otherwise politely ask for an email address.
 - Do not promise exact response times; you may mention approximate SLA hours from facts.
@@ -65,14 +65,21 @@ def complete_escalation_openai_turn(
     fact_json: dict[str, Any],
     latest_user_text: str | None,
     api_key: str,
-    escalation_language: str = "en",
+    response_language: str = "en",
     model: str | None = None,
 ) -> EscalationLlmResult:
-    """One OpenAI JSON-object completion; never raises on API errors."""
+    """One OpenAI JSON-object completion; never raises on API errors.
+
+    ``response_language`` is the language ``message_to_user`` must be written
+    in. Always pass the user's response_language here so the escalation reply
+    stays in the language the user is writing in. The tenant-side
+    ``escalation_language`` (ticket / support team artifact language) is a
+    separate concern and must not be passed to this function.
+    """
     model_name = model or settings.escalation_model
     facts = {**fact_json, "phase": phase.value}
     user_block = (
-        f"ESCALATION_LANGUAGE:\n{escalation_language}\n\n"
+        f"RESPONSE_LANGUAGE:\n{response_language}\n\n"
         "ESCALATION_FACTS_JSON:\n"
         + json.dumps(facts, ensure_ascii=False)
         + "\n\nCHAT_TRANSCRIPT:\n"
@@ -103,7 +110,7 @@ def complete_escalation_openai_turn(
         tokens = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(
             operation="escalate_draft",
-            target_language=escalation_language,
+            target_language=response_language,
             tokens=tokens,
             model=model_name,
         )
@@ -111,7 +118,7 @@ def complete_escalation_openai_turn(
         if not msg:
             localization = localize_text_to_language_result(
                 canonical_text=FALLBACK_EN_GENERIC,
-                target_language=escalation_language,
+                target_language=response_language,
                 api_key=api_key,
             )
             msg = localization.text
@@ -129,13 +136,13 @@ def complete_escalation_openai_turn(
         logger.exception("complete_escalation_openai_turn failed: %s", e)
         log_llm_tokens(
             operation="escalate_draft",
-            target_language=escalation_language,
+            target_language=response_language,
             tokens=0,
             model=model_name,
         )
         localization = localize_text_to_language_result(
             canonical_text=FALLBACK_EN_GENERIC,
-            target_language=escalation_language,
+            target_language=response_language,
             api_key=api_key,
         )
         return EscalationLlmResult(

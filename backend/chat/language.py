@@ -195,36 +195,6 @@ def _normalize_config_language(raw: str | None) -> str | None:
     return _normalize_language_tag(raw)
 
 
-_FALLBACK_RESPONSE_REASONS = frozenset(
-    {
-        "bootstrap_default_english",
-        "detector_failure",
-        "detector_unknown",
-        "detector_unreliable",
-    }
-)
-
-
-def _pick_escalation_language(
-    tenant_escalation_language: str | None,
-    response_language: str,
-    response_language_resolution_reason: str,
-) -> tuple[str, str]:
-    """Resolve the language for user-facing escalation messages.
-
-    Tenant override wins. Otherwise mirror the user's response_language so the
-    handoff (ask-for-email, ticket confirmation, etc.) stays in the language
-    the user is writing in. Mark the source as ``default`` only when the
-    response_language itself was a fallback (no real signal).
-    """
-    explicit = _normalize_config_language(tenant_escalation_language)
-    if explicit:
-        return explicit, "tenant"
-    if response_language_resolution_reason in _FALLBACK_RESPONSE_REASONS:
-        return response_language or "en", "default"
-    return response_language or "en", "user_language"
-
-
 def _looks_undetectable(text: str) -> bool:
     stripped = text.strip()
     if not stripped:
@@ -419,54 +389,40 @@ def _resolve_language_context_inner(
     bot_id: str | None = None,
     chat_id: str | None = None,
 ) -> ResolvedLanguageContext:
-    def _build(
-        *,
-        detected_language: str,
-        confidence: float,
-        is_reliable: bool,
-        response_language: str,
-        response_language_resolution_reason: str,
-    ) -> ResolvedLanguageContext:
-        escalation_language, escalation_language_source = _pick_escalation_language(
-            tenant_escalation_language,
-            response_language,
-            response_language_resolution_reason,
-        )
-        return ResolvedLanguageContext(
-            detected_language=detected_language,
-            confidence=confidence,
-            is_reliable=is_reliable,
-            response_language=response_language,
-            response_language_resolution_reason=response_language_resolution_reason,
-            escalation_language=escalation_language,
-            escalation_language_source=escalation_language_source,
-        )
+    escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
+    escalation_language_source = "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
 
     if is_bootstrap_turn:
         bootstrap_language = _normalize_config_language(bootstrap_user_locale)
         if bootstrap_language:
-            return _build(
+            return ResolvedLanguageContext(
                 detected_language="unknown",
                 confidence=0.0,
                 is_reliable=False,
                 response_language=bootstrap_language,
                 response_language_resolution_reason="bootstrap_user_locale",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
             )
         browser_language = _normalize_config_language(browser_locale)
         if browser_language:
-            return _build(
+            return ResolvedLanguageContext(
                 detected_language="unknown",
                 confidence=0.0,
                 is_reliable=False,
                 response_language=browser_language,
                 response_language_resolution_reason="browser_locale",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
             )
-        return _build(
+        return ResolvedLanguageContext(
             detected_language="unknown",
             confidence=0.0,
             is_reliable=False,
             response_language="en",
             response_language_resolution_reason="bootstrap_default_english",
+            escalation_language=escalation_language,
+            escalation_language_source=escalation_language_source,
         )
 
     try:
@@ -483,12 +439,14 @@ def _resolve_language_context_inner(
                 "chat_id": chat_id,
             },
         )
-        return _build(
+        return ResolvedLanguageContext(
             detected_language="unknown",
             confidence=0.0,
             is_reliable=False,
             response_language="en",
             response_language_resolution_reason="detector_failure",
+            escalation_language=escalation_language,
+            escalation_language_source=escalation_language_source,
         )
 
     if detection.detected_language == "unknown":
@@ -509,22 +467,26 @@ def _resolve_language_context_inner(
 
     if winner is None:
         if previous_response_language:
-            return _build(
+            return ResolvedLanguageContext(
                 detected_language=detection.detected_language,
                 confidence=detection.confidence,
                 is_reliable=detection.is_reliable,
                 response_language=previous_response_language,
                 response_language_resolution_reason="sticky_no_signal",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
             )
         reason = "detector_unknown"
         if detection.detected_language != "unknown":
             reason = "detector_unreliable"
-        return _build(
+        return ResolvedLanguageContext(
             detected_language=detection.detected_language,
             confidence=detection.confidence,
             is_reliable=detection.is_reliable,
             response_language="en",
             response_language_resolution_reason=reason,
+            escalation_language=escalation_language,
+            escalation_language_source=escalation_language_source,
         )
 
     previous_root = _language_root(previous_response_language) if previous_response_language else None
@@ -532,12 +494,14 @@ def _resolve_language_context_inner(
         previous_score = votes.get(previous_root, 0)
         winner_score = votes.get(winner, 0)
         if winner_score - previous_score < _STICKY_SWITCH_MARGIN:
-            return _build(
+            return ResolvedLanguageContext(
                 detected_language=detection.detected_language,
                 confidence=detection.confidence,
                 is_reliable=detection.is_reliable,
                 response_language=previous_response_language,
                 response_language_resolution_reason="sticky_retained",
+                escalation_language=escalation_language,
+                escalation_language_source=escalation_language_source,
             )
 
     resolution_reason = "detected"
@@ -567,12 +531,14 @@ def _resolve_language_context_inner(
         if _language_root(recent_detection.detected_language) == winner:
             response_language = recent_detection.detected_language
             break
-    return _build(
+    return ResolvedLanguageContext(
         detected_language=detection.detected_language,
         confidence=detection.confidence,
         is_reliable=detection.is_reliable,
         response_language=response_language,
         response_language_resolution_reason=resolution_reason,
+        escalation_language=escalation_language,
+        escalation_language_source=escalation_language_source,
     )
 
 

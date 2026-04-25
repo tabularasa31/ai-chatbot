@@ -96,14 +96,19 @@ def complete_escalation_openai_turn(
     try:
         client = get_openai_client(api_key)
         _esc_reasoning = is_reasoning_model(model_name)
+        _esc_max_tokens = (
+            settings.chat_response_max_tokens_reasoning
+            if _esc_reasoning
+            else settings.escalation_max_completion_tokens
+        )
         response = call_openai_with_retry(
             "escalation_complete_turn",
             lambda: client.chat.completions.create(
                 model=model_name,
                 messages=messages,
                 **({} if _esc_reasoning else {"temperature": 0.3}),
-                max_completion_tokens=600,
-                response_format={"type": "json_object"},
+                max_completion_tokens=_esc_max_tokens,
+                **({} if _esc_reasoning else {"response_format": {"type": "json_object"}}),
             ),
         )
         raw = response.choices[0].message.content or "{}"

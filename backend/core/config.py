@@ -58,10 +58,20 @@ class Settings(BaseSettings):
         alias="ESCALATION_MODEL",
         description="OpenAI model for escalation turn completions.",
     )
+    escalation_max_completion_tokens: int = Field(
+        600,
+        alias="ESCALATION_MAX_COMPLETION_TOKENS",
+        ge=1,
+    )
     answer_validation_model: str = Field(
         "gpt-4.1-mini",
         alias="ANSWER_VALIDATION_MODEL",
         description="OpenAI model for answer grounding validation.",
+    )
+    answer_validation_max_completion_tokens: int = Field(
+        150,
+        alias="ANSWER_VALIDATION_MAX_COMPLETION_TOKENS",
+        ge=1,
     )
     query_rewrite_model: str = Field(
         "gpt-4.1-mini",

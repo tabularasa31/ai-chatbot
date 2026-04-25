@@ -1871,13 +1871,18 @@ def validate_answer(
         openai_client = get_openai_client(api_key)
         started_at = perf_counter()
         _val_reasoning = is_reasoning_model(settings.answer_validation_model)
+        _val_max_tokens = (
+            settings.chat_response_max_tokens_reasoning
+            if _val_reasoning
+            else settings.answer_validation_max_completion_tokens
+        )
         response = call_openai_with_retry(
             "chat_validate_answer",
             lambda: openai_client.chat.completions.create(
                 model=settings.answer_validation_model,
                 messages=[{"role": "user", "content": prompt}],
                 **({} if _val_reasoning else {"temperature": 0}),
-                max_completion_tokens=150,
+                max_completion_tokens=_val_max_tokens,
             ),
         )
         raw = response.choices[0].message.content or ""

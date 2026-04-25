@@ -43,7 +43,10 @@ from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client, is_reasoning_model
 from backend.core.openai_retry import call_openai_with_retry
 from backend.disclosure_config import resolve_level
-from backend.escalation.openai_escalation import complete_escalation_openai_turn
+from backend.escalation.openai_escalation import (
+    EscalationLlmResult,
+    complete_escalation_openai_turn,
+)
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
@@ -846,6 +849,51 @@ def _persist_turn_with_response_language(
         document_ids,
         extra_tokens,
         optional_entity_types=optional_entity_types,
+    )
+
+
+def _escalation_turn_response(
+    *,
+    db: Session,
+    chat: Chat,
+    tenant_id: uuid.UUID,
+    language_context: ResolvedLanguageContext,
+    question: str,
+    out: EscalationLlmResult,
+    optional_entity_types: set[str] | None,
+    trace: TraceHandle,
+    trace_source: str,
+    chat_ended: bool,
+    escalated: bool,
+    ticket_number: str | None = None,
+) -> ChatTurnOutcome:
+    """Persist an escalation turn and return the outcome. Single commit for all mutations."""
+    _persist_turn_with_response_language(
+        db=db,
+        chat=chat,
+        tenant_id=tenant_id,
+        response_language=language_context.escalation_language,
+        resolution_reason=language_context.response_language_resolution_reason,
+        user_content=question,
+        assistant_content=out.message_to_user,
+        document_ids=[],
+        extra_tokens=out.tokens_used,
+        optional_entity_types=optional_entity_types,
+    )
+    trace.update(
+        output={"answer": out.message_to_user, "source": trace_source},
+        metadata={
+            "chat_ended": chat_ended,
+            "escalated": escalated,
+            "escalation_language": language_context.escalation_language,
+        },
+    )
+    return ChatTurnOutcome(
+        text=out.message_to_user,
+        document_ids=[],
+        tokens_used=out.tokens_used,
+        chat_ended=chat_ended,
+        ticket_number=ticket_number,
     )
 
 
@@ -2281,31 +2329,18 @@ def process_chat_message(
             api_key=api_key,
             escalation_language=language_context.escalation_language,
         )
-        _persist_turn_with_response_language(
+        return _escalation_turn_response(
             db=db,
             chat=chat,
             tenant_id=tenant_id,
-            response_language=language_context.escalation_language,
-            resolution_reason=language_context.response_language_resolution_reason,
-            user_content=question,
-            assistant_content=out.message_to_user,
-            document_ids=[],
-            extra_tokens=out.tokens_used,
+            language_context=language_context,
+            question=question,
+            out=out,
             optional_entity_types=optional_entity_types,
-        )
-        trace.update(
-            output={"answer": out.message_to_user, "source": "chat_closed"},
-            metadata={
-                "chat_ended": True,
-                "escalated": False,
-                "escalation_language": language_context.escalation_language,
-            },
-        )
-        return ChatTurnOutcome(
-            text=out.message_to_user,
-            document_ids=[],
-            tokens_used=out.tokens_used,
+            trace=trace,
+            trace_source="chat_closed",
             chat_ended=True,
+            escalated=False,
         )
 
     # --- Awaiting contact email ---
@@ -2326,6 +2361,9 @@ def process_chat_message(
             email = parse_contact_email(question)
             try:
                 if email:
+                    # apply_collected_contact_email flushes (not commits) so all
+                    # mutations — email, chat flags, and the message turn — commit
+                    # atomically in _escalation_turn_response below.
                     apply_collected_contact_email(ticket.id, chat.id, email, db)
                     db.refresh(ticket)
                     db.refresh(chat)
@@ -2339,42 +2377,21 @@ def process_chat_message(
                         api_key=api_key,
                         escalation_language=language_context.escalation_language,
                     )
-                    chat.escalation_followup_pending = True
-                    _set_last_response_language(
-                        db=db,
-                        chat=chat,
-                        tenant_id=tenant_id,
-                        response_language=language_context.escalation_language,
-                        resolution_reason=language_context.response_language_resolution_reason,
-                    )
-                    db.add(chat)
-                    db.commit()
-                    _persist_turn(
-                        db,
-                        chat,
-                        tenant_id,
-                        question,
-                        out.message_to_user,
-                        [],
-                        out.tokens_used,
-                        optional_entity_types=optional_entity_types,
-                    )
                     awaiting_email_span.end(
                         output={"ticket_found": True, "email_captured": True}
                     )
-                    trace.update(
-                        output={"answer": out.message_to_user, "source": "escalation_email_capture"},
-                        metadata={
-                            "chat_ended": False,
-                            "escalated": True,
-                            "escalation_language": language_context.escalation_language,
-                        },
-                    )
-                    return ChatTurnOutcome(
-                        text=out.message_to_user,
-                        document_ids=[],
-                        tokens_used=out.tokens_used,
+                    return _escalation_turn_response(
+                        db=db,
+                        chat=chat,
+                        tenant_id=tenant_id,
+                        language_context=language_context,
+                        question=question,
+                        out=out,
+                        optional_entity_types=optional_entity_types,
+                        trace=trace,
+                        trace_source="escalation_email_capture",
                         chat_ended=False,
+                        escalated=True,
                     )
                 out = complete_escalation_openai_turn(
                     phase=EscalationPhase.email_parse_failed,
@@ -2384,34 +2401,21 @@ def process_chat_message(
                     api_key=api_key,
                     escalation_language=language_context.escalation_language,
                 )
-                _persist_turn_with_response_language(
-                    db=db,
-                    chat=chat,
-                    tenant_id=tenant_id,
-                    response_language=language_context.escalation_language,
-                    resolution_reason=language_context.response_language_resolution_reason,
-                    user_content=question,
-                    assistant_content=out.message_to_user,
-                    document_ids=[],
-                    extra_tokens=out.tokens_used,
-                    optional_entity_types=optional_entity_types,
-                )
                 awaiting_email_span.end(
                     output={"ticket_found": True, "email_captured": False}
                 )
-                trace.update(
-                    output={"answer": out.message_to_user, "source": "escalation_email_retry"},
-                    metadata={
-                        "chat_ended": False,
-                        "escalated": True,
-                        "escalation_language": language_context.escalation_language,
-                    },
-                )
-                return ChatTurnOutcome(
-                    text=out.message_to_user,
-                    document_ids=[],
-                    tokens_used=out.tokens_used,
+                return _escalation_turn_response(
+                    db=db,
+                    chat=chat,
+                    tenant_id=tenant_id,
+                    language_context=language_context,
+                    question=question,
+                    out=out,
+                    optional_entity_types=optional_entity_types,
+                    trace=trace,
+                    trace_source="escalation_email_retry",
                     chat_ended=False,
+                    escalated=True,
                 )
             except Exception as exc:
                 awaiting_email_span.end(
@@ -2447,58 +2451,38 @@ def process_chat_message(
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 db.add(chat)
-                _persist_turn_with_response_language(
+                followup_span.end(output={"decision": decision, "chat_ended": False})
+                return _escalation_turn_response(
                     db=db,
                     chat=chat,
                     tenant_id=tenant_id,
-                    response_language=language_context.escalation_language,
-                    resolution_reason=language_context.response_language_resolution_reason,
-                    user_content=question,
-                    assistant_content=out.message_to_user,
-                    document_ids=[],
-                    extra_tokens=out.tokens_used,
+                    language_context=language_context,
+                    question=question,
+                    out=out,
                     optional_entity_types=optional_entity_types,
-                )
-                followup_span.end(output={"decision": decision, "chat_ended": False})
-                trace.update(
-                    output={"answer": out.message_to_user, "source": "escalation_followup"},
-                    metadata={
-                        "chat_ended": False,
-                        "escalated": True,
-                        "escalation_language": language_context.escalation_language,
-                    },
-                )
-                return ChatTurnOutcome(
-                    text=out.message_to_user,
-                    document_ids=[],
-                    tokens_used=out.tokens_used,
+                    trace=trace,
+                    trace_source="escalation_followup",
                     chat_ended=False,
+                    escalated=True,
                 )
             if decision == "no":
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
                 chat.ended_at = datetime.now(UTC)
                 db.add(chat)
-                _persist_turn_with_response_language(
+                followup_span.end(output={"decision": decision, "chat_ended": True})
+                outcome = _escalation_turn_response(
                     db=db,
                     chat=chat,
                     tenant_id=tenant_id,
-                    response_language=language_context.escalation_language,
-                    resolution_reason=language_context.response_language_resolution_reason,
-                    user_content=question,
-                    assistant_content=out.message_to_user,
-                    document_ids=[],
-                    extra_tokens=out.tokens_used,
+                    language_context=language_context,
+                    question=question,
+                    out=out,
                     optional_entity_types=optional_entity_types,
-                )
-                followup_span.end(output={"decision": decision, "chat_ended": True})
-                trace.update(
-                    output={"answer": out.message_to_user, "source": "escalation_followup"},
-                    metadata={
-                        "chat_ended": True,
-                        "escalated": True,
-                        "escalation_language": language_context.escalation_language,
-                    },
+                    trace=trace,
+                    trace_source="escalation_followup",
+                    chat_ended=True,
+                    escalated=True,
                 )
                 _emit_chat_session_ended_event(
                     tenant_public_id=getattr(tenant_row, "public_id", None),
@@ -2506,40 +2490,22 @@ def process_chat_message(
                     chat_id=str(chat.id),
                     outcome="resolved",
                 )
-                return ChatTurnOutcome(
-                    text=out.message_to_user,
-                    document_ids=[],
-                    tokens_used=out.tokens_used,
-                    chat_ended=True,
-                )
+                return outcome
             _set_escalation_clarify_flag(chat)
             db.add(chat)
-            _persist_turn_with_response_language(
+            followup_span.end(output={"decision": decision, "chat_ended": False})
+            return _escalation_turn_response(
                 db=db,
                 chat=chat,
                 tenant_id=tenant_id,
-                response_language=language_context.escalation_language,
-                resolution_reason=language_context.response_language_resolution_reason,
-                user_content=question,
-                assistant_content=out.message_to_user,
-                document_ids=[],
-                extra_tokens=out.tokens_used,
+                language_context=language_context,
+                question=question,
+                out=out,
                 optional_entity_types=optional_entity_types,
-            )
-            followup_span.end(output={"decision": decision, "chat_ended": False})
-            trace.update(
-                output={"answer": out.message_to_user, "source": "escalation_followup"},
-                metadata={
-                    "chat_ended": False,
-                    "escalated": True,
-                    "escalation_language": language_context.escalation_language,
-                },
-            )
-            return ChatTurnOutcome(
-                text=out.message_to_user,
-                document_ids=[],
-                tokens_used=out.tokens_used,
+                trace=trace,
+                trace_source="escalation_followup",
                 chat_ended=False,
+                escalated=True,
             )
         except Exception as exc:
             followup_span.end(

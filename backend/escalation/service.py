@@ -389,7 +389,7 @@ def apply_collected_contact_email(
         tenant_id=chat.tenant_id,
         user_context=ctx,
     )
-    db.commit()
+    db.flush()
 
 
 def resolve_ticket(

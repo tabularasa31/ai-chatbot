@@ -3646,6 +3646,97 @@ def test_resolve_language_context_bootstrap_sets_unknown_detection() -> None:
     assert context.escalation_language_source == "tenant"
 
 
+@pytest.mark.parametrize(
+    "user_text, detected_lang",
+    [
+        ("Хочу поговорить с оператором", "ru"),
+        ("Quiero hablar con un agente", "es"),
+        ("Ich möchte mit einem Mitarbeiter sprechen", "de"),
+        ("Je veux parler à un agent", "fr"),
+    ],
+)
+def test_resolve_language_context_escalation_defaults_to_user_language(
+    monkeypatch: pytest.MonkeyPatch,
+    user_text: str,
+    detected_lang: str,
+) -> None:
+    """Without an explicit tenant override, escalation_language must mirror the
+    user's response_language so the handoff stays in the user's language.
+    Regression test for ClickUp 86excm5kz.
+    """
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: LanguageDetectionResult(detected_lang, 0.99, True),
+    )
+
+    context = resolve_language_context(
+        current_turn_text=user_text,
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=None,
+        recent_user_turn_texts=[user_text],
+    )
+
+    assert context.response_language == detected_lang
+    assert context.escalation_language == detected_lang
+    assert context.escalation_language_source == "user_language"
+
+
+def test_resolve_language_context_tenant_escalation_language_wins_over_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit tenant escalation_language overrides the user's language —
+    used when the support team wants all handoff messages in a fixed language.
+    """
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: LanguageDetectionResult("ru", 0.99, True),
+    )
+
+    context = resolve_language_context(
+        current_turn_text="Хочу поговорить с оператором",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language="es",
+        recent_user_turn_texts=["Хочу поговорить с оператором"],
+    )
+
+    assert context.response_language == "ru"
+    assert context.escalation_language == "es"
+    assert context.escalation_language_source == "tenant"
+
+
+def test_resolve_language_context_escalation_marks_default_when_response_is_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When response_language itself was a fallback (no real signal),
+    escalation_language inherits it but the source is tagged ``default`` —
+    not ``user_language`` — for honest telemetry.
+    """
+    from backend.chat.language import LangDetectError
+
+    monkeypatch.setattr(
+        "backend.chat.language.detect_language",
+        lambda _text: (_ for _ in ()).throw(LangDetectError(0, "boom")),
+    )
+
+    context = resolve_language_context(
+        current_turn_text="???",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=None,
+        recent_user_turn_texts=["???"],
+    )
+
+    assert context.response_language == "en"
+    assert context.response_language_resolution_reason == "detector_failure"
+    assert context.escalation_language == "en"
+    assert context.escalation_language_source == "default"
+
+
 def test_render_direct_faq_answer_result_translates_when_detection_is_unreliable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

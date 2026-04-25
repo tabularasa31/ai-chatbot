@@ -578,7 +578,7 @@ def test_chat_logs_escalation_override_reason(
 
     records = [record for record in caplog.records if record.msg == "response_language_changed"]
     assert any(
-        getattr(record, "next", None) == "en"
+        getattr(record, "next", None) == "ru"
         and getattr(record, "reason", None) == RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE
         for record in records
     )

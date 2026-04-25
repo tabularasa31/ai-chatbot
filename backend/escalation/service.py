@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import UTC
 from typing import Any
 
@@ -15,6 +19,8 @@ from backend.chat.pii import redact
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
+from backend.core.openai_client import get_openai_client
+from backend.core.openai_retry import call_openai_with_retry
 from backend.email.service import send_email
 from backend.models import (
     Chat,
@@ -38,6 +44,33 @@ logger = logging.getLogger(__name__)
 ESCALATION_THRESHOLD = 0.45
 
 _CLARIFY_KEY = "escalation_followup_clarify"
+
+_HUMAN_REQUEST_TIMEOUT = 3.0
+_HUMAN_REQUEST_CACHE_TTL = 5 * 60
+_HUMAN_REQUEST_CACHE_MAX = 2048
+_human_request_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _hr_cache_get(key: str) -> bool | None:
+    item = _human_request_cache.get(key)
+    if not item:
+        return None
+    expires_at, result = item
+    if time.time() > expires_at:
+        _human_request_cache.pop(key, None)
+        return None
+    return result
+
+
+def _hr_cache_set(key: str, result: bool) -> None:
+    if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX and key not in _human_request_cache:
+        expired = [k for k, v in _human_request_cache.items() if time.time() > v[0]]
+        for k in expired[:max(1, len(expired))]:
+            _human_request_cache.pop(k, None)
+        if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX:
+            oldest = min(_human_request_cache.items(), key=lambda x: x[1][0])[0]
+            _human_request_cache.pop(oldest, None)
+    _human_request_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
 
 
 def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
@@ -84,35 +117,58 @@ def should_escalate(
     return False, None
 
 
-def detect_human_request(message: str) -> bool:
-    t = message.lower()
-    patterns = (
-        "talk to a human",
-        "talk to human",
-        "speak to a human",
-        "speak to human",
-        "connect me to",
-        "get me a human",
-        "i want a human",
-        "i want an agent",
-        "i want a person",
-        "live agent",
-        "real person",
-        "human agent",
-        "human support",
-        "поговорить с",  # noqa: RUF001
-        "соедини с",  # noqa: RUF001
-        "хочу с человеком",  # noqa: RUF001
-        "оператор",
-        "живой человек",
+def detect_human_request(message: str, api_key: str) -> bool:
+    """Return True if the user is requesting to speak with a human agent.
+
+    Uses LLM classification so it works across all languages. Falls back to
+    False on timeout or error to avoid false-positive escalations.
+    """
+    cache_key = hashlib.sha256(message[:200].encode()).hexdigest()
+    cached = _hr_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    system_prompt = (
+        "Determine if the user wants to speak with a human agent, operator, or live support person. "
+        'Answer ONLY with JSON: {"human_request": true/false}'
     )
-    if any(p in t for p in patterns):
-        return True
-    if ("human" in t or "agent" in t or "support" in t) and (
-        "not helpful" in t or "useless" in t or "this is useless" in t
-    ):
-        return True
-    return False
+
+    def _call_llm() -> bool:
+        client = get_openai_client(api_key)
+        response = call_openai_with_retry(
+            "detect_human_request",
+            lambda: client.chat.completions.create(
+                model=settings.guards_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message},
+                ],
+                temperature=0,
+                max_completion_tokens=20,
+                response_format={"type": "json_object"},
+            ),
+        )
+        raw = response.choices[0].message.content or "{}"
+        return bool(json.loads(raw).get("human_request", False))
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(_call_llm)
+    try:
+        result = future.result(timeout=_HUMAN_REQUEST_TIMEOUT)
+    except (TimeoutError, Exception):
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+        return False
+    else:
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
+
+    _hr_cache_set(cache_key, result)
+    return result
 
 
 def compute_priority(

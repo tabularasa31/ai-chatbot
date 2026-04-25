@@ -2153,7 +2153,7 @@ def process_chat_message(
         db=db,
     )
 
-    explicit_human_request_raw = detect_human_request(redacted_question)
+    explicit_human_request_raw = detect_human_request(redacted_question, api_key)
 
     trace = begin_trace(
         name="rag-query",
@@ -2222,7 +2222,7 @@ def process_chat_message(
     user_context_line = _user_context_prompt_line(effective_user_ctx)
     question_for_pipeline = redacted_question
 
-    explicit_human_request = detect_human_request(question_for_pipeline)
+    explicit_human_request = detect_human_request(question_for_pipeline, api_key)
 
     # Clarification budget: allow the LLM to ask a clarifying question only when
     # the per-session limit has not yet been reached.

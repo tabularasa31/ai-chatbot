@@ -310,13 +310,18 @@ def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
     assert "answer conservatively from the clearest supported part only" in prompt
 
 
-def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
-    """OpenAI/JSON errors → validation_skipped, does not raise."""
+def test_validate_answer_openai_error_returns_invalid(
+    mock_openai_client: Mock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """OpenAI/JSON errors are logged and treated as validation failures."""
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
-    result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
-    assert result["is_valid"] is True
-    assert result["confidence"] == 1.0
-    assert result["reason"] == "validation_skipped"
+    with caplog.at_level("ERROR", logger="backend.chat.service"):
+        result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
+    assert result["is_valid"] is False
+    assert result["confidence"] == 0.0
+    assert result["reason"] == "validation_error"
+    assert "Answer validation failed" in caplog.text
 
 
 def test_validate_answer_prompt_allows_single_clarifying_question(

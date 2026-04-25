@@ -2213,24 +2213,25 @@ def process_chat_message(
         force_trace=explicit_human_request_raw,
     )
 
+    handler_ctx = HandlerContext(
+        tenant_id=tenant_id,
+        chat=chat,
+        tenant_row=tenant_row,
+        tenant_profile=tenant_profile,
+        question=question,
+        redacted_question=redacted_question,
+        question_text=question_text,
+        language_context=language_context,
+        api_key=api_key,
+        optional_entity_types=optional_entity_types,
+        is_new_session=is_new_session,
+        trace=trace,
+        db=db,
+    )
+
     if not question_text:
         if not is_new_session:
             raise ValueError("Question is required")
-        handler_ctx = HandlerContext(
-            tenant_id=tenant_id,
-            chat=chat,
-            tenant_row=tenant_row,
-            tenant_profile=tenant_profile,
-            question=question,
-            redacted_question=redacted_question,
-            question_text=question_text,
-            language_context=language_context,
-            api_key=api_key,
-            optional_entity_types=optional_entity_types,
-            is_new_session=is_new_session,
-            trace=trace,
-            db=db,
-        )
         outcome = _HANDLER_ROUTER.dispatch(handler_ctx)
         if outcome is None:
             # Unreachable in normal operation: GreetingHandler always handles
@@ -2268,21 +2269,6 @@ def process_chat_message(
         _resolved_bot.agent_instructions if _resolved_bot else None
     )
 
-    handler_ctx = HandlerContext(
-        tenant_id=tenant_id,
-        chat=chat,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        question=question,
-        redacted_question=redacted_question,
-        question_text=question_text,
-        language_context=language_context,
-        api_key=api_key,
-        optional_entity_types=optional_entity_types,
-        is_new_session=is_new_session,
-        trace=trace,
-        db=db,
-    )
     if outcome := _HANDLER_ROUTER.dispatch(handler_ctx):
         return outcome
 

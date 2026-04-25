@@ -59,6 +59,45 @@ _LATIN_WORD_HINTS: dict[str, tuple[str, float]] = {
     "thanks": ("en", 0.95),
 }
 
+# Common English function words used to confirm an ASCII multi-token text is
+# actually English. langdetect mis-classifies short ASCII English fragments
+# (e.g. "Reset password" -> af, "question about product" -> fr), so we trust
+# the heuristic's English fallback only when at least one of these positive
+# English signals is present. List is intentionally curated to function words
+# that are uniquely English (excluded: short tokens like "a", "no", "in", "on",
+# "or" that overlap with Spanish/French/German).
+_ENGLISH_STOP_WORDS = frozenset({
+    "the", "this", "that", "these", "those",
+    "i", "me", "my", "we", "us", "our",
+    "you", "your", "they", "them", "their",
+    "is", "am", "are", "was", "were",
+    "be", "been", "being",
+    "do", "does", "did", "done",
+    "have", "has", "had",
+    "can", "could", "would", "should", "will",
+    "with", "from", "into", "onto",
+    "what", "when", "where", "why", "how", "who", "which",
+    "it", "its",
+    "and", "but", "if",
+    "please", "thanks", "thank",
+})
+
+# Languages langdetect detects reliably on full multi-token sentences. Used to
+# accept langdetect's verdict over the heuristic's English fallback. Excludes
+# `af`, `cy`, `ca`, `tl`, `so` because langdetect commonly mis-fires to those
+# for short ASCII English input.
+_LANGDETECT_TRUSTED_NON_EN = frozenset({
+    "es", "de", "fr", "pt", "it", "ru", "ja", "zh", "ko", "ar",
+    "uk", "pl", "tr", "nl",
+})
+
+# Number of tokens above which we trust langdetect over the heuristic English
+# fallback for stop-word-free ASCII text. Below this, langdetect mis-classifies
+# too often to be useful (e.g. "Reset password" -> af).
+_ASCII_LANGDETECT_MIN_TOKENS = 4
+# Minimum langdetect confidence required to override the heuristic.
+_ASCII_LANGDETECT_MIN_CONFIDENCE = 0.99
+
 
 @dataclass(frozen=True)
 class LanguageDetectionResult:
@@ -280,18 +319,28 @@ def _detect_language_uncached(text: str) -> LanguageDetectionResult:
     if ascii_tokens and all(token.isascii() for token in ascii_tokens) and len(ascii_tokens) == 1:
         return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
 
-    # Trust the heuristic for pure-ASCII text that it assessed as English.
-    # langdetect can badly misclassify short ASCII phrases at low token counts —
-    # e.g. "Reset password" → af (Afrikaans), "question about product" → fr (French) —
-    # because it lacks sufficient signal at that length.  Non-ASCII text is still
-    # passed to langdetect since the extended character set gives it a reliable signal.
+    # Trust the heuristic for pure-ASCII text that it assessed as English when
+    # there is a positive English signal — either the input is short (langdetect
+    # mis-classifies short ASCII English: "Reset password" -> af, "I cannot
+    # login" -> it) or it contains a common English function word (proves the
+    # text is actually English, not coincidentally pure-ASCII non-English).
+    # When neither holds — a longer multi-token ASCII text without English
+    # function words — fall through to langdetect, which is accurate on full
+    # foreign-language sentences (e.g. "Quiero hablar con un agente" -> es).
+    # Regression test: ClickUp 86excmfke.
+    pure_ascii = bool(ascii_tokens) and all(token.isascii() for token in ascii_tokens)
     if (
         heuristic.detected_language == "en"
         and heuristic.is_reliable
-        and ascii_tokens
-        and all(token.isascii() for token in ascii_tokens)
+        and pure_ascii
     ):
-        return heuristic
+        token_set = {t.casefold() for t in ascii_tokens}
+        if (
+            len(ascii_tokens) < _ASCII_LANGDETECT_MIN_TOKENS
+            or token_set & _ENGLISH_STOP_WORDS
+        ):
+            return heuristic
+        # Fall through to langdetect.
 
     if detect_langs is not None:
         detections = detect_langs(text)
@@ -301,6 +350,27 @@ def _detect_language_uncached(text: str) -> LanguageDetectionResult:
             if normalized is None:
                 return LanguageDetectionResult(detected_language="unknown", confidence=0.0, is_reliable=False)
             confidence = float(getattr(top, "prob", 0.0) or 0.0)
+            # When the heuristic already flagged this as English-fallback for
+            # pure-ASCII text, only override with langdetect's verdict when it
+            # is strongly confident in a language we trust to detect reliably
+            # on full sentences. Otherwise keep the heuristic's English
+            # fallback to avoid langdetect's known false-positives on
+            # ambiguous tech English (e.g. "API returns error code" -> ca).
+            if (
+                heuristic.detected_language == "en"
+                and heuristic.is_reliable
+                and pure_ascii
+            ):
+                if (
+                    normalized in _LANGDETECT_TRUSTED_NON_EN
+                    and confidence >= _ASCII_LANGDETECT_MIN_CONFIDENCE
+                ) or normalized == "en":
+                    return LanguageDetectionResult(
+                        detected_language=normalized,
+                        confidence=confidence,
+                        is_reliable=confidence >= _threshold(),
+                    )
+                return heuristic
             return LanguageDetectionResult(
                 detected_language=normalized,
                 confidence=confidence,

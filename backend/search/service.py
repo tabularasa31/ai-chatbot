@@ -42,6 +42,9 @@ BM25_CANDIDATE_POOL = 200
 # Cap for the standalone bm25_search_chunks() prefilter: bounds memory and CPU
 # even when a query token matches a large fraction of a tenant's corpus.
 BM25_PREFILTER_CANDIDATE_LIMIT = 1000
+# Cap on unique query tokens used to build the prefilter OR-clause. Prevents
+# pathological queries from generating SQL with hundreds of LIKE branches.
+BM25_PREFILTER_MAX_QUERY_TOKENS = 32
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 RERANK_LEXICAL_WEIGHT = 0.35
 RERANK_VECTOR_WEIGHT = 0.25
@@ -1359,6 +1362,9 @@ def bm25_search_chunks(
         .filter(Document.tenant_id == tenant_id)
         .filter(Embedding.chunk_text.isnot(None))
         .filter(or_(*token_conditions))
+        # Deterministic ordering so the limit truncates predictably and biases
+        # toward recent content when a token matches more than the cap allows.
+        .order_by(Embedding.created_at.desc(), Embedding.id.desc())
         .limit(BM25_PREFILTER_CANDIDATE_LIMIT)
         .all()
     )
@@ -1366,9 +1372,15 @@ def bm25_search_chunks(
 
 
 def _bm25_prefilter_tokens(query: str) -> list[str]:
-    """Unique, casefolded word tokens used for the bm25_search_chunks prefilter."""
-    raw_tokens = re.findall(r"\w+", query.casefold(), flags=re.UNICODE)
-    return list(dict.fromkeys(raw_tokens))
+    """Unique, lowercase word tokens used for the bm25_search_chunks prefilter.
+
+    .lower() (not .casefold()) matches the SQL func.lower() applied to the
+    column and the BM25 scorer's tokenization, keeping prefilter and scoring
+    in lockstep.
+    """
+    raw_tokens = re.findall(r"\w+", query.lower(), flags=re.UNICODE)
+    unique_tokens = list(dict.fromkeys(raw_tokens))
+    return unique_tokens[:BM25_PREFILTER_MAX_QUERY_TOKENS]
 
 
 def _escape_like(token: str) -> str:

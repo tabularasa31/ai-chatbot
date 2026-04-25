@@ -1396,19 +1396,393 @@ def validate_answer(
 
 
 # ---------------------------------------------------------------------------
-# RagHandler placeholder — full encapsulation deferred to PR 4/4.
+# RagHandler — runs the RAG pipeline then converts the result into a turn
+# outcome, including post-RAG escalation side effects.
 # ---------------------------------------------------------------------------
 
 
 class RagHandler(PipelineHandler):
-    """Placeholder. Real implementation lands in PR 4/4 once the
-    EscalationStateMachine is extracted from ``service.process_chat_message``;
-    only then can this handler convert ``ChatPipelineResult`` into a
-    ``ChatTurnOutcome``.
+    """Catch-all handler that runs the full RAG pipeline.
+
+    Invoked after Greeting / SmallTalk / EscalationStateMachine handlers; this
+    one always claims a turn (``can_handle`` returns True for non-empty input
+    that didn't trigger an earlier handler). Owns:
+
+      * calling ``run_chat_pipeline`` (pure pipeline, no DB writes)
+      * consuming ``ChatPipelineResult`` — guard rejects, faq_direct fast
+        paths, RAG/faq_context normal paths
+      * building the policy ``TurnContext``, calling ``decide()``, and
+        promoting the decision to escalation if needed
+      * persisting the turn (user + assistant messages), emitting analytics
+        events, ingesting gap signals, firing the log-analysis threshold
     """
 
     def can_handle(self, ctx: HandlerContext) -> bool:
-        return False
+        # Empty input is GreetingHandler's domain or rejected outright; anything
+        # else falls through to RAG once earlier handlers decline.
+        return bool(ctx.question_text)
 
     def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
-        raise NotImplementedError("RagHandler will land in PR 3/4 of the chat-pipeline refactor")
+        from time import perf_counter
+
+        from backend.chat import service as _svc
+        from backend.chat.decision import (
+            MAX_CLARIFICATIONS_PER_SESSION,
+            Decision,
+            DecisionKind,
+            decide,
+        )
+        from backend.chat.decision import (
+            TurnContext as DecisionTurnContext,
+        )
+        from backend.escalation.service import chunks_preview_from_results
+        from backend.models import EscalationPhase, EscalationTrigger
+        from backend.search.service import (
+            build_reliability_projection,
+            build_variant_trace_metadata,
+            build_variant_trace_tag,
+        )
+
+        # Pull side-effecting helpers via the service module so tests' monkey-
+        # patches against ``backend.chat.service.X`` keep affecting these calls.
+        _emit_chat_escalated_event = _svc._emit_chat_escalated_event
+        _emit_chat_session_ended_event = _svc._emit_chat_session_ended_event
+        _emit_chat_turn_event = _svc._emit_chat_turn_event
+        _persist_turn_with_response_language = _svc._persist_turn_with_response_language
+        _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
+        _try_ingest_gap_signal = _svc._try_ingest_gap_signal
+        complete_escalation_openai_turn = _svc.complete_escalation_openai_turn
+        create_escalation_ticket = _svc.create_escalation_ticket
+        fact_from_ticket = _svc.fact_from_ticket
+        build_chat_messages_for_openai = _svc.build_chat_messages_for_openai
+        run_chat_pipeline_fn = _svc.run_chat_pipeline
+
+        chat = ctx.chat
+        msgs = build_chat_messages_for_openai(chat, ctx.redacted_question)
+        result = run_chat_pipeline_fn(
+            ctx.tenant_id,
+            ctx.redacted_question,
+            ctx.db,
+            api_key=ctx.api_key,
+            language_context=ctx.language_context,
+            user_context_line=ctx.user_context_line,
+            disclosure_config=ctx.disclosure_config,
+            trace=ctx.trace,
+            precomputed_injection=None,
+            tenant_public_id=getattr(ctx.tenant_row, "public_id", None) if ctx.tenant_row else None,
+            bot_public_id=ctx.bot_public_id,
+            retry_bot_id=str(ctx.bot_id) if ctx.bot_id is not None else None,
+            chat_id=str(chat.id) if chat is not None else None,
+            stream_callback=ctx.stream_callback,
+            agent_instructions=ctx.bot_agent_instructions,
+            allow_clarification=ctx.allow_clarification,
+        )
+
+        # Guard rejects and faq_direct: persist and return immediately (no escalation).
+        if result.is_reject or result.is_faq_direct:
+            user_message, assistant_message = _persist_turn_with_response_language(
+                db=ctx.db,
+                chat=chat,
+                tenant_id=ctx.tenant_id,
+                response_language=ctx.language_context.response_language,
+                resolution_reason=ctx.language_context.response_language_resolution_reason,
+                user_content=ctx.question,
+                assistant_content=result.final_answer,
+                document_ids=[],
+                extra_tokens=result.tokens_used,
+                optional_entity_types=ctx.optional_entity_types,
+                language_context=ctx.language_context,
+            )
+            _try_ingest_gap_signal(
+                chat=chat,
+                tenant_id=ctx.tenant_id,
+                session_id=ctx.session_id,
+                user_message=user_message,
+                assistant_message=assistant_message,
+                question_text=ctx.redacted_question,
+                answer_confidence=(
+                    result.retrieval.best_confidence_score if result.retrieval is not None else None
+                ),
+                was_rejected=result.is_reject,
+                had_fallback=result.validation_outcome == "fallback",
+                was_escalated=False,
+                language=ctx.language_context.response_language,
+            )
+            source_map = {
+                "injection": "guard_reject_injection",
+                "not_relevant": "guard_reject_not_relevant",
+                "low_retrieval": "guard_reject_low_retrieval",
+            }
+            if result.is_reject:
+                source = source_map.get(result.reject_reason or "", "guard_reject")
+            else:
+                source = "faq_direct"
+            if ctx.trace is not None:
+                ctx.trace.update(
+                    output={"answer": result.final_answer, "source": source},
+                    metadata={
+                        "chat_ended": False,
+                        "escalated": False,
+                        "strategy": result.strategy,
+                        "reject_reason": result.reject_reason,
+                        "retrieval_skipped": result.is_faq_direct,
+                        "response_language": ctx.language_context.response_language,
+                    },
+                )
+            _emit_chat_turn_event(
+                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                bot_public_id=ctx.bot_public_id,
+                chat_id=str(chat.id) if chat is not None else None,
+                strategy=result.strategy,
+                reject_reason=result.reject_reason,
+                is_reject=result.is_reject,
+                escalated=False,
+                identified=bool(ctx.user_context),
+                latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
+                retrieval_ms=result.retrieval_ms,
+                llm_ms=result.llm_ms,
+            )
+            return ChatTurnOutcome(
+                text=result.final_answer,
+                document_ids=[],
+                tokens_used=result.tokens_used,
+                chat_ended=False,
+            )
+
+        # Normal RAG / faq_context path: handle escalation side effects, then persist.
+        retrieval = result.retrieval
+        assert retrieval is not None  # only None for guard_reject / faq_direct
+        document_ids = list(dict.fromkeys(retrieval.document_ids))
+        scores = retrieval.scores
+        chunk_texts = retrieval.chunk_texts
+        answer = result.final_answer
+        tokens_used = result.tokens_used
+        validation = result.validation or {}
+        escalate = result.escalation_recommended
+        esc_trigger = result.escalation_trigger
+        reliability_score = (
+            "low" if result.validation_outcome == "fallback"
+            else retrieval.reliability.score
+        )
+
+        # Build TurnContext and call decide() to get the formal policy decision.
+        # This is the single authoritative classification of what this turn produced.
+        faq_match_obj = result.faq_match
+        _kb_confidence = _classify_kb_confidence(retrieval)
+        _turn_ctx = DecisionTurnContext(
+            session_closed=(chat.ended_at is not None),
+            active_escalation=(
+                chat.escalation_awaiting_ticket_id is not None
+                or chat.escalation_followup_pending
+            ),
+            clarification_count=chat.clarification_count,
+            max_clarifications=MAX_CLARIFICATIONS_PER_SESSION,
+            guard_failed=result.is_reject,
+            guard_reason=result.reject_reason,
+            explicit_human_request=ctx.explicit_human_request,
+            faq_direct_hit=result.is_faq_direct,
+            faq_top_score=faq_match_obj.top_score if faq_match_obj else None,
+            kb_confidence=_kb_confidence,
+            # Partial-answer signal: only medium-confidence chunks constitute a usable
+            # partial answer. Low-confidence chunks are too unreliable to caveat from;
+            # the budget-exhausted path escalates instead (clarify_loop_limit).
+            kb_has_partial_answer=_kb_confidence == "medium" and bool(chunk_texts),
+            kb_contradiction_detected=False,  # not yet propagated from search layer (v1)
+            low_retrieval_no_chunks=not chunk_texts,
+        )
+        _decision: Decision = decide(_turn_ctx)
+
+        # Enforce policy decision: clarify_loop_limit escalation must become a real escalation
+        # even when the RAG pipeline did not independently recommend it.
+        if (
+            _decision.kind == DecisionKind.escalate
+            and _decision.escalate_reason == "clarify_loop_limit"
+            and not escalate
+        ):
+            escalate = True
+            esc_trigger = EscalationTrigger.low_similarity
+
+        # Increment clarification counter when the pipeline produced a blocking clarify.
+        _clarification_count_before = chat.clarification_count
+        if _decision.is_blocking_clarify():
+            chat.clarification_count += 1
+            ctx.db.add(chat)
+            # Counter is committed in the same transaction as the assistant message below.
+
+        if ctx.trace is not None:
+            escalation_decision_span = ctx.trace.span(
+                name="escalation-check",
+                input={
+                    "best_confidence_score": retrieval.best_confidence_score,
+                    "chunk_count": len(chunk_texts),
+                    "validation": validation,
+                    "reliability_score": reliability_score,
+                },
+            )
+            escalation_decision_span.end(
+                output={
+                    "escalate": escalate,
+                    "trigger": esc_trigger.value if esc_trigger else None,
+                    "reliability_score": reliability_score,
+                }
+            )
+            if reliability_score == "low" or escalate:
+                ctx.trace.promote(
+                    metadata={
+                        "sampling_promoted": True,
+                        "promotion_reason": "low_reliability_or_escalation",
+                    }
+                )
+        created_ticket_number: str | None = None
+        if escalate and esc_trigger is not None:
+            try:
+                preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
+                ticket = create_escalation_ticket(
+                    ctx.tenant_id,
+                    ctx.question,
+                    esc_trigger,
+                    ctx.db,
+                    chat_id=chat.id,
+                    session_id=ctx.session_id,
+                    best_similarity_score=retrieval.best_confidence_score,
+                    retrieved_chunks=preview,
+                    user_context=ctx.effective_user_ctx,
+                    optional_entity_types=ctx.optional_entity_types,
+                )
+                esc_phase = (
+                    EscalationPhase.handoff_ask_email
+                    if not ticket.user_email
+                    else EscalationPhase.handoff_email_known
+                )
+                esc = complete_escalation_openai_turn(
+                    phase=esc_phase,
+                    chat_messages=msgs,
+                    fact_json=fact_from_ticket(ticket, chat=chat),
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
+                answer = answer + "\n\n" + esc.message_to_user
+                tokens_used = tokens_used + esc.tokens_used
+                created_ticket_number = ticket.ticket_number
+                if not ticket.user_email:
+                    chat.escalation_awaiting_ticket_id = ticket.id
+                else:
+                    chat.escalation_followup_pending = True
+                ctx.db.add(chat)
+                ctx.db.commit()
+                _emit_chat_escalated_event(
+                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                    bot_public_id=ctx.bot_public_id,
+                    chat_id=str(chat.id),
+                    escalation_reason=_decision.escalate_reason or esc_trigger.value,
+                    escalation_trigger=esc_trigger.value,
+                )
+                _emit_chat_session_ended_event(
+                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                    bot_public_id=ctx.bot_public_id,
+                    chat_id=str(chat.id),
+                    outcome="escalated",
+                )
+            except Exception as e:
+                logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
+
+        # Both branches (RAG answer or escalation handoff) write to the user in
+        # response_language. escalation_language stays for tenant-side artifacts
+        # only and must not leak into the chat reply.
+        user_message, assistant_message = _persist_turn_with_response_language(
+            db=ctx.db,
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            response_language=ctx.language_context.response_language,
+            resolution_reason=ctx.language_context.response_language_resolution_reason,
+            user_content=ctx.question,
+            assistant_content=answer,
+            document_ids=document_ids,
+            extra_tokens=tokens_used,
+            optional_entity_types=ctx.optional_entity_types,
+            language_context=ctx.language_context,
+        )
+        _try_ingest_gap_signal(
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=ctx.redacted_question,
+            answer_confidence=retrieval.best_confidence_score,
+            was_rejected=False,
+            had_fallback=result.validation_outcome == "fallback",
+            was_escalated=bool(escalate),
+            language=ctx.language_context.response_language,
+        )
+
+        # Phase 4: fire-and-forget threshold check — never blocks the response.
+        _trigger_log_analysis_threshold(ctx.tenant_id, ctx.api_key)
+
+        faq_match = result.faq_match
+        if ctx.trace is not None:
+            ctx.trace.update(
+                output={"answer": answer},
+                metadata={
+                    "chat_ended": bool(chat.ended_at),
+                    "escalated": bool(escalate),
+                    "escalation_trigger": esc_trigger.value if esc_trigger else None,
+                    "response_language": ctx.language_context.response_language,
+                    "response_language_resolution_reason": ctx.language_context.response_language_resolution_reason,
+                    "escalation_language": ctx.language_context.escalation_language,
+                    "escalation_language_source": ctx.language_context.escalation_language_source,
+                    "strategy": result.strategy,
+                    "validation_outcome": result.validation_outcome,
+                    "retrieval_mode": retrieval.mode,
+                    "best_rank_score": retrieval.best_rank_score,
+                    "best_confidence_score": retrieval.best_confidence_score,
+                    "validation": validation,
+                    "source_document_ids": [str(document_id) for document_id in document_ids],
+                    "tokens_used": int(tokens_used),
+                    **(
+                        {
+                            "faq_strategy": faq_match.strategy,
+                            "faq_top_score": faq_match.top_score,
+                            "faq_selected_score": faq_match.selected_score,
+                        }
+                        if faq_match is not None
+                        else {}
+                    ),
+                    **build_reliability_projection(retrieval.reliability),
+                    **build_variant_trace_metadata(retrieval),
+                    # Clarification policy trace fields (spec §Trace fields)
+                    **_decision.trace_dict(_clarification_count_before),
+                    "allow_clarification": ctx.allow_clarification,
+                    "intent_top_class": None,   # no classifier in v1
+                    "intent_top_score": None,
+                    "intent_runner_up_score": None,
+                    "faq_top_score": faq_match.top_score if faq_match else None,
+                    "kb_has_partial_answer": bool(chunk_texts),
+                },
+                tags=[build_variant_trace_tag(retrieval.variant_mode)],
+            )
+        _emit_chat_turn_event(
+            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+            bot_public_id=ctx.bot_public_id,
+            chat_id=str(chat.id) if chat is not None else None,
+            strategy=result.strategy,
+            reject_reason=None,
+            is_reject=False,
+            escalated=bool(escalate),
+            identified=bool(ctx.user_context),
+            latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
+            retrieval_ms=result.retrieval_ms,
+            llm_ms=result.llm_ms,
+            reliability_score=reliability_score,
+            best_confidence_score=retrieval.best_confidence_score,
+            decision=_decision,
+            escalation_trigger=esc_trigger.value if esc_trigger else None,
+        )
+        return ChatTurnOutcome(
+            text=answer,
+            document_ids=document_ids,
+            tokens_used=tokens_used,
+            chat_ended=bool(chat.ended_at),
+            ticket_number=created_ticket_number,
+        )

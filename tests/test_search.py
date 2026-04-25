@@ -3285,3 +3285,61 @@ def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
         result = _rewrite_query_for_retrieval("", api_key="test-key")
 
     assert result is None
+
+
+def test_normalize_scored_results_flat_multi_doc_returns_zero() -> None:
+    """Multiple docs with identical scores: must return 0.0, not 1.0.
+
+    Returning 1.0 artificially inflates every document's fusion contribution
+    when the BM25 signal cannot distinguish between them.
+    """
+    from backend.models import Embedding
+    from backend.search.service import _normalize_scored_results
+
+    emb_a = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="a", metadata_json={})
+    emb_b = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="b", metadata_json={})
+    emb_c = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="c", metadata_json={})
+
+    for flat_score in (0.0, 0.5, 1.0, 42.0):
+        result = _normalize_scored_results([(emb_a, flat_score), (emb_b, flat_score), (emb_c, flat_score)])
+        scores = [s for _, s in result]
+        assert scores == [0.0, 0.0, 0.0], (
+            f"Expected all 0.0 when max==min=={flat_score} across multiple docs, got {scores}"
+        )
+
+
+def test_normalize_scored_results_single_item_returns_one() -> None:
+    """Single unique match: must return 1.0 — it is the top result by definition."""
+    from backend.models import Embedding
+    from backend.search.service import _normalize_scored_results
+
+    emb = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="only", metadata_json={})
+
+    for raw_score in (0.0, 0.5, 1.0, 42.0):
+        result = _normalize_scored_results([(emb, raw_score)])
+        assert result[0][1] == 1.0, (
+            f"Expected 1.0 for single-item list with score {raw_score}, got {result[0][1]}"
+        )
+
+
+def test_normalize_scored_results_distinct_scores_are_scaled() -> None:
+    """Normal case: scores are rescaled to [0, 1] with order preserved."""
+    from backend.models import Embedding
+    from backend.search.service import _normalize_scored_results
+
+    emb_high = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="hi", metadata_json={})
+    emb_mid = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="mid", metadata_json={})
+    emb_low = Embedding(id=uuid.uuid4(), document_id=uuid.uuid4(), chunk_text="lo", metadata_json={})
+
+    result = _normalize_scored_results([(emb_high, 3.0), (emb_mid, 2.0), (emb_low, 1.0)])
+    scores = [s for _, s in result]
+
+    assert scores[0] == pytest.approx(1.0)
+    assert scores[1] == pytest.approx(0.5)
+    assert scores[2] == pytest.approx(0.0)
+
+
+def test_normalize_scored_results_empty_list_returns_empty() -> None:
+    from backend.search.service import _normalize_scored_results
+
+    assert _normalize_scored_results([]) == []

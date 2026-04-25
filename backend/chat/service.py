@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from time import perf_counter
 from typing import Any
 
@@ -15,9 +15,6 @@ from sqlalchemy.orm import Session, joinedload
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
     Decision,
-    DecisionKind,
-    TurnContext,
-    decide,
 )
 from backend.chat.handlers import (
     ChatTurnOutcome,
@@ -66,20 +63,13 @@ from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client  # noqa: F401
 from backend.escalation.openai_escalation import (
     EscalationLlmResult,
-    complete_escalation_openai_turn,
+    complete_escalation_openai_turn,  # noqa: F401  (re-export for monkeypatch via backend.chat.service)
 )
 from backend.escalation.service import (
-    _clear_escalation_clarify_flag,
-    _escalation_clarify_already_asked,
-    _set_escalation_clarify_flag,
-    apply_collected_contact_email,
-    build_chat_messages_for_openai,
-    chunks_preview_from_results,
-    create_escalation_ticket,
+    build_chat_messages_for_openai,  # noqa: F401  (re-export for monkeypatch)
+    create_escalation_ticket,  # noqa: F401  (re-export for monkeypatch)
     detect_human_request,
-    fact_from_ticket,
-    get_latest_escalation_ticket_for_chat,
-    parse_contact_email,
+    fact_from_ticket,  # noqa: F401  (re-export for monkeypatch)
     should_escalate,  # noqa: F401  (re-export for monkeypatch via backend.chat.service)
 )
 from backend.faq.faq_matcher import match_faq  # noqa: F401  (re-export for monkeypatch)
@@ -93,9 +83,6 @@ from backend.guards.relevance_checker import check_relevance_with_profile  # noq
 from backend.models import (
     Bot,
     Chat,
-    EscalationPhase,
-    EscalationTicket,
-    EscalationTrigger,
     Message,
     MessageFeedback,
     MessageRole,
@@ -109,8 +96,6 @@ from backend.observability.metrics import capture_event
 from backend.privacy_config import public_redaction_config_dict
 from backend.search.service import (
     build_reliability_projection,
-    build_variant_trace_metadata,
-    build_variant_trace_tag,
     embed_queries,  # noqa: F401  (re-export for monkeypatch via backend.chat.service)
     expand_query,  # noqa: F401  (re-export)
     search_similar_chunks_detailed,  # noqa: F401  (re-export)
@@ -960,41 +945,15 @@ def process_chat_message(
         force_trace=explicit_human_request_raw,
     )
 
-    handler_ctx = HandlerContext(
-        tenant_id=tenant_id,
-        chat=chat,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        question=question,
-        redacted_question=redacted_question,
-        question_text=question_text,
-        language_context=language_context,
-        api_key=api_key,
-        optional_entity_types=optional_entity_types,
-        is_new_session=is_new_session,
-        trace=trace,
-        db=db,
-    )
+    # Empty input on an established session is invalid — reject before dispatch
+    # so handlers don't have to validate this themselves.
+    if not question_text and not is_new_session:
+        raise ValueError("Question is required")
 
-    if not question_text:
-        if not is_new_session:
-            raise ValueError("Question is required")
-        outcome = _HANDLER_ROUTER.dispatch(handler_ctx)
-        if outcome is None:
-            # Unreachable in normal operation: GreetingHandler always handles
-            # an empty new-session turn.
-            raise RuntimeError("Pipeline router did not produce an outcome for greeting turn")
-        return outcome
+    explicit_human_request = detect_human_request(redacted_question, api_key)
 
-    user_context_line = _user_context_prompt_line(effective_user_ctx)
-    question_for_pipeline = redacted_question
-
-    explicit_human_request = detect_human_request(question_for_pipeline, api_key)
-
-    # Clarification budget: allow the LLM to ask a clarifying question only when
-    # the per-session limit has not yet been reached.
-    allow_clarification = chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION
-
+    # Resolve the bot row once: handlers need disclosure config and agent
+    # instructions, both of which are tied to the active bot.
     _resolved_bot: Bot | None = None
     if bot_id is not None:
         _resolved_bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
@@ -1012,646 +971,42 @@ def process_chat_message(
             else None
         )
     disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
-    _bot_agent_instructions: str | None = (
-        _resolved_bot.agent_instructions if _resolved_bot else None
-    )
 
-    if outcome := _HANDLER_ROUTER.dispatch(handler_ctx):
-        return outcome
-
-    msgs = build_chat_messages_for_openai(chat, redacted_question)
-
-    # --- Chat closed ---
-    if chat.ended_at is not None:
-        trace.span(
-            name="chat-state-check",
-            input={"state": "closed"},
-        ).end(
-            output={"chat_ended": True}
-        )
-        out = complete_escalation_openai_turn(
-            phase=EscalationPhase.chat_already_closed,
-            chat_messages=msgs,
-            fact_json={},
-            latest_user_text=redacted_question,
-            api_key=api_key,
-            response_language=language_context.response_language,
-        )
-        return _escalation_turn_response(
-            db=db,
-            chat=chat,
-            tenant_id=tenant_id,
-            language_context=language_context,
-            question=question,
-            out=out,
-            optional_entity_types=optional_entity_types,
-            trace=trace,
-            trace_source="chat_closed",
-            chat_ended=True,
-            escalated=False,
-        )
-
-    # --- Awaiting contact email ---
-    if chat.escalation_awaiting_ticket_id:
-        awaiting_email_span = trace.span(
-            name="escalation-awaiting-email",
-            input={"ticket_id": str(chat.escalation_awaiting_ticket_id)},
-        )
-        ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
-        if not ticket:
-            chat.escalation_awaiting_ticket_id = None
-            db.add(chat)
-            db.commit()
-            awaiting_email_span.end(output={"ticket_found": False})
-        else:
-            # Parse contact email from original user text, not redacted text.
-            # Redaction replaces addresses with placeholders and would break capture.
-            email = parse_contact_email(question)
-            try:
-                if email:
-                    # apply_collected_contact_email flushes (not commits) so all
-                    # mutations — email, chat flags, and the message turn — commit
-                    # atomically in _escalation_turn_response below.
-                    apply_collected_contact_email(ticket.id, chat.id, email, db)
-                    db.refresh(ticket)
-                    db.refresh(chat)
-                    db.expire(chat, ["messages"])
-                    msgs = build_chat_messages_for_openai(chat, redacted_question)
-                    out = complete_escalation_openai_turn(
-                        phase=EscalationPhase.handoff_email_known,
-                        chat_messages=msgs,
-                        fact_json=fact_from_ticket(ticket, chat=chat),
-                        latest_user_text=redacted_question,
-                        api_key=api_key,
-                        response_language=language_context.response_language,
-                    )
-                    awaiting_email_span.end(
-                        output={"ticket_found": True, "email_captured": True}
-                    )
-                    return _escalation_turn_response(
-                        db=db,
-                        chat=chat,
-                        tenant_id=tenant_id,
-                        language_context=language_context,
-                        question=question,
-                        out=out,
-                        optional_entity_types=optional_entity_types,
-                        trace=trace,
-                        trace_source="escalation_email_capture",
-                        chat_ended=False,
-                        escalated=True,
-                    )
-                out = complete_escalation_openai_turn(
-                    phase=EscalationPhase.email_parse_failed,
-                    chat_messages=msgs,
-                    fact_json=fact_from_ticket(ticket, chat=chat),
-                    latest_user_text=redacted_question,
-                    api_key=api_key,
-                    response_language=language_context.response_language,
-                )
-                awaiting_email_span.end(
-                    output={"ticket_found": True, "email_captured": False}
-                )
-                return _escalation_turn_response(
-                    db=db,
-                    chat=chat,
-                    tenant_id=tenant_id,
-                    language_context=language_context,
-                    question=question,
-                    out=out,
-                    optional_entity_types=optional_entity_types,
-                    trace=trace,
-                    trace_source="escalation_email_retry",
-                    chat_ended=False,
-                    escalated=True,
-                )
-            except Exception as exc:
-                awaiting_email_span.end(
-                    output={"ticket_found": True, "error": True},
-                    level="ERROR",
-                    status_message=str(exc),
-                )
-                raise
-
-    # --- Follow-up yes/no ---
-    if chat.escalation_followup_pending:
-        followup_span = trace.span(
-            name="escalation-followup",
-            input={"pending": True},
-        )
-        ticket = get_latest_escalation_ticket_for_chat(chat.id, db)
-        try:
-            out = complete_escalation_openai_turn(
-                phase=EscalationPhase.followup_awaiting_yes_no,
-                chat_messages=msgs,
-                fact_json={
-                    **fact_from_ticket(ticket, chat=chat),
-                    "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
-                },
-                latest_user_text=redacted_question,
-                api_key=api_key,
-                response_language=language_context.response_language,
-            )
-            decision = out.followup_decision or "unclear"
-            if decision == "unclear" and _escalation_clarify_already_asked(chat):
-                decision = "yes"
-            if decision == "yes":
-                chat.escalation_followup_pending = False
-                _clear_escalation_clarify_flag(chat)
-                db.add(chat)
-                followup_span.end(output={"decision": decision, "chat_ended": False})
-                return _escalation_turn_response(
-                    db=db,
-                    chat=chat,
-                    tenant_id=tenant_id,
-                    language_context=language_context,
-                    question=question,
-                    out=out,
-                    optional_entity_types=optional_entity_types,
-                    trace=trace,
-                    trace_source="escalation_followup",
-                    chat_ended=False,
-                    escalated=True,
-                )
-            if decision == "no":
-                chat.escalation_followup_pending = False
-                _clear_escalation_clarify_flag(chat)
-                chat.ended_at = datetime.now(UTC)
-                db.add(chat)
-                followup_span.end(output={"decision": decision, "chat_ended": True})
-                outcome = _escalation_turn_response(
-                    db=db,
-                    chat=chat,
-                    tenant_id=tenant_id,
-                    language_context=language_context,
-                    question=question,
-                    out=out,
-                    optional_entity_types=optional_entity_types,
-                    trace=trace,
-                    trace_source="escalation_followup",
-                    chat_ended=True,
-                    escalated=True,
-                )
-                _emit_chat_session_ended_event(
-                    tenant_public_id=getattr(tenant_row, "public_id", None),
-                    bot_public_id=bot_public_id,
-                    chat_id=str(chat.id),
-                    outcome="resolved",
-                )
-                return outcome
-            _set_escalation_clarify_flag(chat)
-            db.add(chat)
-            followup_span.end(output={"decision": decision, "chat_ended": False})
-            return _escalation_turn_response(
-                db=db,
-                chat=chat,
-                tenant_id=tenant_id,
-                language_context=language_context,
-                question=question,
-                out=out,
-                optional_entity_types=optional_entity_types,
-                trace=trace,
-                trace_source="escalation_followup",
-                chat_ended=False,
-                escalated=True,
-            )
-        except Exception as exc:
-            followup_span.end(
-                output={"error": True},
-                level="ERROR",
-                status_message=str(exc),
-            )
-            raise
-
-    # --- T-3: explicit human request (before RAG) ---
-    human_request_span = trace.span(
-        name="human-request-detection",
-        input={"question": question_for_pipeline},
-    )
-    human_request_span.end(output={"matched": explicit_human_request})
-    if explicit_human_request:
-        try:
-            ticket = create_escalation_ticket(
-                tenant_id,
-                question,
-                EscalationTrigger.user_request,
-                db,
-                chat_id=chat.id,
-                session_id=session_id,
-                user_context=effective_user_ctx,
-                optional_entity_types=optional_entity_types,
-            )
-            phase = (
-                EscalationPhase.handoff_ask_email
-                if not ticket.user_email
-                else EscalationPhase.handoff_email_known
-            )
-            out = complete_escalation_openai_turn(
-                phase=phase,
-                chat_messages=msgs,
-                fact_json=fact_from_ticket(ticket, chat=chat),
-                latest_user_text=redacted_question,
-                api_key=api_key,
-                response_language=language_context.response_language,
-            )
-            if not ticket.user_email:
-                chat.escalation_awaiting_ticket_id = ticket.id
-            else:
-                chat.escalation_followup_pending = True
-            _set_last_response_language(
-                db=db,
-                chat=chat,
-                tenant_id=tenant_id,
-                response_language=language_context.response_language,
-                resolution_reason=language_context.response_language_resolution_reason,
-                language_context=language_context,
-            )
-            db.add(chat)
-            db.commit()
-            user_message, assistant_message = _persist_turn(
-                db,
-                chat,
-                tenant_id,
-                question,
-                out.message_to_user,
-                [],
-                out.tokens_used,
-                optional_entity_types=optional_entity_types,
-            )
-            _try_ingest_gap_signal(
-                chat=chat,
-                tenant_id=tenant_id,
-                session_id=session_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                question_text=redacted_question,
-                answer_confidence=None,
-                was_rejected=False,
-                had_fallback=False,
-                was_escalated=True,
-                language=language_context.response_language,
-            )
-            trace.update(
-                output={"answer": out.message_to_user, "source": "explicit_handoff"},
-                metadata={
-                    "chat_ended": False,
-                    "escalated": True,
-                    "response_language": language_context.response_language,
-                    "escalation_language": language_context.escalation_language,
-                },
-            )
-            _emit_chat_escalated_event(
-                tenant_public_id=getattr(tenant_row, "public_id", None),
-                bot_public_id=bot_public_id,
-                chat_id=str(chat.id),
-                escalation_reason="explicit_human_request",
-                escalation_trigger=EscalationTrigger.user_request.value,
-            )
-            _emit_chat_session_ended_event(
-                tenant_public_id=getattr(tenant_row, "public_id", None),
-                bot_public_id=bot_public_id,
-                chat_id=str(chat.id),
-                outcome="escalated",
-            )
-            return ChatTurnOutcome(
-                text=out.message_to_user,
-                document_ids=[],
-                tokens_used=out.tokens_used,
-                chat_ended=False,
-                ticket_number=ticket.ticket_number,
-            )
-        except Exception as e:
-            logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
-
-    # --- Normal RAG pipeline ---
-    # NOTE: run_chat_pipeline runs AFTER escalation paths (T-1/T-2/T-3).
-    # Escalations are triggered by explicit user signals and are always valid
-    # regardless of topic relevance. The pipeline handles injection → FAQ →
-    # relevance → retrieve → generate → validate → escalation decision.
-    result = run_chat_pipeline(
-        tenant_id,
-        question_for_pipeline,
-        db,
+    handler_ctx = HandlerContext(
+        tenant_id=tenant_id,
+        chat=chat,
+        tenant_row=tenant_row,
+        tenant_profile=tenant_profile,
+        question=question,
+        redacted_question=redacted_question,
+        question_text=question_text,
+        language_context=language_context,
         api_key=api_key,
-        language_context=language_context,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_cfg,
-        trace=trace,
-        precomputed_injection=None,
-        tenant_public_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
-        bot_public_id=bot_public_id,
-        retry_bot_id=str(bot_id) if bot_id is not None else None,
-        chat_id=str(chat.id) if chat is not None else None,
-        stream_callback=stream_callback,
-        agent_instructions=_bot_agent_instructions,
-        allow_clarification=allow_clarification,
-    )
-
-    # Guard rejects and faq_direct: persist and return immediately (no escalation).
-    if result.is_reject or result.is_faq_direct:
-        user_message, assistant_message = _persist_turn_with_response_language(
-            db=db,
-            chat=chat,
-            tenant_id=tenant_id,
-            response_language=language_context.response_language,
-            resolution_reason=language_context.response_language_resolution_reason,
-            user_content=question,
-            assistant_content=result.final_answer,
-            document_ids=[],
-            extra_tokens=result.tokens_used,
-            optional_entity_types=optional_entity_types,
-            language_context=language_context,
-        )
-        _try_ingest_gap_signal(
-            chat=chat,
-            tenant_id=tenant_id,
-            session_id=session_id,
-            user_message=user_message,
-            assistant_message=assistant_message,
-            question_text=redacted_question,
-            answer_confidence=(
-                result.retrieval.best_confidence_score if result.retrieval is not None else None
-            ),
-            was_rejected=result.is_reject,
-            had_fallback=result.validation_outcome == "fallback",
-            was_escalated=False,
-            language=language_context.response_language,
-        )
-        source_map = {
-            "injection": "guard_reject_injection",
-            "not_relevant": "guard_reject_not_relevant",
-            "low_retrieval": "guard_reject_low_retrieval",
-        }
-        if result.is_reject:
-            source = source_map.get(result.reject_reason or "", "guard_reject")
-        else:
-            source = "faq_direct"
-        trace.update(
-            output={"answer": result.final_answer, "source": source},
-            metadata={
-                "chat_ended": False,
-                "escalated": False,
-                "strategy": result.strategy,
-                "reject_reason": result.reject_reason,
-                "retrieval_skipped": result.is_faq_direct,
-                "response_language": language_context.response_language,
-            },
-        )
-        _emit_chat_turn_event(
-            tenant_public_id=getattr(tenant_row, "public_id", None),
-            bot_public_id=bot_public_id,
-            chat_id=str(chat.id) if chat is not None else None,
-            strategy=result.strategy,
-            reject_reason=result.reject_reason,
-            is_reject=result.is_reject,
-            escalated=False,
-            identified=bool(user_context),
-            latency_ms=int((perf_counter() - _turn_started_at) * 1000),
-            retrieval_ms=result.retrieval_ms,
-            llm_ms=result.llm_ms,
-        )
-        return ChatTurnOutcome(
-            text=result.final_answer,
-            document_ids=[],
-            tokens_used=result.tokens_used,
-            chat_ended=False,
-        )
-
-    # Normal RAG / faq_context path: handle escalation side effects, then persist.
-    retrieval = result.retrieval
-    assert retrieval is not None  # only None for guard_reject / faq_direct
-    document_ids = list(dict.fromkeys(retrieval.document_ids))
-    scores = retrieval.scores
-    chunk_texts = retrieval.chunk_texts
-    answer = result.final_answer
-    tokens_used = result.tokens_used
-    validation = result.validation or {}
-    escalate = result.escalation_recommended
-    esc_trigger = result.escalation_trigger
-    reliability_score = (
-        "low" if result.validation_outcome == "fallback"
-        else retrieval.reliability.score
-    )
-
-    # Build TurnContext and call decide() to get the formal policy decision.
-    # This is the single authoritative classification of what this turn produced.
-    faq_match_obj = result.faq_match
-    _kb_confidence = _classify_kb_confidence(retrieval)
-    _turn_ctx = TurnContext(
-        session_closed=(chat.ended_at is not None),
-        active_escalation=(
-            chat.escalation_awaiting_ticket_id is not None
-            or chat.escalation_followup_pending
-        ),
-        clarification_count=chat.clarification_count,
-        max_clarifications=MAX_CLARIFICATIONS_PER_SESSION,
-        guard_failed=result.is_reject,
-        guard_reason=result.reject_reason,
-        explicit_human_request=explicit_human_request,
-        faq_direct_hit=result.is_faq_direct,
-        faq_top_score=faq_match_obj.top_score if faq_match_obj else None,
-        kb_confidence=_kb_confidence,
-        # Partial-answer signal: only medium-confidence chunks constitute a usable
-        # partial answer. Low-confidence chunks are too unreliable to caveat from;
-        # the budget-exhausted path escalates instead (clarify_loop_limit).
-        kb_has_partial_answer=_kb_confidence == "medium" and bool(chunk_texts),
-        kb_contradiction_detected=False,  # not yet propagated from search layer (v1)
-        low_retrieval_no_chunks=not chunk_texts,
-    )
-    _decision: Decision = decide(_turn_ctx)
-
-    # Enforce policy decision: clarify_loop_limit escalation must become a real escalation
-    # even when the RAG pipeline did not independently recommend it.
-    if (
-        _decision.kind == DecisionKind.escalate
-        and _decision.escalate_reason == "clarify_loop_limit"
-        and not escalate
-    ):
-        escalate = True
-        esc_trigger = EscalationTrigger.low_similarity
-
-    # Increment clarification counter when the pipeline produced a blocking clarify.
-    _clarification_count_before = chat.clarification_count
-    if _decision.is_blocking_clarify():
-        chat.clarification_count += 1
-        db.add(chat)
-        # Counter is committed in the same transaction as the assistant message below.
-
-    escalation_decision_span = trace.span(
-        name="escalation-check",
-        input={
-            "best_confidence_score": retrieval.best_confidence_score,
-            "chunk_count": len(chunk_texts),
-            "validation": validation,
-            "reliability_score": reliability_score,
-        },
-    )
-    escalation_decision_span.end(
-        output={
-            "escalate": escalate,
-            "trigger": esc_trigger.value if esc_trigger else None,
-            "reliability_score": reliability_score,
-        }
-    )
-    if reliability_score == "low" or escalate:
-        trace.promote(
-            metadata={
-                "sampling_promoted": True,
-                "promotion_reason": "low_reliability_or_escalation",
-            }
-        )
-    created_ticket_number: str | None = None
-    if escalate and esc_trigger is not None:
-        try:
-            preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
-            ticket = create_escalation_ticket(
-                tenant_id,
-                question,
-                esc_trigger,
-                db,
-                chat_id=chat.id,
-                session_id=session_id,
-                best_similarity_score=retrieval.best_confidence_score,
-                retrieved_chunks=preview,
-                user_context=effective_user_ctx,
-                optional_entity_types=optional_entity_types,
-            )
-            esc_phase = (
-                EscalationPhase.handoff_ask_email
-                if not ticket.user_email
-                else EscalationPhase.handoff_email_known
-            )
-            esc = complete_escalation_openai_turn(
-                phase=esc_phase,
-                chat_messages=msgs,
-                fact_json=fact_from_ticket(ticket, chat=chat),
-                latest_user_text=redacted_question,
-                api_key=api_key,
-                response_language=language_context.response_language,
-            )
-            answer = answer + "\n\n" + esc.message_to_user
-            tokens_used = tokens_used + esc.tokens_used
-            created_ticket_number = ticket.ticket_number
-            if not ticket.user_email:
-                chat.escalation_awaiting_ticket_id = ticket.id
-            else:
-                chat.escalation_followup_pending = True
-            db.add(chat)
-            db.commit()
-            _emit_chat_escalated_event(
-                tenant_public_id=getattr(tenant_row, "public_id", None),
-                bot_public_id=bot_public_id,
-                chat_id=str(chat.id),
-                escalation_reason=_decision.escalate_reason or esc_trigger.value,
-                escalation_trigger=esc_trigger.value,
-            )
-            _emit_chat_session_ended_event(
-                tenant_public_id=getattr(tenant_row, "public_id", None),
-                bot_public_id=bot_public_id,
-                chat_id=str(chat.id),
-                outcome="escalated",
-            )
-        except Exception as e:
-            logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
-
-    # Both branches (RAG answer or escalation handoff) write to the user in
-    # response_language. escalation_language stays for tenant-side artifacts
-    # only and must not leak into the chat reply.
-    user_message, assistant_message = _persist_turn_with_response_language(
-        db=db,
-        chat=chat,
-        tenant_id=tenant_id,
-        response_language=language_context.response_language,
-        resolution_reason=language_context.response_language_resolution_reason,
-        user_content=question,
-        assistant_content=answer,
-        document_ids=document_ids,
-        extra_tokens=tokens_used,
         optional_entity_types=optional_entity_types,
-        language_context=language_context,
-    )
-    _try_ingest_gap_signal(
-        chat=chat,
-        tenant_id=tenant_id,
+        is_new_session=is_new_session,
+        trace=trace,
+        db=db,
         session_id=session_id,
-        user_message=user_message,
-        assistant_message=assistant_message,
-        question_text=redacted_question,
-        answer_confidence=retrieval.best_confidence_score,
-        was_rejected=False,
-        had_fallback=result.validation_outcome == "fallback",
-        was_escalated=bool(escalate),
-        language=language_context.response_language,
-    )
-
-    # Phase 4: fire-and-forget threshold check — never blocks the response.
-    _trigger_log_analysis_threshold(tenant_id, api_key)
-
-    faq_match = result.faq_match
-    trace.update(
-        output={"answer": answer},
-        metadata={
-            "chat_ended": bool(chat.ended_at),
-            "escalated": bool(escalate),
-            "escalation_trigger": esc_trigger.value if esc_trigger else None,
-            "response_language": language_context.response_language,
-            "response_language_resolution_reason": language_context.response_language_resolution_reason,
-            "escalation_language": language_context.escalation_language,
-            "escalation_language_source": language_context.escalation_language_source,
-            "strategy": result.strategy,
-            "validation_outcome": result.validation_outcome,
-            "retrieval_mode": retrieval.mode,
-            "best_rank_score": retrieval.best_rank_score,
-            "best_confidence_score": retrieval.best_confidence_score,
-            "validation": validation,
-            "source_document_ids": [str(document_id) for document_id in document_ids],
-            "tokens_used": int(tokens_used),
-            **(
-                {
-                    "faq_strategy": faq_match.strategy,
-                    "faq_top_score": faq_match.top_score,
-                    "faq_selected_score": faq_match.selected_score,
-                }
-                if faq_match is not None
-                else {}
-            ),
-            **build_reliability_projection(retrieval.reliability),
-            **build_variant_trace_metadata(retrieval),
-            # Clarification policy trace fields (spec §Trace fields)
-            **_decision.trace_dict(_clarification_count_before),
-            "allow_clarification": allow_clarification,
-            "intent_top_class": None,   # no classifier in v1
-            "intent_top_score": None,
-            "intent_runner_up_score": None,
-            "faq_top_score": faq_match.top_score if faq_match else None,
-            "kb_has_partial_answer": bool(chunk_texts),
-        },
-        tags=[build_variant_trace_tag(retrieval.variant_mode)],
-    )
-    _emit_chat_turn_event(
-        tenant_public_id=getattr(tenant_row, "public_id", None),
+        effective_user_ctx=effective_user_ctx,
         bot_public_id=bot_public_id,
-        chat_id=str(chat.id) if chat is not None else None,
-        strategy=result.strategy,
-        reject_reason=None,
-        is_reject=False,
-        escalated=bool(escalate),
-        identified=bool(user_context),
-        latency_ms=int((perf_counter() - _turn_started_at) * 1000),
-        retrieval_ms=result.retrieval_ms,
-        llm_ms=result.llm_ms,
-        reliability_score=reliability_score,
-        best_confidence_score=retrieval.best_confidence_score,
-        decision=_decision,
-        escalation_trigger=esc_trigger.value if esc_trigger else None,
+        bot_id=bot_id,
+        bot=_resolved_bot,
+        bot_agent_instructions=_resolved_bot.agent_instructions if _resolved_bot else None,
+        disclosure_config=disclosure_cfg,
+        allow_clarification=chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION,
+        user_context_line=_user_context_prompt_line(effective_user_ctx),
+        stream_callback=stream_callback,
+        explicit_human_request=explicit_human_request,
+        turn_started_at=_turn_started_at,
     )
-    return ChatTurnOutcome(
-        text=answer,
-        document_ids=document_ids,
-        tokens_used=tokens_used,
-        chat_ended=bool(chat.ended_at),
-        ticket_number=created_ticket_number,
-    )
+
+    outcome = _HANDLER_ROUTER.dispatch(handler_ctx)
+    if outcome is None:
+        # Unreachable in normal operation: RagHandler is the catch-all and
+        # always produces an outcome for non-empty input. If we reach here
+        # the handler chain has been misconfigured.
+        raise RuntimeError("Pipeline router produced no outcome for chat turn")
+    return outcome
 
 
 def run_debug(

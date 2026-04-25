@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from backend.chat.language import ResolvedLanguageContext
-    from backend.models import Chat, Tenant, TenantProfile
+    from backend.models import Bot, Chat, Tenant, TenantProfile
     from backend.observability import TraceHandle
 
 
@@ -28,11 +29,12 @@ class ChatTurnOutcome:
 class HandlerContext:
     """Inputs assembled at the top of process_chat_message before handler dispatch.
 
-    Fields are intentionally narrow for PR 1/4 (only what GreetingHandler needs).
-    Subsequent PRs will widen this dataclass as SmallTalk / RAG / Escalation
-    handlers are migrated.
+    Greeting / SmallTalk handlers only read the core fields; Escalation /
+    RagHandler also use the bot, disclosure, callback, and per-turn metadata
+    fields populated below.
     """
 
+    # Core — used by every handler
     tenant_id: uuid.UUID
     chat: Chat
     tenant_row: Tenant | None
@@ -47,16 +49,43 @@ class HandlerContext:
     trace: TraceHandle | None
     db: Session
 
+    # Used by EscalationStateMachine + RagHandler
+    session_id: uuid.UUID | None = None
+    effective_user_ctx: dict[str, Any] | None = None
+    bot_public_id: str | None = None
+
+    # Used by RagHandler only
+    bot_id: uuid.UUID | None = None
+    bot: Bot | None = None
+    bot_agent_instructions: str | None = None
+    disclosure_config: dict[str, Any] | None = None
+    allow_clarification: bool = True
+    user_context_line: str | None = None
+    stream_callback: Callable[[str], None] | None = None
+    explicit_human_request: bool = False
+
+    # Per-turn metrics
+    turn_started_at: float = 0.0
+
+    # Mutable scratch space for handlers — currently unused; reserved for future
+    # cross-handler state (e.g. precomputed injection result threaded between
+    # injection guard and run_chat_pipeline).
+    extras: dict[str, Any] = field(default_factory=dict)
+
 
 class PipelineHandler(ABC):
     """A pipeline-stage handler.
 
     HandlerRouter walks its registered handlers in order and dispatches the turn
-    to the first one whose ``can_handle`` returns True.
+    to the first one whose ``can_handle`` returns True. If ``handle`` returns
+    ``None`` the router moves on to the next handler — used by handlers that
+    opt-in optimistically (``can_handle`` is True) but discover at runtime that
+    they cannot complete the turn (e.g. EscalationStateMachine T-3 path failing
+    falls back to RagHandler).
     """
 
     @abstractmethod
     def can_handle(self, ctx: HandlerContext) -> bool: ...
 
     @abstractmethod
-    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome: ...
+    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None: ...

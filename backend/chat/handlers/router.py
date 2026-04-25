@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
+from backend.chat.handlers.escalation import EscalationStateMachine
 from backend.chat.handlers.greeting import GreetingHandler
+from backend.chat.handlers.rag import RagHandler
 from backend.chat.handlers.small_talk import SmallTalkHandler
 
 
@@ -22,16 +24,28 @@ class HandlerRouter:
     def dispatch(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         for handler in self._handlers:
             if handler.can_handle(ctx):
-                return handler.handle(ctx)
+                outcome = handler.handle(ctx)
+                if outcome is not None:
+                    return outcome
+                # Fall through to the next handler when this one opted out
+                # at runtime (e.g. T-3 escalation failed → retry with RAG).
         return None
 
 
 def default_router() -> HandlerRouter:
     """Builds the standard handler chain.
 
-    Order matters: GreetingHandler claims empty + new-session turns first;
-    SmallTalkHandler claims single-word turns outside escalation flows.
-    Rag / Escalation handlers are added by subsequent PRs in the chat-pipeline
-    refactor epic.
+    Order matters: GreetingHandler claims empty + new-session turns first,
+    SmallTalkHandler claims single-word turns outside escalation flows,
+    EscalationStateMachine claims any active escalation state or explicit
+    human request, and RagHandler is the catch-all that runs the full RAG
+    pipeline for everything else.
     """
-    return HandlerRouter([GreetingHandler(), SmallTalkHandler()])
+    return HandlerRouter(
+        [
+            GreetingHandler(),
+            SmallTalkHandler(),
+            EscalationStateMachine(),
+            RagHandler(),
+        ]
+    )

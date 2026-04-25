@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Глобальные настройки приложения, загружаемые из .env."""
+    """Application settings loaded from environment variables."""
 
     database_url: str = Field(..., alias="DATABASE_URL")
     environment: str = Field("development", alias="ENVIRONMENT")

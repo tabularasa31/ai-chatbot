@@ -19,7 +19,7 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 
 def hash_password(password: str) -> str:
-    """Хеширует пароль с помощью bcrypt."""  # noqa: RUF002
+    """Hash a plaintext password with bcrypt."""
     if not isinstance(password, str):
         raise TypeError("password must be a string")
 
@@ -30,7 +30,7 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Проверяет пароль по его bcrypt-хешу."""  # noqa: RUF002
+    """Verify a plaintext password against its bcrypt hash."""
     if not (isinstance(password, str) and isinstance(hashed, str)):
         return False
 
@@ -58,7 +58,7 @@ def decode_access_token(token: str) -> str | None:
 
 
 def create_access_token(data: dict[str, Any]) -> str:
-    """Создаёт JWT-токен с payload и сроком жизни 24 часа."""  # noqa: RUF002
+    """Create a JWT access token with the given payload (24-hour TTL)."""
     to_encode = data.copy()
     to_encode.setdefault("typ", USER_ACCESS_JWT_TYP)
     now = dt.datetime.now(dt.UTC)

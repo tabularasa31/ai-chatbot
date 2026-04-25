@@ -67,13 +67,43 @@ def test_should_not_escalate_when_answer_is_valid() -> None:
     assert trig is None
 
 
+def _mock_llm_human_request(result: bool):
+    """Patch the OpenAI call inside detect_human_request to return a fixed result."""
+    import json
+    from contextlib import ExitStack
+    from unittest.mock import MagicMock, patch
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({"human_request": result})
+
+    class _Stack:
+        def __enter__(self):
+            self._stack = ExitStack()
+            self._stack.enter_context(
+                patch("backend.escalation.service.get_openai_client", return_value=MagicMock())
+            )
+            self._stack.enter_context(
+                patch("backend.escalation.service.call_openai_with_retry", return_value=response)
+            )
+            return self
+
+        def __exit__(self, *args):
+            return self._stack.__exit__(*args)
+
+    return _Stack()
+
+
 def test_detect_human_request_english() -> None:
-    assert detect_human_request("I need to talk to a human please") is True
-    assert detect_human_request("connect me to support, this is useless") is True
+    with _mock_llm_human_request(True):
+        assert detect_human_request("I need to talk to a human please", "sk-test") is True
+    with _mock_llm_human_request(True):
+        assert detect_human_request("connect me to support, this is useless", "sk-test") is True
 
 
 def test_detect_human_request_russian() -> None:
-    assert detect_human_request("хочу поговорить с человеком") is True
+    with _mock_llm_human_request(True):
+        assert detect_human_request("хочу поговорить с человеком", "sk-test") is True
 
 
 def test_compute_priority_t3_enterprise() -> None:

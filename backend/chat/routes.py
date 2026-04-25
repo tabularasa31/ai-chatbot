@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
-from backend.chat.language import detect_language, get_string
+from backend.chat.language import detect_language, localize_text_to_language_result
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
@@ -60,7 +60,7 @@ from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 logger = logging.getLogger(__name__)
 
 
-def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en") -> str:
+def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", api_key: str | None = None) -> str:
     """Log OpenAI quota-exceeded event to Sentry and email the tenant admin once.
 
     Returns the user-facing error detail string (includes support email if known).
@@ -110,7 +110,15 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en") ->
             logger.warning("quota_exceeded_email_failed: tenant_id=%s", tenant.id)
 
     contact = f" at {support_email}" if support_email else ""
-    return get_string("quota_exceeded_user", lang).format(contact=contact)
+    canonical = (
+        "We're currently experiencing technical difficulties and are unable to respond via chat. "
+        f"We apologize for the inconvenience — please contact our support team{contact} by email."
+    )
+    return localize_text_to_language_result(
+        canonical_text=canonical,
+        target_language=lang,
+        api_key=api_key,
+    ).text
 
 
 class DebugRequest(BaseModel):
@@ -238,7 +246,7 @@ def chat(
             lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, lang=lang),
+                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
@@ -289,7 +297,7 @@ def chat_debug(
             lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, lang=lang),
+                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
@@ -401,7 +409,7 @@ def chat_escalate(
         if is_quota_exceeded(exc):
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db),
+                detail=_notify_quota_exceeded(tenant, db, api_key=tenant.openai_api_key),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:

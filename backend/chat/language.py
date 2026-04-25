@@ -15,35 +15,6 @@ from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 
-STRINGS: dict[str, dict[str, str]] = {
-    "fallback_low_confidence": {
-        "en": "I don't have enough information in my knowledge base to answer this question accurately.",
-        "ru": "У меня недостаточно информации в базе знаний, чтобы точно ответить на этот вопрос.",  # noqa: RUF001
-    },
-    "no_information": {
-        "en": "I don't have information about this.",
-        "ru": "У меня нет информации по этому вопросу.",  # noqa: RUF001
-    },
-    "quota_exceeded_user": {
-        "en": (
-            "We're currently experiencing technical difficulties and are unable to respond via chat. "
-            "We apologize for the inconvenience — please contact our support team{contact} by email."
-        ),
-        "ru": (
-            "В данный момент у нас технические неполадки, и мы не можем отвечать через чат. "  # noqa: RUF001
-            "Приносим извинения — пожалуйста, свяжитесь с нашей службой поддержки{contact} "  # noqa: RUF001
-            "по электронной почте."
-        ),
-    },
-}
-
-
-def get_string(key: str, lang: str) -> str:
-    """Return localized string for key in lang, falling back to English."""
-    bucket = STRINGS.get(key, {})
-    root = _language_root(lang) if lang else "en"
-    return bucket.get(root) or bucket.get(lang) or bucket.get("en", "")
-
 _DETECT_CACHE_MAX_INPUT_CHARS = 512
 _DETECT_CACHE_SIZE = 1024
 STICKY_WINDOW = 3

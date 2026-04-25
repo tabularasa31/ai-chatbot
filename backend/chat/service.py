@@ -29,7 +29,7 @@ from backend.chat.language import (
     LocalizationResult,
     ResolvedLanguageContext,
     generate_greeting_in_language_result,
-    get_string,
+    localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
     resolve_language_context,
@@ -1557,7 +1557,12 @@ def generate_answer(
     # For faq_context strategy we may intentionally have no retrieval chunks,
     # but still want generation to use VERIFIED FAQ CANDIDATES hints.
     if not context_chunks and not faq_context_items and not quick_answer_items:
-        return (get_string("no_information", response_language), 0)
+        text = localize_text_to_language_result(
+            canonical_text="I don't have information about this.",
+            target_language=response_language,
+            api_key=api_key,
+        ).text
+        return (text, 0)
 
     system_prompt, user_message = build_rag_messages(
         question,

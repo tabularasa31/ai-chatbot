@@ -19,9 +19,9 @@ from backend.chat.schemas import (
     ChatMessageLogItem,
     ChatMessageLogResponse,
     ChatRequest,
-    ChatResponse,
     ChatSessionListResponse,
     ChatSessionSummaryResponse,
+    ChatTurnResponse,
     MessageFeedbackRequest,
     MessageFeedbackResponse,
     MessageResponse,
@@ -201,7 +201,7 @@ def _require_original_access(current_user: User) -> None:
         raise HTTPException(status_code=403, detail="Original content access requires admin privileges")
 
 
-@chat_router.post("", response_model=ChatResponse)
+@chat_router.post("", response_model=ChatTurnResponse)
 @limiter.limit("30/minute")
 def chat(
     request: Request,
@@ -209,7 +209,7 @@ def chat(
     db: Annotated[Session, Depends(get_db)],
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     x_browser_locale: Annotated[str | None, Header(alias="X-Browser-Locale")] = None,
-) -> ChatResponse:
+) -> ChatTurnResponse:
     """
     Chat endpoint (PUBLIC — no JWT, uses X-API-Key).
 
@@ -255,7 +255,7 @@ def chat(
             detail="OpenAI service unavailable",
         ) from None
 
-    return ChatResponse(
+    return ChatTurnResponse(
         text=outcome.text,
         session_id=session_id,
         source_documents=outcome.document_ids,

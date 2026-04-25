@@ -107,43 +107,46 @@ CI runs both on every push/PR to `main` and `deploy`.
 
 ---
 
-## Task tracking — Plane (NOT Linear, NOT Jira)
+## Task tracking — ClickUp
 
-This project uses **self-hosted Plane** at `http://localhost`. Do NOT use Linear or any other tracker.
+This project uses **ClickUp** (cloud, MCP-accessible). Do NOT use Plane, Linear, or Jira.
 
-**At the start of every session:** ask "Нужно ли создать задачу в Plane для этой сессии?"
+**At the start of every session:** ask "Нужно ли создать задачу в ClickUp для этой сессии?"
 
-**API (works with API key for issues):**
+**Workspace & structure:**
 ```
-Base URL:  http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d
-API key and session credentials: see ~/.claude/CLAUDE.md
+Workspace ID:  90182652207
+Space:         Team Space (901810779094)
+Folder:        Chat9 — AI Chatbot (901813669414)
 ```
 
-**State IDs:**
-- Backlog: `ce2523ae-ecb6-43da-9617-7ea64a6735a5`
-- Todo: `84727391-2611-4b56-911b-e2e0f017793c`
-- In Progress: `d65eafc9-95ff-4a30-8bb5-ef67f889c589`
-- In Review: `fd53cd08-0693-411e-86d3-227cd895c3ed`
-- Done: `beed4266-8c0c-4c47-80c2-410ccad4d8e4`
+**Lists (by domain):**
+- Auth and Users:    `901817658296`
+- Chat Core:         `901817658300`
+- RAG and Search:    `901817658303`
+- Tenant Management: `901817658304`
+- Observability:     `901817658306`
+- Gap Analyzer:      `901817658307`
+- Eval Pipeline:     `901817658308`
+- Frontend:          `901817658309`
+- DevOps:            `901817658310`
+
+**Documents (knowledge/specs):**
+- Backlog:            `2kzmw49f-458`
+- Strategy & Research:`2kzmw49f-478`
+- Progress & Reviews: `2kzmw49f-498`
+- QA & Testing:       `2kzmw49f-518`
+- Specs:              `2kzmw49f-538`
+- Archive:            `2kzmw49f-558`
+
+**MCP tools** (use via `mcp__e99deeb1-b53c-476a-be64-b4f18d8f0be6__clickup_*`):
+- Create task: `clickup_create_task` — always include full business description (WHY, WHAT, acceptance criteria)
+- Update task: `clickup_update_task`
+- Create doc page: `clickup_create_document_page`
+- Search: `clickup_search`
 
 **Issue lifecycle:**
-- Create issue with full business description (WHY, WHAT, acceptance criteria) — never just a title
+- Create task with full business description — never just a title
 - Include link to current session in description
-- After PR opened → move to In Review + add PR URL to description (PATCH the issue)
-- After deploy → move to Done
-
-**Create issue** (API key from `~/.claude/CLAUDE.md`):
-```bash
-curl -s -H "x-api-key: $PLANE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -X POST "http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d/issues/" \
-  -d '{"name":"Title","description_html":"<p>Full description</p>","state":"84727391-2611-4b56-911b-e2e0f017793c","priority":"high"}'
-```
-
-**Update issue state:**
-```bash
-curl -s -H "x-api-key: $PLANE_API_KEY" \
-  -H "Content-Type: application/json" \
-  -X PATCH "http://localhost/api/v1/workspaces/chat9/projects/fafa6d90-860d-431b-a6a3-8d345c19c48d/issues/{issue_id}/" \
-  -d '{"state":"fd53cd08-0693-411e-86d3-227cd895c3ed"}'
-```
+- After PR opened → update task status to "In Review" + add PR URL
+- After deploy → move task to "Done"

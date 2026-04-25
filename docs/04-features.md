@@ -565,7 +565,7 @@ After generating an answer, a **second LLM call** (`temperature=0`) checks wheth
 
 The bot now follows one shared language policy for deterministic assistant text:
 
-- before the first real user question, language-only turns use `user_context.locale -> user_context.browser_locale -> English`
+- before the first real user question, language-only turns use the bootstrap locale chain (see fixed contract below)
 - after the first real question, replies should follow the language of that question
 
 This applies not only to generated RAG answers, but also to deterministic system text such as:
@@ -576,6 +576,16 @@ This applies not only to generated RAG answers, but also to deterministic system
 - the default greeting
 
 Localization of deterministic text is handled by a shared helper in `backend/chat/language.py`.
+
+#### Bootstrap locale chain — fixed contract
+
+For any turn that has no user message to detect language from (the bootstrap greeting and any other pre-question deterministic text), the response language is resolved in this exact order. **This order must not be changed without an explicit product decision** — call sites and tests rely on it.
+
+1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via the signed `identity_token` in KYC mode). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
+2. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than KYC because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
+3. **English** — final fallback when neither signal is available.
+
+KYC outranks browser deliberately. Reversing the order would silently override tenants who paid the integration cost of passing `locale` through `identity_token`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch.
 
 ### Default greeting
 

@@ -3990,7 +3990,7 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     )
     monkeypatch.setattr(
         "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: {"is_valid": False, "confidence": 0.1, "reason": "not_grounded"},
+        lambda *args, **kwargs: {"is_valid": False, "confidence": 0.9, "reason": "not_grounded"},
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -4437,7 +4437,7 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
         "backend.chat.service.run_chat_pipeline",
         lambda *args, **kwargs: _make_pipeline_result(
             final_answer="Which domain provider are you trying to configure?",
-            validation_outcome="skipped",
+            validation_outcome="valid",
             reliability_score="medium",
         ),
     )

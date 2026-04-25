@@ -575,7 +575,7 @@ class ChatPipelineResult:
     is_reject: bool
     is_faq_direct: bool
     validation_applied: bool
-    validation_outcome: Literal["valid", "fallback", "skipped"] | None
+    validation_outcome: Literal["valid", "fallback"] | None
     # retrieval
     retrieval: RetrievalContext | None
     # validation
@@ -1338,7 +1338,7 @@ def run_chat_pipeline(
     validation_outcome: Literal["valid", "fallback"] = "valid"
     final_answer = raw_answer
 
-    if not validation["is_valid"] and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD:
+    if not validation["is_valid"]:
         reject_result = build_reject_response_result(
             reason=RejectReason.INSUFFICIENT_CONFIDENCE,
             profile=profile,

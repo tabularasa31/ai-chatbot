@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.handlers.greeting import GreetingHandler
+from backend.chat.handlers.small_talk import SmallTalkHandler
 
 
 class HandlerRouter:
@@ -28,7 +29,9 @@ class HandlerRouter:
 def default_router() -> HandlerRouter:
     """Builds the standard handler chain.
 
-    PR 1/4 wires only GreetingHandler; SmallTalk / Rag / Escalation handlers
-    are added by subsequent PRs in the chat-pipeline refactor epic.
+    Order matters: GreetingHandler claims empty + new-session turns first;
+    SmallTalkHandler claims single-word turns outside escalation flows.
+    Rag / Escalation handlers are added by subsequent PRs in the chat-pipeline
+    refactor epic.
     """
-    return HandlerRouter([GreetingHandler()])
+    return HandlerRouter([GreetingHandler(), SmallTalkHandler()])

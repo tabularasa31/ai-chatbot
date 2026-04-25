@@ -30,10 +30,6 @@ from backend.chat.handlers import (
     HandlerRouter,
     default_router,
 )
-from backend.chat.handlers.greeting import (
-    _build_greeting_result,
-    _resolve_product_name,
-)
 from backend.chat.language import (
     STICKY_WINDOW,
     LanguageDetectionResult,
@@ -77,7 +73,7 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import detect_injection, detect_injection_structural
+from backend.guards.injection_detector import detect_injection
 from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
@@ -99,7 +95,6 @@ from backend.models import (
 )
 
 _DISCLOSURE_UNSET: dict | None = object()  # type: ignore[assignment]
-_SHORT_TURN_MAX_WORDS = 1  # messages with ≤ this many words skip LLM guards (small talk)
 _GUARD_POOL_WORKERS = 3   # concurrent threads: injection + relevance + semantic rewrite
 _DEFAULT_RELEVANCE_THRESHOLD = 0.22
 from backend.observability import TraceHandle, begin_trace
@@ -626,68 +621,6 @@ def _resolve_fallback_locale(
     if browser_locale and browser_locale.strip():
         return browser_locale.strip()
     return None
-
-
-def _handle_small_talk_early_exit(
-    *,
-    redacted_question: str,
-    question: str,
-    chat: Chat,
-    tenant_row: Any,
-    tenant_id: uuid.UUID,
-    language_context: Any,
-    api_key: str,
-    db: Session,
-    trace: Any,
-    optional_entity_types: set[str] | None,
-) -> ChatTurnOutcome | None:
-    """Return a ChatTurnOutcome for single-word inputs that are not injections, else None.
-
-    Skipped when the chat is in any escalation or closed state so that
-    single-word inputs (yes/no replies, email addresses) reach the correct handler.
-    """
-    if chat.escalation_followup_pending or chat.escalation_awaiting_ticket_id or chat.ended_at:
-        return None
-    if len(redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
-        return None
-    if detect_injection_structural(redacted_question).detected:
-        return None
-
-    small_talk_result = _build_greeting_result(
-        product_name=_resolve_product_name(tenant=tenant_row, db=db),
-        response_language=language_context.response_language,
-        api_key=api_key,
-    )
-    _persist_turn_with_response_language(
-        db=db,
-        chat=chat,
-        tenant_id=tenant_id,
-        response_language=language_context.response_language,
-        resolution_reason=language_context.response_language_resolution_reason,
-        user_content=question,
-        assistant_content=small_talk_result.text,
-        document_ids=[],
-        extra_tokens=small_talk_result.tokens_used,
-        optional_entity_types=optional_entity_types,
-        language_context=language_context,
-    )
-    if trace is not None:
-        trace.update(
-            output={"answer": small_talk_result.text, "source": "small_talk"},
-            metadata={
-                "chat_ended": False,
-                "escalated": False,
-                "small_talk": True,
-                "question": redacted_question,
-                "response_language": language_context.response_language,
-            },
-        )
-    return ChatTurnOutcome(
-        text=small_talk_result.text,
-        document_ids=[],
-        tokens_used=small_talk_result.tokens_used,
-        chat_ended=False,
-    )
 
 
 def _is_bootstrap_question(text: str) -> bool:
@@ -2335,18 +2268,22 @@ def process_chat_message(
         _resolved_bot.agent_instructions if _resolved_bot else None
     )
 
-    if outcome := _handle_small_talk_early_exit(
-        redacted_question=redacted_question,
-        question=question,
+    handler_ctx = HandlerContext(
+        tenant_id=tenant_id,
         chat=chat,
         tenant_row=tenant_row,
-        tenant_id=tenant_id,
+        tenant_profile=tenant_profile,
+        question=question,
+        redacted_question=redacted_question,
+        question_text=question_text,
         language_context=language_context,
         api_key=api_key,
-        db=db,
-        trace=trace,
         optional_entity_types=optional_entity_types,
-    ):
+        is_new_session=is_new_session,
+        trace=trace,
+        db=db,
+    )
+    if outcome := _HANDLER_ROUTER.dispatch(handler_ctx):
         return outcome
 
     msgs = build_chat_messages_for_openai(chat, redacted_question)

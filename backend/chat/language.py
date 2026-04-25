@@ -63,18 +63,20 @@ _LATIN_WORD_HINTS: dict[str, tuple[str, float]] = {
 # actually English. langdetect mis-classifies short ASCII English fragments
 # (e.g. "Reset password" -> af, "question about product" -> fr), so we trust
 # the heuristic's English fallback only when at least one of these positive
-# English signals is present. List is intentionally curated to function words
-# that are uniquely English (excluded: short tokens like "a", "no", "in", "on",
-# "or" that overlap with Spanish/French/German).
+# English signals is present. List is curated to function words that are
+# uniquely English on case-folded comparison: short tokens like "a", "no",
+# "in", "on", "or" overlap with Spanish/French/German and are excluded;
+# tokens like "i", "me", "am", "was", "do", "has", "will" overlap with
+# Italian/Spanish/German lowercased forms and are also excluded.
 _ENGLISH_STOP_WORDS = frozenset({
     "the", "this", "that", "these", "those",
-    "i", "me", "my", "we", "us", "our",
+    "my", "we", "us", "our",
     "you", "your", "they", "them", "their",
-    "is", "am", "are", "was", "were",
+    "is", "are", "were",
     "be", "been", "being",
-    "do", "does", "did", "done",
-    "have", "has", "had",
-    "can", "could", "would", "should", "will",
+    "does", "did", "done",
+    "have", "had",
+    "can", "could", "would", "should",
     "with", "from", "into", "onto",
     "what", "when", "where", "why", "how", "who", "which",
     "it", "its",
@@ -82,13 +84,16 @@ _ENGLISH_STOP_WORDS = frozenset({
     "please", "thanks", "thank",
 })
 
-# Languages langdetect detects reliably on full multi-token sentences. Used to
-# accept langdetect's verdict over the heuristic's English fallback. Excludes
-# `af`, `cy`, `ca`, `tl`, `so` because langdetect commonly mis-fires to those
-# for short ASCII English input.
+# Languages langdetect detects reliably on full pure-ASCII Latin-script
+# sentences. Used to accept langdetect's verdict over the heuristic's English
+# fallback. Excludes:
+#   - `af`, `cy`, `ca`, `tl`, `so`: langdetect commonly mis-fires to these
+#     for short ASCII English.
+#   - non-Latin-script languages (`ru`, `uk`, `ja`, `zh`, `ko`, `ar`): cannot
+#     legitimately appear in pure-ASCII text; if langdetect returns them for
+#     ASCII input, it's a misclassification.
 _LANGDETECT_TRUSTED_NON_EN = frozenset({
-    "es", "de", "fr", "pt", "it", "ru", "ja", "zh", "ko", "ar",
-    "uk", "pl", "tr", "nl",
+    "es", "de", "fr", "pt", "it", "nl", "pl", "tr",
 })
 
 # Number of tokens above which we trust langdetect over the heuristic English
@@ -352,10 +357,10 @@ def _detect_language_uncached(text: str) -> LanguageDetectionResult:
             confidence = float(getattr(top, "prob", 0.0) or 0.0)
             # When the heuristic already flagged this as English-fallback for
             # pure-ASCII text, only override with langdetect's verdict when it
-            # is strongly confident in a language we trust to detect reliably
-            # on full sentences. Otherwise keep the heuristic's English
-            # fallback to avoid langdetect's known false-positives on
-            # ambiguous tech English (e.g. "API returns error code" -> ca).
+            # is strongly confident in a Latin-script language we trust to
+            # detect reliably on full sentences. Otherwise keep the heuristic's
+            # English fallback — including when langdetect itself says "en",
+            # since the heuristic already encodes that result.
             if (
                 heuristic.detected_language == "en"
                 and heuristic.is_reliable
@@ -364,7 +369,7 @@ def _detect_language_uncached(text: str) -> LanguageDetectionResult:
                 if (
                     normalized in _LANGDETECT_TRUSTED_NON_EN
                     and confidence >= _ASCII_LANGDETECT_MIN_CONFIDENCE
-                ) or normalized == "en":
+                ):
                     return LanguageDetectionResult(
                         detected_language=normalized,
                         confidence=confidence,

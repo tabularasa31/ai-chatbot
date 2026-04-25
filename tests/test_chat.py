@@ -4665,6 +4665,11 @@ def test_detect_language_cache_respects_whitespace_stripping(
         ("Bitte helfen Sie mir", "de"),
         ("Je m'appelle Jean", "fr"),
         ("Mein Name ist Hans", "de"),
+        # Inputs that overlap with English on case-folded short tokens — the
+        # stop-word list deliberately excludes "i" / "me" / "am" / "was" / "do" /
+        # "has" / "will" so that these still fall through to langdetect.
+        ("Me siento muy mal hoy", "es"),
+        ("I bambini sono qui", "it"),
     ],
 )
 def test_detect_language_handles_ascii_non_english_multitoken(text: str, expected: str) -> None:

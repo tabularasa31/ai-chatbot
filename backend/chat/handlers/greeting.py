@@ -9,12 +9,22 @@ from backend.chat.language import LocalizationResult, generate_greeting_in_langu
 from backend.models import Tenant, TenantProfile
 
 
-def _resolve_product_name(*, tenant: Tenant | None, db: Session) -> str:
-    profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
-        if tenant
-        else None
-    )
+def _resolve_product_name(
+    *,
+    tenant: Tenant | None,
+    db: Session,
+    profile: TenantProfile | None = None,
+) -> str:
+    """Resolve the user-facing product name.
+
+    If ``profile`` is provided, use it directly — process_chat_message already
+    fetched it for language resolution, so re-querying is wasteful. The ``db``
+    arg remains for callers that don't have the profile pre-loaded.
+    """
+    if profile is None and tenant is not None:
+        profile = (
+            db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
+        )
     product_name = (profile.product_name if profile and profile.product_name else None) or (
         tenant.name if tenant and tenant.name else None
     )
@@ -57,7 +67,11 @@ class GreetingHandler(PipelineHandler):
         from backend.chat.service import _persist_assistant_message_with_response_language
 
         greeting = _build_greeting_result(
-            product_name=_resolve_product_name(tenant=ctx.tenant_row, db=ctx.db),
+            product_name=_resolve_product_name(
+                tenant=ctx.tenant_row,
+                db=ctx.db,
+                profile=ctx.tenant_profile,
+            ),
             response_language=ctx.language_context.response_language,
             api_key=ctx.api_key,
         )

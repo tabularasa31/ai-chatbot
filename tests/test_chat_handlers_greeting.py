@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from backend.chat.handlers.base import HandlerContext
 from backend.chat.handlers.greeting import GreetingHandler, _resolve_product_name
 from backend.chat.language import LocalizationResult, ResolvedLanguageContext
-from backend.models import Chat, Message, MessageRole, Tenant
+from backend.models import Chat, Message, MessageRole, Tenant, TenantProfile
 
 
 def _make_language_context(response_language: str = "en") -> ResolvedLanguageContext:
@@ -40,11 +40,13 @@ def _make_handler_context(
     question_text: str = "",
     is_new_session: bool = True,
     response_language: str = "en",
+    tenant_profile: TenantProfile | None = None,
 ) -> HandlerContext:
     return HandlerContext(
         tenant_id=tenant.id if tenant else uuid.uuid4(),
         chat=chat,
         tenant_row=tenant,
+        tenant_profile=tenant_profile,
         question=question_text,
         redacted_question=question_text,
         question_text=question_text,
@@ -134,3 +136,19 @@ def test_resolve_product_name_falls_back_to_default_when_tenant_missing(db_sessi
 def test_resolve_product_name_uses_tenant_name_when_no_profile(db_session: Session) -> None:
     tenant = _make_persisted_tenant(db_session, name="My Co")
     assert _resolve_product_name(tenant=tenant, db=db_session) == "My Co"
+
+
+def test_resolve_product_name_skips_db_when_profile_passed(db_session: Session) -> None:
+    """Caller-provided profile short-circuits the DB lookup."""
+
+    class _SentinelDb:
+        def query(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("DB lookup must not happen when profile is provided")
+
+    tenant = _make_persisted_tenant(db_session, name="No Lookup")
+    profile = TenantProfile(tenant_id=tenant.id, product_name="ShinyProduct")
+
+    assert (
+        _resolve_product_name(tenant=tenant, db=_SentinelDb(), profile=profile)
+        == "ShinyProduct"
+    )

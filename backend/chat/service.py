@@ -2287,6 +2287,7 @@ def process_chat_message(
             tenant_id=tenant_id,
             chat=chat,
             tenant_row=tenant_row,
+            tenant_profile=tenant_profile,
             question=question,
             redacted_question=redacted_question,
             question_text=question_text,

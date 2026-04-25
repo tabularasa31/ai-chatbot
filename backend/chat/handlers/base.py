@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from backend.chat.language import ResolvedLanguageContext
-    from backend.models import Chat, Tenant
+    from backend.models import Chat, Tenant, TenantProfile
     from backend.observability import TraceHandle
 
 
@@ -36,6 +36,7 @@ class HandlerContext:
     tenant_id: uuid.UUID
     chat: Chat
     tenant_row: Tenant | None
+    tenant_profile: TenantProfile | None
     question: str
     redacted_question: str
     question_text: str

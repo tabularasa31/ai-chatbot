@@ -179,10 +179,16 @@ def widget_session_init(
     responses={
         200: {
             "description": (
-                "Server-sent events stream. The terminal `done` event's payload "
-                "conforms to ChatTurnResponse (without trace fields)."
+                "Server-sent events stream (`text/event-stream`). Each frame is "
+                "`type: 'chunk'` (incremental text) or `type: 'done'`; the `done` "
+                "frame's payload conforms to `ChatTurnResponse` with trace fields "
+                "(`source_documents`, `tokens_used`) omitted."
             ),
-            "model": ChatTurnResponse,
+            "content": {
+                "text/event-stream": {
+                    "schema": {"$ref": "#/components/schemas/ChatTurnResponse"},
+                },
+            },
         }
     },
 )

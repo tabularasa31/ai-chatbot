@@ -155,4 +155,4 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 
 Never leave a task in `To Do` while actively working on it. Never finish a session without updating the status and dropping a comment with the session/PR link.
 
-**Description is write-once** — set at creation, never edited again. All subsequent updates (session links, PR URLs, progress notes) go as comments via `clickup_create_task_comment`, not as edits to the description.
+**Description is for specification only** — set at creation and updated only if requirements or acceptance criteria change. All progress updates (session links, PR URLs, notes) must go as comments via clickup_create_task_comment, never as edits to the description.

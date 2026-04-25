@@ -567,7 +567,7 @@ def perform_manual_escalation(
         fact_json=fact_from_ticket(ticket, chat=chat),
         latest_user_text="[User requested support via the Talk to support action.]",
         api_key=api_key,
-        escalation_language=language_context.escalation_language,
+        response_language=language_context.response_language,
     )
     if not ticket.user_email:
         chat.escalation_awaiting_ticket_id = ticket.id

@@ -113,7 +113,6 @@ from backend.support_config import public_support_config_dict
 PREVIEW_MAX_LEN = 120
 
 logger = logging.getLogger(__name__)
-RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE = "escalation_override"
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 _ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
@@ -867,12 +866,18 @@ def _escalation_turn_response(
     escalated: bool,
     ticket_number: str | None = None,
 ) -> ChatTurnOutcome:
-    """Persist an escalation turn and return the outcome. Single commit for all mutations."""
+    """Persist an escalation turn and return the outcome. Single commit for all mutations.
+
+    The user-facing message is always written in ``response_language`` (the
+    user's language), not in ``escalation_language``. ``escalation_language``
+    is the tenant-side artifact language (ticket text / support team) and
+    must not leak into the chat reply.
+    """
     _persist_turn_with_response_language(
         db=db,
         chat=chat,
         tenant_id=tenant_id,
-        response_language=language_context.escalation_language,
+        response_language=language_context.response_language,
         resolution_reason=language_context.response_language_resolution_reason,
         user_content=question,
         assistant_content=out.message_to_user,
@@ -885,6 +890,7 @@ def _escalation_turn_response(
         metadata={
             "chat_ended": chat_ended,
             "escalated": escalated,
+            "response_language": language_context.response_language,
             "escalation_language": language_context.escalation_language,
         },
     )
@@ -2327,7 +2333,7 @@ def process_chat_message(
             fact_json={},
             latest_user_text=redacted_question,
             api_key=api_key,
-            escalation_language=language_context.escalation_language,
+            response_language=language_context.response_language,
         )
         return _escalation_turn_response(
             db=db,
@@ -2375,7 +2381,7 @@ def process_chat_message(
                         fact_json=fact_from_ticket(ticket, chat=chat),
                         latest_user_text=redacted_question,
                         api_key=api_key,
-                        escalation_language=language_context.escalation_language,
+                        response_language=language_context.response_language,
                     )
                     awaiting_email_span.end(
                         output={"ticket_found": True, "email_captured": True}
@@ -2399,7 +2405,7 @@ def process_chat_message(
                     fact_json=fact_from_ticket(ticket, chat=chat),
                     latest_user_text=redacted_question,
                     api_key=api_key,
-                    escalation_language=language_context.escalation_language,
+                    response_language=language_context.response_language,
                 )
                 awaiting_email_span.end(
                     output={"ticket_found": True, "email_captured": False}
@@ -2442,7 +2448,7 @@ def process_chat_message(
                 },
                 latest_user_text=redacted_question,
                 api_key=api_key,
-                escalation_language=language_context.escalation_language,
+                response_language=language_context.response_language,
             )
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
@@ -2544,7 +2550,7 @@ def process_chat_message(
                 fact_json=fact_from_ticket(ticket, chat=chat),
                 latest_user_text=redacted_question,
                 api_key=api_key,
-                escalation_language=language_context.escalation_language,
+                response_language=language_context.response_language,
             )
             if not ticket.user_email:
                 chat.escalation_awaiting_ticket_id = ticket.id
@@ -2554,7 +2560,7 @@ def process_chat_message(
                 db=db,
                 chat=chat,
                 tenant_id=tenant_id,
-                response_language=language_context.escalation_language,
+                response_language=language_context.response_language,
                 resolution_reason=language_context.response_language_resolution_reason,
             )
             db.add(chat)
@@ -2580,13 +2586,14 @@ def process_chat_message(
                 was_rejected=False,
                 had_fallback=False,
                 was_escalated=True,
-                language=language_context.escalation_language,
+                language=language_context.response_language,
             )
             trace.update(
                 output={"answer": out.message_to_user, "source": "explicit_handoff"},
                 metadata={
                     "chat_ended": False,
                     "escalated": True,
+                    "response_language": language_context.response_language,
                     "escalation_language": language_context.escalation_language,
                 },
             )
@@ -2816,7 +2823,7 @@ def process_chat_message(
                 fact_json=fact_from_ticket(ticket, chat=chat),
                 latest_user_text=redacted_question,
                 api_key=api_key,
-                escalation_language=language_context.escalation_language,
+                response_language=language_context.response_language,
             )
             answer = answer + "\n\n" + esc.message_to_user
             tokens_used = tokens_used + esc.tokens_used
@@ -2843,18 +2850,15 @@ def process_chat_message(
         except Exception as e:
             logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
 
+    # Both branches (RAG answer or escalation handoff) write to the user in
+    # response_language. escalation_language stays for tenant-side artifacts
+    # only and must not leak into the chat reply.
     user_message, assistant_message = _persist_turn_with_response_language(
         db=db,
         chat=chat,
         tenant_id=tenant_id,
-        response_language=(
-            language_context.escalation_language if escalate else language_context.response_language
-        ),
-        resolution_reason=(
-            RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE
-            if escalate
-            else language_context.response_language_resolution_reason
-        ),
+        response_language=language_context.response_language,
+        resolution_reason=language_context.response_language_resolution_reason,
         user_content=question,
         assistant_content=answer,
         document_ids=document_ids,
@@ -2872,9 +2876,7 @@ def process_chat_message(
         was_rejected=False,
         had_fallback=result.validation_outcome == "fallback",
         was_escalated=bool(escalate),
-        language=(
-            language_context.escalation_language if escalate else language_context.response_language
-        ),
+        language=language_context.response_language,
     )
 
     # Phase 4: fire-and-forget threshold check — never blocks the response.

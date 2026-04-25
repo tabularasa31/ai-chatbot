@@ -16,7 +16,6 @@ from backend.chat.language import (
 )
 from backend.chat.service import (
     ChatPipelineResult,
-    RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE,
     RetrievalContext,
     _load_recent_user_turn_texts,
     process_chat_message,
@@ -514,12 +513,20 @@ def test_chat_logs_response_language_changed_on_switch(
     )
 
 
-def test_chat_logs_escalation_override_reason(
+def test_chat_escalation_uses_user_response_language(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    """Regression test for ClickUp 86excm5kz.
+
+    When the chat pipeline triggers an escalation, the user-facing response
+    must stay in the user's language (here: Russian). The handoff LLM call
+    must receive ``response_language="ru"`` and the persisted turn language
+    must also be ``ru`` — not the tenant-side ``escalation_language`` (which
+    defaults to English and is for support-team artifacts only).
+    """
     tenant_id, api_key = _chat_test_setup(tenant, db_session, "sticky-escalate@example.com")
     session_id = uuid.uuid4()
     _patch_process_chat_dependencies(
@@ -546,6 +553,7 @@ def test_chat_logs_escalation_override_reason(
         )
 
     monkeypatch.setattr("backend.chat.service.run_chat_pipeline", _escalating_pipeline)
+
     def _create_ticket(*args, **kwargs) -> EscalationTicket:
         ticket = EscalationTicket(
             tenant_id=tenant_id,
@@ -560,9 +568,20 @@ def test_chat_logs_escalation_override_reason(
         return ticket
 
     monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _create_ticket)
+
+    captured: dict[str, str] = {}
+
+    def _fake_escalation_turn(**kwargs):
+        captured["response_language"] = kwargs.get("response_language", "")
+        return type(
+            "EscalationOut",
+            (),
+            {"message_to_user": "Support will reach out", "tokens_used": 2},
+        )()
+
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: type("EscalationOut", (), {"message_to_user": "Support will reach out", "tokens_used": 2})(),
+        _fake_escalation_turn,
     )
     monkeypatch.setattr("backend.chat.service.fact_from_ticket", lambda *args, **kwargs: {})
     monkeypatch.setattr("backend.chat.service.build_chat_messages_for_openai", lambda *args, **kwargs: [])
@@ -576,10 +595,18 @@ def test_chat_logs_escalation_override_reason(
             api_key=api_key,
         )
 
+    # The escalation LLM was told to write in the user's language, not English.
+    assert captured["response_language"] == "ru"
+
+    # The persisted turn language is the user's language; the change log uses
+    # the normal detection reason, not a forced "escalation_override" reason.
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.last_response_language == "ru"
+
     records = [record for record in caplog.records if record.msg == "response_language_changed"]
     assert any(
-        getattr(record, "next", None) == "en"
-        and getattr(record, "reason", None) == RESPONSE_LANGUAGE_REASON_ESCALATION_OVERRIDE
+        getattr(record, "next", None) == "ru"
+        and getattr(record, "reason", None) != "escalation_override"
         for record in records
     )
 

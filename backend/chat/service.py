@@ -987,6 +987,7 @@ def process_chat_message(
         trace=trace,
         db=db,
         session_id=session_id,
+        user_context=user_context,
         effective_user_ctx=effective_user_ctx,
         bot_public_id=bot_public_id,
         bot_id=bot_id,

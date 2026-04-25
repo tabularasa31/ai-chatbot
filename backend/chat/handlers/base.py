@@ -51,6 +51,11 @@ class HandlerContext:
 
     # Used by EscalationStateMachine + RagHandler
     session_id: uuid.UUID | None = None
+    # The raw per-request user_context arg from process_chat_message — used as
+    # the "identified on this turn" analytics signal. Distinct from
+    # effective_user_ctx, which prefers the persisted chat.user_context (i.e.
+    # carries identity from earlier turns and would inflate the metric).
+    user_context: dict[str, Any] | None = None
     effective_user_ctx: dict[str, Any] | None = None
     bot_public_id: str | None = None
 

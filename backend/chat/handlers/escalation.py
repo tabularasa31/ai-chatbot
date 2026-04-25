@@ -77,14 +77,19 @@ class EscalationStateMachine(PipelineHandler):
             outcome = self._handle_awaiting_email(ctx)
             if outcome is not None:
                 return outcome
-            # Ticket disappeared — re-evaluate state below; if no other escalation
-            # state matches, return None so the router falls through to RagHandler.
+            # Ticket disappeared — flag was cleared. Drop into the gates below
+            # in case another escalation state still applies; otherwise return
+            # None so the router falls through to RagHandler.
         if chat.escalation_followup_pending:
             return self._handle_followup_yes_no(ctx)
-        # Default: explicit human request before RAG (T-3). Returns None on
-        # failure so the router retries with RagHandler — mirrors the legacy
-        # try/except behaviour.
-        return self._handle_explicit_request(ctx)
+        # Explicit human request (T-3) — only fires when the user actually
+        # asked for a human. Without this gate, a stale-pointer recovery (vanished
+        # awaiting-ticket cleared above) would mint a fresh escalation ticket on
+        # any ordinary reply, which the legacy inline flow did not do. Returns
+        # None on failure so the router retries with RagHandler.
+        if ctx.explicit_human_request:
+            return self._handle_explicit_request(ctx)
+        return None
 
     # ------------------------------------------------------------------
     # State handlers — order matches the legacy inline branches in

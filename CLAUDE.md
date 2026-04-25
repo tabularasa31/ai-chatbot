@@ -154,3 +154,5 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 4. **After deploy / work done** → move status to `Done`
 
 Never leave a task in `To Do` while actively working on it. Never finish a session without updating the status and dropping a comment with the session/PR link.
+
+**Description is write-once** — set at creation, never edited again. All subsequent updates (session links, PR URLs, progress notes) go as comments via `clickup_create_task_comment`, not as edits to the description.

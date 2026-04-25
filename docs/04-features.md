@@ -565,7 +565,7 @@ After generating an answer, a **second LLM call** (`temperature=0`) checks wheth
 
 The bot now follows one shared language policy for deterministic assistant text:
 
-- before the first real user question, language-only turns use the bootstrap locale chain (see invariant below)
+- before the first real user question, language-only turns use the bootstrap locale chain (see fixed contract below)
 - after the first real question, replies should follow the language of that question
 
 This applies not only to generated RAG answers, but also to deterministic system text such as:

@@ -34,10 +34,7 @@ You can choose between two modes on the [Embed page](https://getchat9.live/embed
 - When that follow-up has clear options, the widget renders them as quick-reply buttons on the latest bot message.
 - The widget works in any language.
 
-Language behavior:
-
-- before the first real user question, deterministic widget text uses `locale → browser locale → English`
-- after the first real user question, replies follow the language of that question
+Language behavior — short version: the bot replies in the language of the user's question once they've typed one; before that, it uses your KYC `locale` if provided, then the browser locale, then English. See [Language Support](/docs/language) for the full contract, including sticky retention and the dashboard escalation-language override.
 
 ## Where to get the embed code
 

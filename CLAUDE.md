@@ -139,14 +139,18 @@ Folder:        Chat9 — AI Chatbot (901813669414)
 - Specs:              `2kzmw49f-538`
 - Archive:            `2kzmw49f-558`
 
-**MCP tools** (use via `mcp__e99deeb1-b53c-476a-be64-b4f18d8f0be6__clickup_*`):
+**MCP tools** (use the available ClickUp MCP tools — `clickup_*`):
 - Create task: `clickup_create_task` — always include full business description (WHY, WHAT, acceptance criteria)
-- Update task: `clickup_update_task`
+- Update task status: `clickup_update_task` with `status` field
+- Add comment: `clickup_create_task_comment`
 - Create doc page: `clickup_create_document_page`
 - Search: `clickup_search`
 
-**Issue lifecycle:**
-- Create task with full business description — never just a title
-- Include link to current session in description
-- After PR opened → update task status to "In Review" + add PR URL
-- After deploy → move task to "Done"
+**Task lifecycle — mandatory for every agent session:**
+
+1. **Session start / task picked up** → move status to `in progress` immediately
+2. **During work** → add a comment with a link to the current Claude session (so progress is traceable)
+3. **PR opened** → move status to `in review` + add comment with PR URL
+4. **After deploy / work done** → move status to `done`
+
+Never leave a task in `to do` while actively working on it. Never finish a session without updating the status and dropping a comment with the session/PR link.

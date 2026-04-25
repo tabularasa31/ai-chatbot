@@ -1380,7 +1380,11 @@ def _normalize_scored_results(
     max_s = scored[0][1]
     min_s = scored[-1][1]
     if max_s == min_s:
-        return [(emb, 1.0) for emb, _ in scored]
+        # Single unique match: award 1.0 — it is the top result by definition.
+        # Multiple docs with identical scores: award 0.0 — the signal is
+        # uninformative and must not inflate every doc's fusion contribution.
+        flat_score = 1.0 if len(scored) == 1 else 0.0
+        return [(emb, flat_score) for emb, _ in scored]
     return [(emb, (s - min_s) / (max_s - min_s)) for emb, s in scored]
 
 

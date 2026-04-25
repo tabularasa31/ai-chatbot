@@ -557,8 +557,8 @@ Tenant admins can configure optional regex entity types in `Settings → Privacy
 After generating an answer, a **second LLM call** (`temperature=0`) checks whether the answer is grounded in the retrieved chunks:
 
 - Returns `is_valid` (bool) and `confidence` (0.0–1.0)
-- If `is_valid = false` **and** `confidence < 0.4`, the answer is replaced with a safe fallback: *"I don't have enough information to answer this question."*
-- Validation errors (e.g. OpenAI timeout) do not block the response — the original answer is returned with `validation_skipped: true`
+- If `is_valid = false`, the answer is replaced with a safe fallback: *"I don't have enough information to answer this question."*
+- Validation errors (e.g. OpenAI timeout) are logged and treated as `validation_error`, which triggers the safe fallback instead of returning an unverified answer
 - Full validation result is visible in `POST /chat/debug` → `debug.validation`
 
 ### Language behavior

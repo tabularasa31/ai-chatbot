@@ -574,7 +574,7 @@ class ChatPipelineResult:
     is_reject: bool
     is_faq_direct: bool
     validation_applied: bool
-    validation_outcome: Literal["valid", "fallback", "skipped"] | None
+    validation_outcome: Literal["valid", "fallback"] | None
     # retrieval
     retrieval: RetrievalContext | None
     # validation
@@ -1341,12 +1341,10 @@ def run_chat_pipeline(
         trace=trace,
     )
     validation_applied = True
-    validation_outcome: Literal["valid", "fallback", "skipped"] = "valid"
+    validation_outcome: Literal["valid", "fallback"] = "valid"
     final_answer = raw_answer
 
-    if validation.get("reason") == "validation_skipped":
-        validation_outcome = "skipped"
-    elif not validation["is_valid"] and validation["confidence"] < LOW_CONFIDENCE_THRESHOLD:
+    if not validation["is_valid"]:
         reject_result = build_reject_response_result(
             reason=RejectReason.INSUFFICIENT_CONFIDENCE,
             profile=profile,
@@ -1778,7 +1776,8 @@ def validate_answer(
     """
     Ask LLM to validate if the answer is grounded in context.
     Returns {"is_valid": bool, "confidence": float, "reason": str}.
-    On any error, returns {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}.
+    On validation errors, returns an invalid low-confidence result so the chat
+    pipeline falls back instead of silently approving an unverified answer.
     """
     if not context_chunks:
         return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
@@ -1829,14 +1828,15 @@ def validate_answer(
             )
         return result
     except Exception as e:
-        logger.warning("Answer validation failed (non-blocking): %s", e)
+        logger.exception("Answer validation failed")
+        result = {"is_valid": False, "confidence": 0.0, "reason": "validation_error"}
         if validation_span is not None:
             validation_span.end(
-                output={"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"},
-                level="WARNING",
+                output=result,
+                level="ERROR",
                 status_message=str(e),
             )
-        return {"is_valid": True, "confidence": 1.0, "reason": "validation_skipped"}
+        return result
 
 
 def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid.UUID] | None:

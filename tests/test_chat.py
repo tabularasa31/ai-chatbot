@@ -20,6 +20,30 @@ from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource,
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
+def _chat_completion_response(content: str, *, total_tokens: int = 0) -> Mock:
+    response = Mock()
+    response.choices = [Mock(message=Mock(content=content))]
+    response.usage = Mock(total_tokens=total_tokens)
+    return response
+
+
+def _valid_validation_response() -> Mock:
+    return _chat_completion_response('{"is_valid": true, "confidence": 0.95, "reason": "grounded"}')
+
+
+def _chat_completion_side_effect(answer: str, *, total_tokens: int = 0):
+    def _side_effect(*args, **kwargs):
+        messages = kwargs.get("messages") or []
+        combined_prompt = "\n".join(str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        if "relevance classifier" in combined_prompt:
+            return _chat_completion_response('{"relevant": true, "reason": "test"}')
+        if "You are a fact-checker for a support chatbot." in combined_prompt:
+            return _valid_validation_response()
+        return _chat_completion_response(answer, total_tokens=total_tokens)
+
+    return _side_effect
+
+
 def _bot_public_id(tenant, token: str) -> str:
     r = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, r.text
@@ -310,13 +334,18 @@ def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
     assert "answer conservatively from the clearest supported part only" in prompt
 
 
-def test_validate_answer_openai_error_non_blocking(mock_openai_client: Mock) -> None:
-    """OpenAI/JSON errors → validation_skipped, does not raise."""
+def test_validate_answer_openai_error_returns_invalid(
+    mock_openai_client: Mock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """OpenAI/JSON errors are logged and treated as validation failures."""
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
-    result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
-    assert result["is_valid"] is True
-    assert result["confidence"] == 1.0
-    assert result["reason"] == "validation_skipped"
+    with caplog.at_level("ERROR", logger="backend.chat.service"):
+        result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
+    assert result["is_valid"] is False
+    assert result["confidence"] == 0.0
+    assert result["reason"] == "validation_error"
+    assert "Answer validation failed" in caplog.text
 
 
 def test_validate_answer_prompt_allows_single_clarifying_question(
@@ -755,10 +784,10 @@ def test_chat_success(
     db_session.commit()
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="The answer is 42"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=50)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "The answer is 42",
+        total_tokens=50,
+    )
 
     response = tenant.post(
         "/chat",
@@ -1042,10 +1071,10 @@ def test_chat_uses_context(
     mock_openai_client.embeddings.create.return_value.data = [
         Mock(embedding=[0.9] + [0.0] * 1535)
     ]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="99"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "99",
+        total_tokens=5,
+    )
 
     response = tenant.post(
         "/chat",
@@ -1055,7 +1084,11 @@ def test_chat_uses_context(
     assert response.status_code == 200
     assert "99" in response.json()["text"]
     # Verify the chunk was passed to chat (via build_rag_prompt)
-    call_args = mock_openai_client.chat.completions.create.call_args
+    call_args = next(
+        call
+        for call in mock_openai_client.chat.completions.create.call_args_list
+        if "The secret number is 99" in call.kwargs["messages"][0]["content"]
+    )
     messages = call_args.kwargs["messages"]
     assert len(messages) == 1
     assert "The secret number is 99" in messages[0]["content"]
@@ -1364,10 +1397,10 @@ def test_get_history_success(
     db_session.commit()
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="Reply"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "Reply",
+        total_tokens=5,
+    )
 
     chat_resp = tenant.post(
         "/chat",
@@ -2256,10 +2289,10 @@ def test_debug_with_embeddings_vector_mode(
     mock_openai_client.embeddings.create.return_value.data = [
         Mock(embedding=[0.9] + [0.0] * 1535)
     ]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="42"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "42",
+        total_tokens=10,
+    )
 
     response = tenant.post(
         f"/chat/debug?bot_id={_bot_public_id(tenant, token)}",
@@ -3155,10 +3188,10 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     db_session.refresh(chat)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="Tracked answer"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=25)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "Tracked answer",
+        total_tokens=25,
+    )
 
     monkeypatch.setattr(
         "backend.chat.service.record_user_session_turn",
@@ -3985,7 +4018,7 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     )
     monkeypatch.setattr(
         "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: {"is_valid": False, "confidence": 0.1, "reason": "not_grounded"},
+        lambda *args, **kwargs: {"is_valid": False, "confidence": 0.9, "reason": "not_grounded"},
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -4432,7 +4465,7 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
         "backend.chat.service.run_chat_pipeline",
         lambda *args, **kwargs: _make_pipeline_result(
             final_answer="Which domain provider are you trying to configure?",
-            validation_outcome="skipped",
+            validation_outcome="valid",
             reliability_score="medium",
         ),
     )

@@ -14,6 +14,39 @@ from backend.models import Bot, Chat, ContactSession, Document, DocumentStatus, 
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
+def _chat_completion_response(content: str, *, total_tokens: int = 0) -> Mock:
+    response = Mock()
+    response.choices = [Mock(message=Mock(content=content))]
+    response.usage = Mock(total_tokens=total_tokens)
+    return response
+
+
+def _valid_validation_response() -> Mock:
+    return _chat_completion_response('{"is_valid": true, "confidence": 0.95, "reason": "grounded"}')
+
+
+def _chat_stream_response(content: str, *, total_tokens: int = 0) -> list[Mock]:
+    return [
+        Mock(choices=[Mock(delta=Mock(content=content), finish_reason=None)], usage=None),
+        Mock(choices=[], usage=Mock(total_tokens=total_tokens, prompt_tokens=0, completion_tokens=0)),
+    ]
+
+
+def _chat_completion_side_effect(answer: str, *, total_tokens: int = 0):
+    def _side_effect(*args, **kwargs):
+        messages = kwargs.get("messages") or []
+        combined_prompt = "\n".join(str(message.get("content", "")) for message in messages if isinstance(message, dict))
+        if "relevance classifier" in combined_prompt:
+            return _chat_completion_response('{"relevant": true, "reason": "test"}')
+        if "You are a fact-checker for a support chatbot." in combined_prompt:
+            return _valid_validation_response()
+        if kwargs.get("stream") is True:
+            return _chat_stream_response(answer, total_tokens=total_tokens)
+        return _chat_completion_response(answer, total_tokens=total_tokens)
+
+    return _side_effect
+
+
 def _create_bot(client: TestClient, token: str) -> str:
     """Create a default bot for the current user's tenant; return bot public_id."""
     resp = client.post(
@@ -142,10 +175,10 @@ def test_widget_chat_success(
     _seed_rag_chunk(db_session, client_uuid)
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="Widget says hi"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=5)
+    mock_openai_client.chat.completions.create.side_effect = _chat_completion_side_effect(
+        "Widget says hi",
+        total_tokens=5,
+    )
 
     r = _post_widget_chat(tenant, bot_public_id, message="widget support")
     assert r.status_code == 200

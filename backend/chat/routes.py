@@ -165,7 +165,7 @@ class DebugInfoResponse(BaseModel):
     is_reject: bool = False
     is_faq_direct: bool = False
     validation_applied: bool = False
-    validation_outcome: Literal["valid", "fallback", "skipped"] | None = None
+    validation_outcome: Literal["valid", "fallback"] | None = None
 
 
 class ChatDebugResponse(BaseModel):

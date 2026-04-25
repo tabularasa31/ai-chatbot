@@ -708,6 +708,15 @@ class Chat(Base):
     ended_at = Column(DateTime, nullable=True)
     clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_response_language = Column(String(16), nullable=True)
+    # Once True, response_language is frozen at last_response_language and
+    # detection is bypassed. Set by lock heuristic in backend/chat/language.py
+    # (high-confidence first user turn or two consistent reliable turns).
+    language_locked = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

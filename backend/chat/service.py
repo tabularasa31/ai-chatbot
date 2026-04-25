@@ -26,8 +26,10 @@ from backend.chat.decision import (
 )
 from backend.chat.language import (
     STICKY_WINDOW,
+    LanguageDetectionResult,
     LocalizationResult,
     ResolvedLanguageContext,
+    _decide_language_lock,
     generate_greeting_in_language_result,
     localize_text_to_language_result,
     log_llm_tokens,
@@ -676,6 +678,7 @@ def _handle_small_talk_early_exit(
         document_ids=[],
         extra_tokens=small_talk_result.tokens_used,
         optional_entity_types=optional_entity_types,
+        language_context=language_context,
     )
     if trace is not None:
         trace.update(
@@ -760,6 +763,7 @@ def _resolve_chat_language_context(
         ),
         previous_response_language=previous_response_language,
         recent_user_turn_texts=recent_user_turn_texts,
+        language_locked=bool(getattr(chat, "language_locked", False)) if chat is not None else False,
         tenant_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         chat_id=str(chat.id) if chat is not None else None,
     )
@@ -799,6 +803,7 @@ def _set_last_response_language(
     tenant_id: uuid.UUID,
     response_language: str | None,
     resolution_reason: str | None,
+    language_context: ResolvedLanguageContext | None = None,
 ) -> None:
     if not response_language:
         return
@@ -817,6 +822,63 @@ def _set_last_response_language(
         )
     chat.last_response_language = response_language
     db.add(chat)
+    # When this turn was driven by a real detection (language_context provided
+    # and not from the locked fast path), decide whether to lock the chat's
+    # language now. See _decide_language_lock for the rules.
+    if (
+        language_context is not None
+        and not chat.language_locked
+        and language_context.response_language_resolution_reason != "locked"
+    ):
+        _maybe_lock_language(
+            db=db,
+            chat=chat,
+            language_context=language_context,
+            previous_response_language=previous_language,
+        )
+
+
+def _user_message_count(chat: Chat) -> int:
+    return sum(
+        1 for message in (chat.messages or []) if message.role == MessageRole.user
+    )
+
+
+def _maybe_lock_language(
+    *,
+    db: Session,
+    chat: Chat,
+    language_context: ResolvedLanguageContext,
+    previous_response_language: str | None,
+) -> None:
+    """Set chat.language_locked = True when this turn's detection meets the
+    lock rules. Idempotent — caller is expected to skip already-locked chats.
+    """
+    detection = LanguageDetectionResult(
+        detected_language=language_context.detected_language,
+        confidence=language_context.confidence,
+        is_reliable=language_context.is_reliable,
+    )
+    is_first_user_turn = _user_message_count(chat) == 0
+    if not _decide_language_lock(
+        detection=detection,
+        previous_response_language=previous_response_language,
+        is_first_user_turn=is_first_user_turn,
+    ):
+        return
+    chat.language_locked = True
+    db.add(chat)
+    logger.info(
+        "language_locked",
+        extra={
+            "chat_id": str(chat.id),
+            "tenant_id": str(chat.tenant_id),
+            "locked_to": chat.last_response_language or detection.detected_language,
+            "rule": "first_turn_high_conf" if is_first_user_turn else "two_consistent_turns",
+            "detected_language": detection.detected_language,
+            "confidence": detection.confidence,
+        },
+    )
 
 
 def _persist_turn_with_response_language(
@@ -831,6 +893,7 @@ def _persist_turn_with_response_language(
     document_ids: list[uuid.UUID],
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
+    language_context: ResolvedLanguageContext | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -838,6 +901,7 @@ def _persist_turn_with_response_language(
         tenant_id=tenant_id,
         response_language=response_language,
         resolution_reason=resolution_reason,
+        language_context=language_context,
     )
     return _persist_turn(
         db,
@@ -884,6 +948,7 @@ def _escalation_turn_response(
         document_ids=[],
         extra_tokens=out.tokens_used,
         optional_entity_types=optional_entity_types,
+        language_context=language_context,
     )
     trace.update(
         output={"answer": out.message_to_user, "source": trace_source},
@@ -913,6 +978,7 @@ def _persist_assistant_message_with_response_language(
     assistant_content: str,
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
+    language_context: ResolvedLanguageContext | None = None,
 ) -> None:
     _set_last_response_language(
         db=db,
@@ -920,6 +986,7 @@ def _persist_assistant_message_with_response_language(
         tenant_id=tenant_id,
         response_language=response_language,
         resolution_reason=resolution_reason,
+        language_context=language_context,
     )
     _persist_assistant_message(
         db,
@@ -2256,6 +2323,7 @@ def process_chat_message(
             assistant_content=greeting.text,
             extra_tokens=greeting.tokens_used,
             optional_entity_types=optional_entity_types,
+            language_context=language_context,
         )
         trace.update(
             output={"answer": greeting.text, "source": "greeting"},
@@ -2562,6 +2630,7 @@ def process_chat_message(
                 tenant_id=tenant_id,
                 response_language=language_context.response_language,
                 resolution_reason=language_context.response_language_resolution_reason,
+                language_context=language_context,
             )
             db.add(chat)
             db.commit()
@@ -2657,6 +2726,7 @@ def process_chat_message(
             document_ids=[],
             extra_tokens=result.tokens_used,
             optional_entity_types=optional_entity_types,
+            language_context=language_context,
         )
         _try_ingest_gap_signal(
             chat=chat,
@@ -2864,6 +2934,7 @@ def process_chat_message(
         document_ids=document_ids,
         extra_tokens=tokens_used,
         optional_entity_types=optional_entity_types,
+        language_context=language_context,
     )
     _try_ingest_gap_signal(
         chat=chat,

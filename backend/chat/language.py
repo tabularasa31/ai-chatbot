@@ -143,6 +143,7 @@ _RESOLUTION_REASON_TO_SOURCE = {
     "detector_unknown": "detector",
     "detector_unreliable": "detector",
     "detector_failure": "detector",
+    "locked": "locked",
 }
 
 
@@ -416,6 +417,64 @@ def _weighted_vote(texts: list[str]) -> tuple[str | None, dict[str, int]]:
     return winner, dict(votes)
 
 
+# --- Language lock decision -------------------------------------------------
+# Once a chat's language is locked, all subsequent turns reply in the same
+# language regardless of what the user types — see resolve_language_context's
+# locked fast path. The decision to lock is made by _decide_language_lock,
+# which is called once per (non-bootstrap) turn after detection.
+#
+# Lock rules:
+#   1. First-turn confidence gate for non-English: lock immediately when the
+#      first user turn produces a reliable, high-confidence detection of a
+#      *non-English* language. Strong non-English signals (Cyrillic, CJK,
+#      diacritics, langdetect-confirmed Latin-script non-English) only fire
+#      when the user has positively expressed that language, so locking on
+#      the first turn is safe. English is excluded from this branch because
+#      `en` is also the heuristic's fallback for any pure-ASCII multi-token
+#      input — locking on it would freeze the language for users whose
+#      first message happens to be ambiguous English-ish ASCII.
+#   2. Two consistent reliable turns: if not locked yet, lock when the
+#      current detection is reliable AND its language root matches the
+#      previous turn's response_language root. This handles English (which
+#      always waits for a second confirmation) and any case where the
+#      first-turn confidence gate didn't fire.
+#
+# Real bilingual switches are rare in B2B support; locking after at most
+# two turns keeps replies coherent for the rest of the conversation. To
+# unlock, the user starts a new chat session.
+_LOCK_FIRST_TURN_MIN_CONFIDENCE = 0.95
+
+
+def _decide_language_lock(
+    *,
+    detection: LanguageDetectionResult,
+    previous_response_language: str | None,
+    is_first_user_turn: bool,
+) -> bool:
+    """Return True when the chat's language should now be frozen.
+
+    Caller is responsible for skipping this when chat.language_locked is
+    already True (no need to re-decide) and for not calling on bootstrap
+    turns (no real user message yet).
+    """
+    if not detection.is_reliable:
+        return False
+    if detection.detected_language == "unknown":
+        return False
+    if is_first_user_turn:
+        if detection.detected_language == "en":
+            # `en` on a first turn is too easy to land on (heuristic fallback
+            # for any ASCII-only multi-token input). Wait for a second
+            # confirming turn before locking to English.
+            return False
+        return detection.confidence >= _LOCK_FIRST_TURN_MIN_CONFIDENCE
+    if previous_response_language and _language_matches(
+        detection.detected_language, previous_response_language
+    ):
+        return True
+    return False
+
+
 def resolve_language_context(
     *,
     current_turn_text: str | None,
@@ -425,22 +484,49 @@ def resolve_language_context(
     tenant_escalation_language: str | None,
     previous_response_language: str | None = None,
     recent_user_turn_texts: list[str] | None = None,
+    language_locked: bool = False,
     tenant_id: str | None = None,
     bot_id: str | None = None,
     chat_id: str | None = None,
 ) -> ResolvedLanguageContext:
-    context = _resolve_language_context_inner(
-        current_turn_text=current_turn_text,
-        is_bootstrap_turn=is_bootstrap_turn,
-        bootstrap_user_locale=bootstrap_user_locale,
-        browser_locale=browser_locale,
-        tenant_escalation_language=tenant_escalation_language,
-        previous_response_language=previous_response_language,
-        recent_user_turn_texts=recent_user_turn_texts,
-        tenant_id=tenant_id,
-        bot_id=bot_id,
-        chat_id=chat_id,
-    )
+    # Locked-language fast path: once a chat's language is locked, the bot
+    # always responds in last_response_language and detection is skipped.
+    # This is the post-lock steady state — see _decide_language_lock for how
+    # locks are set. Bootstrap turns ignore the lock since by definition
+    # there is no last_response_language yet on the very first turn; in
+    # practice locks are only set on real (non-bootstrap) turns so this
+    # branch only short-circuits actual chat replies.
+    if (
+        language_locked
+        and not is_bootstrap_turn
+        and previous_response_language
+    ):
+        escalation_language = _normalize_config_language(tenant_escalation_language) or "en"
+        escalation_language_source = (
+            "tenant" if _normalize_config_language(tenant_escalation_language) else "default"
+        )
+        context = ResolvedLanguageContext(
+            detected_language="unknown",
+            confidence=0.0,
+            is_reliable=False,
+            response_language=previous_response_language,
+            response_language_resolution_reason="locked",
+            escalation_language=escalation_language,
+            escalation_language_source=escalation_language_source,
+        )
+    else:
+        context = _resolve_language_context_inner(
+            current_turn_text=current_turn_text,
+            is_bootstrap_turn=is_bootstrap_turn,
+            bootstrap_user_locale=bootstrap_user_locale,
+            browser_locale=browser_locale,
+            tenant_escalation_language=tenant_escalation_language,
+            previous_response_language=previous_response_language,
+            recent_user_turn_texts=recent_user_turn_texts,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            chat_id=chat_id,
+        )
     _emit_language_resolved_event(
         context=context,
         text_length=len(current_turn_text or ""),

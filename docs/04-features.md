@@ -587,6 +587,17 @@ For any turn that has no user message to detect language from (the bootstrap gre
 
 KYC outranks browser deliberately. Reversing the order would silently override tenants who paid the integration cost of passing `locale` through `identity_token`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch.
 
+#### Language locking — fixed contract
+
+Once a chat has settled on a language, it stops re-detecting and stays in that language for the rest of the session. Two rules can fire the lock:
+
+1. **First-turn confidence gate (non-English only).** When the user's first real message produces a reliable, high-confidence detection of a *non-English* language (e.g. Cyrillic message, Spanish/German/French sentence with diacritics, langdetect-confirmed Latin-script non-English), the chat locks to that language immediately. English is excluded from this branch because `en` is also the heuristic's fallback for any pure-ASCII multi-token input — locking on it would freeze ambiguous English-ish first turns.
+2. **Two consistent reliable turns.** If the lock didn't fire on turn 1 (English, low-conf detection, unreliable), it fires the moment a turn's detected language root matches the previous turn's response language root. This handles English (always waits for the second confirming turn) and any case where the first turn was ambiguous.
+
+After lock, `resolve_language_context` returns the stored `last_response_language` with `response_language_resolution_reason = "locked"` and skips the detector entirely. This is implemented in `_resolve_language_context_inner` (locked fast path) and `_decide_language_lock` in `backend/chat/language.py`. Stored on `Chat.language_locked` (boolean, default False); set once and never reset on existing chats.
+
+Bilingual mid-session switches require the user to start a new chat session. This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
+
 ### Default greeting
 
 When a new conversation starts before the first real user question, Chat9 can return a default assistant greeting instead of `422`:

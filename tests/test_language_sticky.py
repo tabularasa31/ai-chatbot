@@ -611,6 +611,143 @@ def test_chat_escalation_uses_user_response_language(
     )
 
 
+# ---------------------------------------------------------------------------
+# Language lock — regression suite for the "lock after 2 consistent turns +
+# confidence gate on first turn (non-English only)" rule.
+# ---------------------------------------------------------------------------
+
+
+def test_chat_locks_on_first_high_confidence_non_english_turn(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """High-confidence non-English first turn locks immediately."""
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-first-ru@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"Привет мир": _detection("ru")},
+    )
+
+    process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
+
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.last_response_language == "ru"
+    assert chat.language_locked is True
+
+
+def test_chat_does_not_lock_on_first_english_turn(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """English on the first turn is too easy for the heuristic to claim
+    by accident (any pure-ASCII multi-token text falls back to en).
+    Don't lock until a second consistent turn confirms English.
+    """
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-first-en@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"Hello there": _detection("en")},
+    )
+
+    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.last_response_language == "en"
+    assert chat.language_locked is False
+
+
+def test_chat_locks_after_two_consistent_english_turns(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """English locks on the second consecutive English turn."""
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "lock-two-en@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"Hello there": _detection("en"), "How are you": _detection("en")},
+    )
+
+    process_chat_message(tenant_id, "Hello there", session_id, db_session, api_key=api_key)
+    chat_after_first = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat_after_first.language_locked is False
+
+    process_chat_message(tenant_id, "How are you", session_id, db_session, api_key=api_key)
+    chat_after_second = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat_after_second.language_locked is True
+    assert chat_after_second.last_response_language == "en"
+
+
+def test_chat_locked_chat_keeps_language_against_off_language_turn(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once locked, the chat sticks to its language even if the user
+    sends a clear off-language message. This is the intended trade-off
+    of the lock rule — bilingual mid-session switches require a new
+    chat session.
+    """
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "locked-keeps@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {
+            "Привет мир": _detection("ru"),
+            "Hello there everyone": _detection("en"),
+        },
+    )
+
+    first = process_chat_message(tenant_id, "Привет мир", session_id, db_session, api_key=api_key)
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.language_locked is True
+    assert first.text == "lang=ru"
+
+    second = process_chat_message(
+        tenant_id, "Hello there everyone", session_id, db_session, api_key=api_key
+    )
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    assert chat.language_locked is True
+    assert chat.last_response_language == "ru"
+    assert second.text == "lang=ru"
+
+
+def test_resolve_language_context_skips_detection_when_locked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the chat is locked, resolve_language_context returns the
+    stored response_language with reason="locked" and does not invoke
+    the underlying detector at all.
+    """
+    detector_calls = {"count": 0}
+
+    def _exploding_detector(_text: str | None) -> LanguageDetectionResult:
+        detector_calls["count"] += 1
+        raise AssertionError("detector must not be called when language is locked")
+
+    monkeypatch.setattr("backend.chat.language.detect_language", _exploding_detector)
+
+    context = resolve_language_context(
+        current_turn_text="Some message in any language",
+        is_bootstrap_turn=False,
+        bootstrap_user_locale=None,
+        browser_locale=None,
+        tenant_escalation_language=None,
+        previous_response_language="es",
+        recent_user_turn_texts=["Some message in any language"],
+        language_locked=True,
+    )
+
+    assert context.response_language == "es"
+    assert context.response_language_resolution_reason == "locked"
+    assert detector_calls["count"] == 0
+
+
 def test_load_recent_user_turn_texts_without_duplicating_current(
     tenant: TestClient,
     db_session: Session,

@@ -39,8 +39,7 @@ from backend.gap_analyzer.enums import (
 Base = declarative_base()
 
 
-# Позволяем использовать UUID и ARRAY в SQLite (для тестов),
-# мапя их на совместимые типы.
+# Map PostgreSQL-specific types to SQLite-compatible equivalents for tests.
 @compiles(PG_UUID, "sqlite")
 def compile_uuid_sqlite(type_, compiler, **kw) -> str:  # type: ignore[override]
     return "CHAR(36)"

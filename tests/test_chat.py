@@ -4642,6 +4642,76 @@ def test_detect_language_cache_respects_whitespace_stripping(
     assert calls["count"] == 1
 
 
+# ---------------------------------------------------------------------------
+# ASCII non-English detection — regression tests for ClickUp 86excmfke.
+#
+# The heuristic claims English for any pure-ASCII multi-token text (it has
+# no positive English signal, just a fallback). Without these tests, longer
+# Spanish/German/French sentences with no diacritics get locked to English
+# and the chat reply ends up in English instead of the user's language.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # Acceptance criteria from 86excmfke.
+        ("Quiero hablar con un agente", "es"),
+        ("Necesito hablar con un agente humano", "es"),
+        ("Nein, ich brauche noch Hilfe", "de"),
+        ("Non, j'ai encore besoin d'aide", "fr"),
+        # Other realistic ASCII-only escalation phrases.
+        ("Mi cuenta no funciona", "es"),
+        ("Bitte helfen Sie mir", "de"),
+        ("Je m'appelle Jean", "fr"),
+        ("Mein Name ist Hans", "de"),
+        # Inputs that overlap with English on case-folded short tokens — the
+        # stop-word list deliberately excludes "i" / "me" / "am" / "was" / "do" /
+        # "has" / "will" so that these still fall through to langdetect.
+        ("Me siento muy mal hoy", "es"),
+        ("I bambini sono qui", "it"),
+    ],
+)
+def test_detect_language_handles_ascii_non_english_multitoken(text: str, expected: str) -> None:
+    result = detect_language(text)
+    assert result.detected_language == expected, (
+        f"Expected {expected} for {text!r}, got {result.detected_language}"
+    )
+    assert result.is_reliable
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Short ASCII English fragments where langdetect is known to mis-fire
+        # ("Reset password" -> af, "I cannot login" -> it, "question about
+        # product" -> fr). The heuristic protects these.
+        "Reset password",
+        "I cannot login",
+        "question about product",
+        "Need help",
+        "pricing question",
+        # 4+ token English with stop words — heuristic short-circuits because
+        # of the positive English signal even though we now consider longer
+        # ASCII text.
+        "How do I get started",
+        "Help me reset password",
+        "Why is it broken",
+        "Cannot access my account",
+        "Reset my password please",
+        # Tech English with no stop words but where langdetect wouldn't claim
+        # a trusted non-English language confidently — heuristic keeps en.
+        "API returns error code 500",
+        "login screen broken after update",
+    ],
+)
+def test_detect_language_protects_short_ascii_english(text: str) -> None:
+    result = detect_language(text)
+    assert result.detected_language == "en", (
+        f"Expected en for {text!r}, got {result.detected_language}"
+    )
+
+
 def test_localize_logs_tokens_with_operation_label(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,

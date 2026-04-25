@@ -407,9 +407,10 @@ def chat_escalate(
         raise HTTPException(status_code=404, detail="Session not found") from None
     except RateLimitError as exc:
         if is_quota_exceeded(exc):
+            lang = detect_language(body.user_note).detected_language if body.user_note else "en"
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, api_key=tenant.openai_api_key),
+                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:

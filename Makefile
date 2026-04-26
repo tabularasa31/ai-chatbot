@@ -65,10 +65,9 @@ clean:
 
 smoke:
 	PYTHONPATH=. pytest -q \
-		tests/test_chat.py \
+		tests/test_chat_api.py \
 		tests/test_escalation.py \
 		tests/test_auth.py \
-		tests/test_auth_email_verification.py \
 		tests/test_verification_enforcement.py \
 		-k "escalat or verify or forgot_password or reset_password"
 
@@ -77,14 +76,15 @@ auth-reset:
 
 escalation:
 	PYTHONPATH=. pytest -q \
-		tests/test_chat.py \
+		tests/test_chat_api.py \
+		tests/test_chat_escalation.py \
 		tests/test_escalation.py \
 		-k "awaiting_email or followup or already_closed or manual_escalate or perform_manual_escalation"
 
 rag-edge:
 	PYTHONPATH=. pytest -q \
 		tests/test_search.py \
-		tests/test_chat.py \
+		tests/test_chat_api.py \
 		-k "openai_unavailable or malformed or wrong_dimension or low_vector"
 
 pgvector-only: db-up db-ready

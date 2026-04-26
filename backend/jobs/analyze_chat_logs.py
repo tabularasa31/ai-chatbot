@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +38,21 @@ from backend.utils.math import cosine_similarity as _cosine_similarity
 logger = logging.getLogger(__name__)
 
 CURRENT_ANALYSIS_VERSION = 1
+
+# ── Thread registry for graceful shutdown ─────────────────────────────────────
+_active_threads_lock = threading.Lock()
+_active_threads: set[threading.Thread] = set()
+
+
+def shutdown_log_analysis_threads(timeout_seconds: float = 30.0) -> None:
+    """Join all running job threads; called from FastAPI lifespan on shutdown."""
+    with _active_threads_lock:
+        threads = list(_active_threads)
+    for t in threads:
+        t.join(timeout=timeout_seconds)
+        if t.is_alive():
+            logger.warning("log_analysis job thread %s did not finish within %ss", t.name, timeout_seconds)
+
 
 # ── LLM concurrency guard ────────────────────────────────────────────────────
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
@@ -460,12 +476,14 @@ def enqueue_log_analysis_job(
 
     job_start, old_watermark = result
 
-    import threading
     t = threading.Thread(
         target=_run_job_sync,
         args=(tenant_id, api_key, job_start, old_watermark, trigger),
-        daemon=True,
+        daemon=False,
+        name=f"log-analysis-{tenant_id}",
     )
+    with _active_threads_lock:
+        _active_threads.add(t)
     t.start()
     return True
 
@@ -479,7 +497,7 @@ def _run_job_sync(
     old_watermark: datetime | None,
     trigger: str,
 ) -> None:
-    """Entry point for daemon thread — opens its own DB session, runs async job."""
+    """Entry point for job thread — opens its own DB session, runs async job."""
     from backend.core.db import SessionLocal
 
     db = SessionLocal()
@@ -491,6 +509,8 @@ def _run_job_sync(
     finally:
         loop.close()
         db.close()
+        with _active_threads_lock:
+            _active_threads.discard(threading.current_thread())
 
 
 async def run_job(
@@ -586,31 +606,33 @@ async def run_job(
                         )
                     )
 
-            if not members:
-                continue
-
-            # Skip cluster if ALL assistant answers are thumbs-down
-            if all(m.feedback == MessageFeedback.down for m in members):
-                continue
-
-            # Best answer: thumbs_up > no feedback (none) > skip thumbs_down
-            best = next((m for m in members if m.has_thumbs_up), None)
-            if best is None:
-                best = next(
-                    (m for m in members if m.feedback != MessageFeedback.down), None
-                )
-            if best is None:
-                continue
-
-            representative = _representative_question(cluster)
-            created = _create_faq_candidate(
-                db, tenant_id, representative, best, cluster, api_key
+            usable = (
+                members
+                and not all(m.feedback == MessageFeedback.down for m in members)
             )
-            if created:
-                faq_count += 1
+            if usable:
+                # Best answer: thumbs_up > no feedback (none) > skip thumbs_down
+                best = next((m for m in members if m.has_thumbs_up), None)
+                if best is None:
+                    best = next(
+                        (m for m in members if m.feedback != MessageFeedback.down), None
+                    )
+                if best is not None:
+                    representative = _representative_question(cluster)
+                    created = _create_faq_candidate(
+                        db, tenant_id, representative, best, cluster, api_key
+                    )
+                    if created:
+                        faq_count += 1
+                    alias_inputs.append([m.message.content for m in members])
 
-            # Prepare alias extraction input
-            alias_inputs.append([m.message.content for m in members])
+            # Advance watermark after each cluster is fully processed (at-least-once).
+            # Tracks the max created_at across cluster messages so a crash mid-batch
+            # only causes the remaining clusters to be reprocessed, not the whole batch.
+            for msg in cluster:
+                if last_msg_created_at is None or msg.created_at > last_msg_created_at:
+                    last_msg_created_at = msg.created_at
+                    last_msg_id = msg.id
 
         # ── Alias extraction (async, throttled) ──────────────────────────────
         alias_count = await extract_and_merge_aliases(
@@ -619,10 +641,6 @@ async def run_job(
             cluster_questions_list=alias_inputs,
             api_key=api_key,
         )
-
-        if messages:
-            last_msg_id = messages[-1].id
-            last_msg_created_at = messages[-1].created_at
 
     except Exception as exc:
         status = "failed"

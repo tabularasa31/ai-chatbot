@@ -15,6 +15,9 @@ from backend.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+_DEFERRED_OPS_MAXLEN = 200
+
+
 def _merge_tags(*tag_lists: list[str] | None) -> list[str]:
     """Merge trace tags while preserving order and removing duplicates."""
     merged: list[str] = []
@@ -322,6 +325,7 @@ class _DeferredSpan(SpanHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
+        self._trace._ops_added += 1
         self._trace._operations.append(
             {
                 "kind": self._kind,
@@ -350,6 +354,7 @@ class _DeferredGeneration(GenerationHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
+        self._trace._ops_added += 1
         self._trace._operations.append(
             {
                 "kind": "generation",
@@ -378,7 +383,8 @@ class _DeferredTrace(TraceHandle):
         self._init_kwargs = init_kwargs
         self._sampled = sampled
         self._sampling_reason = sampling_reason
-        self._operations: list[dict[str, Any]] = []
+        self._operations: deque[dict[str, Any]] = deque(maxlen=_DEFERRED_OPS_MAXLEN)
+        self._ops_added: int = 0
         self._materialized: TraceHandle | None = None
 
     def span(
@@ -434,6 +440,7 @@ class _DeferredTrace(TraceHandle):
                 status_message=status_message,
             )
             return
+        self._ops_added += 1
         self._operations.append(
             {
                 "kind": "update",
@@ -465,6 +472,13 @@ class _DeferredTrace(TraceHandle):
         )
         if materialized is None:
             return
+        dropped = self._ops_added - len(self._operations)
+        if dropped > 0:
+            logger.warning(
+                "DeferredTrace: %d operations dropped (maxlen=%d); trace may be incomplete",
+                dropped,
+                _DEFERRED_OPS_MAXLEN,
+            )
         self._materialized = materialized
         for operation in self._operations:
             kind = operation["kind"]

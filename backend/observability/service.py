@@ -325,8 +325,7 @@ class _DeferredSpan(SpanHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
-        self._trace._ops_added += 1
-        self._trace._operations.append(
+        self._trace._record(
             {
                 "kind": self._kind,
                 "kwargs": dict(self._kwargs),
@@ -354,8 +353,7 @@ class _DeferredGeneration(GenerationHandle):
         level: str | None = None,
         status_message: str | None = None,
     ) -> None:
-        self._trace._ops_added += 1
-        self._trace._operations.append(
+        self._trace._record(
             {
                 "kind": "generation",
                 "kwargs": dict(self._kwargs),
@@ -386,6 +384,10 @@ class _DeferredTrace(TraceHandle):
         self._operations: deque[dict[str, Any]] = deque(maxlen=_DEFERRED_OPS_MAXLEN)
         self._ops_added: int = 0
         self._materialized: TraceHandle | None = None
+
+    def _record(self, op: dict[str, Any]) -> None:
+        self._ops_added += 1
+        self._operations.append(op)
 
     def span(
         self,
@@ -440,8 +442,7 @@ class _DeferredTrace(TraceHandle):
                 status_message=status_message,
             )
             return
-        self._ops_added += 1
-        self._operations.append(
+        self._record(
             {
                 "kind": "update",
                 "kwargs": {

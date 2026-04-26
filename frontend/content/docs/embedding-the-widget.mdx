@@ -30,8 +30,7 @@ You can choose between two modes on the [Embed page](https://getchat9.live/embed
 - Users type questions and receive answers from your documentation.
 - Session continuity works across messages in the same visit.
 - If the widget starts a brand-new empty conversation, it can show a default greeting instead of an error or blank state.
-- If the bot needs one missing detail, it can show a single structured follow-up question instead of guessing.
-- When that follow-up has clear options, the widget renders them as quick-reply buttons on the latest bot message.
+- If the bot needs one missing detail, it can ask a single follow-up question (embedded in the same text reply) instead of guessing.
 - The widget works in any language.
 
 Language behavior — short version: the bot replies in the language of the user's question once they've typed one; before that, it uses your KYC `locale` if provided, then the browser locale, then English. See [Language Support](/docs/language) for the full contract, including sticky retention and the dashboard escalation-language override.
@@ -65,9 +64,9 @@ Greeting behavior:
 
 Clarification behavior:
 
-- Chat9 may ask one clarification question when the user's request is ambiguous or missing a critical parameter.
+- Chat9 may ask one clarification question when the user's request is ambiguous or missing a critical parameter, but at most one blocking clarifying question per conversation.
+- The clarifying question is part of the assistant's normal text reply — there is no separate structured payload and no quick-reply buttons.
 - Clarification replies are treated as part of the same conversation context, not as a brand-new standalone question.
-- Quick replies stay active only on the latest clarification turn, so older buttons do not keep driving the current conversation after the chat has moved on.
 - Empty follow-up turns after the conversation has already started are still rejected as invalid input.
 
 ## Security
@@ -228,14 +227,15 @@ curl -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&sessio
   -d '{"message":"Hello"}'
 ```
 
-Public widget responses may now include:
+Public widget responses may include:
 
-- normal answer text
-- default localized greeting when a new empty conversation starts
-- one clarification question
-- partial guidance plus one clarification question
+- a normal answer derived from your knowledge base
+- the default localized greeting when a new empty conversation starts
+- a partial answer with a caveat when the bot is only partially confident
+- a single clarifying question (embedded in the same text reply) when the bot needs one missing detail to answer reliably
+- an escalation handoff message when the bot cannot answer safely
 
-When the widget receives structured clarification options, it can render them as quick replies instead of forcing the user to type the answer manually.
+The reply is always a single text field. There is no structured clarification payload and the widget does not render quick-reply buttons.
 
 ### Token field reference
 

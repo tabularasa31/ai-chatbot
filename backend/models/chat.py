@@ -173,6 +173,7 @@ class EscalationTicket(Base):
         index=True,
     )
     resolution_text = Column(Text, nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(

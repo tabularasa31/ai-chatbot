@@ -18,6 +18,11 @@ os.environ.setdefault("INJECTION_SEMANTIC_ENABLED", "false")
 # Valid Fernet key for tests (generate with Fernet.generate_key())
 os.environ.setdefault("ENCRYPTION_KEY", "7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=")
 
+# Prevent Langfuse from initialising and hitting real network during tests.
+# Pop any shell-level vars so settings.langfuse_* comes up as None.
+for _lf_var in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+    os.environ.pop(_lf_var, None)
+
 # Patch create_engine for SQLite (pool_size/max_overflow not supported)
 import sqlalchemy as _sa
 _original_create_engine = _sa.create_engine
@@ -342,6 +347,27 @@ def _reset_rate_limiter_state():
     limiter.reset()
     if hasattr(limiter, "_storage") and hasattr(limiter._storage, "reset"):
         limiter._storage.reset()
+
+
+@pytest.fixture(autouse=True)
+def mock_langfuse():
+    """Block all Langfuse network calls for every test.
+
+    Belt-and-suspenders on top of the env-var clearing above: patches the
+    Langfuse constructor so tests stay offline even if creds leak in from the
+    shell.  Also resets the module-level _service singleton so each test starts
+    from a clean disabled state.
+    """
+    from unittest.mock import MagicMock
+
+    import backend.observability.service as _obs
+
+    _obs._service.reset()
+    mock_lf_cls = MagicMock(name="Langfuse")
+    mock_lf_cls.return_value = MagicMock(name="LangfuseInstance")
+    with patch("langfuse.Langfuse", mock_lf_cls, create=True):
+        yield mock_lf_cls
+    _obs._service.reset()
 
 
 def set_client_openai_key(test_client: TestClient, token: str, key: str = "sk-test") -> None:

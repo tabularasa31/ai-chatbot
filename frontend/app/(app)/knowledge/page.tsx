@@ -614,6 +614,7 @@ export default function KnowledgePage() {
         botId={botId}
         activeTab={activeTab}
         onTabChange={setTab}
+        faqLoading={faqLoading}
         faqItems={faqItems}
         setFaqItems={setFaqItems}
         pendingCount={pendingCount}

@@ -8,6 +8,7 @@ export interface FaqSectionProps {
   botId?: string;
   activeTab: "documents" | "profile" | "faq";
   onTabChange: (tab: "documents" | "profile" | "faq") => void;
+  faqLoading: boolean;
   faqItems: KnowledgeFaqItem[];
   setFaqItems: Dispatch<SetStateAction<KnowledgeFaqItem[]>>;
   pendingCount: number;
@@ -36,6 +37,7 @@ export function FaqSection({
   botId,
   activeTab,
   onTabChange,
+  faqLoading,
   faqItems,
   setFaqItems,
   pendingCount,
@@ -103,7 +105,9 @@ export function FaqSection({
       </div>
       {faqSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">{faqSaved}</div>}
       {faqError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{faqError}</div>}
-      {faqItems.length === 0 ? (
+      {faqLoading ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading FAQ…</div>
+      ) : faqItems.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
           {faqFilter === "pending"
             ? "All caught up! No FAQ entries need review."

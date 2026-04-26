@@ -369,7 +369,8 @@ export function saveToken(_token: string): void {
 export function removeToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(SESSION_KEY);
-  document.cookie = `${SESSION_KEY}=; path=/; max-age=0; samesite=lax`;
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `${SESSION_KEY}=; path=/; max-age=0; samesite=lax${secure}`;
 }
 
 function handleUnauthorized(): void {

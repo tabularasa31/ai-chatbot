@@ -594,7 +594,7 @@ export function ChatWidget({
     <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
       {/* Header */}
       <div className="bg-nd-base-alt px-6 py-4 flex items-center gap-3 flex-shrink-0">
-        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nd-accent to-[#a855f7] flex items-center justify-center flex-shrink-0">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nd-accent to-violet-500 flex items-center justify-center flex-shrink-0">
           <MessageCircle size={22} className="text-white" />
         </div>
         <div>
@@ -636,7 +636,7 @@ export function ChatWidget({
                         <button
                           type="button"
                           onClick={handleStartNewChat}
-                          className="mt-3 inline-flex items-center rounded-lg bg-[#a855f7] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[#9333ea]"
+                          className="mt-3 inline-flex items-center rounded-lg bg-violet-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-600"
                         >
                           Start new chat
                         </button>
@@ -741,13 +741,13 @@ export function ChatWidget({
             }}
             placeholder={chatClosed ? "Start a new chat to ask another question" : "Type a message..."}
             disabled={loading || chatClosed}
-            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-[#a855f7] focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
+            className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-violet-500 focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"
           />
           <button
             type="button"
             onClick={handleSendClick}
             disabled={!canSend}
-            className="flex-shrink-0 p-3 bg-[#a855f7] hover:bg-[#9333ea] disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+            className="flex-shrink-0 p-3 bg-violet-500 hover:bg-violet-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
             aria-label="Send message"
           >
             <Send size={18} />

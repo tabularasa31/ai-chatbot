@@ -235,7 +235,7 @@ Public widget responses may include:
 - a single clarifying question (embedded in the same text reply) when the bot needs one missing detail to answer reliably
 - an escalation handoff message when the bot cannot answer safely
 
-The reply is always a single text field. There is no structured clarification payload and the widget does not render quick-reply buttons.
+The reply is a JSON object whose message content lives in a single `text` field (alongside `session_id`, `chat_ended` and an optional `ticket_number`). There is no structured clarification payload and the widget does not render quick-reply buttons.
 
 ### Token field reference
 

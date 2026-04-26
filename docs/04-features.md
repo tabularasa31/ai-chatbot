@@ -269,9 +269,10 @@ The chat pipeline routes every turn through a single decision engine
 `DecisionKind` outcomes (e.g. `answer_from_faq`, `answer_with_citations`,
 `answer_with_caveat`, `answer_with_caveat_and_inline_clarify`, `clarify`,
 `escalate`, `reject`). The full block-rules contract is documented in the
-**Clarification** subsection below; the chat reply itself is always a
-single text field — there is no structured `message_type` discriminator
-or quick-reply payload in v1.
+**Clarification** subsection below. The chat reply is a JSON object
+whose message content lives in a single `text` field (alongside
+`session_id`, `chat_ended` and an optional `ticket_number`); there is no
+structured `message_type` discriminator and no quick-reply payload in v1.
 
 ---
 

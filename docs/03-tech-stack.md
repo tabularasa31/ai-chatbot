@@ -154,7 +154,9 @@
 │       decision is a blocking clarify                     │
 │   10. Track token usage                                  │
 │   11. Save encrypted original + redacted-safe message    │
-│   12. Return canonical {text} (no structured payload)    │
+│   12. Return JSON {text, session_id, chat_ended,         │
+│       ticket_number?} — no structured clarification      │
+│       payload, no message_type discriminator             │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
@@ -237,22 +239,26 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
       is a blocking clarify; the counter is committed in the same
       transaction as the assistant message
    ↓
-12. Return canonical `text`. The clarifying question, when present,
-    is embedded directly inside `text` as plain prose
+12. Return JSON `{text, session_id, chat_ended, ticket_number?}` (private
+    `/chat` also includes `source_documents` and `tokens_used`). The
+    clarifying question, when present, is embedded directly inside `text`
+    as plain prose
    ↓
 13. Widget / dashboard displays the message text as-is. There is no
-    structured payload, no `message_type` discriminator and no
-    quick-reply buttons in v1
+    structured clarification payload, no `message_type` discriminator
+    and no quick-reply buttons in v1
 ```
 
 ### Chat output contract (v1)
 
-The `/widget/chat` and `/chat` responses return a single canonical `text`
-field plus optional escalation metadata. Structured outcome typing
-(`message_type=clarification`, `partial_with_clarification`, structured
-`clarification` payload, quick-reply options) is **not implemented** — the
-relevant flow was removed in PR #287 and replaced by the decision-engine
-policy in PR #425.
+The `/widget/chat` and `/chat` responses return a JSON object with a
+canonical `text` field, `session_id`, `chat_ended` and an optional
+`ticket_number`; the private `/chat` endpoint also includes
+`source_documents` and `tokens_used` for trace use. Structured outcome
+typing (`message_type=clarification`, `partial_with_clarification`,
+structured `clarification` payload, quick-reply options) is **not
+implemented** — the relevant flow was removed in PR #287 and replaced
+by the decision-engine policy in PR #425.
 
 Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 `clarification_count_before/after`, `budget_blocked`, `slot_asked`,

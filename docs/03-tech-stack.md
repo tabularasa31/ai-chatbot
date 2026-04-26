@@ -120,10 +120,9 @@
 │              Next.js /widget (ChatWidget)                 │
 │                                                           │
 │  - Chat UI (messages, input)                             │
-│  - Renders typed assistant outcomes: answer,             │
-│    clarification, partial_with_clarification             │
-│  - Latest clarification options render as quick replies; │
-│    old clarification buttons are no longer active        │
+│  - Renders the assistant message text plus optional      │
+│    inline clarification follow-up appended after a       │
+│    partial answer (no quick-reply buttons in v1)         │
 │  - Optional: POST /widget/session/init → session_id +   │
 │    mode (identified | anonymous) for HMAC user context   │
 │  - POST /widget/chat (BFF) → FastAPI /widget/chat        │
@@ -139,22 +138,25 @@
 │    ↓                                                      │
 │    1. Resolve tenant → tenant_id + openai_api_key        │
 │    2. Redact PII in question (regex + tenant toggles)    │
-│    3. If pending clarification exists, classify the turn │
-│       as continuation vs new intent                      │
-│    4. Run shared chat pipeline (FAQ / retrieval /        │
+│    3. Run shared chat pipeline (FAQ / retrieval /        │
 │       validation / existing reject & escalation guards)  │
-│    5. Clarification policy may emit answer,              │
-│       clarification, or partial_with_clarification       │
-│    6. Embed redacted question when retrieval is needed   │
+│    4. Embed redacted question when retrieval is needed   │
 │       (OpenAI, client's key)                             │
-│    7. Search embeddings (pgvector)                       │
-│    8. Build prompt (+ safe user context line if FI-KYC)  │
-│    9. Call OpenAI gpt-4o-mini (client's key); optional   │
-│       validation call (FI-034) also uses redacted text   │
+│    5. Search embeddings (pgvector)                       │
+│    6. Build prompt (+ safe user context line if FI-KYC)  │
+│    7. Call OpenAI (client's key); optional validation    │
+│       call (FI-034) also uses redacted text              │
+│    8. Build TurnContext + call decide() (block-rules     │
+│       gate). decide() returns the authoritative          │
+│       Decision: answer / clarify / escalate / reject /   │
+│       caveat / inline-clarify                            │
+│    9. Increment chats.clarification_count only when      │
+│       decision is a blocking clarify                     │
 │   10. Track token usage                                  │
 │   11. Save encrypted original + redacted-safe message    │
-│   12. Return canonical {text, message_type,              │
-│       clarification?}                                    │
+│   12. Return JSON {text, session_id, chat_ended,         │
+│       ticket_number?} — no structured clarification      │
+│       payload, no message_type discriminator             │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │                  PostgreSQL + pgvector                   │
@@ -224,31 +226,44 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
    ↓
 10. Track tokens used → save encrypted original question plus redacted-safe message fields
    ↓
-11. Clarification policy may:
-    - answer immediately
-    - ask one structured clarification question
-    - return partial guidance plus one clarification question
-    Clarification replies are re-synthesized into a normalized query and re-enter
-    the standard chat pipeline, not a side branch.
+11. Clarification policy (see `docs/04-features.md §Clarification` and
+    `backend/chat/decision.py`):
+    - the pipeline builds a `TurnContext` from guard, FAQ, KB and session
+      signals and calls `decide()` — the single authoritative classifier
+      for what this turn produced
+    - block rules (in order): guard reject → explicit human request →
+      closed session → active escalation → FAQ direct hit → KB high
+      confidence → KB medium with partial answer (inline clarify) →
+      low confidence (blocking clarify, budget-gated, or escalate)
+    - `chats.clarification_count` is incremented only when the decision
+      is a blocking clarify; the counter is committed in the same
+      transaction as the assistant message
    ↓
-12. Return canonical `text` + `message_type` + optional `clarification`
+12. Return JSON `{text, session_id, chat_ended, ticket_number?}` (private
+    `/chat` also includes `source_documents` and `tokens_used`). The
+    clarifying question, when present, is embedded directly inside `text`
+    as plain prose
    ↓
-13. Widget / dashboard displays the message; widget renders quick replies only
-    for the latest assistant clarification
+13. Widget / dashboard displays the message text as-is. There is no
+    structured clarification payload, no `message_type` discriminator
+    and no quick-reply buttons in v1
 ```
 
-### Typed chat outcomes
+### Chat output contract (v1)
 
-Public chat surfaces now treat assistant output as a typed contract rather than
-plain text only.
+The `/widget/chat` and `/chat` responses return a JSON object with a
+canonical `text` field, `session_id`, `chat_ended` and an optional
+`ticket_number`; the private `/chat` endpoint also includes
+`source_documents` and `tokens_used` for trace use. Structured outcome
+typing (`message_type=clarification`, `partial_with_clarification`,
+structured `clarification` payload, quick-reply options) is **not
+implemented** — the relevant flow was removed in PR #287 and replaced
+by the decision-engine policy in PR #425.
 
-- `answer` — normal direct response
-- `clarification` — one structured follow-up question
-- `partial_with_clarification` — safe partial guidance plus one follow-up question
-
-When `message_type != answer`, the payload also includes structured
-`clarification` data (`reason`, `type`, `options`, `requested_fields`,
-`original_user_message`, `turn_index`).
+Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
+`clarification_count_before/after`, `budget_blocked`, `slot_asked`,
+`escalation_reason`) is emitted into Langfuse traces and the PostHog
+`chat.turn` event, not into the chat reply payload.
 
 ---
 

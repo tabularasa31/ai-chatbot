@@ -63,13 +63,16 @@ Implemented in code:
 - `source-overlap-check`
 - `llm-generation`
 - reliability score propagation
-- clarification decision projection for chat traces/debug:
-  - `clarification_considered`
-  - `message_type`
-  - `clarification_reason`
-  - `clarification_type`
-  - `clarification_limit_hit`
-  - `safe_partial_source_type` (only for `partial_with_clarification`)
+- clarification decision projection for chat traces/debug (produced by
+  `Decision.trace_dict()` in `backend/chat/decision.py`):
+  - `decision`
+  - `decision_reason`
+  - `clarify_type`
+  - `clarification_count_before`
+  - `clarification_count_after`
+  - `budget_blocked`
+  - `slot_asked`
+  - `escalation_reason`
 - contradiction observability projection (`contradiction_detected`, `contradiction_count`, `contradiction_pair_count`, `contradiction_basis_types`)
 - optional contradiction **adjudication** projection fields (`contradiction_adjudication_*`) sourced from the observability run, not from canonical `evidence` alone — see `docs/04-features.md` (Retrieval contradiction observability + shadow adjudication)
 - deferred sampling with promotion for low-reliability and escalated requests
@@ -186,31 +189,46 @@ the `mmr-pass` stage uses token-set Jaccard similarity over the post-rerank pool
 
 ## Clarification observability
 
-Controlled clarification now emits decision metadata into chat traces and
-`/chat/debug`, even though clarification itself remains a product-level chat
-feature rather than a retrieval stage.
+The clarification policy decision engine (`backend/chat/decision.py`)
+emits decision metadata into chat traces, `/chat/debug` responses and
+the PostHog `chat.turn` event. Decision routing itself is a product-level
+chat concern, but its outcome is observable everywhere a chat turn is
+traced.
 
-Trace/debug fields:
+**Trace / debug fields** — produced by `Decision.trace_dict()` and merged
+into the root chat trace metadata in `backend/chat/handlers/rag.py`:
 
-- `clarification_considered`
-- `message_type`
-- `clarification_reason`
-- `clarification_type`
-- `clarification_limit_hit`
-- `safe_partial_source_type` when `message_type=partial_with_clarification`
+- `decision` — one of `answer_from_faq`, `answer_with_citations`,
+  `answer_with_caveat`, `answer_with_caveat_and_inline_clarify`,
+  `clarify`, `escalate`, `reject`, `acknowledge_closed_or_start_new`,
+  `forward_to_active_ticket`
+- `decision_reason` — clarify reason, escalate reason, or `n/a`
+- `clarify_type` — `blocking`, `inline`, `safety_confirm` or `n/a`
+- `clarification_count_before` — counter value at the start of the turn
+- `clarification_count_after` — incremented only when the decision is a
+  blocking clarify
+- `budget_blocked` — `True` when a would-be blocking clarify was
+  suppressed because the per-session budget was exhausted
+- `slot_asked` — name of the missing slot when applicable (always `None`
+  in v1 because there is no intent classifier yet)
+- `escalation_reason` — `explicit_human_request`, `clarify_loop_limit`,
+  `low_confidence_no_path`, `guard_reject`, or `None`
 
-Operational events currently recorded from the chat flow:
+**PostHog event** — `chat.turn` (emitted from
+`backend/chat/service.py::_emit_chat_turn_event`) carries `decision`,
+`decision_reason`, `clarify_type`, `clarify_reason`, `budget_blocked`
+and `escalation_reason` as event properties.
 
-- `clarification_shown`
-- `clarification_answered`
-- `clarification_resolved`
-- `clarification_followed_by_best_effort`
-- `clarification_superseded`
+v1 limitations:
 
-Current limitation:
-
-- true `clarification_abandoned` requires a lifecycle hook tied to session
-  expiry/closure; it is not fully emitted from the single-request path yet
+- there is no intent classifier yet, so `clarify_reason` is never
+  `ambiguous_intent` or `missing_critical_slot`
+- `kb_contradiction_detected` is not yet propagated from the search
+  layer; until it is, `clarify_reason=multiple_conflicting_matches` is
+  not emitted
+- session-lifecycle abandonment (`clarification_abandoned`) is not
+  emitted from the single-request path; it would require a hook tied
+  to session expiry/closure
 
 ## Acceptance Criteria Status
 

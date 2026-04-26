@@ -47,25 +47,39 @@ pytest -q \
   -k "awaiting_email or followup or already_closed or manual_escalate or perform_manual_escalation"
 ```
 
-## Clarification Flow (controlled clarification MVP)
+## Clarification policy (decision engine)
 
-Use this after touching chat outcome typing, clarification heuristics, widget
-quick replies, or continuation-vs-new-intent logic.
+Use this after touching `backend/chat/decision.py`, `backend/chat/slots.py`,
+the `chats.clarification_count` budget, the block-rules gate in
+`backend/chat/handlers/rag.py`, or any of the trace/PostHog fields produced
+by `Decision.trace_dict()`.
 
 ```bash
-pytest -q \
-  tests/test_chat.py \
-  tests/test_widget.py \
-  -k "clarification"
+pytest -q tests/test_decision.py
 ```
 
-This targeted group covers:
+This is a pure-function suite that exercises the `decide()` block rules in
+isolation from the pipeline. It covers:
 
-- direct answer vs clarification branching
-- clarification continuation vs new intent
-- clarification state cleanup/supersede behavior
-- widget quick replies and structured clarification payloads
-- schema invariant: non-answer message types must include clarification payload
+- each of the seven block rules (guard reject, explicit human request,
+  closed session, active escalation, FAQ direct hit, KB confidence routing,
+  partial-answer inline clarify)
+- budget enforcement: a second would-be blocking clarify in the same
+  session falls back to `answer_with_caveat` or escalates with
+  `clarify_loop_limit`
+- ordering invariants between block rules (guard > human request > closed
+  > active escalation > FAQ > KB confidence)
+- inline clarify and FAQ hits are never suppressed by the budget rule
+- counter semantics: `Decision.trace_dict()` increments
+  `clarification_count_after` only for blocking clarify
+
+The end-to-end pipeline integration (TurnContext build, counter persistence,
+trace emission) is exercised by the regular chat suites — no separate
+group is needed for it.
+
+v1 note: structured clarification payloads (`message_type`,
+`partial_with_clarification`, quick-reply options) are **not implemented**.
+Tests that previously asserted on those shapes were removed in PR #287.
 
 ## RAG Edge Cases (SQLite path)
 

@@ -262,13 +262,17 @@ Observability for this layer is emitted through a single `faq_match` span with s
 - `direct_guard_used`, `direct_guard_passed`, `decision_reason`
 - `retrieval_skipped`, `generation_skipped`
 
-### Controlled clarification layer (MVP)
+### Controlled clarification layer
 
-The chat pipeline can now return three typed outcomes instead of only a plain answer:
-
-- `answer`
-- `clarification`
-- `partial_with_clarification`
+The chat pipeline routes every turn through a single decision engine
+(`backend/chat/decision.py::decide`) which returns one of nine
+`DecisionKind` outcomes (e.g. `answer_from_faq`, `answer_with_citations`,
+`answer_with_caveat`, `answer_with_caveat_and_inline_clarify`, `clarify`,
+`escalate`, `reject`). The full block-rules contract is documented in the
+**Clarification** subsection below. The chat reply is a JSON object
+whose message content lives in a single `text` field (alongside
+`session_id`, `chat_ended` and an optional `ticket_number`); there is no
+structured `message_type` discriminator and no quick-reply payload in v1.
 
 ---
 

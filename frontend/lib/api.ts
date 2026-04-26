@@ -396,10 +396,15 @@ function handleUnauthorized(): void {
   }
 }
 
-async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const response = await fetch(url, { ...options, credentials: "include" });
+async function apiFetch(
+  url: string,
+  options: RequestInit & { skipAuthRedirect?: boolean } = {}
+): Promise<Response> {
+  const { skipAuthRedirect, ...fetchOptions } = options;
+  // credentials must come after the spread so callers cannot accidentally override it
+  const response = await fetch(url, { ...fetchOptions, credentials: "include" });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !skipAuthRedirect) {
     handleUnauthorized();
   }
 
@@ -416,88 +421,87 @@ async function parseJsonSafe(res: Response): Promise<unknown> {
 export const api = {
   auth: {
     async register(email: string, password: string): Promise<{ user: AuthUser }> {
-      const res = await fetch(`${BASE_URL}/auth/register`, {
+      const res = await apiFetch(`${BASE_URL}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
-        credentials: "include",
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
       return data as { user: AuthUser };
     },
     async login(email: string, password: string): Promise<AuthSession> {
-      const res = await fetch(`${BASE_URL}/auth/login`, {
+      const res = await apiFetch(`${BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
-        credentials: "include",
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
       return data as AuthSession;
     },
     async getMe(): Promise<AuthUser> {
-      const res = await authFetch(`${BASE_URL}/auth/me`);
+      const res = await apiFetch(`${BASE_URL}/auth/me`);
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
       return data as AuthUser;
     },
     async verifyEmail(token: string): Promise<AuthSession> {
-      const res = await fetch(`${BASE_URL}/auth/verify-email`, {
+      const res = await apiFetch(`${BASE_URL}/auth/verify-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
-        credentials: "include",
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to verify email"));
       return data as AuthSession;
     },
     async forgotPassword(email: string): Promise<{ message: string }> {
-      const res = await fetch(`${BASE_URL}/auth/forgot-password`, {
+      const res = await apiFetch(`${BASE_URL}/auth/forgot-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
-        credentials: "include",
+        skipAuthRedirect: true,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send reset link"));
       return data as { message: string };
     },
     async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
-      const res = await fetch(`${BASE_URL}/auth/reset-password`, {
+      const res = await apiFetch(`${BASE_URL}/auth/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: newPassword }),
-        credentials: "include",
+        skipAuthRedirect: true,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));
       return data as { message: string };
     },
     async logout(): Promise<void> {
-      await fetch(`${BASE_URL}/auth/logout`, {
+      await apiFetch(`${BASE_URL}/auth/logout`, {
         method: "POST",
-        credentials: "include",
       }).catch(() => {/* ignore network errors on logout */});
     },
   },
   bots: {
     async list(): Promise<BotResponse[]> {
-      const res = await authFetch(`${BASE_URL}/bots`);
+      const res = await apiFetch(`${BASE_URL}/bots`);
       if (!res.ok) throw new Error("Failed to load bots");
       const data = await res.json();
       return (data.items ?? []) as BotResponse[];
     },
     async getDisclosure(botId: string): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/bots/${botId}/disclosure`);
+      const res = await apiFetch(`${BASE_URL}/bots/${botId}/disclosure`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load disclosure settings"));
       return data as DisclosureConfigResponse;
     },
     async updateDisclosure(botId: string, config: DisclosureConfigResponse): Promise<DisclosureConfigResponse> {
-      const res = await authFetch(`${BASE_URL}/bots/${botId}/disclosure`, {
+      const res = await apiFetch(`${BASE_URL}/bots/${botId}/disclosure`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -507,7 +511,7 @@ export const api = {
       return data as DisclosureConfigResponse;
     },
     async update(botId: string, payload: { agent_instructions?: string | null; name?: string; is_active?: boolean }): Promise<BotResponse> {
-      const res = await authFetch(`${BASE_URL}/bots/${botId}`, {
+      const res = await apiFetch(`${BASE_URL}/bots/${botId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -519,7 +523,7 @@ export const api = {
   },
   clients: {
     async create(name: string) {
-      const res = await authFetch(`${BASE_URL}/tenants`, {
+      const res = await apiFetch(`${BASE_URL}/tenants`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -529,13 +533,13 @@ export const api = {
       return data as TenantResponse;
     },
     async getMe() {
-      const res = await authFetch(`${BASE_URL}/tenants/me`);
+      const res = await apiFetch(`${BASE_URL}/tenants/me`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
       return data as TenantMeResponse;
     },
     async update(data: { name?: string; openai_api_key?: string | null }) {
-      const res = await authFetch(`${BASE_URL}/tenants/me`, {
+      const res = await apiFetch(`${BASE_URL}/tenants/me`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -547,7 +551,7 @@ export const api = {
   },
   kyc: {
     async generateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/secret`, {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/secret`, {
         method: "POST",
       });
       const data = await res.json();
@@ -555,13 +559,13 @@ export const api = {
       return data as KycSecretResponse;
     },
     async getStatus(): Promise<KycStatusResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/status`);
+      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/status`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get KYC status"));
       return data as KycStatusResponse;
     },
     async rotateSecret(): Promise<KycSecretResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/kyc/rotate`, {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/rotate`, {
         method: "POST",
       });
       const data = await res.json();
@@ -571,13 +575,13 @@ export const api = {
   },
   support: {
     async get(): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`);
+      const res = await apiFetch(`${BASE_URL}/tenants/me/support-settings`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load support inbox settings"));
       return data as SupportSettingsResponse;
     },
     async update(config: { l2_email: string | null; escalation_language?: string | null }): Promise<SupportSettingsResponse> {
-      const res = await authFetch(`${BASE_URL}/tenants/me/support-settings`, {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/support-settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -589,7 +593,7 @@ export const api = {
   },
   documents: {
     async list() {
-      const res = await authFetch(`${BASE_URL}/documents`);
+      const res = await apiFetch(`${BASE_URL}/documents`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list documents"));
       const list = data as {
@@ -606,7 +610,7 @@ export const api = {
       return list.documents;
     },
     async listSources(): Promise<{ documents: DocumentListItem[]; url_sources: UrlSource[] }> {
-      const res = await authFetch(`${BASE_URL}/documents/sources`);
+      const res = await apiFetch(`${BASE_URL}/documents/sources`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load sources"));
       return data as { documents: DocumentListItem[]; url_sources: UrlSource[] };
@@ -614,7 +618,7 @@ export const api = {
     async upload(file: File) {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await authFetch(`${BASE_URL}/documents`, {
+      const res = await apiFetch(`${BASE_URL}/documents`, {
         method: "POST",
         body: formData,
       });
@@ -634,7 +638,7 @@ export const api = {
       schedule?: string;
       exclusions?: string[];
     }): Promise<UrlSource> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/url`, {
+      const res = await apiFetch(`${BASE_URL}/documents/sources/url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -644,7 +648,7 @@ export const api = {
       return data as UrlSource;
     },
     async getSourceById(id: string): Promise<UrlSourceDetail> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`);
+      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load source details"));
       return data as UrlSourceDetail;
@@ -653,7 +657,7 @@ export const api = {
       id: string,
       input: { name?: string; schedule?: string; exclusions?: string[] }
     ): Promise<UrlSource> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`, {
+      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
@@ -663,7 +667,7 @@ export const api = {
       return data as UrlSource;
     },
     async refreshSource(id: string): Promise<UrlSource> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/${id}/refresh`, {
+      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}/refresh`, {
         method: "POST",
       });
       const data = await res.json();
@@ -671,14 +675,14 @@ export const api = {
       return data as UrlSource;
     },
     async deleteSource(id: string): Promise<void> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`${BASE_URL}/documents/sources/${id}`, { method: "DELETE" });
       if (res.status !== 204 && !res.ok) {
         const data = await res.json();
         throw new Error(getErrorMessage(data, "Failed to delete source"));
       }
     },
     async deleteSourcePage(sourceId: string, documentId: string): Promise<void> {
-      const res = await authFetch(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, {
+      const res = await apiFetch(`${BASE_URL}/documents/sources/${sourceId}/pages/${documentId}`, {
         method: "DELETE",
       });
       if (res.status !== 204 && !res.ok) {
@@ -687,7 +691,7 @@ export const api = {
       }
     },
     async getById(id: string) {
-      const res = await authFetch(`${BASE_URL}/documents/${id}`);
+      const res = await apiFetch(`${BASE_URL}/documents/${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get document"));
       return data as {
@@ -701,20 +705,20 @@ export const api = {
       };
     },
     async delete(id: string) {
-      const res = await authFetch(`${BASE_URL}/documents/${id}`, { method: "DELETE" });
+      const res = await apiFetch(`${BASE_URL}/documents/${id}`, { method: "DELETE" });
       if (res.status !== 204 && !res.ok) {
         const data = await res.json();
         throw new Error(getErrorMessage(data, "Failed to delete document"));
       }
     },
     async getHealth(docId: string): Promise<DocumentHealthStatus> {
-      const res = await authFetch(`${BASE_URL}/documents/${docId}/health`);
+      const res = await apiFetch(`${BASE_URL}/documents/${docId}/health`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Health check not available"));
       return data as DocumentHealthStatus;
     },
     async runHealth(docId: string): Promise<DocumentHealthStatus> {
-      const res = await authFetch(`${BASE_URL}/documents/${docId}/health/run`, {
+      const res = await apiFetch(`${BASE_URL}/documents/${docId}/health/run`, {
         method: "POST",
       });
       const data = await res.json();
@@ -725,7 +729,7 @@ export const api = {
   knowledge: {
     async getProfile(botId?: string): Promise<KnowledgeProfile> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/profile`);
+      const res = await apiFetch(`${base}/profile`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
       return {
@@ -738,7 +742,7 @@ export const api = {
       botId?: string
     ): Promise<KnowledgeProfile> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/profile`, {
+      const res = await apiFetch(`${base}/profile`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -760,14 +764,14 @@ export const api = {
       if (typeof params?.offset === "number") search.set("offset", String(params.offset));
       const suffix = search.toString() ? `?${search.toString()}` : "";
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq${suffix}`);
+      const res = await apiFetch(`${base}/faq${suffix}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load FAQ"));
       return data as KnowledgeFaqListResponse;
     },
     async approveFaq(id: string, botId?: string): Promise<{ id: string; approved: boolean }> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq/${id}/approve`, {
+      const res = await apiFetch(`${base}/faq/${id}/approve`, {
         method: "POST",
       });
       const data = await res.json();
@@ -776,7 +780,7 @@ export const api = {
     },
     async rejectFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq/${id}/reject`, {
+      const res = await apiFetch(`${base}/faq/${id}/reject`, {
         method: "POST",
       });
       const data = await res.json();
@@ -785,7 +789,7 @@ export const api = {
     },
     async approveAll(botId?: string): Promise<{ approved_count: number }> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq/approve-all`, {
+      const res = await apiFetch(`${base}/faq/approve-all`, {
         method: "POST",
       });
       const data = await res.json();
@@ -798,7 +802,7 @@ export const api = {
       botId?: string
     ): Promise<KnowledgeFaqItem> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq/${id}`, {
+      const res = await apiFetch(`${base}/faq/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -809,7 +813,7 @@ export const api = {
     },
     async deleteFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
       const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await authFetch(`${base}/faq/${id}`, {
+      const res = await apiFetch(`${base}/faq/${id}`, {
         method: "DELETE",
       });
       const data = await res.json();
@@ -819,7 +823,7 @@ export const api = {
   },
   embeddings: {
     async create(documentId: string) {
-      const res = await authFetch(`${BASE_URL}/embeddings/documents/${documentId}`, {
+      const res = await apiFetch(`${BASE_URL}/embeddings/documents/${documentId}`, {
         method: "POST",
       });
       const data = await res.json();
@@ -840,19 +844,19 @@ export const api = {
       if (params?.modeASort) search.set("mode_a_sort", params.modeASort);
       if (params?.modeBSort) search.set("mode_b_sort", params.modeBSort);
       const suffix = search.toString() ? `?${search.toString()}` : "";
-      const res = await authFetch(`${BASE_URL}/gap-analyzer${suffix}`);
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer${suffix}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer"));
       return data as GapAnalyzerResponse;
     },
     async getSummary(): Promise<GapSummaryEnvelope> {
-      const res = await authFetch(`${BASE_URL}/gap-analyzer/summary`);
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/summary`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load Gap Analyzer summary"));
       return data as GapSummaryEnvelope;
     },
     async recalculate(mode: GapRunMode): Promise<GapRecalculateResponse> {
-      const res = await authFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/recalculate?mode=${encodeURIComponent(mode)}`, {
         method: "POST",
       });
       const data = await res.json();
@@ -864,7 +868,7 @@ export const api = {
       gapId: string,
       reason: GapDismissReason = "other",
     ): Promise<GapActionResponse> {
-      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/dismiss`, {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/dismiss`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason }),
@@ -874,7 +878,7 @@ export const api = {
       return data as GapActionResponse;
     },
     async reactivate(source: GapSource, gapId: string): Promise<GapActionResponse> {
-      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/reactivate`, {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/reactivate`, {
         method: "POST",
       });
       const data = await res.json();
@@ -882,7 +886,7 @@ export const api = {
       return data as GapActionResponse;
     },
     async draft(source: GapSource, gapId: string): Promise<GapDraftResponse> {
-      const res = await authFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/draft`, {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/${source}/${gapId}/draft`, {
         method: "POST",
       });
       const data = await res.json();
@@ -892,14 +896,14 @@ export const api = {
   },
   chat: {
     async listSessions(): Promise<ChatSessionSummary[]> {
-      const res = await authFetch(`${BASE_URL}/chat/sessions`);
+      const res = await apiFetch(`${BASE_URL}/chat/sessions`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list sessions"));
       const list = data as { sessions: ChatSessionSummary[] };
       return list.sessions;
     },
     async getSessionLogs(sessionId: string): Promise<ChatSessionLogs> {
-      const res = await authFetch(`${BASE_URL}/chat/logs/session/${sessionId}`);
+      const res = await apiFetch(`${BASE_URL}/chat/logs/session/${sessionId}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get session logs"));
       const log = data as { messages: ChatSessionLogs["messages"] };
@@ -910,7 +914,7 @@ export const api = {
       feedback: MessageFeedbackValue,
       idealAnswer?: string | null
     ) {
-      const res = await authFetch(`${BASE_URL}/chat/messages/${messageId}/feedback`, {
+      const res = await apiFetch(`${BASE_URL}/chat/messages/${messageId}/feedback`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ feedback, ideal_answer: idealAnswer ?? null }),
@@ -920,7 +924,7 @@ export const api = {
       return data as { id: string; feedback: string; ideal_answer: string | null };
     },
     async listBadAnswers(limit = 50, offset = 0): Promise<BadAnswerItem[]> {
-      const res = await authFetch(
+      const res = await apiFetch(
         `${BASE_URL}/chat/bad-answers?limit=${limit}&offset=${offset}`
       );
       const data = await res.json();
@@ -980,7 +984,7 @@ export const api = {
       return data as { message: string; ticket_number: string };
     },
     async getHistory(sessionId: string) {
-      const res = await authFetch(`${BASE_URL}/chat/history/${sessionId}`);
+      const res = await apiFetch(`${BASE_URL}/chat/history/${sessionId}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get history"));
       return data as {
@@ -995,7 +999,7 @@ export const api = {
     },
     async debug(question: string, botId: string): Promise<ChatDebugResponse> {
       const q = `?bot_id=${encodeURIComponent(botId.trim())}`;
-      const res = await authFetch(`${BASE_URL}/chat/debug${q}`, {
+      const res = await apiFetch(`${BASE_URL}/chat/debug${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
@@ -1010,20 +1014,20 @@ export const api = {
       const q = params?.status
         ? `?status=${encodeURIComponent(params.status)}`
         : "";
-      const res = await authFetch(`${BASE_URL}/escalations${q}`);
+      const res = await apiFetch(`${BASE_URL}/escalations${q}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list tickets"));
       const list = data as { tickets: EscalationTicket[] };
       return list.tickets;
     },
     async get(id: string): Promise<EscalationTicket> {
-      const res = await authFetch(`${BASE_URL}/escalations/${id}`);
+      const res = await apiFetch(`${BASE_URL}/escalations/${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load ticket"));
       return data as EscalationTicket;
     },
     async resolve(id: string, resolutionText: string): Promise<EscalationTicket> {
-      const res = await authFetch(`${BASE_URL}/escalations/${id}/resolve`, {
+      const res = await apiFetch(`${BASE_URL}/escalations/${id}/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resolution_text: resolutionText }),
@@ -1035,12 +1039,12 @@ export const api = {
   },
   admin: {
     async getSummary(): Promise<AdminMetricsSummary> {
-      const res = await authFetch(`${BASE_URL}/admin/metrics/summary`);
+      const res = await apiFetch(`${BASE_URL}/admin/metrics/summary`);
       if (!res.ok) throw new Error("Failed to load admin metrics summary");
       return res.json();
     },
     async getTenants(): Promise<AdminTenantMetricsItem[]> {
-      const res = await authFetch(`${BASE_URL}/admin/metrics/tenants`);
+      const res = await apiFetch(`${BASE_URL}/admin/metrics/tenants`);
       if (!res.ok) throw new Error("Failed to load admin client metrics");
       const data = await res.json();
       return data.items;

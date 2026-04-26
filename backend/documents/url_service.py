@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import socket  # exposed for test patching via url_service.socket
+import socket  # noqa: F401  # exposed for test patching via url_service.socket
 import time
 import uuid
 from collections import deque
@@ -19,66 +19,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.core.db import SessionLocal
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-from backend.documents.parsers import (
-    build_openapi_ingestion_payload_from_spec,
-    load_openapi_spec,
-    looks_like_openapi,
-)
-from backend.documents.quick_answers import (
-    SUPPORTED_QUICK_ANSWER_KEYS,
-    QuickAnswerCandidate,
-    merge_quick_answer_candidates,
-    scan_html_for_quick_answers,
-)
-from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
-from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
-from backend.models import (
-    Document,
-    DocumentStatus,
-    DocumentType,
-    Embedding,
-    QuickAnswer,
-    SourceSchedule,
-    SourceStatus,
-    Tenant,
-    UrlSource,
-    UrlSourceRun,
-)
 
 # --- sub-module re-exports (keep names in this namespace for monkeypatching in tests) ---
-from backend.documents.http_client import (  # noqa: F401
-    DISCOVERY_CONTENT_TYPES,
-    FETCH_TIMEOUT_SECONDS,
-    MAX_HTML_BYTES,
-    MAX_REDIRECTS,
-    PREFLIGHT_TIMEOUT_SECONDS,
-    SUPPORTED_PAGE_CONTENT_TYPES,
-    USER_AGENT,
-    FetchContext,
-    _enforce_response_size_limit,
-    _fetch_page_html,
-    _fetch_reachable_page,
-    _http_client,
-    _is_html_like,
-    _is_forbidden_ip,
-    _is_supported_page_response,
-    _log_fetch,
-    _raise_for_upstream_status,
-    _request_with_safe_redirects,
-    _resolve_hostname,
-    _validate_public_hostname,
-)
-from backend.documents.sitemap import (  # noqa: F401
-    DISCOVERY_ESTIMATE_CAP,
-    MAX_DISCOVERY_DEPTH,
-    MAX_SITEMAPS_PER_SOURCE,
-    _apply_exclusions,
-    _extract_links,
-    _fetch_sitemap_urls,
-    _load_robots_warning,
-    _normalize_page_url,
-)
 from backend.documents.embedder import (  # noqa: F401
+    _SECTION_SPLIT_RE,
     EMBED_BATCH_SIZE,
     ExtractedPage,
     StructuredSource,
@@ -94,7 +38,63 @@ from backend.documents.embedder import (  # noqa: F401
     _render_structured_openapi_chunks,
     _run_tenant_knowledge_extraction_best_effort,
     _url_knowledge_extract_when_unchanged,
-    _SECTION_SPLIT_RE,
+)
+from backend.documents.http_client import (  # noqa: F401
+    DISCOVERY_CONTENT_TYPES,
+    FETCH_TIMEOUT_SECONDS,
+    MAX_HTML_BYTES,
+    MAX_REDIRECTS,
+    PREFLIGHT_TIMEOUT_SECONDS,
+    SUPPORTED_PAGE_CONTENT_TYPES,
+    USER_AGENT,
+    FetchContext,
+    _enforce_response_size_limit,
+    _fetch_page_html,
+    _fetch_reachable_page,
+    _http_client,
+    _is_forbidden_ip,
+    _is_html_like,
+    _is_supported_page_response,
+    _log_fetch,
+    _raise_for_upstream_status,
+    _request_with_safe_redirects,
+    _resolve_hostname,
+    _validate_public_hostname,
+)
+from backend.documents.parsers import (
+    build_openapi_ingestion_payload_from_spec,
+    load_openapi_spec,
+    looks_like_openapi,
+)
+from backend.documents.quick_answers import (
+    SUPPORTED_QUICK_ANSWER_KEYS,
+    QuickAnswerCandidate,
+    merge_quick_answer_candidates,
+    scan_html_for_quick_answers,
+)
+from backend.documents.sitemap import (  # noqa: F401
+    DISCOVERY_ESTIMATE_CAP,
+    MAX_DISCOVERY_DEPTH,
+    MAX_SITEMAPS_PER_SOURCE,
+    _apply_exclusions,
+    _extract_links,
+    _fetch_sitemap_urls,
+    _load_robots_warning,
+    _normalize_page_url,
+)
+from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
+from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
+from backend.models import (
+    Document,
+    DocumentStatus,
+    DocumentType,
+    Embedding,
+    QuickAnswer,
+    SourceSchedule,
+    SourceStatus,
+    Tenant,
+    UrlSource,
+    UrlSourceRun,
 )
 
 logger = logging.getLogger(__name__)

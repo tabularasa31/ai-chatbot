@@ -18,7 +18,6 @@ from backend.documents.http_client import (
     _http_client,
     _log_fetch,
     _request_with_safe_redirects,
-    _is_html_like,
 )
 
 logger = logging.getLogger(__name__)

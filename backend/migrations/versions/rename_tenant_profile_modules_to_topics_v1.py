@@ -12,7 +12,7 @@ Create Date: 2026-04-26
 from alembic import op
 
 revision = "rename_tp_modules_to_topics_v1"
-down_revision = "widen_document_file_type_v1"
+down_revision = "ix_state_machine_fields_v1"
 branch_labels = None
 depends_on = None
 

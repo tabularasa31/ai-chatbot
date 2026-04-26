@@ -26,8 +26,8 @@ from backend.embeddings.routes import embeddings_router
 from backend.escalation.routes import escalation_router
 from backend.eval.routes import eval_router
 from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
-from backend.jobs.analyze_chat_logs import shutdown_log_analysis_threads
 from backend.gap_analyzer.routes import gap_analyzer_router
+from backend.jobs.analyze_chat_logs import shutdown_log_analysis_threads
 from backend.knowledge.routes import knowledge_router
 from backend.observability import (
     init_metrics,

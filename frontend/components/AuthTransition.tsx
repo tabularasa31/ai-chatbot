@@ -28,15 +28,8 @@ export function AuthTransition({ onComplete }: AuthTransitionProps) {
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "#0A0A0F",
-        opacity,
-        transition: "opacity 400ms ease-out",
-        zIndex: 9999,
-        pointerEvents: "none",
-      }}
+      className="fixed inset-0 bg-nd-base pointer-events-none"
+      style={{ opacity, transition: "opacity 400ms ease-out", zIndex: 9999 }}
     />
   );
 }

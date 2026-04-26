@@ -13,7 +13,7 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <h2
                 key={`${block.type}-${index}`}
-                className="pt-4 text-2xl text-[#FAF5FF] md:text-3xl"
+                className="pt-4 text-2xl text-nd-text md:text-3xl"
               >
                 {block.text}
               </h2>
@@ -42,9 +42,9 @@ export function BlogBody({ blocks }: BlogBodyProps) {
             return (
               <blockquote
                 key={`${block.type}-${index}`}
-                className="rounded-r-2xl border-l-4 border-[#E879F9] bg-[#14141D] px-6 py-5"
+                className="rounded-r-2xl border-l-4 border-nd-accent bg-nd-base-alt px-6 py-5"
               >
-                <p className="text-xl leading-8 text-[#FAF5FF]">{block.text}</p>
+                <p className="text-xl leading-8 text-nd-text">{block.text}</p>
                 {block.attribution ? (
                   <footer className="mt-3 text-sm uppercase tracking-[0.2em] text-[#A9A3BA]">
                     {block.attribution}

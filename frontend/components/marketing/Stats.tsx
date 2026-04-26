@@ -27,10 +27,10 @@ export function Stats() {
             transition={{ duration: 0.5, delay: index * 0.1 }}
             className="text-center"
           >
-            <div className="text-[#E879F9] text-5xl md:text-6xl mb-2">
+            <div className="text-nd-accent text-5xl md:text-6xl mb-2">
               {stat.value}
             </div>
-            <div className="text-[#FAF5FF]/60 text-lg">{stat.label}</div>
+            <div className="text-nd-text/60 text-lg">{stat.label}</div>
           </motion.div>
         ))}
       </motion.div>

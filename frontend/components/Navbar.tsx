@@ -37,20 +37,20 @@ export function Navbar() {
           Your email is not verified. Check your inbox for a verification link.
         </div>
       )}
-      <div style={{ backgroundColor: "#0A0A0F" }} className="fixed top-0 left-0 right-0 z-[100] border-b border-white/[0.07]">
+      <div className="fixed top-0 left-0 right-0 z-[100] bg-nd-base border-b border-white/[0.07]">
         <div className="px-5">
           <div className="flex items-center justify-between h-12">
-            <Link href="/dashboard" className="text-[#FAF5FF] font-bold text-[15px] tracking-tight">
+            <Link href="/dashboard" className="text-nd-text font-bold text-[15px] tracking-tight">
               Chat9
             </Link>
             <div className="flex items-center gap-5">
               {userEmail && (
-                <span className="text-[#FAF5FF]/50 text-xs">{userEmail}</span>
+                <span className="text-nd-text/50 text-xs">{userEmail}</span>
               )}
               <button
                 type="button"
                 onClick={handleLogout}
-                className="text-[#E879F9] text-xs font-medium hover:text-[#E879F9]/80"
+                className="text-nd-accent text-xs font-medium hover:text-nd-accent/80"
               >
                 Logout
               </button>

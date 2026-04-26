@@ -13,7 +13,7 @@ export default function DocsSectionLayout({ children }: { children: ReactNode })
         nav={{
           enabled: true,
           title: (
-            <span className="font-bold tracking-tight" style={{ color: '#FAF5FF', fontSize: '15px' }}>
+            <span className="font-bold tracking-tight text-nd-text text-[15px]">
               Chat9
             </span>
           ),

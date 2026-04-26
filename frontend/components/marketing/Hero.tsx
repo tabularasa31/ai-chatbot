@@ -12,22 +12,22 @@ export function Hero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
         >
-          <h1 className="text-5xl md:text-6xl lg:text-7xl text-[#FAF5FF] mb-6">
+          <h1 className="text-5xl md:text-6xl lg:text-7xl text-nd-text mb-6">
             Meet your new support mate.
           </h1>
-          <p className="text-xl text-[#FAF5FF]/80 mb-8">
+          <p className="text-xl text-nd-text/80 mb-8">
             Works 24/7. Sends you a daily report. Gets better every week.
           </p>
           <div className="flex flex-col sm:flex-row gap-4">
             <Link
               href="/signup"
-              className="bg-[#E879F9] text-[#0A0A0F] px-8 py-3 rounded-lg hover:bg-[#f099fb] hover:scale-105 transition-all inline-block text-center"
+              className="bg-nd-accent text-nd-base px-8 py-3 rounded-lg hover:bg-nd-accent-hover hover:scale-105 transition-all inline-block text-center"
             >
               Try for free
             </Link>
             <a
               href="#demo"
-              className="border border-[#38BDF8] text-[#FAF5FF] px-8 py-3 rounded-lg hover:bg-[#38BDF8]/10 hover:scale-105 transition-all inline-block text-center"
+              className="border border-nd-info text-nd-text px-8 py-3 rounded-lg hover:bg-nd-info/10 hover:scale-105 transition-all inline-block text-center"
             >
               See demo
             </a>
@@ -42,19 +42,19 @@ export function Hero() {
           className="relative"
         >
           {/* Glow Effects */}
-          <div className="absolute inset-0 bg-[#E879F9]/20 rounded-3xl blur-3xl"></div>
-          <div className="absolute inset-0 bg-[#38BDF8]/20 rounded-3xl blur-3xl"></div>
+          <div className="absolute inset-0 bg-nd-accent/20 rounded-3xl blur-3xl"></div>
+          <div className="absolute inset-0 bg-nd-info/20 rounded-3xl blur-3xl"></div>
           
           {/* Chat Card */}
-          <div className="relative bg-[#12121A] rounded-2xl p-6 shadow-2xl border border-[#1E1E2E]">
+          <div className="relative bg-nd-base-alt rounded-2xl p-6 shadow-2xl border border-nd-surface">
             {/* Chat Header */}
-            <div className="flex items-center gap-3 mb-6 pb-4 border-b border-[#1E1E2E]">
-              <div className="w-10 h-10 bg-[#E879F9] rounded-full flex items-center justify-center text-[#0A0A0F] font-semibold">
+            <div className="flex items-center gap-3 mb-6 pb-4 border-b border-nd-surface">
+              <div className="w-10 h-10 bg-nd-accent rounded-full flex items-center justify-center text-nd-base font-semibold">
                 AI
               </div>
               <div>
-                <div className="text-[#FAF5FF] font-medium">Chat9 Assistant</div>
-                <div className="text-[#FAF5FF]/60 text-sm">Online</div>
+                <div className="text-nd-text font-medium">Chat9 Assistant</div>
+                <div className="text-nd-text/60 text-sm">Online</div>
               </div>
             </div>
 
@@ -63,7 +63,7 @@ export function Hero() {
               {/* Incoming Message */}
               <div className="flex gap-2">
                 <div className="bg-[#2D2D44] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%]">
-                  <p className="text-[#FAF5FF] text-sm">
+                  <p className="text-nd-text text-sm">
                     Hi! How can I help you today?
                   </p>
                 </div>
@@ -71,8 +71,8 @@ export function Hero() {
 
               {/* Outgoing Message */}
               <div className="flex justify-end">
-                <div className="bg-[#38BDF8] rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
-                  <p className="text-[#0A0A0F] text-sm">
+                <div className="bg-nd-info rounded-2xl rounded-tr-sm px-4 py-3 max-w-[85%]">
+                  <p className="text-nd-base text-sm">
                     What are your pricing plans?
                   </p>
                 </div>
@@ -81,7 +81,7 @@ export function Hero() {
               {/* Incoming Message */}
               <div className="flex gap-2">
                 <div className="bg-[#2D2D44] rounded-2xl rounded-tl-sm px-4 py-3 max-w-[85%]">
-                  <p className="text-[#FAF5FF] text-sm">
+                  <p className="text-nd-text text-sm">
                     We have flexible plans starting at $29/month. Would you like more details?
                   </p>
                 </div>
@@ -93,10 +93,10 @@ export function Hero() {
               <input
                 type="text"
                 placeholder="Type a message..."
-                className="flex-1 bg-[#0A0A0F]/50 border border-[#1E1E2E] rounded-lg px-4 py-2.5 text-[#FAF5FF] text-sm placeholder-[#FAF5FF]/40 focus:outline-none focus:ring-2 focus:ring-[#E879F9]"
+                className="flex-1 bg-nd-base/50 border border-nd-surface rounded-lg px-4 py-2.5 text-nd-text text-sm placeholder-nd-text/40 focus:outline-none focus:ring-2 focus:ring-nd-accent"
               />
-              <button className="bg-[#E879F9] p-2.5 rounded-lg hover:bg-[#f099fb] transition-colors">
-                <Send size={18} className="text-[#0A0A0F]" />
+              <button className="bg-nd-accent p-2.5 rounded-lg hover:bg-nd-accent-hover transition-colors">
+                <Send size={18} className="text-nd-base" />
               </button>
             </div>
           </div>

@@ -593,8 +593,8 @@ export function ChatWidget({
   return (
     <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
       {/* Header */}
-      <div className="bg-[#1a1a1a] px-6 py-4 flex items-center gap-3 flex-shrink-0">
-        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-[#e879f9] to-[#a855f7] flex items-center justify-center flex-shrink-0">
+      <div className="bg-nd-base-alt px-6 py-4 flex items-center gap-3 flex-shrink-0">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nd-accent to-[#a855f7] flex items-center justify-center flex-shrink-0">
           <MessageCircle size={22} className="text-white" />
         </div>
         <div>

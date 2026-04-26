@@ -2,19 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-
-const MD_COMPONENTS: Components = {
-  a: ({ node: _node, ...props }) => (
-    <a {...props} target="_blank" rel="noopener noreferrer" />
-  ),
-  img: () => null,
-};
-import {
-  MessageCircle,
-  Send,
-  Ticket,
-} from "lucide-react";
+import remarkGfm from "remark-gfm";
+import rehypeHighlight from "rehype-highlight";
+import "highlight.js/styles/github-dark.css";
+import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn } from "@/components/ui/utils";
+import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import {
   appendSystemMarker,
   createTextMessage,
@@ -41,6 +34,34 @@ interface ChatWidgetProps {
   /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
   isOpen?: boolean;
 }
+
+const MD_COMPONENTS: Components = {
+  a: ({ node: _node, ...props }) => (
+    <a {...props} target="_blank" rel="noopener noreferrer" />
+  ),
+  img: () => null,
+  code: ({ node: _node, className, children, ...props }) => {
+    const isBlock = !!className;
+    const code = String(children).replace(/\n$/, "");
+    if (isBlock) {
+      return (
+        <CodeBlockWithCopy
+          code={code}
+          tone="dark"
+          containerClassName="my-2"
+        />
+      );
+    }
+    return (
+      <code
+        className="rounded bg-slate-700 px-1 py-0.5 font-mono text-xs text-slate-100"
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+};
 
 const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
 const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -608,7 +629,13 @@ export function ChatWidget({
                           <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
                         ) : (
                           <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                            <ReactMarkdown components={MD_COMPONENTS}>{msg.text}</ReactMarkdown>
+                            <ReactMarkdown
+                              remarkPlugins={[remarkGfm]}
+                              rehypePlugins={[rehypeHighlight]}
+                              components={MD_COMPONENTS}
+                            >
+                              {msg.text}
+                            </ReactMarkdown>
                           </div>
                         )}
                       </div>
@@ -631,7 +658,13 @@ export function ChatWidget({
               <div className="flex items-end gap-3">
                 <div className="max-w-[85%] rounded-2xl bg-gray-100 px-4 py-2 text-gray-800">
                   <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                    <ReactMarkdown components={MD_COMPONENTS}>{streamingText}</ReactMarkdown>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      rehypePlugins={[rehypeHighlight]}
+                      components={MD_COMPONENTS}
+                    >
+                      {streamingText}
+                    </ReactMarkdown>
                   </div>
                 </div>
               </div>

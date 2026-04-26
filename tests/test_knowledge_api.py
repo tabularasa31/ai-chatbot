@@ -33,7 +33,7 @@ def test_get_profile(tenant: TestClient, db_session: Session) -> None:
     profile = TenantProfile(
         tenant_id=client_row.id,
         product_name="Acme API",
-        modules=["Payments"],
+        topics=["Payments"],
         glossary=[],
         aliases=[],
         support_email="help@acme.com",
@@ -58,7 +58,7 @@ def test_patch_profile_partial(tenant: TestClient, db_session: Session) -> None:
     profile = TenantProfile(
         tenant_id=client_row.id,
         product_name="Acme API",
-        modules=["Payments"],
+        topics=["Payments"],
         glossary=[],
         aliases=[],
         support_email="help@acme.com",

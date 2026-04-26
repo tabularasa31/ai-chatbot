@@ -841,8 +841,8 @@ def run_chat_pipeline(
 
     client_product_name: str | None = profile.product_name if profile else None
     topic_hint: str | None = None
-    if profile and isinstance(profile.modules, list) and profile.modules:
-        topic_hint = ", ".join([str(m) for m in profile.modules[:3] if str(m).strip()])
+    if profile and isinstance(profile.topics, list) and profile.topics:
+        topic_hint = ", ".join([str(m) for m in profile.topics[:3] if str(m).strip()])
 
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
     selected_quick_answer_keys = _quick_answer_keys_for_question(question)

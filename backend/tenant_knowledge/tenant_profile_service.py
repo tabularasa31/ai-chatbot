@@ -18,7 +18,7 @@ def load_client_profile(db: Session, tenant_id: uuid.UUID) -> TenantProfileModel
     return db.get(TenantProfileModel, tenant_id)
 
 
-def _merge_modules(existing: list[str], incoming: Iterable[str]) -> list[str]:
+def _merge_topics(existing: list[str], incoming: Iterable[str]) -> list[str]:
     seen: set[str] = {m.casefold() for m in existing if isinstance(m, str)}
     out = list(existing)
     for m in incoming:
@@ -118,7 +118,7 @@ def merge_into_profile(
     tenant_id: uuid.UUID,
     product_name: str | None,
     product_name_confidence: float,
-    modules: list[str],
+    topics: list[str],
     glossary_entries: list[GlossaryEntry],
     support_email: str | None,
     support_email_confidence: float,
@@ -140,7 +140,7 @@ def merge_into_profile(
         row = TenantProfileModel(
             tenant_id=tenant_id,
             product_name=None,
-            modules=[],
+            topics=[],
             glossary=[],
             aliases=[],
             support_email=None,
@@ -160,9 +160,9 @@ def merge_into_profile(
         if isinstance(product_name, str) and product_name.strip():
             row.product_name = product_name.strip()
 
-    row.modules = _merge_modules(row.modules or [], modules)
+    row.topics = _merge_topics(row.topics or [], topics)
     row.glossary = _merge_glossary(row.glossary if isinstance(row.glossary, list) else None, glossary_entries)
-    row.support_urls = _merge_modules(row.support_urls or [], support_urls)
+    row.support_urls = _merge_topics(row.support_urls or [], support_urls)
 
     if support_email and support_email_confidence >= 0.85:
         row.support_email = support_email.strip()

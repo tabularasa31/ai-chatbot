@@ -52,13 +52,13 @@ def _cache_set(key: str, relevant: bool, reason: str) -> None:
 
 
 def _profile_is_empty(profile: TenantProfileModel) -> bool:
-    if not profile.product_name and not profile.modules and not profile.glossary:
+    if not profile.product_name and not profile.topics and not profile.glossary:
         return True
     return False
 
 
 def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
-    modules_list = profile.modules or []
+    modules_list = profile.topics or []
     glossary_items = profile.glossary or []
     glossary_terms = []
     if isinstance(glossary_items, list):

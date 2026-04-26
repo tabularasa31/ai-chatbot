@@ -194,10 +194,8 @@ def run_extract_client_knowledge_for_document(
         product_name = extracted.get("product_name")
         product_name_norm = product_name.strip() if isinstance(product_name, str) else None
 
-        modules: list[str] = []
+        topics: list[str] = []
         raw_topics = extracted.get("topics")
-        if not isinstance(raw_topics, list):
-            raw_topics = extracted.get("modules")
         if not isinstance(raw_topics, list):
             raw_topics = []
         for m in raw_topics:
@@ -206,17 +204,16 @@ def run_extract_client_knowledge_for_document(
             value = m.strip()
             if not value:
                 continue
-            modules.append(value)
-        # Dedupe extracted topics before merging into the legacy DB column.
-        dedup_modules: list[str] = []
-        seen_mods: set[str] = set()
-        for m in modules:
+            topics.append(value)
+        dedup_topics: list[str] = []
+        seen_topics: set[str] = set()
+        for m in topics:
             key = m.casefold()
-            if key in seen_mods:
+            if key in seen_topics:
                 continue
-            seen_mods.add(key)
-            dedup_modules.append(m)
-        modules = dedup_modules
+            seen_topics.add(key)
+            dedup_topics.append(m)
+        topics = dedup_topics
 
         glossary_entries: list[GlossaryEntry] = []
         raw_glossary = extracted.get("glossary_terms") or []
@@ -324,11 +321,11 @@ def run_extract_client_knowledge_for_document(
         # Swagger/OpenAPI parsing without extra LLM calls.
         aliases: list[AliasEntry] = []
         if doc.file_type == DocumentType.swagger:
-            openapi_modules, openapi_glossary, openapi_aliases = extract_openapi_knowledge(
+            openapi_topics, openapi_glossary, openapi_aliases = extract_openapi_knowledge(
                 swagger_text=combined_text
             )
-            # Union modules; glossary merge will prioritize confidence.
-            modules = list({m.casefold(): m for m in (modules + openapi_modules)}.values())
+            # Union topics; glossary merge will prioritize confidence.
+            topics = list({m.casefold(): m for m in (topics + openapi_topics)}.values())
             glossary_entries.extend(openapi_glossary)
             aliases = openapi_aliases
 
@@ -346,7 +343,7 @@ def run_extract_client_knowledge_for_document(
             # Preserve extracted casing; only trim/collapse spaces upstream.
             product_name=product_name_norm if product_name_norm else None,
             product_name_confidence=float(product_conf),
-            modules=modules,
+            topics=topics,
             glossary_entries=glossary_entries,
             support_email=support_email,
             support_email_confidence=float(support_email_conf),
@@ -357,12 +354,12 @@ def run_extract_client_knowledge_for_document(
         )
         logger.info(
             "Tenant knowledge extraction merged profile "
-            "(document_id=%s tenant_id=%s product_name_present=%s modules=%s glossary_entries=%s "
+            "(document_id=%s tenant_id=%s product_name_present=%s topics=%s glossary_entries=%s "
             "support_email_present=%s support_urls=%s aliases=%s)",
             document_id,
             tenant_id,
             bool(product_name_norm),
-            len(modules),
+            len(topics),
             len(glossary_entries),
             bool(support_email),
             len(support_urls),

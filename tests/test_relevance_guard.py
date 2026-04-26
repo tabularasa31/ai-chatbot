@@ -89,7 +89,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
-    profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
+    profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
         lambda **kwargs: (True, "ok", profile),
@@ -150,7 +150,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
-    profile = SimpleNamespace(product_name="Product", modules=["ModA", "ModB"])
+    profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
         lambda **kwargs: (True, "ok", profile),
@@ -207,7 +207,7 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     profile = TenantProfile(
         tenant_id=tenant_id,
         product_name="Product",
-        modules=["ModA"],
+        topics=["ModA"],
         glossary=[],
         aliases=[],
         support_email=None,

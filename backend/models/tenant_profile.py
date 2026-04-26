@@ -23,7 +23,7 @@ class TenantProfile(Base):
     )
     product_name = Column(Text, nullable=True)
     escalation_language = Column(String(32), nullable=True)
-    modules = Column(JSON, nullable=False, default=list)
+    topics = Column(JSON, nullable=False, default=list)
     glossary = Column(JSON, nullable=False, default=list)
     aliases = Column(JSON, nullable=False, default=list)
     support_email = Column(Text, nullable=True)

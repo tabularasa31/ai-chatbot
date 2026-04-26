@@ -13,7 +13,12 @@ from backend.observability.formatters import (
     format_query_embedding_preview,
     truncate_text,
 )
-from backend.observability.service import _safe_construct, _safe_invoke, get_observability
+from backend.observability.service import (
+    _DEFERRED_OPS_MAXLEN,
+    _safe_construct,
+    _safe_invoke,
+    get_observability,
+)
 
 
 def test_truncate_text_keeps_short_input() -> None:
@@ -398,3 +403,56 @@ def test_deferred_trace_replays_variant_metadata_tags_and_query_embedding_span(
         "sampling_mode:adaptive",
         "variants:multi",
     ]
+
+
+def test_deferred_trace_caps_operations_at_maxlen(monkeypatch) -> None:
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    # force the first trace to make the second one hit the high-volume sampler
+    service.begin_trace(name="rag-query", session_id="seed", tenant_id="cap-tenant")
+    trace = service.begin_trace(name="rag-query", session_id="cap-session", tenant_id="cap-tenant")
+
+    overflow = _DEFERRED_OPS_MAXLEN + 10
+    for i in range(overflow):
+        trace.span(name=f"span-{i}").end(output={"i": i})
+
+    assert len(trace._operations) == _DEFERRED_OPS_MAXLEN
+    assert trace._ops_added == overflow
+
+    trace.promote()
+
+    materialized = service._client.traces[0]
+    # only the last _DEFERRED_OPS_MAXLEN spans were kept (deque evicts oldest)
+    assert len(materialized.spans) == _DEFERRED_OPS_MAXLEN
+    assert materialized.spans[-1][0]["name"] == f"span-{overflow - 1}"
+
+
+def test_deferred_trace_logs_warning_when_ops_dropped(monkeypatch, caplog) -> None:
+    import logging
+
+    service = ObservabilityService()
+    service._client = _FakeClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    service.begin_trace(name="rag-query", session_id="seed", tenant_id="warn-tenant")
+    trace = service.begin_trace(name="rag-query", session_id="warn-session", tenant_id="warn-tenant")
+
+    for i in range(_DEFERRED_OPS_MAXLEN + 5):
+        trace.span(name=f"s-{i}").end()
+
+    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
+        trace.promote()
+
+    assert any("dropped" in r.message for r in caplog.records)

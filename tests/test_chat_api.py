@@ -353,15 +353,18 @@ def test_chat_uses_context(
     )
     assert response.status_code == 200
     assert "99" in response.json()["text"]
-    # Verify the chunk was passed to chat (via build_rag_prompt)
+    # Verify the chunk was passed to generate_answer (system + user, chunks in user message)
     call_args = next(
         call
         for call in mock_openai_client.chat.completions.create.call_args_list
-        if "The secret number is 99" in call.kwargs["messages"][0]["content"]
+        if len(call.kwargs.get("messages", [])) >= 2
+        and "The secret number is 99" in call.kwargs["messages"][1]["content"]
     )
     messages = call_args.kwargs["messages"]
-    assert len(messages) == 1
-    assert "The secret number is 99" in messages[0]["content"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert "The secret number is 99" in messages[1]["content"]
 
 
 def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(

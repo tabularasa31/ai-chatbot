@@ -278,7 +278,7 @@ def test_validate_answer_openai_error_returns_invalid(
 ) -> None:
     """OpenAI/JSON errors are logged and treated as validation failures."""
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
-    with caplog.at_level("ERROR", logger="backend.chat.service"):
+    with caplog.at_level("ERROR", logger="backend.chat.handlers.rag"):
         result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
     assert result["is_valid"] is False
     assert result["confidence"] == 0.0

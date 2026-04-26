@@ -74,33 +74,24 @@ export default function SettingsPage() {
   const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
 
   const defaultBot = bots?.find((b) => b.is_active) ?? null;
-  const { data: disclosure, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
+  const { data: disclosure, isLoading: disclosureLoading, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
 
   const initialized = useRef(false);
 
   useEffect(() => {
     if (initialized.current) return;
-    if (!client || !support) return;
+    if (!client || !support || !defaultBot || !disclosure) return;
     initialized.current = true;
     setSupportEmailInput(support.l2_email ?? "");
     setEscalationLanguageInput(support.escalation_language ?? "");
-  }, [client, support]);
-
-  const defaultBotId = defaultBot?.id;
-  const defaultBotInstructions = defaultBot?.agent_instructions;
-  useEffect(() => {
-    if (!defaultBotId) return;
-    const instructions = defaultBotInstructions ?? "";
+    const instructions = defaultBot.agent_instructions ?? "";
     setAgentInstructions(instructions);
     const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
     setSelectedPreset(matched?.id ?? null);
-  }, [defaultBotId, defaultBotInstructions]);
+    setLevel(disclosure.level);
+  }, [client, support, defaultBot, disclosure]);
 
-  useEffect(() => {
-    if (disclosure) setLevel(disclosure.level);
-  }, [disclosure]);
-
-  const loading = clientLoading || botsLoading || supportLoading;
+  const loading = clientLoading || botsLoading || supportLoading || disclosureLoading;
 
   function applyPreset(presetId: string) {
     const preset = PRESETS.find((p) => p.id === presetId);

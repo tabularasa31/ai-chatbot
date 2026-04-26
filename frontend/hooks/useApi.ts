@@ -6,6 +6,7 @@ import type {
   SupportSettingsResponse,
   DisclosureConfigResponse,
   ChatSessionSummary,
+  ChatSessionLogs,
   EscalationTicket,
 } from "@/lib/api";
 
@@ -33,7 +34,7 @@ export function useChatSessions() {
 }
 
 export function useChatSessionLogs(sessionId: string | null) {
-  return useSWR(
+  return useSWR<ChatSessionLogs>(
     sessionId ? `chat/session/${sessionId}/logs` : null,
     () => api.chat.getSessionLogs(sessionId!)
   );

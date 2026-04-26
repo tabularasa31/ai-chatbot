@@ -18,7 +18,7 @@ function DashboardContent() {
   const [copiedApiKey, setCopiedApiKey] = useState(false);
 
   const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
-  const { data: bots } = useBots();
+  const { data: bots, isLoading: botsLoading } = useBots();
 
   const firstActiveBot = bots?.find((b) => b.is_active) ?? bots?.[0];
   const botPublicId = firstActiveBot?.public_id ?? null;
@@ -51,7 +51,7 @@ function DashboardContent() {
     return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${botPublicId ?? ""}">\n</script>`;
   }
 
-  if (clientLoading) {
+  if (clientLoading || botsLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-pulse text-slate-500 text-sm">Loading…</div>

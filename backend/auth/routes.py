@@ -45,19 +45,23 @@ auth_router = APIRouter(tags=["auth"])
 _COOKIE_NAME = "chat9_token"
 
 
-def _auth_cookie_secure() -> bool:
+def _auth_cookie_attrs() -> tuple[str, bool]:
+    """Return (samesite, secure) for the dashboard auth cookie.
+
+    SameSite=None requires Secure, so it's forced on regardless of the
+    AUTH_COOKIE_SECURE setting.
+    """
+    samesite = settings.auth_cookie_samesite
     if settings.auth_cookie_secure is not None:
-        return settings.auth_cookie_secure
-    return settings.FRONTEND_URL.startswith("https://")
-
-
-def _auth_cookie_samesite() -> str:
-    return settings.auth_cookie_samesite
+        secure = settings.auth_cookie_secure
+    else:
+        secure = settings.FRONTEND_URL.startswith("https://")
+    return samesite, secure or samesite == "none"
 
 
 def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
     """Set httpOnly auth cookie for same-site dashboard API requests."""
-    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
+    samesite, secure = _auth_cookie_attrs()
     response.set_cookie(
         key=_COOKIE_NAME,
         value=token,
@@ -65,18 +69,18 @@ def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
         max_age=expires_in,
         path="/",
         domain=settings.auth_cookie_domain,
-        samesite=_auth_cookie_samesite(),
+        samesite=samesite,
         secure=secure,
     )
 
 
 def _clear_auth_cookie(response: Response) -> None:
-    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
+    samesite, secure = _auth_cookie_attrs()
     response.delete_cookie(
         key=_COOKIE_NAME,
         path="/",
         domain=settings.auth_cookie_domain,
-        samesite=_auth_cookie_samesite(),
+        samesite=samesite,
         secure=secure,
         httponly=True,
     )
@@ -84,7 +88,7 @@ def _clear_auth_cookie(response: Response) -> None:
         response.delete_cookie(
             key=_COOKIE_NAME,
             path="/",
-            samesite=_auth_cookie_samesite(),
+            samesite=samesite,
             secure=secure,
             httponly=True,
         )

@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { removeToken, api } from "@/lib/api";
+import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import { useClientMe, useBots } from "@/hooks/useApi";
 
@@ -27,7 +27,7 @@ function DashboardContent() {
     if (!clientError) return;
     const msg = clientError instanceof Error ? clientError.message : "";
     if (msg.toLowerCase().includes("email not verified")) {
-      removeToken();
+      clearSession();
       api.auth.logout();
       router.replace("/login?error=email_not_verified");
     }

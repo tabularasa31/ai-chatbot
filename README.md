@@ -149,7 +149,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | `ENVIRONMENT` | Backend | `development` or `production` |
 | `ENCRYPTION_KEY` | Backend | Fernet key for OpenAI key encryption |
 | `FRONTEND_URL` | Backend | Frontend URL (e.g. https://getchat9.live) |
-| `AUTH_COOKIE_DOMAIN` | Backend | Parent cookie domain for same-site auth (e.g. `.getchat9.live`) |
+| `AUTH_COOKIE_DOMAIN` | Backend | Parent cookie domain for same-site auth (e.g. `.getchat9.live`). Frontend and API must share this parent — otherwise the cookie is not sent (e.g. on `*.vercel.app` previews). |
 | `AUTH_COOKIE_SAMESITE` | Backend | Auth cookie SameSite policy (`lax` for same-site API) |
 | `AUTH_COOKIE_SECURE` | Backend | Override auth cookie `Secure`; set `true` in production |
 | `CORS_ALLOWED_ORIGINS` | Backend | Allowed dashboard origins (e.g. `https://getchat9.live`) |

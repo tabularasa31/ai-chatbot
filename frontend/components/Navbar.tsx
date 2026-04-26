@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, removeToken } from "@/lib/api";
+import { api, clearSession } from "@/lib/api";
 
 export function Navbar() {
   const router = useRouter();
@@ -25,7 +25,7 @@ export function Navbar() {
   }, []);
 
   function handleLogout() {
-    removeToken();
+    clearSession();
     api.auth.logout();
     router.replace("/login");
   }

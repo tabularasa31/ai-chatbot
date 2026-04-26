@@ -4,8 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from chat9 import generateToken
-from chat9 import Chat9Error
+from chat9 import Chat9Error, generateToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 

@@ -168,6 +168,52 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # ── OpenAI token pricing ─────────────────────────────────────────────
+    # Fallback rates used when a model is not in the per-model map below.
+    openai_default_cost_per_1m_input_tokens: float = Field(
+        0.30,
+        alias="OPENAI_DEFAULT_COST_PER_1M_INPUT_TOKENS",
+    )
+    openai_default_cost_per_1m_output_tokens: float = Field(
+        0.30,
+        alias="OPENAI_DEFAULT_COST_PER_1M_OUTPUT_TOKENS",
+    )
+
+    @property
+    def openai_model_costs(self) -> dict[str, dict[str, float]]:
+        """Per-model token pricing (USD per 1M tokens) with input/output split."""
+        return {
+            "gpt-4o": {"input": 2.50, "output": 10.00},
+            "gpt-4o-mini": {"input": 0.15, "output": 0.60},
+            "gpt-4.1": {"input": 2.00, "output": 8.00},
+            "gpt-4.1-mini": {"input": 0.40, "output": 1.60},
+            "gpt-5-mini": {"input": 1.10, "output": 4.40},
+            "o1": {"input": 15.00, "output": 60.00},
+            "o1-mini": {"input": 3.00, "output": 12.00},
+            "o3": {"input": 10.00, "output": 40.00},
+            "o3-mini": {"input": 1.10, "output": 4.40},
+        }
+
+    def compute_cost_usd(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> float:
+        """Estimate USD cost for one LLM call using per-model input/output rates."""
+        rates = self.openai_model_costs.get(model)
+        if rates:
+            input_rate = rates["input"]
+            output_rate = rates["output"]
+        else:
+            input_rate = self.openai_default_cost_per_1m_input_tokens
+            output_rate = self.openai_default_cost_per_1m_output_tokens
+        return round(
+            (prompt_tokens / 1_000_000) * input_rate
+            + (completion_tokens / 1_000_000) * output_rate,
+            6,
+        )
+
     # ── Guard thread pool ────────────────────────────────────────────────
     guard_pool_workers: int = Field(
         8,

@@ -1,243 +1,18 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
   api,
-  type DocumentHealthStatus,
   type DocumentListItem,
   type KnowledgeFaqItem,
   type KnowledgeProfile,
   type UrlSource,
   type UrlSourceDetail,
 } from "@/lib/api";
-import { Tooltip } from "@/components/ui/tooltip";
-
-function TypeBadge({ type }: { type: string }) {
-  const styles: Record<string, string> = {
-    file: "bg-indigo-400/10 text-indigo-500",
-    url: "bg-amber-400/15 text-amber-600",
-  };
-  return (
-    <span className={`rounded px-2 py-0.5 text-[10px] font-mono font-medium ${styles[type] ?? "bg-slate-100 text-slate-600"}`}>
-      {type}
-    </span>
-  );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    processing: "bg-yellow-100 text-yellow-800",
-    embedding: "bg-blue-100 text-blue-800",
-    ready: "bg-green-100 text-green-800",
-    error: "bg-red-100 text-red-800",
-    queued: "bg-amber-100 text-amber-800",
-    indexing: "bg-sky-100 text-sky-800",
-    paused: "bg-orange-100 text-orange-800",
-    stale: "bg-yellow-100 text-yellow-800",
-  };
-  return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? "bg-slate-100 text-slate-800"}`}>
-      {status}
-    </span>
-  );
-}
-
-function healthLabel(health: DocumentHealthStatus | null | undefined): string {
-  if (health == null) return "Checking…";
-  if (health.error || health.score === null) return "Unavailable";
-  if (health.score >= 80) return "Good";
-  if (health.score >= 50) return "Fair";
-  return "Needs attention";
-}
-
-function HealthCell({
-  health,
-  isEmbedding,
-}: {
-  health: DocumentHealthStatus | null | undefined;
-  isEmbedding?: boolean;
-}) {
-  if (isEmbedding) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-300" />
-        Pending
-      </span>
-    );
-  }
-
-  let dotClass = "bg-slate-300";
-  const label = healthLabel(health);
-  if (health != null && !health.error && health.score !== null) {
-    if (health.score >= 80) dotClass = "bg-emerald-500";
-    else if (health.score >= 50) dotClass = "bg-amber-400";
-    else dotClass = "bg-red-500";
-  }
-
-  const warnings = health?.warnings ?? [];
-  const checkedAt = health?.checked_at ? new Date(health.checked_at).toLocaleString() : null;
-  const tooltipLines =
-    health == null
-      ? ["Health check is still running."]
-      : health.error
-        ? ["Health check is currently unavailable."]
-        : warnings.length > 0
-          ? warnings.map((warning) => warning.message)
-          : ["No issues found."];
-  return (
-    <Tooltip
-      className="z-10 text-xs text-slate-600"
-      content={
-        <>
-          {tooltipLines.map((line) => (
-            <span key={line} className="block">
-              {line}
-            </span>
-          ))}
-          {checkedAt && <span className="mt-2 block text-[10px] text-slate-300">Checked: {checkedAt}</span>}
-        </>
-      }
-    >
-      <span className={`h-2 w-2 rounded-full ${dotClass}`} />
-      <span className="font-medium">{label}</span>
-    </Tooltip>
-  );
-}
-
-function summarizeSourceIssue({
-  status,
-  warning,
-  error,
-}: {
-  status: string;
-  warning?: string | null;
-  error?: string | null;
-}) {
-  if (error) {
-    return {
-      label: "Needs attention",
-      dotClass: "bg-red-500",
-      note: error,
-    };
-  }
-  if (warning) {
-    return {
-      label: "Warning",
-      dotClass: "bg-amber-400",
-      note: warning,
-    };
-  }
-  if (status === "ready") {
-    return {
-      label: "Good",
-      dotClass: "bg-emerald-500",
-      note: "No active warnings.",
-    };
-  }
-  if (status === "paused" || status === "error") {
-    return {
-      label: "Needs attention",
-      dotClass: "bg-red-500",
-      note: "Source requires action before indexing can continue.",
-    };
-  }
-  return {
-    label: "Pending",
-    dotClass: "bg-slate-300",
-    note: "Source processing is still in progress.",
-  };
-}
-
-function formatFailedUrlPreview(failedUrls: Array<{ url: string; reason: string }>): string {
-  const preview = failedUrls
-    .slice(0, 2)
-    .map((item) => `${item.url} (${item.reason})`)
-    .join(", ");
-
-  if (failedUrls.length <= 2) {
-    return preview;
-  }
-  return `${preview} +${failedUrls.length - 2} more`;
-}
-
-function SourceHealthCell({
-  status,
-  warning,
-  error,
-}: {
-  status: string;
-  warning?: string | null;
-  error?: string | null;
-}) {
-  const { label, dotClass, note } = summarizeSourceIssue({ status, warning, error });
-
-  return (
-    <Tooltip className="z-10 max-w-[240px] text-xs text-slate-600" content={note}>
-      <span className={`h-2 w-2 rounded-full ${dotClass}`} />
-      <span className="font-medium">{label}</span>
-      {(warning || error) && <span className="max-w-[220px] truncate text-slate-400">{note}</span>}
-    </Tooltip>
-  );
-}
-
-type MixedRow =
-  | { kind: "file"; item: DocumentListItem }
-  | { kind: "url"; item: UrlSource };
-
-const POLLABLE_SOURCE_STATUSES = new Set(["queued", "indexing"]);
-
-function formatSchedule(value: string) {
-  if (value === "manual") return "Manual only";
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function quickAnswerLabel(key: string) {
-  const labels: Record<string, string> = {
-    support_email: "Support email",
-    documentation_url: "Documentation",
-    pricing_url: "Pricing",
-    trial_info: "Trial info",
-    status_page_url: "Status page",
-    support_chat: "Support chat",
-  };
-  return labels[key] ?? key;
-}
-
-function stopRowClick(event: React.MouseEvent<HTMLElement>) {
-  event.stopPropagation();
-}
-
-function KnowledgeTabs({
-  activeTab,
-  onChange,
-}: {
-  activeTab: "documents" | "profile" | "faq";
-  onChange: (tab: "documents" | "profile" | "faq") => void;
-}) {
-  return (
-    <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "documents" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("documents")}
-      >
-        Documents
-      </button>
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "profile" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("profile")}
-      >
-        Profile
-      </button>
-      <button
-        className={`rounded-md px-3 py-1.5 text-sm ${activeTab === "faq" ? "bg-violet-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}
-        onClick={() => onChange("faq")}
-      >
-        FAQ
-      </button>
-    </div>
-  );
-}
+import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_components/shared";
+import { FaqSection } from "./_components/FaqSection";
+import { DocumentsSection } from "./_components/DocumentsSection";
 
 export default function KnowledgePage() {
   const router = useRouter();
@@ -317,13 +92,6 @@ export default function KnowledgePage() {
       support_email: profileDraft.support_email,
       support_urls: profileDraft.support_urls,
     });
-  }
-
-  function confidenceBadge(value?: number | null): string {
-    if (value == null) return "Low";
-    if (value >= 0.85) return "High";
-    if (value >= 0.6) return "Medium";
-    return "Low";
   }
 
   const loadProfile = useCallback(async () => {
@@ -617,19 +385,6 @@ export default function KnowledgePage() {
     }
   }
 
-  const rows = (() => {
-    const text = filter.trim().toLowerCase();
-    const mixed: MixedRow[] = [
-      ...documents.map((item) => ({ kind: "file" as const, item })),
-      ...sources.map((item) => ({ kind: "url" as const, item })),
-    ];
-    return mixed.filter((row) => {
-      if (!text) return true;
-      if (row.kind === "file") return row.item.filename.toLowerCase().includes(text);
-      return row.item.name.toLowerCase().includes(text) || row.item.url.toLowerCase().includes(text);
-    });
-  })();
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -855,602 +610,84 @@ export default function KnowledgePage() {
 
   if (activeTab === "faq") {
     return (
-      <div className="max-w-7xl space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
-          <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
-        </div>
-        <KnowledgeTabs activeTab="faq" onChange={setTab} />
-        <div className="flex flex-wrap items-center gap-3">
-          <span className={`rounded-full px-3 py-1 text-xs font-medium ${pendingCount > 0 ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
-            {pendingCount} pending review
-          </span>
-          <button
-            type="button"
-            disabled={approvingAll || pendingCount === 0}
-            onClick={async () => {
-              setApprovingAll(true);
-              try {
-                await api.knowledge.approveAll(botId);
-                setFaqSaved("All pending FAQ accepted.");
-                await loadFaq();
-              } catch (err) {
-                setFaqError(err instanceof Error ? err.message : "Failed to approve all");
-              } finally {
-                setApprovingAll(false);
-              }
-            }}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            {approvingAll ? "Accepting..." : "Accept all"}
-          </button>
-          <select
-            value={faqFilter}
-            onChange={(e) => setFaqFilter(e.target.value as typeof faqFilter)}
-            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
-          >
-            <option value="all">All</option>
-            <option value="pending">Pending</option>
-            <option value="approved">Approved</option>
-            <option value="docs">From docs</option>
-            <option value="logs">From logs</option>
-          </select>
-        </div>
-        {faqSaved && <div className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-700">{faqSaved}</div>}
-        {faqError && <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">{faqError}</div>}
-        {faqLoading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">Loading FAQ…</div>
-        ) : faqItems.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
-            {faqFilter === "pending"
-              ? "All caught up! No FAQ entries need review."
-              : faqFilter === "approved"
-                ? "No approved FAQ yet. Review the suggestions above."
-                : "No FAQ entries yet. They will appear after your documents are indexed."}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {faqItems.map((item) => {
-              const isEditing = editingFaqId === item.id;
-              return (
-                <div
-                  key={item.id}
-                  className={`rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all duration-200 ${removingFaqIds.includes(item.id) ? "opacity-0 scale-[0.98]" : "opacity-100 scale-100"}`}
-                >
-                  {isEditing ? (
-                    <div className="space-y-3">
-                      {item.approved && <div className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">Will require re-approval</div>}
-                      <input value={editingFaqQuestion} onChange={(e) => setEditingFaqQuestion(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800" />
-                      <textarea value={editingFaqAnswer} onChange={(e) => setEditingFaqAnswer(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" rows={4} />
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={updatingFaqId === item.id}
-                          onClick={async () => {
-                            try {
-                              setUpdatingFaqId(item.id);
-                              await api.knowledge.updateFaq(item.id, { question: editingFaqQuestion, answer: editingFaqAnswer }, botId);
-                              setEditingFaqId(null);
-                              setFaqSaved(item.approved ? "Saved. Re-approval required." : "Saved.");
-                              await loadFaq();
-                            } catch (err) {
-                              setFaqError(err instanceof Error ? err.message : "Failed to save FAQ");
-                            } finally {
-                              setUpdatingFaqId(null);
-                            }
-                          }}
-                          className="rounded-lg bg-violet-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-                        >
-                          Save
-                        </button>
-                        <button type="button" onClick={() => setEditingFaqId(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-600">Cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="space-y-2">
-                          <div className="text-sm font-semibold text-slate-800">{item.question}</div>
-                          <div className="text-sm text-slate-600">{item.answer}</div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{item.source ?? "unknown"}</span>
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-700">{confidenceBadge(item.confidence)}</span>
-                            {item.approved && <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700">Approved</span>}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {!item.approved && (
-                            <>
-                              <button
-                                type="button"
-                                disabled={updatingFaqId === item.id}
-                                onClick={async () => {
-                                  try {
-                                    setUpdatingFaqId(item.id);
-                                    await api.knowledge.approveFaq(item.id, botId);
-                                    await loadFaq();
-                                  } catch (err) {
-                                    setFaqError(err instanceof Error ? err.message : "Failed to approve FAQ");
-                                  } finally {
-                                    setUpdatingFaqId(null);
-                                  }
-                                }}
-                                className="rounded-lg bg-green-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-50"
-                              >
-                                Accept
-                              </button>
-                              <button
-                                type="button"
-                                disabled={updatingFaqId === item.id}
-                                onClick={async () => {
-                                  const snapshot = faqItems;
-                                  setRemovingFaqIds((prev) => [...prev, item.id]);
-                                  window.setTimeout(() => {
-                                    setFaqItems((prev) => prev.filter((i) => i.id !== item.id));
-                                  }, 140);
-                                  try {
-                                    setUpdatingFaqId(item.id);
-                                    await api.knowledge.rejectFaq(item.id, botId);
-                                    await loadFaq();
-                                  } catch (err) {
-                                    setFaqItems(snapshot);
-                                    setFaqError(err instanceof Error ? err.message : "Failed to reject FAQ");
-                                  } finally {
-                                    setUpdatingFaqId(null);
-                                    setRemovingFaqIds((prev) => prev.filter((id) => id !== item.id));
-                                  }
-                                }}
-                                className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 disabled:opacity-50"
-                              >
-                                Reject
-                              </button>
-                            </>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingFaqId(item.id);
-                              setEditingFaqQuestion(item.question);
-                              setEditingFaqAnswer(item.answer);
-                            }}
-                            className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600"
-                          >
-                            Edit
-                          </button>
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <FaqSection
+        botId={botId}
+        activeTab={activeTab}
+        onTabChange={setTab}
+        faqItems={faqItems}
+        setFaqItems={setFaqItems}
+        pendingCount={pendingCount}
+        faqFilter={faqFilter}
+        setFaqFilter={setFaqFilter}
+        faqError={faqError}
+        setFaqError={setFaqError}
+        faqSaved={faqSaved}
+        setFaqSaved={setFaqSaved}
+        approvingAll={approvingAll}
+        setApprovingAll={setApprovingAll}
+        updatingFaqId={updatingFaqId}
+        setUpdatingFaqId={setUpdatingFaqId}
+        editingFaqId={editingFaqId}
+        setEditingFaqId={setEditingFaqId}
+        editingFaqQuestion={editingFaqQuestion}
+        setEditingFaqQuestion={setEditingFaqQuestion}
+        editingFaqAnswer={editingFaqAnswer}
+        setEditingFaqAnswer={setEditingFaqAnswer}
+        removingFaqIds={removingFaqIds}
+        setRemovingFaqIds={setRemovingFaqIds}
+        loadFaq={loadFaq}
+      />
     );
   }
 
   return (
-    <div className="max-w-7xl space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-800">Knowledge Hub</h1>
-          <p className="mt-1 text-sm text-slate-500">Files and URL sources that power your bot.</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2">
-            <span className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700">
-              {uploading
-                ? uploadProgress
-                  ? `Processing ${uploadProgress.current}/${uploadProgress.total}…`
-                  : "Processing…"
-                : "Upload files"}
-            </span>
-            <input
-              type="file"
-              multiple
-              accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt"
-              onChange={handleUpload}
-              disabled={uploading}
-              className="sr-only"
-            />
-          </label>
-          <button
-            type="button"
-            onClick={() => setShowUrlForm((prev) => !prev)}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50"
-          >
-            + Add from URL
-          </button>
-        </div>
-      </div>
-      <KnowledgeTabs activeTab="documents" onChange={setTab} />
-
-      {showUrlForm && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">URL</span>
-              <input
-                type="url"
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                placeholder="https://docs.yourproduct.com"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Name</span>
-              <input
-                type="text"
-                value={nameInput}
-                onChange={(e) => setNameInput(e.target.value)}
-                placeholder="Optional display name"
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Schedule</span>
-              <select
-                value={scheduleInput}
-                onChange={(e) => setScheduleInput(e.target.value)}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="manual">Manual only</option>
-              </select>
-            </label>
-            <label className="block md:col-span-2">
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-500">Exclusions</span>
-              <textarea
-                value={exclusionsInput}
-                onChange={(e) => setExclusionsInput(e.target.value)}
-                placeholder={"/blog/*\n/changelog/*"}
-                rows={4}
-                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => void handleCreateUrlSource()}
-              disabled={submittingUrl || !urlInput.trim()}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submittingUrl ? "Checking and starting…" : "Add and start indexing"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowUrlForm(false)}
-              className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between gap-4">
-        <input
-          type="text"
-          placeholder="Filter sources…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="w-60 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-        />
-      </div>
-
-      {uploadError && (
-        <div className="whitespace-pre-line rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-600">
-          {uploadError}
-        </div>
-      )}
-      {error && (
-        <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      <div className="overflow-x-auto overflow-y-visible rounded-xl border border-slate-200 bg-white">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="border-b border-slate-100 bg-slate-50">
-              <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Indexed / Updated</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Scheduled</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
-              <th className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-wider text-slate-400">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="py-12 text-center text-sm text-slate-500">
-                  {filter ? "No sources match your filter." : "No sources yet. Upload a file or add a docs URL."}
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                if (row.kind === "file") {
-                  const doc = row.item;
-                  const isEmbedding = doc.status === "processing" || doc.status === "embedding";
-                  return (
-                    <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
-                      <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">{doc.filename}</td>
-                      <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
-                      <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>—</div>
-                        <div className="mt-1">{isEmbedding ? "embedding…" : new Date(doc.updated_at || doc.created_at).toLocaleString()}</div>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-400">—</td>
-                      <td className="px-4 py-3.5"><HealthCell health={doc.health_status} isEmbedding={isEmbedding} /></td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2">
-                          {!isEmbedding && (
-                            <button
-                              type="button"
-                              onClick={() => void handleRecheckHealth(doc.id)}
-                              disabled={recheckingId === doc.id}
-                              className="text-xs text-slate-400 hover:text-slate-600 disabled:opacity-40"
-                            >
-                              {recheckingId === doc.id ? "…" : "Re-check"}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteFile(doc.id)}
-                            className="text-xs text-red-400 hover:text-red-600"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                }
-
-                const source = row.item;
-                const isExpanded = expandedSourceId === source.id;
-                const currentDetail = detail?.id === source.id ? detail : null;
-                const pageMeta = source.pages_found ? `${source.pages_indexed} / ${source.pages_found}` : `${source.pages_indexed}`;
-
-                return (
-                  <Fragment key={source.id}>
-                    <tr
-                      className={`cursor-pointer transition-colors hover:bg-slate-50/60 ${isExpanded ? "bg-violet-50/40" : ""}`}
-                      onClick={() => void toggleDetail(source.id)}
-                    >
-                      <td className="px-5 py-3.5">
-                        <div className="max-w-[320px] text-sm font-medium text-slate-800">{source.name}</div>
-                        <div className="mt-1 max-w-[320px] truncate text-xs text-slate-400">{source.url}</div>
-                      </td>
-                      <td className="px-4 py-3.5"><TypeBadge type="url" /></td>
-                      <td className="px-4 py-3.5"><StatusBadge status={source.status} /></td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>{pageMeta} pages</div>
-                        <div className="mt-1">{new Date(source.updated_at).toLocaleString()}</div>
-                      </td>
-                      <td className="px-4 py-3.5 text-xs text-slate-500">
-                        <div>{formatSchedule(source.schedule)}</div>
-                        <div className="mt-1 text-slate-400">
-                          {source.next_crawl_at ? new Date(source.next_crawl_at).toLocaleString() : "No next run"}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <SourceHealthCell status={source.status} warning={source.warning_message} error={source.error_message} />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2" onClick={stopRowClick}>
-                          <button
-                            type="button"
-                            onClick={() => openEdit(source)}
-                            className="text-xs text-slate-500 hover:text-slate-700"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleRefreshSource(source.id)}
-                            disabled={refreshingSourceId === source.id}
-                            className="text-xs text-indigo-400 hover:text-indigo-600 disabled:opacity-40"
-                          >
-                            {refreshingSourceId === source.id ? "…" : "Refresh"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleDeleteSource(source.id)}
-                            className="text-xs text-red-400 hover:text-red-600"
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {isExpanded && (
-                      <tr className="bg-slate-50/60">
-                        <td colSpan={7} className="px-5 py-4">
-                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                            {detailLoading && !currentDetail ? (
-                              <div className="text-sm text-slate-500">Loading source details…</div>
-                            ) : (
-                              <div className="space-y-5">
-                                {isEditing && (
-                                  <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
-                                    <label className="block">
-                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Name</span>
-                                      <input
-                                        type="text"
-                                        value={editName}
-                                        onChange={(e) => setEditName(e.target.value)}
-                                        placeholder="Display name"
-                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                                      />
-                                    </label>
-                                    <label className="block">
-                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Schedule</span>
-                                      <select
-                                        value={editSchedule}
-                                        onChange={(e) => setEditSchedule(e.target.value)}
-                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                                      >
-                                        <option value="daily">Daily</option>
-                                        <option value="weekly">Weekly</option>
-                                        <option value="manual">Manual only</option>
-                                      </select>
-                                    </label>
-                                    <label className="block">
-                                      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</span>
-                                      <textarea
-                                        value={editExclusions}
-                                        onChange={(e) => setEditExclusions(e.target.value)}
-                                        placeholder={"/blog/*\n/changelog/*"}
-                                        rows={4}
-                                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
-                                      />
-                                    </label>
-                                    <div className="flex items-center gap-2 pt-1">
-                                      <button
-                                        type="button"
-                                        onClick={() => void handleSaveEdit()}
-                                        disabled={isSaving}
-                                        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
-                                      >
-                                        {isSaving ? "Saving…" : "Save"}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setIsEditing(false)}
-                                        disabled={isSaving}
-                                        className="rounded-lg px-3 py-2 text-sm text-slate-500 hover:bg-slate-100 disabled:opacity-50"
-                                      >
-                                        Cancel
-                                      </button>
-                                    </div>
-                                  </div>
-                                )}
-
-                                {(currentDetail?.warning_message || currentDetail?.error_message) && (
-                                  <div className="space-y-2">
-                                    {currentDetail.warning_message && (
-                                      <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                                        {currentDetail.warning_message}
-                                      </div>
-                                    )}
-                                    {currentDetail.error_message && (
-                                      <div className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
-                                        {currentDetail.error_message}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-
-                                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-                                  <div>
-                                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Recent runs</div>
-                                    <div className="space-y-2">
-                                      {!currentDetail || currentDetail.recent_runs.length === 0 ? (
-                                        <div className="text-sm text-slate-500">No crawl runs yet.</div>
-                                      ) : (
-                                        currentDetail.recent_runs.map((run) => (
-                                          <div key={run.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                                            <div className="flex items-center justify-between gap-3">
-                                              <StatusBadge status={run.status} />
-                                              <span className="text-xs text-slate-400">{new Date(run.created_at).toLocaleString()}</span>
-                                            </div>
-                                            <div className="mt-2 text-slate-600">
-                                              {run.pages_indexed}
-                                              {run.pages_found ? ` / ${run.pages_found}` : ""} pages indexed
-                                            </div>
-                                            {run.failed_urls.length > 0 && (
-                                              <div className="mt-2 text-xs text-slate-500">
-                                                Failed: {formatFailedUrlPreview(run.failed_urls)}
-                                              </div>
-                                            )}
-                                          </div>
-                                        ))
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  <div>
-                                    <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Exclusions</div>
-                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                                      {currentDetail && currentDetail.exclusion_patterns.length
-                                        ? currentDetail.exclusion_patterns.join(", ")
-                                        : "No exclusions"}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Quick answers</div>
-                                  {!currentDetail || !currentDetail.quick_answers || currentDetail.quick_answers.length === 0 ? (
-                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-                                      No structured quick answers detected yet.
-                                    </div>
-                                  ) : (
-                                    <div className="grid gap-3 xl:grid-cols-2">
-                                      {currentDetail.quick_answers.map((item) => (
-                                        <div key={item.key} className="rounded-lg border border-slate-200 p-3">
-                                          <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
-                                            {quickAnswerLabel(item.key)}
-                                          </div>
-                                          <div className="mt-1 break-all text-sm text-slate-700">{item.value}</div>
-                                          <div className="mt-2 text-xs text-slate-400">{item.source_url}</div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-
-                                <div>
-                                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">Indexed pages</div>
-                                  {!currentDetail || currentDetail.pages.length === 0 ? (
-                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-                                      Pages will appear here after indexing starts.
-                                    </div>
-                                  ) : (
-                                    <div className="grid gap-3 xl:grid-cols-2">
-                                      {currentDetail.pages.map((page) => (
-                                        <div key={page.id} className="rounded-lg border border-slate-200 p-3">
-                                          <div className="flex items-start justify-between gap-3">
-                                            <div className="min-w-0">
-                                              <div className="text-sm font-medium text-slate-700">{page.title}</div>
-                                              <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
-                                            </div>
-                                            <button
-                                              type="button"
-                                              onClick={() => void handleDeleteSourcePage(source.id, page.id)}
-                                              disabled={deletingPageId === page.id}
-                                              className="shrink-0 text-xs text-red-400 hover:text-red-600 disabled:opacity-40"
-                                            >
-                                              {deletingPageId === page.id ? "Deleting…" : "Delete"}
-                                            </button>
-                                          </div>
-                                          <div className="mt-2 text-xs text-slate-500">{page.chunk_count} chunks</div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <DocumentsSection
+      activeTab={activeTab}
+      onTabChange={setTab}
+      documents={documents}
+      sources={sources}
+      filter={filter}
+      setFilter={setFilter}
+      uploading={uploading}
+      uploadProgress={uploadProgress}
+      submittingUrl={submittingUrl}
+      error={error}
+      uploadError={uploadError}
+      recheckingId={recheckingId}
+      refreshingSourceId={refreshingSourceId}
+      deletingPageId={deletingPageId}
+      expandedSourceId={expandedSourceId}
+      detail={detail}
+      detailLoading={detailLoading}
+      showUrlForm={showUrlForm}
+      setShowUrlForm={setShowUrlForm}
+      urlInput={urlInput}
+      setUrlInput={setUrlInput}
+      nameInput={nameInput}
+      setNameInput={setNameInput}
+      scheduleInput={scheduleInput}
+      setScheduleInput={setScheduleInput}
+      exclusionsInput={exclusionsInput}
+      setExclusionsInput={setExclusionsInput}
+      isEditing={isEditing}
+      setIsEditing={setIsEditing}
+      editName={editName}
+      setEditName={setEditName}
+      editSchedule={editSchedule}
+      setEditSchedule={setEditSchedule}
+      editExclusions={editExclusions}
+      setEditExclusions={setEditExclusions}
+      isSaving={isSaving}
+      onUpload={handleUpload}
+      onCreateUrlSource={handleCreateUrlSource}
+      onDeleteFile={handleDeleteFile}
+      onDeleteSource={handleDeleteSource}
+      onRefreshSource={handleRefreshSource}
+      onDeleteSourcePage={handleDeleteSourcePage}
+      onOpenEdit={openEdit}
+      onSaveEdit={handleSaveEdit}
+      onRecheckHealth={handleRecheckHealth}
+      onToggleDetail={toggleDetail}
+    />
   );
 }

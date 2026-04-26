@@ -1283,6 +1283,7 @@ def generate_answer(
         prompt_tokens_raw = 0
         completion_tokens_raw = 0
         finish_reason: str | None = None
+        actual_model: str = settings.chat_model
         if stream_callback is not None:
             stream = call_openai_with_retry(
                 "chat_generate_stream",
@@ -1299,6 +1300,8 @@ def generate_answer(
             chunks: list[str] = []
             total_tokens = 0
             for chunk in stream:
+                if isinstance(getattr(chunk, "model", None), str):
+                    actual_model = chunk.model
                 if getattr(chunk, "usage", None):
                     total_tokens = chunk.usage.total_tokens or 0
                     prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
@@ -1324,6 +1327,7 @@ def generate_answer(
                 ),
                 bot_id=retry_bot_id,
             )
+            actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
             answer_text = _strip_thought_tags(response.choices[0].message.content or "")
             total_tokens = response.usage.total_tokens if response.usage else 0
             if response.usage:
@@ -1335,9 +1339,16 @@ def generate_answer(
             operation="generate",
             target_language=response_language,
             tokens=total_tokens,
-            model=settings.chat_model,
+            model=actual_model,
         )
         if generation is not None:
+            _cost_rates = settings.openai_model_costs.get(
+                actual_model,
+                {
+                    "input": settings.openai_default_cost_per_1m_input_tokens,
+                    "output": settings.openai_default_cost_per_1m_output_tokens,
+                },
+            )
             generation.end(
                 output=answer_text.strip(),
                 usage={
@@ -1347,7 +1358,12 @@ def generate_answer(
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
                     "finish_reason": finish_reason,
-                    "cost_usd": round((_safe_int(total_tokens) / 1_000_000) * 0.30, 6),
+                    "cost_usd": settings.compute_cost_usd(
+                        actual_model,
+                        _safe_int(prompt_tokens_raw),
+                        _safe_int(completion_tokens_raw),
+                    ),
+                    "cost_rate_usd_per_1m": _cost_rates,
                     "duration_ms": round((perf_counter() - started_at) * 1000, 2),
                 },
             )

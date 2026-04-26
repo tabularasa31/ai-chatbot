@@ -17,16 +17,18 @@ const AUTH_PATHS = ["/login", "/signup"];
 
 export function middleware(request: NextRequest) {
   const token = request.cookies.get("chat9_token")?.value;
+  const sessionMarker = request.cookies.get("chat9_session")?.value;
+  const hasSession = Boolean(token || sessionMarker);
   const { pathname } = request.nextUrl;
 
   const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p));
   const isAuth = AUTH_PATHS.some((p) => pathname.startsWith(p));
 
-  if (isProtected && !token) {
+  if (isProtected && !hasSession) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  if (isAuth && token) {
+  if (isAuth && hasSession) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 

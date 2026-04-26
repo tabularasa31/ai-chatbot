@@ -352,6 +352,7 @@ function getErrorMessage(data: unknown, fallback: string): string {
 }
 
 const SESSION_KEY = "chat9_session";
+const SESSION_MAX_AGE_SECONDS = 86400;
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -361,11 +362,14 @@ export function getToken(): string | null {
 export function saveToken(_token: string): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(SESSION_KEY, "1");
+  const secure = window.location.protocol === "https:" ? "; secure" : "";
+  document.cookie = `${SESSION_KEY}=1; path=/; max-age=${SESSION_MAX_AGE_SECONDS}; samesite=lax${secure}`;
 }
 
 export function removeToken(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(SESSION_KEY);
+  document.cookie = `${SESSION_KEY}=; path=/; max-age=0; samesite=lax`;
 }
 
 function handleUnauthorized(): void {

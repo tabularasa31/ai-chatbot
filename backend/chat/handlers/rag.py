@@ -1370,6 +1370,40 @@ def generate_answer(
         raise
 
 
+_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)
+_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _parse_validation_json(raw: str) -> dict:
+    """Parse LLM JSON response, stripping markdown fences if present."""
+    text = raw.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Level 1: strip markdown fences (```json ... ``` or ``` ... ```)
+    stripped = _FENCE_RE.sub("", text).strip()
+    try:
+        result = json.loads(stripped)
+        logger.warning("validate_answer: JSON wrapped in markdown fences — stripped successfully")
+        return result
+    except json.JSONDecodeError:
+        pass
+
+    # Level 2: extract first {...} block from surrounding text
+    m = _JSON_BLOCK_RE.search(text)
+    if m:
+        try:
+            result = json.loads(m.group())
+            logger.warning("validate_answer: JSON extracted via brace-search fallback")
+            return result
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON found in validation response", text, 0)
+
+
 def validate_answer(
     question: str,
     answer: str,
@@ -1428,7 +1462,7 @@ def validate_answer(
             ),
         )
         raw = response.choices[0].message.content or ""
-        result = json.loads(raw.strip())
+        result = _parse_validation_json(raw)
         result = {
             "is_valid": bool(result.get("is_valid", True)),
             "confidence": float(result.get("confidence", 1.0)),

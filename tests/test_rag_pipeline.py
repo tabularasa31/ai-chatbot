@@ -598,3 +598,80 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
     assert "VERIFIED FAQ CANDIDATES" in system_prompt
     assert "Q: How to reset password?" in system_prompt
     assert "A: Use the reset link from login page." in system_prompt
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _parse_validation_json (markdown-fence stripping)
+# ---------------------------------------------------------------------------
+
+
+class TestParseValidationJson:
+    """Tests for the internal JSON parser used by validate_answer."""
+
+    def setup_method(self) -> None:
+        from backend.chat.handlers.rag import _parse_validation_json
+
+        self._parse = _parse_validation_json
+
+    def _valid_payload(self) -> str:
+        return '{"is_valid": true, "confidence": 0.9, "reason": "grounded"}'
+
+    def test_clean_json(self) -> None:
+        result = self._parse(self._valid_payload())
+        assert result == {"is_valid": True, "confidence": 0.9, "reason": "grounded"}
+
+    def test_json_fenced_with_json_hint(self) -> None:
+        raw = f"```json\n{self._valid_payload()}\n```"
+        result = self._parse(raw)
+        assert result["is_valid"] is True
+        assert result["confidence"] == 0.9
+
+    def test_json_fenced_without_hint(self) -> None:
+        raw = f"```\n{self._valid_payload()}\n```"
+        result = self._parse(raw)
+        assert result["is_valid"] is True
+
+    def test_fence_prefix_only(self) -> None:
+        raw = f"```json\n{self._valid_payload()}"
+        result = self._parse(raw)
+        assert result["is_valid"] is True
+
+    def test_fence_suffix_only(self) -> None:
+        raw = f"{self._valid_payload()}\n```"
+        result = self._parse(raw)
+        assert result["is_valid"] is True
+
+    def test_brace_search_fallback(self) -> None:
+        raw = f"Here is the result:\n{self._valid_payload()}\nHope that helps."
+        result = self._parse(raw)
+        assert result["is_valid"] is True
+
+    def test_warns_on_fence_stripping(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        raw = f"```json\n{self._valid_payload()}\n```"
+        with caplog.at_level(logging.WARNING, logger="backend.chat.handlers.rag"):
+            self._parse(raw)
+        assert any("markdown fences" in r.message for r in caplog.records)
+
+    def test_warns_on_brace_fallback(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        raw = f"Some text before {self._valid_payload()} some text after"
+        with caplog.at_level(logging.WARNING, logger="backend.chat.handlers.rag"):
+            self._parse(raw)
+        assert any("brace-search" in r.message for r in caplog.records)
+
+    def test_raises_on_unparseable_content(self) -> None:
+        import json
+
+        with pytest.raises(json.JSONDecodeError):
+            self._parse("not json at all, no braces here")
+
+    def test_clean_json_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="backend.chat.handlers.rag"):
+            self._parse(self._valid_payload())
+        assert caplog.records == []
+

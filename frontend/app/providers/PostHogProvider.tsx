@@ -7,10 +7,10 @@ import { useEffect, Suspense } from "react";
 
 if (typeof window !== "undefined") {
   const key = process.env.NEXT_PUBLIC_POSTHOG_KEY;
-  const host = process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://eu.i.posthog.com";
   if (key) {
     posthog.init(key, {
-      api_host: host,
+      api_host: "/ingest",
+      ui_host: "https://eu.posthog.com",
       capture_pageview: false,
       capture_pageleave: true,
       session_recording: { maskAllInputs: true },

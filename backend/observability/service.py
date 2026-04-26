@@ -479,6 +479,7 @@ class _DeferredTrace(TraceHandle):
                     len(self._operations),
                     self._init_kwargs.get("name"),
                 )
+                self._operations.clear()
             return
         dropped = self._ops_added - len(self._operations)
         if dropped > 0:

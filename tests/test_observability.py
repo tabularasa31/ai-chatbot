@@ -491,3 +491,9 @@ def test_deferred_trace_logs_warning_when_materialize_fails(monkeypatch, caplog)
     assert any("dropping" in m and "3" in m for m in warning_messages), (
         f"Expected a 'dropping 3 queued operations' warning, got: {warning_messages}"
     )
+
+    # Second promote() must not re-log (operations were cleared)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
+        trace.promote()
+    assert not any("dropping" in r.message for r in caplog.records)

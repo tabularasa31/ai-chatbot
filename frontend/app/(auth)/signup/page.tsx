@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { api, getToken } from "@/lib/api";
+import { api, hasSession } from "@/lib/api";
 import { AuthCard, AuthCardCentered, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 
 export default function SignupPage() {
@@ -15,7 +15,7 @@ export default function SignupPage() {
   const [verificationSent, setVerificationSent] = useState(false);
 
   useEffect(() => {
-    if (getToken()) {
+    if (hasSession()) {
       router.replace("/dashboard");
     }
   }, [router]);

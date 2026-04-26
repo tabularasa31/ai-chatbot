@@ -4,14 +4,14 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getToken } from '@/lib/api';
+import { hasSession } from '@/lib/api';
 
 export function Navigation() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
 
   useEffect(() => {
-    setIsAuthed(Boolean(getToken()));
+    setIsAuthed(hasSession());
   }, []);
 
   return (

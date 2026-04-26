@@ -354,9 +354,9 @@ function getErrorMessage(data: unknown, fallback: string): string {
 const SESSION_KEY = "chat9_session";
 const SESSION_MAX_AGE_SECONDS = 86400;
 
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(SESSION_KEY);
+export function hasSession(): boolean {
+  if (typeof window === "undefined") return false;
+  return localStorage.getItem(SESSION_KEY) === "1";
 }
 
 export function saveToken(_token: string): void {

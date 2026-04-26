@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, getToken, saveToken } from "@/lib/api";
+import { api, hasSession, saveToken } from "@/lib/api";
 import { AuthCard, authStyles, validationHandlers } from "@/components/auth/AuthCard";
 import { AuthTransition } from "@/components/AuthTransition";
 
@@ -24,9 +24,7 @@ function LoginForm() {
   }, [router]);
 
   useEffect(() => {
-    const token = getToken();
-    if (token) {
-      saveToken(token);
+    if (hasSession()) {
       router.replace("/dashboard");
     }
   }, [router]);

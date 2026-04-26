@@ -7,7 +7,6 @@ import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn } from "@/components/ui/utils";
-import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import {
   appendSystemMarker,
   createTextMessage,
@@ -35,21 +34,65 @@ interface ChatWidgetProps {
   isOpen?: boolean;
 }
 
+/** Recursively extract plain text from a hast node (works after rehype-highlight). */
+function hastToText(node: unknown): string {
+  if (!node || typeof node !== "object") return "";
+  const n = node as Record<string, unknown>;
+  if (n.type === "text") return String(n.value ?? "");
+  if (Array.isArray(n.children)) {
+    return (n.children as unknown[]).map(hastToText).join("");
+  }
+  return "";
+}
+
+function CodeCopyButton({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  async function handleCopy() {
+    await navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      aria-label={copied ? "Copied!" : "Copy code"}
+      title={copied ? "Copied!" : "Copy code"}
+      className="absolute right-2.5 top-2.5 z-10 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/50 bg-slate-800/80 text-slate-200 transition-colors hover:bg-slate-700/90"
+    >
+      {copied ? (
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
+          <path d="M5 12.5 9.5 17 19 7.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4">
+          <rect x="9" y="9" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+          <rect x="5" y="5" width="10" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" opacity="0.75" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 const MD_COMPONENTS: Components = {
   a: ({ node: _node, ...props }) => (
     <a {...props} target="_blank" rel="noopener noreferrer" />
   ),
   img: () => null,
-  code: ({ node: _node, className, children, ...props }) => {
+  // Prevent react-markdown's default <pre> wrapper — our code component handles it.
+  pre: ({ children }) => <>{children}</>,
+  code: ({ node, className, children, ...props }) => {
     const isBlock = !!className;
-    const code = String(children).replace(/\n$/, "");
     if (isBlock) {
+      // Extract raw text from hast node for copy (children are already highlighted spans).
+      const rawCode = hastToText(node).replace(/\n$/, "");
       return (
-        <CodeBlockWithCopy
-          code={code}
-          tone="dark"
-          containerClassName="my-2"
-        />
+        <div className="relative my-2">
+          <CodeCopyButton code={rawCode} />
+          <pre className="overflow-x-auto whitespace-pre rounded-lg bg-slate-900 p-4 pr-12 text-xs text-slate-100">
+            <code className={className}>{children}</code>
+          </pre>
+        </div>
       );
     }
     return (

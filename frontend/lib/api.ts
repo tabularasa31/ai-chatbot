@@ -400,50 +400,53 @@ async function authFetch(url: string, options: RequestInit = {}): Promise<Respon
   return response;
 }
 
+export type AuthUser = { id: string; email: string; created_at: string };
+export type AuthSession = { token: string; expires_in: number; user: AuthUser };
+
+async function parseJsonSafe(res: Response): Promise<unknown> {
+  return res.json().catch(() => ({}));
+}
+
 export const api = {
   auth: {
-    async register(email: string, password: string) {
+    async register(email: string, password: string): Promise<{ user: AuthUser }> {
       const res = await fetch(`${BASE_URL}/auth/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
         credentials: "include",
       });
-      const data = await res.json();
+      const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
-      return data as { user: { id: string; email: string; created_at: string } };
+      return data as { user: AuthUser };
     },
-    async login(email: string, password: string) {
+    async login(email: string, password: string): Promise<AuthSession> {
       const res = await fetch(`${BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
         credentials: "include",
       });
-      const data = await res.json();
+      const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
-      return data as { token: string; expires_in: number; user: { id: number; email: string } };
+      return data as AuthSession;
     },
-    async getMe() {
+    async getMe(): Promise<AuthUser> {
       const res = await authFetch(`${BASE_URL}/auth/me`);
-      const data = await res.json();
+      const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get user"));
-      return data as { id: string; email: string; created_at: string };
+      return data as AuthUser;
     },
-    async verifyEmail(token: string): Promise<{ token: string; expires_in: number; user: { id: string; email: string; created_at: string } }> {
+    async verifyEmail(token: string): Promise<AuthSession> {
       const res = await fetch(`${BASE_URL}/auth/verify-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
         credentials: "include",
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          (err as { detail?: string }).detail ?? "Failed to verify email"
-        );
-      }
-      return res.json();
+      const data = await parseJsonSafe(res);
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to verify email"));
+      return data as AuthSession;
     },
     async forgotPassword(email: string): Promise<{ message: string }> {
       const res = await fetch(`${BASE_URL}/auth/forgot-password`, {

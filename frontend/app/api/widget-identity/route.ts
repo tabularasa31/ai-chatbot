@@ -8,10 +8,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ detail: "Unauthorized" }, { status: 401 });
   }
 
-  const res = await fetch(`${API_URL}/auth/me/widget-token`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  try {
+    const res = await fetch(`${API_URL}/auth/me/widget-token`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-  const data = await res.json();
-  return NextResponse.json(data, { status: res.status });
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch {
+    return NextResponse.json({ detail: "Unavailable" }, { status: 503 });
+  }
 }

@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from chat9 import generateToken
+from chat9 import Chat9Error, generateToken
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
@@ -298,11 +298,14 @@ def get_widget_token(
         )
 
     secret = keys[0][0]
-    token = generateToken({
-        "secret": secret,
-        "user": {"user_id": str(current_user.id), "email": current_user.email},
-        "options": {"ttl": 300},
-    })
+    try:
+        token = generateToken({
+            "secret": secret,
+            "user": {"user_id": str(current_user.id), "email": current_user.email},
+            "options": {"ttl": 300},
+        })
+    except Chat9Error as exc:
+        raise HTTPException(status_code=500, detail=f"Token generation failed: {exc.code}") from exc
     return {"identity_token": token}
 
 

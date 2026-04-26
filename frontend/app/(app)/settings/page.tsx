@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { api, type DisclosureLevel, type BotResponse } from "@/lib/api";
+import { useEffect, useRef, useState } from "react";
+import { api, type DisclosureLevel } from "@/lib/api";
+import { useClientMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -52,49 +53,45 @@ Formatting:
 ];
 
 export default function SettingsPage() {
-  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [supportEmailInput, setSupportEmailInput] = useState("");
   const [escalationLanguageInput, setEscalationLanguageInput] = useState("");
-  const [fallbackEmail, setFallbackEmail] = useState<string | null>(null);
   const [level, setLevel] = useState<DisclosureLevel>("standard");
-  const [defaultBot, setDefaultBot] = useState<BotResponse | null>(null);
+  const [agentInstructions, setAgentInstructions] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [keySaving, setKeySaving] = useState(false);
   const [supportSaving, setSupportSaving] = useState(false);
   const [disclosureSaving, setDisclosureSaving] = useState(false);
   const [instructionsSaving, setInstructionsSaving] = useState(false);
   const [instructionsSavedOk, setInstructionsSavedOk] = useState(false);
-  const [agentInstructions, setAgentInstructions] = useState("");
-  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [keySavedOk, setKeySavedOk] = useState(false);
   const [supportSavedOk, setSupportSavedOk] = useState(false);
   const [disclosureSavedOk, setDisclosureSavedOk] = useState(false);
-  const [loading, setLoading] = useState(true);
+
+  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
+  const { data: bots, isLoading: botsLoading } = useBots();
+  const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
+
+  const defaultBot = bots?.find((b) => b.is_active) ?? null;
+  const { data: disclosure, isLoading: disclosureLoading, mutate: mutateDisclosure } = useBotDisclosure(defaultBot?.id);
+
+  const initialized = useRef(false);
 
   useEffect(() => {
-    Promise.all([api.clients.getMe(), api.support.get(), api.bots.list()])
-      .then(async ([client, support, bots]) => {
-        setHasOpenaiKey(client.has_openai_key ?? false);
-        setSupportEmailInput(support.l2_email ?? "");
-        setEscalationLanguageInput(support.escalation_language ?? "");
-        setFallbackEmail(support.fallback_email ?? null);
-        const bot = bots.find((b) => b.is_active) ?? null;
-        setDefaultBot(bot);
-        if (bot) {
-          const disclosure = await api.bots.getDisclosure(bot.id);
-          setLevel(disclosure.level);
-          const instructions = bot.agent_instructions ?? "";
-          setAgentInstructions(instructions);
-          const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
-          setSelectedPreset(matched?.id ?? null);
-        }
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Failed to load settings");
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (initialized.current) return;
+    if (!client || !support || !defaultBot || !disclosure) return;
+    initialized.current = true;
+    setSupportEmailInput(support.l2_email ?? "");
+    setEscalationLanguageInput(support.escalation_language ?? "");
+    const instructions = defaultBot.agent_instructions ?? "";
+    setAgentInstructions(instructions);
+    const matched = PRESETS.find((p) => instructions.trim() === p.content.trim());
+    setSelectedPreset(matched?.id ?? null);
+    setLevel(disclosure.level);
+  }, [client, support, defaultBot, disclosure]);
+
+  const loading = clientLoading || botsLoading || supportLoading || disclosureLoading;
 
   function applyPreset(presetId: string) {
     const preset = PRESETS.find((p) => p.id === presetId);
@@ -136,7 +133,7 @@ export default function SettingsPage() {
     setKeySaving(true);
     try {
       await api.clients.update({ openai_api_key: key });
-      setHasOpenaiKey(true);
+      await mutateClient();
       setOpenaiKeyInput("");
       setKeySavedOk(true);
       setTimeout(() => setKeySavedOk(false), 2500);
@@ -152,7 +149,7 @@ export default function SettingsPage() {
     setKeySaving(true);
     try {
       await api.clients.update({ openai_api_key: null });
-      setHasOpenaiKey(false);
+      await mutateClient();
       setOpenaiKeyInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to remove");
@@ -170,9 +167,9 @@ export default function SettingsPage() {
         l2_email: supportEmailInput.trim() || null,
         escalation_language: escalationLanguageInput.trim() || null,
       });
+      await mutateSupport(response, false);
       setSupportEmailInput(response.l2_email ?? "");
       setEscalationLanguageInput(response.escalation_language ?? "");
-      setFallbackEmail(response.fallback_email ?? null);
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
     } catch (err) {
@@ -191,9 +188,9 @@ export default function SettingsPage() {
         l2_email: null,
         escalation_language: null,
       });
+      await mutateSupport(response, false);
       setSupportEmailInput(response.l2_email ?? "");
       setEscalationLanguageInput(response.escalation_language ?? "");
-      setFallbackEmail(response.fallback_email ?? null);
       setSupportSavedOk(true);
       setTimeout(() => setSupportSavedOk(false), 2500);
     } catch (err) {
@@ -209,7 +206,8 @@ export default function SettingsPage() {
     setDisclosureSaving(true);
     setDisclosureSavedOk(false);
     try {
-      await api.bots.updateDisclosure(defaultBot.id, { level });
+      const updated = await api.bots.updateDisclosure(defaultBot.id, { level });
+      await mutateDisclosure(updated, false);
       setDisclosureSavedOk(true);
       setTimeout(() => setDisclosureSavedOk(false), 2500);
     } catch (err) {
@@ -239,9 +237,9 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {error && (
+      {(error || clientError) && (
         <div className="rounded-lg bg-red-50 text-red-600 text-sm px-3 py-2 border border-red-100">
-          {error}
+          {error || (clientError instanceof Error ? clientError.message : "Failed to load settings")}
         </div>
       )}
 
@@ -271,7 +269,7 @@ export default function SettingsPage() {
           />
           <p className="text-xs text-slate-500">
             Fallback owner email:{" "}
-            <span className="font-medium text-slate-700">{fallbackEmail ?? "Not configured"}</span>
+            <span className="font-medium text-slate-700">{support?.fallback_email ?? "Not configured"}</span>
           </p>
           <input
             type="text"
@@ -461,14 +459,14 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        {hasOpenaiKey && (
+        {client?.has_openai_key && (
           <div className="flex items-center gap-2 text-sm text-emerald-700 bg-emerald-50 border border-emerald-100 px-3 py-2 rounded-lg">
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             API key configured
           </div>
         )}
 
-        {!hasOpenaiKey && (
+        {!client?.has_openai_key && (
           <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-100 px-3 py-2 rounded-lg">
             <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
             No API key — chat and embeddings are disabled
@@ -498,9 +496,9 @@ export default function SettingsPage() {
               disabled={keySaving || !openaiKeyInput.trim()}
               className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium rounded-lg disabled:opacity-40 transition-colors"
             >
-              {keySaving ? "Saving…" : hasOpenaiKey ? "Update key" : "Save key"}
+              {keySaving ? "Saving…" : client?.has_openai_key ? "Update key" : "Save key"}
             </button>
-            {hasOpenaiKey && (
+            {client?.has_openai_key && (
               <button
                 type="button"
                 onClick={removeOpenaiKey}

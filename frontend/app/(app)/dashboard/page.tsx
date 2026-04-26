@@ -2,8 +2,9 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { api, removeToken } from "@/lib/api";
+import { removeToken, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
+import { useClientMe, useBots } from "@/hooks/useApi";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const APP_URL =
@@ -14,56 +15,27 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [botPublicId, setBotPublicId] = useState<string | null>(null);
-  const [hasOpenaiKey, setHasOpenaiKey] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [redirecting, setRedirecting] = useState(false);
-  const [error, setError] = useState("");
   const [copiedApiKey, setCopiedApiKey] = useState(false);
 
+  const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
+  const { data: bots, isLoading: botsLoading } = useBots();
+
+  const firstActiveBot = bots?.find((b) => b.is_active) ?? bots?.[0];
+  const botPublicId = firstActiveBot?.public_id ?? null;
+
   useEffect(() => {
-    async function load() {
-      try {
-        await api.auth.getMe();
-
-        let client;
-        try {
-          client = await api.clients.getMe();
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "";
-          if (msg.toLowerCase().includes("email not verified")) {
-            setRedirecting(true);
-            removeToken();
-            api.auth.logout();
-            router.replace("/login?error=email_not_verified");
-            return;
-          }
-          throw err;
-        }
-
-        setApiKey(client.api_key);
-        setHasOpenaiKey(client.has_openai_key ?? false);
-
-        try {
-          const bots = await api.bots.list();
-          const firstActive = bots.find((b) => b.is_active) ?? bots[0];
-          setBotPublicId(firstActive?.public_id ?? null);
-        } catch {
-          setBotPublicId(null);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load");
-      } finally {
-        setLoading(false);
-      }
+    if (!clientError) return;
+    const msg = clientError instanceof Error ? clientError.message : "";
+    if (msg.toLowerCase().includes("email not verified")) {
+      removeToken();
+      api.auth.logout();
+      router.replace("/login?error=email_not_verified");
     }
-    load();
-  }, [router]);
+  }, [clientError, router]);
 
   function copyApiKey() {
-    if (apiKey) {
-      navigator.clipboard.writeText(apiKey);
+    if (client?.api_key) {
+      navigator.clipboard.writeText(client.api_key);
       setCopiedApiKey(true);
       setTimeout(() => setCopiedApiKey(false), 2000);
     }
@@ -79,7 +51,7 @@ function DashboardContent() {
     return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${botPublicId ?? ""}">\n</script>`;
   }
 
-  if (loading || redirecting) {
+  if (clientLoading || botsLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-pulse text-slate-500 text-sm">Loading…</div>
@@ -87,10 +59,10 @@ function DashboardContent() {
     );
   }
 
-  if (error) {
+  if (clientError && !(clientError instanceof Error && clientError.message.toLowerCase().includes("email not verified"))) {
     return (
       <div className="bg-red-50 text-red-700 px-4 py-3 rounded-lg">
-        {error}
+        {clientError instanceof Error ? clientError.message : "Failed to load"}
       </div>
     );
   }
@@ -122,7 +94,7 @@ function DashboardContent() {
         <p className="text-slate-500 text-sm mb-3">Use this key to authenticate API requests.</p>
         <div className="flex items-center gap-2 flex-wrap">
           <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all">
-            {apiKey}
+            {client?.api_key}
           </code>
           <button
             onClick={copyApiKey}
@@ -133,7 +105,7 @@ function DashboardContent() {
         </div>
       </div>
 
-      {!hasOpenaiKey && (
+      {!client?.has_openai_key && (
         <div className="bg-amber-50 border border-amber-100 text-amber-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
           OpenAI API key is not set —{" "}

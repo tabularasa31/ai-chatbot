@@ -2,7 +2,8 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { api, type ChatSessionSummary, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
+import { api, type ChatSessionLogs, type MessageFeedbackValue } from "@/lib/api";
+import { useChatSessions, useChatSessionLogs } from "@/hooks/useApi";
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -144,57 +145,22 @@ function MessageBubble({
 function LogsPageContent() {
   const searchParams = useSearchParams();
   const sessionFromUrl = searchParams.get("session");
-  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(sessionFromUrl);
-  const [logs, setLogs] = useState<ChatSessionLogs | null>(null);
-  const [loadingSessions, setLoadingSessions] = useState(true);
-  const [loadingLogs, setLoadingLogs] = useState(false);
-  const [error, setError] = useState("");
 
   useEffect(() => {
     if (sessionFromUrl) setSelectedSessionId(sessionFromUrl);
   }, [sessionFromUrl]);
 
-  useEffect(() => {
-    async function load() {
-      setError("");
-      setLoadingSessions(true);
-      try {
-        const list = await api.chat.listSessions();
-        setSessions(list);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load sessions");
-      } finally {
-        setLoadingSessions(false);
-      }
-    }
-    load();
-  }, []);
+  const { data: sessions, error: sessionsError, isLoading: loadingSessions } = useChatSessions();
+  const { data: logs, error: logsError, isLoading: loadingLogs, mutate: mutateLogs } = useChatSessionLogs(selectedSessionId);
 
-  useEffect(() => {
-    const sid = selectedSessionId;
-    if (!sid) {
-      setLogs(null);
-      return;
-    }
-    const sessionId: string = sid;
-    async function load() {
-      setError("");
-      setLoadingLogs(true);
-      setLogs(null);
-      try {
-        const data = await api.chat.getSessionLogs(sessionId);
-        setLogs(data);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load logs");
-      } finally {
-        setLoadingLogs(false);
-      }
-    }
-    load();
-  }, [selectedSessionId]);
+  const error = sessionsError
+    ? (sessionsError instanceof Error ? sessionsError.message : "Failed to load sessions")
+    : logsError
+      ? (logsError instanceof Error ? logsError.message : "Failed to load logs")
+      : null;
 
-  const selectedSession = sessions.find((s) => s.session_id === selectedSessionId);
+  const selectedSession = sessions?.find((s) => s.session_id === selectedSessionId);
   const lastActivity = selectedSession?.last_activity ?? logs?.messages?.[logs.messages.length - 1]?.created_at;
 
   return (
@@ -210,7 +176,7 @@ function LogsPageContent() {
           <div className="max-h-[400px] overflow-y-auto">
             {loadingSessions ? (
               <div className="p-4 text-slate-500 text-sm">Loading sessions…</div>
-            ) : sessions.length === 0 ? (
+            ) : !sessions || sessions.length === 0 ? (
               <div className="p-4 text-slate-500 text-sm">No sessions yet.</div>
             ) : (
               <ul className="divide-y divide-slate-100">
@@ -277,8 +243,7 @@ function LogsPageContent() {
                         msg={msg}
                         onFeedbackUpdate={async (m, feedback, idealAnswer) => {
                           await api.chat.setFeedback(m.id, feedback, idealAnswer);
-                          const data = await api.chat.getSessionLogs(selectedSessionId!);
-                          setLogs(data);
+                          await mutateLogs();
                         }}
                       />
                     ))}

@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import inspect
 from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
 import backend.chat.language as language_module
-import backend.chat.service as chat_service_module
-import backend.escalation.openai_escalation as openai_escalation_module
-import backend.guards.reject_response as reject_response_module
 from backend.chat.language import (
     LanguageDetectionResult,
     LangDetectError,
@@ -667,20 +663,3 @@ def test_localization_model_overridden_via_env(
 
     assert result == LocalizationResult(text="Bonjour", tokens_used=21)
     assert captured["model"] == "gpt-4o"
-
-
-# ---------------------------------------------------------------------------
-# Migration guard
-# ---------------------------------------------------------------------------
-
-
-def test_all_callers_migrated() -> None:
-    modules = [
-        chat_service_module,
-        openai_escalation_module,
-        reject_response_module,
-    ]
-
-    for module in modules:
-        contents = inspect.getsource(module)
-        assert "localize_text_to_question_language" not in contents

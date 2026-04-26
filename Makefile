@@ -7,7 +7,7 @@ PG_PASSWORD ?= password
 PG_DBNAME ?= chatbot
 
 .PHONY: db-up db-down db-recreate db-ready db-logs test test-sqlite test-pgvector coverage clean smoke auth-reset escalation rag-edge pgvector-only
-.PHONY: coverage-all
+.PHONY: coverage-all lint-deprecated
 
 db-up:
 	$(COMPOSE) up -d db
@@ -89,4 +89,9 @@ rag-edge:
 
 pgvector-only: db-up db-ready
 	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -q -m pgvector tests/pgvector_tests/
+
+lint-deprecated:
+	@grep -rn --include="*.py" "localize_text_to_question_language" backend/ \
+	  --exclude="language.py" \
+	  && echo "ERROR: deprecated localize_text_to_question_language still in use" && exit 1 || true
 

@@ -37,9 +37,9 @@ from backend.observability import (
     shutdown_sentry,
 )
 from backend.routes.public import public_router
-from backend.routes.widget import widget_router
 from backend.search.routes import search_router
 from backend.tenants.routes import tenants_router
+from backend.widget.routes import widget_router
 
 
 @asynccontextmanager

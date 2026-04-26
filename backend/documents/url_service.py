@@ -62,6 +62,7 @@ from backend.documents.http_client import (  # noqa: F401
     _validate_public_hostname,
 )
 from backend.documents.parsers import (
+    OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
     load_openapi_spec,
     looks_like_openapi,
@@ -453,7 +454,7 @@ def _upsert_structured_document(
     url: str,
     title: str,
     parsed_text: str,
-    chunks: list,
+    chunks: list[OpenAPIChunk],
     db: Session,
     api_key: str | None,
 ) -> tuple[Document, int]:

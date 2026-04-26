@@ -102,7 +102,7 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: sqlite:///:memory:?check_same_thread=False
+      DATABASE_URL: postgresql://postgres:password@localhost:5432/test_pgvector
       JWT_SECRET: test-secret-key-min-32-chars-long!!
       EVAL_JWT_SECRET: test-eval-jwt-secret-min-32-chars-long!!
       ENVIRONMENT: test
@@ -111,6 +111,10 @@ jobs:
       FRONTEND_URL: http://localhost:3000
       BREVO_API_KEY: test-key
       EMAIL_FROM: test@example.com
+      PG_HOST: localhost
+      PG_PORT: 5432
+      PG_USER: postgres
+      PG_PASSWORD: password
 
     steps:
       - uses: actions/checkout@v4
@@ -126,11 +130,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pgvector tests (PostgreSQL)
-        env:
-          PG_HOST: localhost
-          PG_PORT: 5432
-          PG_USER: postgres
-          PG_PASSWORD: password
         run: pytest tests/pgvector_tests/ -m pgvector -q
 
   frontend:

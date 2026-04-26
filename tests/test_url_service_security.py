@@ -8,8 +8,9 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from backend.tenants.service import create_tenant
+from backend.core.config import settings
 from backend.core.security import hash_password
+from backend.tenants.service import create_tenant
 from backend.documents import http_client as http_client_mod
 from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
@@ -495,7 +496,7 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
 def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED", "1")
+    monkeypatch.setattr(settings, "url_knowledge_extract_when_unchanged", True)
     calls: list[dict] = []
 
     def capture_extraction(**kwargs):

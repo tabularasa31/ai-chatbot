@@ -113,6 +113,10 @@ class Settings(BaseSettings):
         description="OpenAI chat model used for localize/translate/render paths.",
     )
     allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
+    cors_allowed_origins_raw: str = Field(
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,https://getchat9.live",
+        alias="CORS_ALLOWED_ORIGINS",
+    )
     widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)
     chat_response_max_tokens: int = Field(800, alias="CHAT_RESPONSE_MAX_TOKENS", ge=1)
     chat_response_max_tokens_reasoning: int = Field(
@@ -150,6 +154,11 @@ class Settings(BaseSettings):
     openai_user_retry_budget_seconds: float = Field(
         1.5,
         alias="OPENAI_USER_RETRY_BUDGET_SECONDS",
+        gt=0,
+    )
+    gap_shutdown_timeout_seconds: float = Field(
+        25.0,
+        alias="GAP_SHUTDOWN_TIMEOUT_SECONDS",
         gt=0,
     )
     gap_transient_max_attempts: int = Field(
@@ -259,6 +268,10 @@ class Settings(BaseSettings):
     max_faq_per_run: int = Field(20, alias="MAX_FAQ_PER_RUN")
     # Minimum confidence to auto-approve a FAQ (skip human review)
     faq_confidence_auto_accept: float = Field(0.85, alias="FAQ_CONFIDENCE_AUTO_ACCEPT")
+    faq_direct_threshold: float = Field(0.92, alias="FAQ_DIRECT_THRESHOLD")
+    faq_context_threshold: float = Field(0.70, alias="FAQ_CONTEXT_THRESHOLD")
+    faq_context_max_items: int = Field(2, alias="FAQ_CONTEXT_MAX_ITEMS", ge=1)
+    faq_approved_promotion_delta: float = Field(0.02, alias="FAQ_APPROVED_PROMOTION_DELTA")
     # Hours between cron-triggered analysis runs
     log_analysis_cron_hours: int = Field(24, alias="LOG_ANALYSIS_CRON_HOURS")
     # Threshold: number of new messages that triggers an analysis job
@@ -287,6 +300,11 @@ class Settings(BaseSettings):
         alias="SEMANTIC_QUERY_REWRITE_TIMEOUT_SEC",
     )
 
+    url_knowledge_extract_when_unchanged: bool = Field(
+        False,
+        alias="URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED",
+    )
+
     # ── Agent instructions ─────────────────────────────────────────────────
     enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")
     enable_cot_reasoning: bool = Field(True, alias="ENABLE_COT_REASONING")
@@ -312,6 +330,10 @@ class Settings(BaseSettings):
             if item.strip()
         ]
         return items or ["*"]
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [x.strip() for x in self.cors_allowed_origins_raw.split(",") if x.strip()]
 
     model_config = SettingsConfigDict(
         env_file=".env",

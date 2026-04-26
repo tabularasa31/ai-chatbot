@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { api, type EscalationTicket } from "@/lib/api";
+import { useEscalations } from "@/hooks/useApi";
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
@@ -38,30 +39,10 @@ function statusClass(s: string): string {
 }
 
 export default function EscalationsPage() {
-  const [tickets, setTickets] = useState<EscalationTicket[]>([]);
   const [statusFilter, setStatusFilter] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const list = await api.escalations.list(
-        statusFilter ? { status: statusFilter } : undefined
-      );
-      setTickets(list);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load tickets");
-    } finally {
-      setLoading(false);
-    }
-  }, [statusFilter]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data: tickets, error, isLoading, mutate } = useEscalations(statusFilter || undefined);
 
   return (
     <div className="space-y-6">
@@ -88,7 +69,7 @@ export default function EscalationsPage() {
         </label>
         <button
           type="button"
-          onClick={() => load()}
+          onClick={() => mutate()}
           className="text-sm text-violet-600 hover:underline"
         >
           Refresh
@@ -96,12 +77,14 @@ export default function EscalationsPage() {
       </div>
 
       {error && (
-        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">{error}</div>
+        <div className="text-red-600 text-sm bg-red-50 border border-red-100 px-3 py-2 rounded-lg">
+          {error instanceof Error ? error.message : "Failed to load tickets"}
+        </div>
       )}
 
-      {loading ? (
+      {isLoading ? (
         <div className="text-slate-500 text-sm">Loading…</div>
-      ) : tickets.length === 0 ? (
+      ) : !tickets || tickets.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-500">
           No tickets for this filter.
         </div>
@@ -128,7 +111,7 @@ export default function EscalationsPage() {
                     onToggle={() =>
                       setExpandedId((id) => (id === t.id ? null : t.id))
                     }
-                    onResolved={load}
+                    onResolved={() => mutate()}
                   />
                 ))}
               </tbody>

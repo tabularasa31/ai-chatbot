@@ -69,7 +69,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | File | Purpose |
 |------|---------|
 | `backend/main.py` | FastAPI entry point, all router wiring |
-| `backend/models.py` | **All** SQLAlchemy models in one file |
+| `backend/models/` | SQLAlchemy models split by domain; re-exported via `backend/models/__init__.py` |
 | `backend/core/config.py` | Settings and all env vars (guards, trace, RAG knobs, etc.) |
 | `backend/core/openai_client.py` | Per-tenant OpenAI client factory |
 | `backend/search/service.py` | Hybrid RAG retrieval (pgvector + BM25 + RRF) |
@@ -90,7 +90,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 ## Conventions (quick reference)
 
 - New backend modules follow: `routes.py` + `service.py` + `schemas.py` under a domain folder.
-- All DB models go in `backend/models.py` — never create a new models file.
+- All DB models go in `backend/models/{domain}.py` (e.g. `auth.py`, `chat.py`), re-exported via `backend/models/__init__.py`. Never import directly from the sub-modules unless needed — use `from backend.models import X`.
 - DB schema changes: Alembic migration only (`alembic revision -m "description"`).
 - Services receive `Session` from the router via `Depends(get_db)`; never import `SessionLocal` in HTTP handlers.
 - Every chat turn passes through `backend/guards/` before LLM generation: injection detector (structural → semantic, 2 levels) then relevance guard. Both are synchronous and short-circuit on failure.

@@ -44,6 +44,11 @@ def _faq_thresholds() -> tuple[float, float, int]:
 
 
 def _approved_promotion_delta() -> float:
+    """
+    Optional safety knob for approved-biased direct candidate selection.
+    If an approved candidate is close enough to the absolute top score,
+    we allow it to be considered for direct path.
+    """
     return max(settings.faq_approved_promotion_delta, 0.0)
 
 

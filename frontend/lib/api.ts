@@ -366,7 +366,7 @@ export function markSession(): void {
   document.cookie = `${SESSION_KEY}=1; path=/; max-age=${SESSION_MAX_AGE_SECONDS}; samesite=lax${secure}`;
 }
 
-export function removeToken(): void {
+export function clearSession(): void {
   if (typeof window === "undefined") return;
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem("chat9_access_token");
@@ -377,7 +377,7 @@ export function removeToken(): void {
 function handleUnauthorized(): void {
   if (typeof window === "undefined") return;
 
-  removeToken();
+  clearSession();
   fetch(`${BASE_URL}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
 
   if (authRedirectInProgress) return;

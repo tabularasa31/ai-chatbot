@@ -396,10 +396,15 @@ function handleUnauthorized(): void {
   }
 }
 
-async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const response = await fetch(url, { credentials: "include", ...options });
+async function apiFetch(
+  url: string,
+  options: RequestInit & { skipAuthRedirect?: boolean } = {}
+): Promise<Response> {
+  const { skipAuthRedirect, ...fetchOptions } = options;
+  // credentials must come after the spread so callers cannot accidentally override it
+  const response = await fetch(url, { ...fetchOptions, credentials: "include" });
 
-  if (response.status === 401) {
+  if (response.status === 401 && !skipAuthRedirect) {
     handleUnauthorized();
   }
 
@@ -420,6 +425,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
@@ -430,6 +436,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
@@ -446,6 +453,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
+        skipAuthRedirect: true,
       });
       const data = await parseJsonSafe(res);
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to verify email"));
@@ -456,6 +464,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
+        skipAuthRedirect: true,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send reset link"));
@@ -466,6 +475,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: newPassword }),
+        skipAuthRedirect: true,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));

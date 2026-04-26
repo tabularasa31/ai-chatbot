@@ -351,27 +351,28 @@ function getErrorMessage(data: unknown, fallback: string): string {
   return fallback;
 }
 
+const SESSION_KEY = "chat9_session";
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("token");
+  return localStorage.getItem(SESSION_KEY);
 }
 
-export function saveToken(token: string): void {
+export function saveToken(_token: string): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem("token", token);
-  document.cookie = `token=${token}; path=/; max-age=86400; samesite=lax`;
+  localStorage.setItem(SESSION_KEY, "1");
 }
 
 export function removeToken(): void {
   if (typeof window === "undefined") return;
-  localStorage.removeItem("token");
-  document.cookie = "token=; path=/; max-age=0; samesite=lax";
+  localStorage.removeItem(SESSION_KEY);
 }
 
 function handleUnauthorized(): void {
   if (typeof window === "undefined") return;
 
   removeToken();
+  fetch(`${BASE_URL}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
 
   if (authRedirectInProgress) return;
   authRedirectInProgress = true;
@@ -390,14 +391,7 @@ function handleUnauthorized(): void {
 }
 
 async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const token = getToken();
-  const headers: HeadersInit = {
-    ...(options.headers as Record<string, string>),
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-  const response = await fetch(url, { ...options, headers });
+  const response = await fetch(url, { ...options, credentials: "include" });
 
   if (response.status === 401) {
     handleUnauthorized();
@@ -467,6 +461,12 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));
       return data as { message: string };
+    },
+    async logout(): Promise<void> {
+      await fetch(`${BASE_URL}/auth/logout`, {
+        method: "POST",
+        credentials: "include",
+      }).catch(() => {/* ignore network errors on logout */});
     },
   },
   bots: {
@@ -600,10 +600,9 @@ export const api = {
     async upload(file: File) {
       const formData = new FormData();
       formData.append("file", file);
-      const token = getToken();
       const res = await fetch(`${BASE_URL}/documents`, {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include",
         body: formData,
       });
       const data = await res.json();

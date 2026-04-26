@@ -26,6 +26,7 @@ export function Navbar() {
 
   function handleLogout() {
     removeToken();
+    api.auth.logout();
     router.replace("/login");
   }
 

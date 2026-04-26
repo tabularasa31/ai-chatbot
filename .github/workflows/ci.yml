@@ -77,6 +77,9 @@ jobs:
       - name: Lint with ruff
         run: ruff check backend
 
+      - name: Check no deprecated callers
+        run: make lint-deprecated
+
       - name: Run tests (SQLite)
         run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
 

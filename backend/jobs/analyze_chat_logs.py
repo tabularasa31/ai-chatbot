@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -37,6 +38,55 @@ from backend.utils.math import cosine_similarity as _cosine_similarity
 logger = logging.getLogger(__name__)
 
 CURRENT_ANALYSIS_VERSION = 1
+
+# ── Thread registry + shutdown event ─────────────────────────────────────────
+_shutdown_event = threading.Event()
+
+# Maps thread → tenant_id so we can force-release the DB lock on shutdown timeout.
+_active_threads_lock = threading.Lock()
+_active_thread_tenants: dict[threading.Thread, uuid.UUID] = {}
+
+
+def shutdown_log_analysis_threads(timeout_seconds: float = 30.0) -> None:
+    """Signal shutdown and join all running job threads.
+
+    Called from FastAPI lifespan. Threads remain daemonized so the interpreter
+    can exit even if a thread is stuck in a network call; after the join timeout
+    we force-release the is_running DB lock so the next deployment can start jobs.
+    """
+    _shutdown_event.set()
+    with _active_threads_lock:
+        snapshot = dict(_active_thread_tenants)
+    for t, tenant_id in snapshot.items():
+        t.join(timeout=timeout_seconds)
+        if t.is_alive():
+            logger.warning(
+                "log_analysis thread %s did not finish within %ss — releasing lock for tenant %s",
+                t.name, timeout_seconds, tenant_id,
+            )
+            _force_release_job_lock(tenant_id)
+
+
+def _force_release_job_lock(tenant_id: uuid.UUID) -> None:
+    """Clear is_running for a tenant whose job thread did not finish in time."""
+    from sqlalchemy import update as sa_update
+
+    from backend.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.execute(
+            sa_update(LogAnalysisState)
+            .where(LogAnalysisState.tenant_id == tenant_id)
+            .values(is_running=False)
+        )
+        db.commit()
+    except Exception:
+        logger.exception("log_analysis force-release failed for tenant %s", tenant_id)
+        db.rollback()
+    finally:
+        db.close()
+
 
 # ── LLM concurrency guard ────────────────────────────────────────────────────
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
@@ -460,12 +510,14 @@ def enqueue_log_analysis_job(
 
     job_start, old_watermark = result
 
-    import threading
     t = threading.Thread(
         target=_run_job_sync,
         args=(tenant_id, api_key, job_start, old_watermark, trigger),
         daemon=True,
+        name=f"log-analysis-{tenant_id}",
     )
+    with _active_threads_lock:
+        _active_thread_tenants[t] = tenant_id
     t.start()
     return True
 
@@ -479,7 +531,7 @@ def _run_job_sync(
     old_watermark: datetime | None,
     trigger: str,
 ) -> None:
-    """Entry point for daemon thread — opens its own DB session, runs async job."""
+    """Entry point for job thread — opens its own DB session, runs async job."""
     from backend.core.db import SessionLocal
 
     db = SessionLocal()
@@ -491,6 +543,8 @@ def _run_job_sync(
     finally:
         loop.close()
         db.close()
+        with _active_threads_lock:
+            _active_thread_tenants.pop(threading.current_thread(), None)
 
 
 async def run_job(
@@ -586,31 +640,40 @@ async def run_job(
                         )
                     )
 
-            if not members:
-                continue
-
-            # Skip cluster if ALL assistant answers are thumbs-down
-            if all(m.feedback == MessageFeedback.down for m in members):
-                continue
-
-            # Best answer: thumbs_up > no feedback (none) > skip thumbs_down
-            best = next((m for m in members if m.has_thumbs_up), None)
-            if best is None:
-                best = next(
-                    (m for m in members if m.feedback != MessageFeedback.down), None
-                )
-            if best is None:
-                continue
-
-            representative = _representative_question(cluster)
-            created = _create_faq_candidate(
-                db, tenant_id, representative, best, cluster, api_key
+            usable = (
+                members
+                and not all(m.feedback == MessageFeedback.down for m in members)
             )
-            if created:
-                faq_count += 1
+            if usable:
+                # Best answer: thumbs_up > no feedback (none) > skip thumbs_down
+                best = next((m for m in members if m.has_thumbs_up), None)
+                if best is None:
+                    best = next(
+                        (m for m in members if m.feedback != MessageFeedback.down), None
+                    )
+                if best is not None:
+                    representative = _representative_question(cluster)
+                    created = _create_faq_candidate(
+                        db, tenant_id, representative, best, cluster, api_key
+                    )
+                    if created:
+                        faq_count += 1
+                    alias_inputs.append([m.message.content for m in members])
 
-            # Prepare alias extraction input
-            alias_inputs.append([m.message.content for m in members])
+            # Advance watermark after each cluster is fully processed (at-least-once).
+            # Tracks the max created_at across cluster messages so a crash mid-batch
+            # only causes the remaining clusters to be reprocessed, not the whole batch.
+            for msg in cluster:
+                if last_msg_created_at is None or msg.created_at > last_msg_created_at:
+                    last_msg_created_at = msg.created_at
+                    last_msg_id = msg.id
+
+        # Fallback: no clusters were processed (empty list or immediate timeout).
+        # Advance past all loaded messages so the next run does not re-scan the
+        # same range; mirrors the original behavior before per-cluster tracking.
+        if last_msg_created_at is None and messages:
+            last_msg_id = messages[-1].id
+            last_msg_created_at = messages[-1].created_at
 
         # ── Alias extraction (async, throttled) ──────────────────────────────
         alias_count = await extract_and_merge_aliases(
@@ -619,10 +682,6 @@ async def run_job(
             cluster_questions_list=alias_inputs,
             api_key=api_key,
         )
-
-        if messages:
-            last_msg_id = messages[-1].id
-            last_msg_created_at = messages[-1].created_at
 
     except Exception as exc:
         status = "failed"

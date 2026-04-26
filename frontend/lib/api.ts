@@ -407,6 +407,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        credentials: "include",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Registration failed"));
@@ -417,6 +418,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
+        credentials: "include",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
@@ -433,6 +435,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
+        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -447,6 +450,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
+        credentials: "include",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to send reset link"));
@@ -457,6 +461,7 @@ export const api = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, new_password: newPassword }),
+        credentials: "include",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Invalid or expired reset link"));

@@ -19,8 +19,6 @@ from backend.tenant_knowledge.openapi_extractor import extract_openapi_knowledge
 from backend.tenant_knowledge.schemas import AliasEntry, FaqCandidate, GlossaryEntry
 from backend.tenant_knowledge.tenant_profile_service import merge_into_profile
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-
 logger = logging.getLogger(__name__)
 
 

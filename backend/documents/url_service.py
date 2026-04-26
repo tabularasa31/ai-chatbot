@@ -28,6 +28,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.core import db as core_db
+from backend.core.config import settings
 from backend.core.db import SessionLocal
 from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
@@ -982,7 +983,7 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
         response = oai.embeddings.create(
-            model="text-embedding-3-small",
+            model=settings.embedding_model,
             input=[chunk["chunk_text"] for chunk in batch],
         )
         vectors.extend(item.embedding for item in response.data)

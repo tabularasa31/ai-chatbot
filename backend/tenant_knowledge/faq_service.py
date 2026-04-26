@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import uuid
 from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import TenantFaq as TenantFaqModel
 from backend.tenant_knowledge.schemas import FaqCandidate
+from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
-
-EMBEDDING_MODEL = "text-embedding-3-small"
 DEDUP_SIMILARITY_THRESHOLD = 0.92
 FAQ_MIN_CONFIDENCE_THRESHOLD = 0.5
 
@@ -34,17 +33,6 @@ def _vector_from_unknown(raw: object) -> list[float] | None:
         except Exception:
             pass
     return None
-
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    norm1 = math.sqrt(sum(x * x for x in a))
-    norm2 = math.sqrt(sum(y * y for y in b))
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return max(0.0, min(1.0, dot / (norm1 * norm2)))
 
 
 def _dedupe_existing_faq_by_similarity(
@@ -144,7 +132,7 @@ def insert_new_faq_candidates(
                 continue
 
             embedding_resp = openai_client.embeddings.create(
-                model=EMBEDDING_MODEL,
+                model=settings.embedding_model,
                 input=question,
             )
             question_embedding = embedding_resp.data[0].embedding  # 1536 floats

@@ -9,6 +9,7 @@ from typing import TypedDict
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.documents.parsers import (
     OPENAPI_REQUEST_DETAIL_MARKER,
@@ -272,7 +273,7 @@ def create_embeddings_for_document(
     openai_client = get_openai_client(api_key)
     try:
         response = openai_client.embeddings.create(
-            model="text-embedding-3-small",
+            model=settings.embedding_model,
             input=chunk_texts,
         )
     except Exception as e:

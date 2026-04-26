@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, saveToken } from "@/lib/api";
+import { api, markSession } from "@/lib/api";
 import { AuthCardCentered, authStyles } from "@/components/auth/AuthCard";
 
 type Status = "idle" | "loading" | "success" | "error";
@@ -24,8 +24,8 @@ function VerifyContent() {
     setStatus("loading");
     api.auth
       .verifyEmail(token)
-      .then((data) => {
-        saveToken(data.token);
+      .then(() => {
+        markSession();
         setStatus("success");
         router.replace("/dashboard");
       })

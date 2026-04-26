@@ -48,22 +48,6 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _detect_platform(html: str, url: str) -> str:
-    lower = html.lower()
-    hostname = urlparse(url).netloc.lower()
-    if "docusaurus" in lower:
-        return "docusaurus"
-    if "gitbook" in lower or "gitbook.io" in hostname:
-        return "gitbook"
-    if "mintlify" in lower:
-        return "mintlify"
-    if "readme.io" in hostname or "readme.com" in hostname:
-        return "readme"
-    if "vitepress" in lower:
-        return "vitepress"
-    return "generic"
-
-
 def _build_chunk_text(chunk_text: str, page_title: str, section: str) -> str:
     parts: list[str] = []
     if page_title:

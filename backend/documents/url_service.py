@@ -31,7 +31,6 @@ from backend.documents.embedder import (  # noqa: F401
     _build_chunks,
     _build_structured_openapi_chunks,
     _content_hash,
-    _detect_platform,
     _embed_chunks,
     _extract_page,
     _normalize_source_format,
@@ -863,10 +862,8 @@ def _index_pages(
             quick_answers=quick_answers,
         )
 
-    root_html = _fetch_page_html(source.url) or ""
     source.metadata_json = {
         **(source.metadata_json or {}),
-        "platform": _detect_platform(root_html, source.url) if root_html else "generic",
         "limit_reached": False,
     }
 

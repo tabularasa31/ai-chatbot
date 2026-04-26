@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
-import tempfile
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
@@ -80,29 +78,6 @@ def parse_docx(content: bytes) -> str:
         return "\n\n".join(paragraphs) if paragraphs else ""
     except Exception as e:
         raise ValueError(f"DOCX is corrupted or unreadable: {e}") from e
-
-
-_ANTIWORD_TIMEOUT = 30
-
-
-def parse_doc(content: bytes) -> str:
-    """Extract text from a legacy .doc file using antiword."""
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".doc") as tmp:
-            tmp.write(content)
-            tmp.flush()
-            result = subprocess.run(
-                ["antiword", tmp.name],
-                capture_output=True,
-                timeout=_ANTIWORD_TIMEOUT,
-            )
-            if result.returncode != 0:
-                raise ValueError(result.stderr.decode(errors="replace").strip() or "antiword failed")
-            return result.stdout.decode("utf-8", errors="replace")
-    except ValueError:
-        raise
-    except Exception as e:
-        raise ValueError(f"DOC is corrupted or unreadable: {e}") from e
 
 
 def parse_txt(content: bytes) -> str:

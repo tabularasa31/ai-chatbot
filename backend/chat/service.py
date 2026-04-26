@@ -74,7 +74,7 @@ from backend.chat.persistence import (
     _persist_assistant_message,  # noqa: F401  (re-export — greeting handler lazy-imports via service)
     _persist_assistant_message_with_response_language,  # noqa: F401  (re-export)
     _persist_turn,  # noqa: F401  (re-export — escalation handler accesses via _svc.*)
-    _persist_turn_with_response_language,  # noqa: F401  (re-export — rag/small_talk handlers)
+    _persist_turn_with_response_language,
     _source_docs_for_db,  # noqa: F401  (re-export)
 )
 from backend.chat.pii import redact
@@ -175,11 +175,14 @@ def _escalation_turn_response(
     escalated: bool,
     ticket_number: str | None = None,
 ) -> ChatTurnOutcome:
-    """Persist an escalation turn and return the outcome."""
-    from backend.chat.persistence import (
-        _persist_turn_with_response_language as _ptwrl,
-    )
-    _ptwrl(
+    """Persist an escalation turn and return the outcome. Single commit for all mutations.
+
+    The user-facing message is always written in ``response_language`` (the
+    user's language), not in ``escalation_language``. ``escalation_language``
+    is the tenant-side artifact language (ticket text / support team) and
+    must not leak into the chat reply.
+    """
+    _persist_turn_with_response_language(
         db=db,
         chat=chat,
         tenant_id=tenant_id,

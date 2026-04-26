@@ -96,7 +96,7 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
     for chat in chats:
         messages = sorted(chat.messages, key=lambda m: m.created_at or datetime.min)
         msg_count = len(messages)
-        last_activity = datetime.min
+        last_activity = chat.created_at or datetime.min
         last_question: str | None = None
         last_answer_preview: str | None = None
 
@@ -111,26 +111,15 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
                     preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."
                 last_answer_preview = preview
 
-        if msg_count > 0:
-            result.append(
-                SessionSummary(
-                    session_id=chat.session_id,
-                    message_count=msg_count,
-                    last_question=last_question,
-                    last_answer_preview=last_answer_preview,
-                    last_activity=last_activity,
-                )
+        result.append(
+            SessionSummary(
+                session_id=chat.session_id,
+                message_count=msg_count,
+                last_question=last_question,
+                last_answer_preview=last_answer_preview,
+                last_activity=last_activity,
             )
-        else:
-            result.append(
-                SessionSummary(
-                    session_id=chat.session_id,
-                    message_count=0,
-                    last_question=None,
-                    last_answer_preview=None,
-                    last_activity=chat.created_at or datetime.min,
-                )
-            )
+        )
 
     result.sort(key=lambda s: s.last_activity, reverse=True)
     return result

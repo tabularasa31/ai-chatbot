@@ -28,7 +28,7 @@ export function ImageWithFallback({ src, alt, className, style, ...rest }: Image
           {/* eslint-disable-next-line @next/next/no-img-element -- data: URLs require img */}
           <img 
             src={ERROR_IMG_SRC} 
-            alt="Error loading image" 
+            alt="Error loading"
             data-original-url={src}
             {...rest}
           />

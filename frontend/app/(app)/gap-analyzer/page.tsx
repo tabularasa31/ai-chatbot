@@ -510,6 +510,7 @@ export default function GapAnalyzerPage() {
             <select
               value={modeAStatus}
               onChange={(event) => setModeAStatus(event.target.value as GapModeAStatusFilter)}
+              aria-label="Mode A status filter"
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>
@@ -555,6 +556,7 @@ export default function GapAnalyzerPage() {
             <select
               value={modeBStatus}
               onChange={(event) => setModeBStatus(event.target.value as GapModeBStatusFilter)}
+              aria-label="Mode B status filter"
               className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700"
             >
               <option value="active">Active</option>

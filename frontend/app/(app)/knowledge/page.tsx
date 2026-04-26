@@ -447,7 +447,7 @@ export default function KnowledgePage() {
                 </div>
                 {profileEditingField === "topics" ? (
                   <div className="mt-2 flex gap-2">
-                    <input value={newTopic} onChange={(e) => setNewTopic(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="Add topic" />
+                    <input aria-label="New topic" value={newTopic} onChange={(e) => setNewTopic(e.target.value)} className="w-64 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="Add topic" />
                     <button
                       type="button"
                       onClick={() => {
@@ -509,7 +509,7 @@ export default function KnowledgePage() {
                 </div>
                 {profileEditingField === "support_urls" ? (
                   <div className="mt-2 flex gap-2">
-                    <input value={newSupportUrl} onChange={(e) => setNewSupportUrl(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="https://..." />
+                    <input aria-label="New support URL" value={newSupportUrl} onChange={(e) => setNewSupportUrl(e.target.value)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700" placeholder="https://..." />
                     <button
                       type="button"
                       onClick={() => {
@@ -587,7 +587,7 @@ export default function KnowledgePage() {
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead className="text-xs uppercase text-slate-400">
-                    <tr><th className="py-2">Term</th><th className="py-2">Definition</th><th className="py-2">Confidence</th><th className="py-2">Source</th></tr>
+                    <tr><th scope="col" className="py-2">Term</th><th scope="col" className="py-2">Definition</th><th scope="col" className="py-2">Confidence</th><th scope="col" className="py-2">Source</th></tr>
                   </thead>
                   <tbody>
                     {profileDraft.glossary.map((entry, idx) => (

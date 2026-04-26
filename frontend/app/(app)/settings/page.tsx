@@ -262,6 +262,7 @@ export default function SettingsPage() {
           <input
             type="email"
             placeholder="support@company.com"
+            aria-label="Support inbox email"
             value={supportEmailInput}
             onChange={(e) => setSupportEmailInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && saveSupportEmail()}
@@ -274,6 +275,7 @@ export default function SettingsPage() {
           <input
             type="text"
             placeholder="Escalation language (e.g. en, ru, fr, pt-BR)"
+            aria-label="Escalation language"
             value={escalationLanguageInput}
             onChange={(e) => setEscalationLanguageInput(e.target.value)}
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-800 outline-none focus:border-slate-400 placeholder:text-slate-400"
@@ -346,6 +348,7 @@ export default function SettingsPage() {
           <textarea
             rows={14}
             placeholder={"You are a support assistant for {product_name}.\n\nYour rules here…"}
+            aria-label="Agent instructions"
             value={agentInstructions}
             onChange={(e) => {
               setAgentInstructions(e.target.value);
@@ -410,6 +413,7 @@ export default function SettingsPage() {
           {DISCLOSURE_OPTIONS.map((opt) => (
             <label
               key={opt.value}
+              aria-label={opt.label}
               className={`flex gap-3 p-4 rounded-xl border cursor-pointer transition-colors ${
                 level === opt.value
                   ? "border-violet-400 bg-violet-50/50"
@@ -483,6 +487,7 @@ export default function SettingsPage() {
           <input
             type="password"
             placeholder="sk-..."
+            aria-label="OpenAI API key"
             value={openaiKeyInput}
             onChange={(e) => setOpenaiKeyInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && saveOpenaiKey()}

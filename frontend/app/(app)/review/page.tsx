@@ -179,6 +179,7 @@ function BadAnswerCard({
                 value={idealText}
                 onChange={(e) => setIdealText(e.target.value)}
                 placeholder="Enter ideal answer for training..."
+                aria-label="Ideal answer for training"
                 className="w-full text-sm border border-slate-200 rounded-lg px-2 py-1.5 text-slate-800 outline-none focus:border-slate-400"
                 rows={4}
               />

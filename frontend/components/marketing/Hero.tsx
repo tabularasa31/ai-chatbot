@@ -93,6 +93,7 @@ export function Hero() {
               <input
                 type="text"
                 placeholder="Type a message..."
+                aria-label="Type a message"
                 className="flex-1 bg-nd-base/50 border border-nd-surface rounded-lg px-4 py-2.5 text-nd-text text-sm placeholder-nd-text/40 focus:outline-none focus:ring-2 focus:ring-nd-accent"
               />
               <button className="bg-nd-accent p-2.5 rounded-lg hover:bg-nd-accent-hover transition-colors">

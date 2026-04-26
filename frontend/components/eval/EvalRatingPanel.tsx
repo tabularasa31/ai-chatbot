@@ -233,11 +233,12 @@ export function EvalRatingPanel({
       {verdict === "fail" && (
         <div className="space-y-3 mt-3">
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
+            <label htmlFor="eval-error-category" className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <Tag size={12} />
               Категория
             </label>
             <select
+              id="eval-error-category"
               value={errorCategory}
               onChange={(e) => {
                 setErrorCategory(e.target.value);
@@ -255,11 +256,12 @@ export function EvalRatingPanel({
           </div>
 
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
+            <label htmlFor="eval-comment" className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <MessageSquare size={12} />
               Комментарий
             </label>
             <textarea
+              id="eval-comment"
               value={comment}
               onChange={(e) => {
                 setComment(e.target.value);

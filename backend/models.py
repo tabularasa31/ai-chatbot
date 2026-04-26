@@ -511,8 +511,10 @@ class Embedding(Base):
         index=True,
     )
     chunk_text = Column(Text, nullable=False)
-    # Vector column: 1536 dimensions for text-embedding-3-small
+    # Vector column: 1536 dimensions for text-embedding-3-small.
     # Uses pgvector extension. Falls back to TEXT in SQLite (tests).
+    # HNSW index (ix_embeddings_vector_hnsw) is created in migration dd643d1a544a;
+    # document_id has index=True above.
     vector = Column(
         Vector(1536),
         nullable=True,
@@ -1349,8 +1351,3 @@ class EvalResult(Base):
     created_at = Column(DateTime, nullable=False, default=_utcnow)
 
     session = relationship("EvalSession", back_populates="results")
-
-
-# Note: pgvector HNSW index is created via migration, not here
-# CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);
-# document_id already has index=True on the column

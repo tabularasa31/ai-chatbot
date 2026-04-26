@@ -35,9 +35,10 @@ def upgrade() -> None:
           AND vector IS NULL
     """)
 
-    # 5. Create HNSW index for cosine distance
+    # 5. Create HNSW index for cosine distance (IF NOT EXISTS: safe on DBs where the
+    #    index was created manually before this migration ran)
     op.execute("""
-        CREATE INDEX ix_embeddings_vector_hnsw
+        CREATE INDEX IF NOT EXISTS ix_embeddings_vector_hnsw
         ON embeddings
         USING hnsw (vector vector_cosine_ops)
         WITH (m = 16, ef_construction = 64)

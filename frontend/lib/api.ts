@@ -422,7 +422,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Login failed"));
-      return data as { token: string; expires_in: number; user: { id: number; email: string } };
+      return data as { token: string; expires_in: number; user: { id: string; email: string; created_at: string } };
     },
     async getMe() {
       const res = await authFetch(`${BASE_URL}/auth/me`);
@@ -437,13 +437,9 @@ export const api = {
         body: JSON.stringify({ token }),
         credentials: "include",
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(
-          (err as { detail?: string }).detail ?? "Failed to verify email"
-        );
-      }
-      return res.json();
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to verify email"));
+      return data;
     },
     async forgotPassword(email: string): Promise<{ message: string }> {
       const res = await fetch(`${BASE_URL}/auth/forgot-password`, {

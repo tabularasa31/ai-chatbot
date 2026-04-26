@@ -16,7 +16,7 @@ const PROTECTED_PATHS = [
 const AUTH_PATHS = ["/login", "/signup"];
 
 export function middleware(request: NextRequest) {
-  const token = request.cookies.get("token")?.value;
+  const token = request.cookies.get("chat9_token")?.value;
   const { pathname } = request.nextUrl;
 
   const isProtected = PROTECTED_PATHS.some((p) => pathname.startsWith(p));

@@ -675,3 +675,29 @@ class TestParseValidationJson:
             self._parse(self._valid_payload())
         assert caplog.records == []
 
+
+class TestStripThoughtTags:
+    def setup_method(self) -> None:
+        from backend.chat.handlers.rag import _strip_thought_tags
+
+        self._strip = _strip_thought_tags
+
+    def test_closed_tag_stripped(self) -> None:
+        text = "<thought>Let me think.</thought> Here is the answer."
+        assert self._strip(text) == "Here is the answer."
+
+    def test_truncated_thought_stripped_to_empty(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging
+
+        text = "<thought>Let me think about this. The user is asking about pricing,"
+        with caplog.at_level(logging.WARNING, logger="backend.chat.handlers.rag"):
+            result = self._strip(text)
+        assert result == ""
+        assert any("thought_tag_truncated" in r.message for r in caplog.records)
+
+    def test_truncated_thought_mid_text_preserves_content_before(self) -> None:
+        text = "Hello! <thought>internal reasoning that got cut off by max_tokens"
+        result = self._strip(text)
+        assert result == "Hello!"
+        assert "<thought>" not in result
+

@@ -358,8 +358,15 @@ def _emit_quick_answer_lookup_event(
 
 
 def _strip_thought_tags(text: str) -> str:
-    """Remove <thought>...</thought> blocks the model may emit for CoT reasoning."""
-    return re.sub(r"<thought>.*?</thought>\s*", "", text, flags=re.DOTALL).strip()
+    """Remove <thought>...</thought> blocks the model may emit for CoT reasoning.
+
+    Handles truncated responses where max_tokens cut off before </thought>.
+    """
+    if "<thought>" in text and "</thought>" not in text:
+        logger.warning(
+            "thought_tag_truncated: <thought> without closing tag — max_tokens likely cut off CoT block"
+        )
+    return re.sub(r"<thought>.*?(?:</thought>|\Z)\s*", "", text, flags=re.DOTALL).strip()
 
 
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
@@ -1284,6 +1291,7 @@ def generate_answer(
         completion_tokens_raw = 0
         finish_reason: str | None = None
         actual_model: str = settings.chat_model
+        _thought_truncated: bool = False
         if stream_callback is not None:
             stream = call_openai_with_retry(
                 "chat_generate_stream",
@@ -1315,7 +1323,9 @@ def generate_answer(
                 if delta:
                     chunks.append(delta)
                     stream_callback(delta)
-            answer_text = _strip_thought_tags("".join(chunks))
+            _raw_answer = "".join(chunks)
+            _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
+            answer_text = _strip_thought_tags(_raw_answer)
         else:
             response = call_openai_with_retry(
                 "chat_generate",
@@ -1328,7 +1338,9 @@ def generate_answer(
                 bot_id=retry_bot_id,
             )
             actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
-            answer_text = _strip_thought_tags(response.choices[0].message.content or "")
+            _raw_content = response.choices[0].message.content or ""
+            _thought_truncated = "<thought>" in _raw_content and "</thought>" not in _raw_content
+            answer_text = _strip_thought_tags(_raw_content)
             total_tokens = response.usage.total_tokens if response.usage else 0
             if response.usage:
                 prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
@@ -1358,6 +1370,7 @@ def generate_answer(
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
                     "finish_reason": finish_reason,
+                    "thought_truncated": _thought_truncated,
                     "cost_usd": settings.compute_cost_usd(
                         actual_model,
                         _safe_int(prompt_tokens_raw),

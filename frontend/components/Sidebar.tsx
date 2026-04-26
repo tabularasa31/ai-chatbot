@@ -164,19 +164,19 @@ export function Sidebar() {
         href={item.href}
         className={`flex items-center gap-2.5 px-3 py-[7px] rounded-md text-[13px] relative transition-colors ${
           isActive(item.href)
-            ? "text-[#FAF5FF] bg-[#E879F9]/[0.08]"
-            : "text-[#FAF5FF]/50 hover:text-[#FAF5FF]/80 hover:bg-white/[0.03]"
+            ? "text-nd-text bg-nd-accent/[0.08]"
+            : "text-nd-text/50 hover:text-nd-text/80 hover:bg-white/[0.03]"
         }`}
       >
         {isActive(item.href) && (
-          <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-[#E879F9]" />
+          <span className="absolute left-0 top-1 bottom-1 w-0.5 rounded-full bg-nd-accent" />
         )}
         <span className={isActive(item.href) ? "opacity-90" : "opacity-60"}>
           {item.icon}
         </span>
         <span className="flex-1">{item.label}</span>
         {badgeValue > 0 && (
-          <span className="rounded-full bg-[#E879F9]/20 px-1.5 py-0.5 text-[10px] font-semibold text-[#F5D0FE]">
+          <span className="rounded-full bg-nd-accent/20 px-1.5 py-0.5 text-[10px] font-semibold text-nd-accent-hover">
             {badgeValue > 99 ? "99+" : badgeValue}
           </span>
         )}
@@ -186,8 +186,7 @@ export function Sidebar() {
 
   return (
     <aside
-      className="fixed top-12 left-0 h-[calc(100vh-48px)] w-[200px] flex flex-col py-4"
-      style={{ backgroundColor: "#0A0A0F", borderRight: "1px solid rgba(255,255,255,0.07)" }}
+      className="fixed top-12 left-0 h-[calc(100vh-48px)] w-[200px] flex flex-col py-4 bg-nd-base border-r border-white/[0.07]"
     >
       <div className="flex flex-col gap-0.5 px-3">
         {mainNav.map((item) => (
@@ -198,7 +197,7 @@ export function Sidebar() {
       <div className="mx-4 my-3 border-t border-white/[0.07]" />
 
       <div className="px-3 mb-1">
-        <p className="text-[10px] uppercase tracking-widest text-[#FAF5FF]/20 px-3 mb-1.5">
+        <p className="text-[10px] uppercase tracking-widest text-nd-text/20 px-3 mb-1.5">
           Configure
         </p>
         <div className="flex flex-col gap-0.5">

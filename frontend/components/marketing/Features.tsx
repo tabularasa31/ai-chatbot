@@ -18,11 +18,11 @@ function FeatureCard({ icon, title, description, index }: FeatureCardProps) {
       initial={{ opacity: 0, y: 20 }}
       animate={isInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
       transition={{ duration: 0.5, delay: index * 0.1 }}
-      className="bg-[#12121A] backdrop-blur-sm border border-[#1E1E2E] rounded-xl p-8 hover:bg-[#1a1a24] hover:scale-105 transition-all"
+      className="bg-nd-base-alt backdrop-blur-sm border border-nd-surface rounded-xl p-8 hover:bg-nd-surface hover:scale-105 transition-all"
     >
-      <div className="text-[#38BDF8] mb-4">{icon}</div>
-      <h3 className="text-[#FAF5FF] text-xl mb-2">{title}</h3>
-      <p className="text-[#FAF5FF]/60">{description}</p>
+      <div className="text-nd-info mb-4">{icon}</div>
+      <h3 className="text-nd-text text-xl mb-2">{title}</h3>
+      <p className="text-nd-text/60">{description}</p>
     </motion.div>
   );
 }

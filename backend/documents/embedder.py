@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-import os
 import re
 import uuid
 from dataclasses import dataclass
@@ -252,13 +251,7 @@ def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[lis
 
 
 def _url_knowledge_extract_when_unchanged() -> bool:
-    """If true, run tenant knowledge extraction even when page/spec content hash is unchanged.
-
-    Default false to avoid extra LLM cost on every scheduled re-crawl. Set env to ``1``/``true``
-    once after deploy to backfill ``tenant_faq`` / profile for already-indexed URL sources.
-    """
-    raw = os.getenv("URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED", "")
-    return raw.strip().lower() in ("1", "true", "yes")
+    return settings.url_knowledge_extract_when_unchanged
 
 
 def _run_tenant_knowledge_extraction_best_effort(

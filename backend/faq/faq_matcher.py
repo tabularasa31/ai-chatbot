@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import ast
-import os
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from backend.core.config import settings
 from backend.models import TenantFaq
 from backend.search.service import cosine_similarity
 
@@ -36,49 +36,15 @@ class FAQMatchResult:
     decision_reason: str
 
 
-def _env_float(name: str, default: float) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
 def _faq_thresholds() -> tuple[float, float, int]:
-    # Backward-compatible defaults (can be overridden via env).
-    direct_threshold = _env_float("FAQ_DIRECT_THRESHOLD", 0.92)
-    context_threshold = _env_float("FAQ_CONTEXT_THRESHOLD", 0.70)
-    context_max_items = _env_int("FAQ_CONTEXT_MAX_ITEMS", 2)
-    # Contract safety: never let thresholds invert.
-    if context_threshold > direct_threshold:
-        context_threshold = direct_threshold
-    if context_max_items < 1:
-        context_max_items = 1
+    direct_threshold = settings.faq_direct_threshold
+    context_threshold = min(settings.faq_context_threshold, direct_threshold)
+    context_max_items = max(settings.faq_context_max_items, 1)
     return direct_threshold, context_threshold, context_max_items
 
 
 def _approved_promotion_delta() -> float:
-    """
-    Optional safety knob for approved-biased direct candidate selection.
-    If an approved candidate is close enough to the absolute top score,
-    we allow it to be considered for direct path.
-    """
-    delta = _env_float("FAQ_APPROVED_PROMOTION_DELTA", 0.02)
-    if delta < 0:
-        return 0.0
-    return delta
+    return max(settings.faq_approved_promotion_delta, 0.0)
 
 
 def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:

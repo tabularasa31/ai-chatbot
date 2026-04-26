@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
+from backend.core.config import settings
 from backend.faq.faq_matcher import FAQRow, match_faq
 
 
@@ -13,8 +14,8 @@ def _fake_rows(*rows: FAQRow) -> list[FAQRow]:
 
 
 def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -57,8 +58,8 @@ def test_faq_direct_hit_guard_passed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -93,8 +94,8 @@ def test_faq_direct_not_approved(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -129,9 +130,9 @@ def test_faq_direct_guard_failed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
-    monkeypatch.setenv("FAQ_CONTEXT_MAX_ITEMS", "2")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
+    monkeypatch.setattr(settings, "faq_context_max_items", 2)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -180,8 +181,8 @@ def test_faq_context_adds_top_n(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -209,8 +210,8 @@ def test_faq_ignored_below_context_threshold(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
 
     top = FAQRow(
         id=uuid.uuid4(),
@@ -242,9 +243,9 @@ def test_match_result_contains_decision_reason(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FAQ_DIRECT_THRESHOLD", "0.92")
-    monkeypatch.setenv("FAQ_CONTEXT_THRESHOLD", "0.75")
-    monkeypatch.setenv("FAQ_APPROVED_PROMOTION_DELTA", "0.02")
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
+    monkeypatch.setattr(settings, "faq_approved_promotion_delta", 0.02)
 
     top_unapproved = FAQRow(
         id=uuid.uuid4(),

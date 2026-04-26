@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import threading
 from dataclasses import dataclass, field
 from uuid import UUID
 
 from backend.core import db as core_db
+from backend.core.config import settings
 from backend.core.openai_errors import OpenAIFailureKind, classify_openai_error
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
@@ -17,7 +17,6 @@ from backend.models import Document, DocumentStatus, SourceStatus, Tenant, UrlSo
 
 logger = logging.getLogger(__name__)
 _GAP_JOB_HEARTBEAT_SECONDS = 300
-_DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = float(os.getenv("GAP_SHUTDOWN_TIMEOUT_SECONDS", "25.0"))
 
 
 @dataclass
@@ -247,7 +246,9 @@ def _refresh_gap_job_lease_until_stopped(
             db.close()
 
 
-def request_graceful_shutdown(timeout_seconds: float = _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS) -> None:
+def request_graceful_shutdown(timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        timeout_seconds = settings.gap_shutdown_timeout_seconds
     if _shutdown_event.is_set():
         return
 

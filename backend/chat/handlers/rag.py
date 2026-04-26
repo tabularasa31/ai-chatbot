@@ -369,6 +369,57 @@ def _strip_thought_tags(text: str) -> str:
     return re.sub(r"<thought>.*?(?:</thought>|\Z)\s*", "", text, flags=re.DOTALL).strip()
 
 
+class ThoughtStreamFilter:
+    """Filter <thought>...</thought> blocks from an SSE text stream in real time.
+
+    Feed each incoming delta via feed(); call flush_end() after the last chunk.
+    The emit callback receives only text that should reach the user.
+
+    Handles tags split across chunk boundaries and multiple consecutive thought blocks.
+    Unclosed <thought> at end of stream is silently discarded.
+    """
+
+    _OPEN_TAG = "<thought>"
+    _CLOSE_TAG = "</thought>"
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self._emit = emit
+        self._buf = ""
+        self._inside = False
+
+    def feed(self, text: str) -> None:
+        self._buf += text
+        self._process()
+
+    def flush_end(self) -> None:
+        if not self._inside and self._buf:
+            self._emit(self._buf)
+        self._buf = ""
+        self._inside = False
+
+    def _process(self) -> None:
+        while self._buf:
+            tag = self._CLOSE_TAG if self._inside else self._OPEN_TAG
+            idx = self._buf.find(tag)
+            if idx >= 0:
+                if not self._inside and idx > 0:
+                    self._emit(self._buf[:idx])
+                self._buf = self._buf[idx + len(tag):]
+                self._inside = not self._inside
+            else:
+                # No complete tag found; keep a potential split-boundary prefix in the
+                # buffer so a tag arriving across two chunks is handled correctly.
+                safe_end = len(self._buf)
+                for prefix_len in range(min(len(tag) - 1, len(self._buf)), 0, -1):
+                    if self._buf[-prefix_len:] == tag[:prefix_len]:
+                        safe_end = len(self._buf) - prefix_len
+                        break
+                if not self._inside and safe_end > 0:
+                    self._emit(self._buf[:safe_end])
+                self._buf = self._buf[safe_end:]
+                break
+
+
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
     """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4)."""
     if not ctx:
@@ -1307,6 +1358,7 @@ def generate_answer(
             )
             chunks: list[str] = []
             total_tokens = 0
+            _filter = ThoughtStreamFilter(stream_callback)
             for chunk in stream:
                 if isinstance(getattr(chunk, "model", None), str):
                     actual_model = chunk.model
@@ -1322,7 +1374,8 @@ def generate_answer(
                 delta = getattr(choice.delta, "content", None) if choice.delta else None
                 if delta:
                     chunks.append(delta)
-                    stream_callback(delta)
+                    _filter.feed(delta)
+            _filter.flush_end()
             _raw_answer = "".join(chunks)
             _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
             answer_text = _strip_thought_tags(_raw_answer)

@@ -733,7 +733,12 @@ export function ChatWidget({
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSend()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             placeholder={chatClosed ? "Start a new chat to ask another question" : "Type a message..."}
             disabled={loading || chatClosed}
             className="flex-1 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-[15px] text-gray-900 placeholder:text-gray-400 outline-none transition focus:ring-2 focus:ring-[#a855f7] focus:border-transparent disabled:cursor-not-allowed disabled:text-gray-400"

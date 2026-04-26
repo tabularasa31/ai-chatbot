@@ -34,8 +34,6 @@ from backend.search.contradiction_adjudication import (
 )
 from backend.utils.math import cosine_similarity
 
-EMBEDDING_DIM = 1536
-
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
@@ -1928,28 +1926,73 @@ def search_similar_chunks(
     ).results
 
 
-def search_similar_chunks_detailed(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: Session,
+# ---------------------------------------------------------------------------
+# Pipeline stage dataclasses — private to search_similar_chunks_detailed
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _QueryStageResult:
+    query_variants: list[str]
+    variant_vectors: list[list[float]]
+    query_variant_count: int
+    variant_mode: VariantMode
+    extra_variant_count: int
+    embedded_query_count: int
+    extra_embedded_queries: int
+    embedding_api_request_count: int
+    extra_embedding_api_requests: int
+    query_embedding_duration_ms: float
+    query_script_bucket: str
+    rewritten_variant: str | None
+    trace_query_vector: list[float]
+
+
+@dataclass
+class _CandidateStageResult:
+    vector_candidates: list[tuple[Embedding, float]]
+    vector_search_call_count: int
+    vector_duration_ms: float
+    vector_engine: str
+    bm25_variant_queries: list[str]
+    bm25_bundle: BM25SearchBundle
+    bm25_duration_ms: float
+    bm25_expansion_mode: BM25ExpansionMode
+    fused_results: list[tuple[Embedding, float]]
+    rrf_duration_ms: float
+    best_vector_similarity: float | None
+    best_keyword_score: float | None
+    rerank_lexical_query: str | None
+
+
+@dataclass
+class _RankingStageResult:
+    final_results: list[tuple[Embedding, float]]
+    vector_similarities: list[float | None]
+    mmr_selection: MMRSelectionResult
+
+
+@dataclass
+class _QualityStageResult:
+    reliability: RetrievalReliability
+
+
+# ---------------------------------------------------------------------------
+# Stage functions
+# ---------------------------------------------------------------------------
+
+
+def _run_query_stage(
     *,
+    query: str,
     api_key: str,
-    trace: TraceHandle | None = None,
-    precomputed_query_variants: list[str] | None = None,
-    precomputed_variant_vectors: list[list[float]] | None = None,
-    precomputed_embedding_api_request_count: int | None = None,
-    precomputed_rewritten_variant: str | None = None,
-    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
-) -> SearchResultBundle:
-    """
-    Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
-
-    PostgreSQL uses pgvector for candidate acquisition, while SQLite uses
-    Python cosine search. Downstream ranking and observability stages are shared.
-    """
-    retrieval_started_at = perf_counter()
-
+    trace: TraceHandle | None,
+    precomputed_query_variants: list[str] | None,
+    precomputed_variant_vectors: list[list[float]] | None,
+    precomputed_embedding_api_request_count: int | None,
+    precomputed_rewritten_variant: str | None,
+    embedding_timeout: float | None,
+) -> _QueryStageResult:
     use_precomputed = (
         precomputed_query_variants is not None
         and precomputed_variant_vectors is not None
@@ -2010,36 +2053,70 @@ def search_similar_chunks_detailed(
         extra_embedded_queries = max(embedded_query_count - 1, 0)
         extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
         trace_query_vector = variant_vectors[0] if variant_vectors else []
-    query_script_bucket = detect_query_script_bucket(query)
-    if trace is not None and not use_precomputed:
-        trace.span(
-            name="query-embedding",
-            input={
-                "query_variants": query_variants,
-                "query_variant_count": query_variant_count,
-                "variant_mode": variant_mode,
-                "model": settings.embedding_model,
-            },
-        ).end(
-            output={
-                "embedded_query_count": embedded_query_count,
-                "extra_embedded_queries": extra_embedded_queries,
-                "embedding_api_request_count": embedding_api_request_count,
-                "extra_embedding_api_requests": extra_embedding_api_requests,
-                "duration_ms": query_embedding_duration_ms,
-            }
-        )
+        if trace is not None:
+            trace.span(
+                name="query-embedding",
+                input={
+                    "query_variants": query_variants,
+                    "query_variant_count": query_variant_count,
+                    "variant_mode": variant_mode,
+                    "model": settings.embedding_model,
+                },
+            ).end(
+                output={
+                    "embedded_query_count": embedded_query_count,
+                    "extra_embedded_queries": extra_embedded_queries,
+                    "embedding_api_request_count": embedding_api_request_count,
+                    "extra_embedding_api_requests": extra_embedding_api_requests,
+                    "duration_ms": query_embedding_duration_ms,
+                }
+            )
 
+    return _QueryStageResult(
+        query_variants=query_variants,
+        variant_vectors=variant_vectors,
+        query_variant_count=query_variant_count,
+        variant_mode=variant_mode,
+        extra_variant_count=extra_variant_count,
+        embedded_query_count=embedded_query_count,
+        extra_embedded_queries=extra_embedded_queries,
+        embedding_api_request_count=embedding_api_request_count,
+        extra_embedding_api_requests=extra_embedding_api_requests,
+        query_embedding_duration_ms=query_embedding_duration_ms,
+        query_script_bucket=detect_query_script_bucket(query),
+        rewritten_variant=rewritten_variant,
+        trace_query_vector=trace_query_vector,
+    )
+
+
+def _run_candidate_stage(
+    *,
+    tenant_id: uuid.UUID,
+    query: str,
+    query_stage: _QueryStageResult,
+    top_k: int,
+    db: Session,
+    trace: TraceHandle | None,
+) -> _CandidateStageResult:
+    q = query_stage
     db_url = str(db.bind.url if db.bind else "")
     vector_engine = "python-cosine" if "sqlite" in db_url else "pgvector"
     vector_search_fn = _python_cosine_search if "sqlite" in db_url else _pgvector_search
     bm25_expansion_mode = _resolve_bm25_expansion_mode()
 
+    bm25_variant_queries = _bm25_queries_for_script(query, q.query_variants, q.query_script_bucket)
+    # EN rewrite to use for lexical scoring in reranker when query is non-EN.
+    rerank_lexical_query: str | None = (
+        None
+        if _is_en_query(query, q.query_script_bucket)
+        else (bm25_variant_queries[0] if bm25_variant_queries else None)
+    )
+
     # Build one shared candidate set before lexical stages: engine-specific
     # acquisition, then cross-variant merge/dedup/truncation.
     vector_candidate_set = _build_vector_candidate_set(
         tenant_id,
-        variant_vectors,
+        q.variant_vectors,
         db,
         vector_search_fn=vector_search_fn,
     )
@@ -2047,24 +2124,14 @@ def search_similar_chunks_detailed(
     vector_search_call_count = vector_candidate_set.call_count
     vector_duration_ms = vector_candidate_set.duration_ms
     extra_vector_search_calls = max(vector_search_call_count - 1, 0)
-    bm25_variant_queries = _bm25_queries_for_script(
-        query, query_variants, query_script_bucket
-    )
-    # EN rewrite to use for lexical scoring in reranker when query is non-EN.
-    rerank_lexical_query: str | None = (
-        None
-        if _is_en_query(query, query_script_bucket)
-        else (bm25_variant_queries[0] if bm25_variant_queries else None)
-    )
 
     if not vector_candidates:
-        retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
         if trace is not None:
             trace.span(
                 name="vector-search",
                 input={
-                    "query_embedding": format_query_embedding_preview(trace_query_vector),
-                    "query_variants": query_variants,
+                    "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                    "query_variants": q.query_variants,
                     "tenant_id": str(tenant_id),
                     "top_k": BM25_CANDIDATE_POOL,
                     "engine": vector_engine,
@@ -2078,30 +2145,28 @@ def search_similar_chunks_detailed(
                     "extra_vector_search_calls": extra_vector_search_calls,
                 }
             )
-        return SearchResultBundle(
-            results=[],
-            query_variants=query_variants,
-            query_script_bucket=query_script_bucket,
-            reliability=build_reliability_assessment(
-                top_score=None,
-                result_count=0,
-            ),
-            query_variant_count=query_variant_count,
-            variant_mode=variant_mode,
-            extra_variant_count=extra_variant_count,
-            embedded_query_count=embedded_query_count,
-            extra_embedded_queries=extra_embedded_queries,
-            embedding_api_request_count=embedding_api_request_count,
-            extra_embedding_api_requests=extra_embedding_api_requests,
+        return _CandidateStageResult(
+            vector_candidates=[],
             vector_search_call_count=vector_search_call_count,
-            extra_vector_search_calls=extra_vector_search_calls,
+            vector_duration_ms=vector_duration_ms,
+            vector_engine=vector_engine,
+            bm25_variant_queries=bm25_variant_queries,
+            bm25_bundle=BM25SearchBundle(
+                results=[],
+                has_lexical_signal=False,
+                variant_queries=bm25_variant_queries or [query],
+                variant_eval_count=0,
+                merged_hit_count_before_cap=0,
+                merged_hit_count_after_cap=0,
+                winner_by_id={},
+            ),
+            bm25_duration_ms=0.0,
             bm25_expansion_mode=bm25_expansion_mode,
-            bm25_query_variant_count=len(bm25_variant_queries),
-            bm25_variant_eval_count=0,
-            extra_bm25_variant_evals=0,
-            retrieval_duration_ms=retrieval_duration_ms,
-            query_embedding_duration_ms=query_embedding_duration_ms,
-            vector_search_duration_ms=vector_duration_ms,
+            fused_results=[],
+            rrf_duration_ms=0.0,
+            best_vector_similarity=None,
+            best_keyword_score=None,
+            rerank_lexical_query=rerank_lexical_query,
         )
 
     vector_embs = [emb for emb, _ in vector_candidates]
@@ -2109,8 +2174,8 @@ def search_similar_chunks_detailed(
         trace.span(
             name="vector-search",
             input={
-                "query_embedding": format_query_embedding_preview(trace_query_vector),
-                "query_variants": query_variants,
+                "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                "query_variants": q.query_variants,
                 "tenant_id": str(tenant_id),
                 "top_k": BM25_CANDIDATE_POOL,
                 "engine": vector_engine,
@@ -2126,7 +2191,7 @@ def search_similar_chunks_detailed(
                 "vector_search_call_count": vector_search_call_count,
                 "extra_vector_search_calls": extra_vector_search_calls,
             }
-            )
+        )
 
     rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
     bm25_started_at = perf_counter()
@@ -2137,8 +2202,6 @@ def search_similar_chunks_detailed(
         top_k=rrf_candidate_pool,
         expansion_mode=bm25_expansion_mode,
     )
-    bm25_results = bm25_bundle.results
-    has_lexical_signal = bm25_bundle.has_lexical_signal
     bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
     if trace is not None:
         trace.span(
@@ -2158,29 +2221,23 @@ def search_similar_chunks_detailed(
         ).end(
             output={
                 "chunks": _format_bm25_trace_results(
-                    bm25_results,
+                    bm25_bundle.results,
                     winner_by_id=bm25_bundle.winner_by_id,
                 ),
                 "duration_ms": bm25_duration_ms,
                 "bm25_query_variant_count": len(bm25_bundle.variant_queries),
                 "bm25_variant_eval_count": bm25_bundle.variant_eval_count,
                 "extra_bm25_variant_evals": max(bm25_bundle.variant_eval_count - 1, 0),
-                "bm25_merged_hit_count_before_cap": (
-                    bm25_bundle.merged_hit_count_before_cap
-                ),
-                "bm25_merged_hit_count_after_cap": (
-                    bm25_bundle.merged_hit_count_after_cap
-                ),
+                "bm25_merged_hit_count_before_cap": bm25_bundle.merged_hit_count_before_cap,
+                "bm25_merged_hit_count_after_cap": bm25_bundle.merged_hit_count_after_cap,
             }
         )
-    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
-    best_vector_similarity = vector_candidates[0][1] if vector_candidates else None
-    best_keyword_score = bm25_results[0][1] if bm25_results else None
 
+    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
     rrf_started_at = perf_counter()
     fused_results = reciprocal_rank_fusion(
         vector_for_rrf,
-        bm25_results,
+        bm25_bundle.results,
         top_k=rrf_candidate_pool,
     )
     rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
@@ -2193,7 +2250,7 @@ def search_similar_chunks_detailed(
                     score_name="similarity_score",
                 ),
                 "bm25_results": format_embedding_results(
-                    bm25_results,
+                    bm25_bundle.results,
                     score_name="bm25_score",
                 ),
                 "bm25_expansion_mode": bm25_expansion_mode,
@@ -2208,13 +2265,41 @@ def search_similar_chunks_detailed(
             }
         )
 
+    return _CandidateStageResult(
+        vector_candidates=vector_candidates,
+        vector_search_call_count=vector_search_call_count,
+        vector_duration_ms=vector_duration_ms,
+        vector_engine=vector_engine,
+        bm25_variant_queries=bm25_variant_queries,
+        bm25_bundle=bm25_bundle,
+        bm25_duration_ms=bm25_duration_ms,
+        bm25_expansion_mode=bm25_expansion_mode,
+        fused_results=fused_results,
+        rrf_duration_ms=rrf_duration_ms,
+        best_vector_similarity=vector_candidates[0][1] if vector_candidates else None,
+        best_keyword_score=bm25_bundle.results[0][1] if bm25_bundle.results else None,
+        rerank_lexical_query=rerank_lexical_query,
+    )
+
+
+def _run_ranking_stage(
+    *,
+    query: str,
+    query_stage: _QueryStageResult,
+    candidate_stage: _CandidateStageResult,
+    top_k: int,
+    trace: TraceHandle | None,
+) -> _RankingStageResult:
+    q = query_stage
+    c = candidate_stage
+
     rerank_started_at = perf_counter()
     reranked_results = rerank_candidates(
         query,
-        fused_results,
-        vector_scores=_collect_score_map(vector_candidates),
-        bm25_scores=_collect_score_map(bm25_results),
-        lexical_query=rerank_lexical_query,
+        c.fused_results,
+        vector_scores=_collect_score_map(c.vector_candidates),
+        bm25_scores=_collect_score_map(c.bm25_bundle.results),
+        lexical_query=c.rerank_lexical_query,
         top_k=top_k,
     )
     if trace is not None:
@@ -2222,7 +2307,7 @@ def search_similar_chunks_detailed(
             name="reranking",
             input={
                 "query": query,
-                "candidate_count": len(fused_results),
+                "candidate_count": len(c.fused_results),
                 "model": "heuristic-rrf-v0",
             },
         ).end(
@@ -2238,7 +2323,7 @@ def search_similar_chunks_detailed(
 
     script_started_at = perf_counter()
     script_boosted_results = apply_script_boost(
-        query_script_bucket,
+        q.query_script_bucket,
         reranked_results,
         top_k=top_k * 2,
     )
@@ -2246,7 +2331,7 @@ def search_similar_chunks_detailed(
         trace.span(
             name="script-boost",
             input={
-                "query_script_bucket": query_script_bucket,
+                "query_script_bucket": q.query_script_bucket,
                 "candidate_count": len(reranked_results),
                 "strategy": "coarse-script-bucket-heuristic",
             },
@@ -2263,12 +2348,9 @@ def search_similar_chunks_detailed(
     # Keep MMR on the small post-rerank pool only. The current lexical pairwise
     # similarity is an interim heuristic, not a large-pool reranker.
     mmr_started_at = perf_counter()
-    mmr_selection = mmr_select(
-        script_boosted_results,
-        top_k=top_k,
-    )
+    mmr_selection = mmr_select(script_boosted_results, top_k=top_k)
     final_results = mmr_selection.results
-    vector_similarity_by_id = {emb.id: sim for emb, sim in vector_candidates}
+    vector_similarity_by_id = {emb.id: sim for emb, sim in c.vector_candidates}
     vector_similarities: list[float | None] = [
         float(vector_similarity_by_id[emb.id]) if emb.id in vector_similarity_by_id else None
         for emb, _ in final_results
@@ -2293,14 +2375,24 @@ def search_similar_chunks_detailed(
             }
         )
 
+    return _RankingStageResult(
+        final_results=final_results,
+        vector_similarities=vector_similarities,
+        mmr_selection=mmr_selection,
+    )
+
+
+def _run_quality_stage(
+    *,
+    final_results: list[tuple[Embedding, float]],
+    tenant_id: uuid.UUID,
+    db: Session,
+    api_key: str,
+    trace: TraceHandle | None,
+) -> _QualityStageResult:
     overlap_started_at = perf_counter()
-    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(
-        final_results
-    )
-    contradiction_pairs = detect_metadata_contradictions(
-        final_results,
-        source_overlap_pairs,
-    )
+    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(final_results)
+    contradiction_pairs = detect_metadata_contradictions(final_results, source_overlap_pairs)
     client_row: Tenant | None = None
     if settings.contradiction_adjudication_enabled and hasattr(db, "query"):
         client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
@@ -2336,35 +2428,129 @@ def search_similar_chunks_detailed(
                 "duration_ms": round((perf_counter() - overlap_started_at) * 1000, 2),
             }
         )
-    retrieval_duration_ms = round((perf_counter() - retrieval_started_at) * 1000, 2)
+    return _QualityStageResult(reliability=reliability)
 
+
+def _build_empty_result_bundle(
+    q: _QueryStageResult,
+    c: _CandidateStageResult,
+    retrieval_duration_ms: float,
+) -> SearchResultBundle:
     return SearchResultBundle(
-        results=final_results,
-        best_vector_similarity=best_vector_similarity,
-        vector_similarities=vector_similarities,
-        best_keyword_score=best_keyword_score,
-        has_lexical_signal=has_lexical_signal,
-        query_variants=query_variants,
-        query_script_bucket=query_script_bucket,
-        reliability=reliability,
-        query_variant_count=query_variant_count,
-        variant_mode=variant_mode,
-        extra_variant_count=extra_variant_count,
-        embedded_query_count=embedded_query_count,
-        extra_embedded_queries=extra_embedded_queries,
-        embedding_api_request_count=embedding_api_request_count,
-        extra_embedding_api_requests=extra_embedding_api_requests,
-        vector_search_call_count=vector_search_call_count,
-        extra_vector_search_calls=extra_vector_search_calls,
-        bm25_expansion_mode=bm25_expansion_mode,
-        bm25_query_variant_count=len(bm25_bundle.variant_queries),
-        bm25_variant_eval_count=bm25_bundle.variant_eval_count,
-        extra_bm25_variant_evals=max(bm25_bundle.variant_eval_count - 1, 0),
-        bm25_merged_hit_count_before_cap=bm25_bundle.merged_hit_count_before_cap,
-        bm25_merged_hit_count_after_cap=bm25_bundle.merged_hit_count_after_cap,
+        results=[],
+        query_variants=q.query_variants,
+        query_script_bucket=q.query_script_bucket,
+        reliability=build_reliability_assessment(top_score=None, result_count=0),
+        query_variant_count=q.query_variant_count,
+        variant_mode=q.variant_mode,
+        extra_variant_count=q.extra_variant_count,
+        embedded_query_count=q.embedded_query_count,
+        extra_embedded_queries=q.extra_embedded_queries,
+        embedding_api_request_count=q.embedding_api_request_count,
+        extra_embedding_api_requests=q.extra_embedding_api_requests,
+        vector_search_call_count=c.vector_search_call_count,
+        extra_vector_search_calls=max(c.vector_search_call_count - 1, 0),
+        bm25_expansion_mode=c.bm25_expansion_mode,
+        bm25_query_variant_count=len(c.bm25_variant_queries),
+        bm25_variant_eval_count=0,
+        extra_bm25_variant_evals=0,
         retrieval_duration_ms=retrieval_duration_ms,
-        query_embedding_duration_ms=query_embedding_duration_ms,
-        vector_search_duration_ms=vector_duration_ms,
+        query_embedding_duration_ms=q.query_embedding_duration_ms,
+        vector_search_duration_ms=c.vector_duration_ms,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public orchestrator
+# ---------------------------------------------------------------------------
+
+
+def search_similar_chunks_detailed(
+    tenant_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: Session,
+    *,
+    api_key: str,
+    trace: TraceHandle | None = None,
+    precomputed_query_variants: list[str] | None = None,
+    precomputed_variant_vectors: list[list[float]] | None = None,
+    precomputed_embedding_api_request_count: int | None = None,
+    precomputed_rewritten_variant: str | None = None,
+    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
+) -> SearchResultBundle:
+    """
+    Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
+
+    PostgreSQL uses pgvector for candidate acquisition, while SQLite uses
+    Python cosine search. Downstream ranking and observability stages are shared.
+    """
+    retrieval_started_at = perf_counter()
+
+    q = _run_query_stage(
+        query=query,
+        api_key=api_key,
+        trace=trace,
+        precomputed_query_variants=precomputed_query_variants,
+        precomputed_variant_vectors=precomputed_variant_vectors,
+        precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
+        precomputed_rewritten_variant=precomputed_rewritten_variant,
+        embedding_timeout=embedding_timeout,
+    )
+    c = _run_candidate_stage(
+        tenant_id=tenant_id,
+        query=query,
+        query_stage=q,
+        top_k=top_k,
+        db=db,
+        trace=trace,
+    )
+    if not c.vector_candidates:
+        return _build_empty_result_bundle(
+            q, c, round((perf_counter() - retrieval_started_at) * 1000, 2)
+        )
+
+    r = _run_ranking_stage(
+        query=query,
+        query_stage=q,
+        candidate_stage=c,
+        top_k=top_k,
+        trace=trace,
+    )
+    quality = _run_quality_stage(
+        final_results=r.final_results,
+        tenant_id=tenant_id,
+        db=db,
+        api_key=api_key,
+        trace=trace,
+    )
+    return SearchResultBundle(
+        results=r.final_results,
+        best_vector_similarity=c.best_vector_similarity,
+        vector_similarities=r.vector_similarities,
+        best_keyword_score=c.best_keyword_score,
+        has_lexical_signal=c.bm25_bundle.has_lexical_signal,
+        query_variants=q.query_variants,
+        query_script_bucket=q.query_script_bucket,
+        reliability=quality.reliability,
+        query_variant_count=q.query_variant_count,
+        variant_mode=q.variant_mode,
+        extra_variant_count=q.extra_variant_count,
+        embedded_query_count=q.embedded_query_count,
+        extra_embedded_queries=q.extra_embedded_queries,
+        embedding_api_request_count=q.embedding_api_request_count,
+        extra_embedding_api_requests=q.extra_embedding_api_requests,
+        vector_search_call_count=c.vector_search_call_count,
+        extra_vector_search_calls=max(c.vector_search_call_count - 1, 0),
+        bm25_expansion_mode=c.bm25_expansion_mode,
+        bm25_query_variant_count=len(c.bm25_bundle.variant_queries),
+        bm25_variant_eval_count=c.bm25_bundle.variant_eval_count,
+        extra_bm25_variant_evals=max(c.bm25_bundle.variant_eval_count - 1, 0),
+        bm25_merged_hit_count_before_cap=c.bm25_bundle.merged_hit_count_before_cap,
+        bm25_merged_hit_count_after_cap=c.bm25_bundle.merged_hit_count_after_cap,
+        retrieval_duration_ms=round((perf_counter() - retrieval_started_at) * 1000, 2),
+        query_embedding_duration_ms=q.query_embedding_duration_ms,
+        vector_search_duration_ms=c.vector_duration_ms,
     )
 
 
@@ -2396,10 +2582,14 @@ def _python_cosine_search(
 
     scored: list[tuple[Embedding, float]] = []
     for emb in embeddings:
-        # Try Vector column first, fall back to metadata_json["vector"]
-        vector = None
         if emb.vector is not None:
-            vector = list(emb.vector)
+            vector: list[float] | None = list(emb.vector)
+            meta_vec = (emb.metadata_json or {}).get("vector")
+            if meta_vec is not None and meta_vec != vector:
+                logger.warning(
+                    "embedding %s: emb.vector diverges from metadata_json[vector]",
+                    emb.id,
+                )
         else:
             meta = emb.metadata_json or {}
             vector = meta.get("vector")

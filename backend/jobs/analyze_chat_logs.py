@@ -39,19 +39,53 @@ logger = logging.getLogger(__name__)
 
 CURRENT_ANALYSIS_VERSION = 1
 
-# ── Thread registry for graceful shutdown ─────────────────────────────────────
+# ── Thread registry + shutdown event ─────────────────────────────────────────
+_shutdown_event = threading.Event()
+
+# Maps thread → tenant_id so we can force-release the DB lock on shutdown timeout.
 _active_threads_lock = threading.Lock()
-_active_threads: set[threading.Thread] = set()
+_active_thread_tenants: dict[threading.Thread, uuid.UUID] = {}
 
 
 def shutdown_log_analysis_threads(timeout_seconds: float = 30.0) -> None:
-    """Join all running job threads; called from FastAPI lifespan on shutdown."""
+    """Signal shutdown and join all running job threads.
+
+    Called from FastAPI lifespan. Threads remain daemonized so the interpreter
+    can exit even if a thread is stuck in a network call; after the join timeout
+    we force-release the is_running DB lock so the next deployment can start jobs.
+    """
+    _shutdown_event.set()
     with _active_threads_lock:
-        threads = list(_active_threads)
-    for t in threads:
+        snapshot = dict(_active_thread_tenants)
+    for t, tenant_id in snapshot.items():
         t.join(timeout=timeout_seconds)
         if t.is_alive():
-            logger.warning("log_analysis job thread %s did not finish within %ss", t.name, timeout_seconds)
+            logger.warning(
+                "log_analysis thread %s did not finish within %ss — releasing lock for tenant %s",
+                t.name, timeout_seconds, tenant_id,
+            )
+            _force_release_job_lock(tenant_id)
+
+
+def _force_release_job_lock(tenant_id: uuid.UUID) -> None:
+    """Clear is_running for a tenant whose job thread did not finish in time."""
+    from sqlalchemy import update as sa_update
+
+    from backend.core.db import SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.execute(
+            sa_update(LogAnalysisState)
+            .where(LogAnalysisState.tenant_id == tenant_id)
+            .values(is_running=False)
+        )
+        db.commit()
+    except Exception:
+        logger.exception("log_analysis force-release failed for tenant %s", tenant_id)
+        db.rollback()
+    finally:
+        db.close()
 
 
 # ── LLM concurrency guard ────────────────────────────────────────────────────
@@ -479,11 +513,11 @@ def enqueue_log_analysis_job(
     t = threading.Thread(
         target=_run_job_sync,
         args=(tenant_id, api_key, job_start, old_watermark, trigger),
-        daemon=False,
+        daemon=True,
         name=f"log-analysis-{tenant_id}",
     )
     with _active_threads_lock:
-        _active_threads.add(t)
+        _active_thread_tenants[t] = tenant_id
     t.start()
     return True
 
@@ -510,7 +544,7 @@ def _run_job_sync(
         loop.close()
         db.close()
         with _active_threads_lock:
-            _active_threads.discard(threading.current_thread())
+            _active_thread_tenants.pop(threading.current_thread(), None)
 
 
 async def run_job(
@@ -633,6 +667,13 @@ async def run_job(
                 if last_msg_created_at is None or msg.created_at > last_msg_created_at:
                     last_msg_created_at = msg.created_at
                     last_msg_id = msg.id
+
+        # Fallback: no clusters were processed (empty list or immediate timeout).
+        # Advance past all loaded messages so the next run does not re-scan the
+        # same range; mirrors the original behavior before per-cluster tracking.
+        if last_msg_created_at is None and messages:
+            last_msg_id = messages[-1].id
+            last_msg_created_at = messages[-1].created_at
 
         # ── Alias extraction (async, throttled) ──────────────────────────────
         alias_count = await extract_and_merge_aliases(

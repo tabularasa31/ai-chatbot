@@ -32,7 +32,7 @@ from backend.search.contradiction_adjudication import (
     serialize_contradiction_adjudication,
     serialize_contradiction_adjudication_run,
 )
-from backend.utils.math import cosine_similarity  # noqa: F401  (re-exported for existing importers)
+from backend.utils.math import cosine_similarity
 
 EMBEDDING_DIM = 1536
 
@@ -2386,7 +2386,6 @@ def _python_cosine_search(
         top_k: Number of results.
         db: Database session.
     """
-    import math
 
     embeddings = (
         db.query(Embedding)
@@ -2405,18 +2404,9 @@ def _python_cosine_search(
             meta = emb.metadata_json or {}
             vector = meta.get("vector")
 
-        if not vector or not isinstance(vector, list):
+        if not vector or not isinstance(vector, list) or len(vector) != len(query_vector):
             continue
 
-        # Cosine similarity
-        if len(vector) != len(query_vector):
-            continue
-        dot = sum(a * b for a, b in zip(query_vector, vector, strict=True))
-        norm1 = math.sqrt(sum(a * a for a in query_vector))
-        norm2 = math.sqrt(sum(b * b for b in vector))
-        if norm1 == 0 or norm2 == 0:
-            continue
-        sim = max(0.0, min(1.0, dot / (norm1 * norm2)))
-        scored.append((emb, sim))
+        scored.append((emb, cosine_similarity(query_vector, vector)))
 
     return _sort_scored_embeddings(scored)[:top_k]

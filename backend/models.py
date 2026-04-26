@@ -437,7 +437,7 @@ class UrlSourceRun(Base):
         nullable=False,
         index=True,
     )
-    status = Column(String(32), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
     pages_found = Column(Integer, nullable=True)
     pages_indexed = Column(Integer, nullable=False, default=0, server_default="0")
     failed_urls = Column(JSON, nullable=False, default=list)
@@ -475,7 +475,7 @@ class QuickAnswer(Base):
         nullable=False,
         index=True,
     )
-    key = Column(String(64), nullable=False)
+    key = Column(String(64), nullable=False, index=True)
     value = Column(Text, nullable=False)
     source_url = Column(Text, nullable=False)
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)

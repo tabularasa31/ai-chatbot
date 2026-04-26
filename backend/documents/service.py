@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.documents.parsers import (
-    parse_doc,
     parse_docx,
     parse_markdown,
     parse_pdf,
@@ -376,8 +375,6 @@ def _parse_content(content: bytes, file_type: str) -> str:
         return parse_swagger(content)
     if file_type == "docx":
         return parse_docx(content)
-    if file_type == "doc":
-        return parse_doc(content)
     if file_type == "plaintext":
         return parse_txt(content)
     raise ValueError(f"Unsupported file type: {file_type}")

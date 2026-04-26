@@ -54,7 +54,6 @@ EXT_TO_TYPE = {
     ".yaml": "swagger",
     ".yml": "swagger",
     ".docx": "docx",
-    ".doc": "doc",
     ".txt": "plaintext",
 }
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB

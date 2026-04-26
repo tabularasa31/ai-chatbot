@@ -65,7 +65,6 @@ class DocumentType(str, enum.Enum):
     swagger = "swagger"
     url = "url"
     docx = "docx"
-    doc = "doc"
     plaintext = "plaintext"
 
 

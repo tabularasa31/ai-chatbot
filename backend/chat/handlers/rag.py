@@ -70,7 +70,6 @@ logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 _ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
-_DEFAULT_RELEVANCE_THRESHOLD = 0.22
 
 # Shared pool — created once at module import, reused across all requests.
 # Shut down via shutdown_guard_pool() in FastAPI lifespan on application exit.

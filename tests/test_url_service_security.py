@@ -609,15 +609,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
         ],
     )
 
-    call_count = {"count": 0}
-
-    def fake_fetch_page_html(url: str) -> str | None:
-        call_count["count"] += 1
-        if call_count["count"] == 1:
-            return "<html><body>root</body></html>"
-        return None
-
-    monkeypatch.setattr(url_service, "_fetch_page_html", fake_fetch_page_html)
+    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: None)
 
     url_service.crawl_url_source(source_id, "sk-test")
 

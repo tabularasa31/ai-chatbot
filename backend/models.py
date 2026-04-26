@@ -1351,6 +1351,5 @@ class EvalResult(Base):
     session = relationship("EvalSession", back_populates="results")
 
 
-# Note: pgvector HNSW index is created via migration, not here
-# CREATE INDEX ON embeddings USING hnsw (vector vector_cosine_ops);
-# document_id already has index=True on the column
+# pgvector HNSW index on embeddings.vector is created in migration dd643d1a544a.
+# document_id already has index=True on the column.

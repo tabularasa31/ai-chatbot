@@ -45,22 +45,49 @@ auth_router = APIRouter(tags=["auth"])
 _COOKIE_NAME = "chat9_token"
 
 
+def _auth_cookie_secure() -> bool:
+    if settings.auth_cookie_secure is not None:
+        return settings.auth_cookie_secure
+    return settings.FRONTEND_URL.startswith("https://")
+
+
+def _auth_cookie_samesite() -> str:
+    return settings.auth_cookie_samesite
+
+
 def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
-    """Set httpOnly auth cookie. SameSite=none+Secure in prod, Lax in dev."""
-    is_prod = settings.FRONTEND_URL.startswith("https://")
+    """Set httpOnly auth cookie for same-site dashboard API requests."""
+    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
     response.set_cookie(
         key=_COOKIE_NAME,
         value=token,
         httponly=True,
         max_age=expires_in,
         path="/",
-        samesite="none" if is_prod else "lax",
-        secure=is_prod,
+        domain=settings.auth_cookie_domain,
+        samesite=_auth_cookie_samesite(),
+        secure=secure,
     )
 
 
 def _clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=_COOKIE_NAME, path="/")
+    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
+    response.delete_cookie(
+        key=_COOKIE_NAME,
+        path="/",
+        domain=settings.auth_cookie_domain,
+        samesite=_auth_cookie_samesite(),
+        secure=secure,
+        httponly=True,
+    )
+    if settings.auth_cookie_domain:
+        response.delete_cookie(
+            key=_COOKIE_NAME,
+            path="/",
+            samesite=_auth_cookie_samesite(),
+            secure=secure,
+            httponly=True,
+        )
 
 
 @auth_router.post("/register", response_model=RegisterResponse)

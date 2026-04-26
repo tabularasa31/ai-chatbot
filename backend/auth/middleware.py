@@ -8,7 +8,7 @@ must work with a not-yet-verified principal (rare; login/register stay public).
 """
 import uuid
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -18,21 +18,30 @@ from backend.models import User
 
 security = HTTPBearer(auto_error=False)
 
+_COOKIE_NAME = "chat9_token"
+
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ) -> User:
     """
-    Dependency for protected routes.
+    Dependency for protected routes. Accepts token from Authorization header or httpOnly cookie.
     Usage: current_user: User = Depends(get_current_user)
     """
-    if not credentials:
+    raw_token: str | None = None
+    if credentials:
+        raw_token = credentials.credentials
+    else:
+        raw_token = request.cookies.get(_COOKIE_NAME)
+
+    if not raw_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid Authorization header",
         )
-    user_id_str = decode_access_token(credentials.credentials)
+    user_id_str = decode_access_token(raw_token)
     if not user_id_str:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

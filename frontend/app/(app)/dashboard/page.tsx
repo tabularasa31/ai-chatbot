@@ -35,6 +35,7 @@ function DashboardContent() {
           if (msg.toLowerCase().includes("email not verified")) {
             setRedirecting(true);
             removeToken();
+            api.auth.logout();
             router.replace("/login?error=email_not_verified");
             return;
           }

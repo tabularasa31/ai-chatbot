@@ -263,6 +263,51 @@ def test_reset_password_success_updates_password_and_verifies_user(
     assert login.status_code == 200
 
 
+def test_login_sets_httponly_cookie(tenant: TestClient, db_session) -> None:
+    """Login sets an httpOnly chat9_token cookie alongside the JSON token."""
+    from tests.conftest import register_and_verify_user
+
+    register_and_verify_user(tenant, db_session, email="cookie@example.com")
+    response = tenant.post(
+        "/auth/login",
+        json={"email": "cookie@example.com", "password": "SecurePass1!"},
+    )
+    assert response.status_code == 200
+    assert "chat9_token" in response.cookies
+    cookie_header = response.headers.get("set-cookie", "")
+    assert "httponly" in cookie_header.lower()
+
+
+def test_get_me_with_cookie_auth(tenant: TestClient, db_session) -> None:
+    """Protected route accepts auth via httpOnly cookie instead of Authorization header."""
+    from tests.conftest import register_and_verify_user
+
+    register_and_verify_user(tenant, db_session, email="cookie-me@example.com")
+    login = tenant.post(
+        "/auth/login",
+        json={"email": "cookie-me@example.com", "password": "SecurePass1!"},
+    )
+    assert login.status_code == 200
+    cookie_token = login.cookies.get("chat9_token")
+    assert cookie_token
+
+    tenant.cookies.set("chat9_token", cookie_token)
+    response = tenant.get("/auth/me")
+    tenant.cookies.clear()
+
+    assert response.status_code == 200
+    assert response.json()["email"] == "cookie-me@example.com"
+
+
+def test_logout_clears_cookie(tenant: TestClient) -> None:
+    """POST /auth/logout returns 200 and clears the chat9_token cookie."""
+    response = tenant.post("/auth/logout")
+    assert response.status_code == 200
+    cookie_header = response.headers.get("set-cookie", "")
+    assert "chat9_token" in cookie_header
+    assert "max-age=0" in cookie_header.lower() or 'expires=' in cookie_header.lower()
+
+
 def test_reset_password_invalid_token_returns_400(tenant: TestClient) -> None:
     response = tenant.post(
         "/auth/reset-password",

@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from chat9 import generateToken
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
@@ -41,6 +41,26 @@ from backend.tenants.service import (
 )
 
 auth_router = APIRouter(tags=["auth"])
+
+_COOKIE_NAME = "chat9_token"
+
+
+def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
+    """Set httpOnly auth cookie. SameSite=none+Secure in prod, Lax in dev."""
+    is_prod = settings.FRONTEND_URL.startswith("https://")
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        max_age=expires_in,
+        path="/",
+        samesite="none" if is_prod else "lax",
+        secure=is_prod,
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(key=_COOKIE_NAME, path="/")
 
 
 @auth_router.post("/register", response_model=RegisterResponse)
@@ -94,13 +114,14 @@ def register(
 @limiter.limit("10/minute")
 def login(
     request: Request,
+    response: Response,
     body: LoginRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> AuthResponse:
     """
     Login with email and password.
 
-    Returns JWT token and user info on success.
+    Returns JWT token and user info on success. Also sets httpOnly auth cookie.
     Errors: 401 (invalid credentials), 404 (user not found).
     """
     user = authenticate_user(body.email, body.password, db)
@@ -109,6 +130,7 @@ def login(
     if not user.is_verified:
         raise HTTPException(status_code=403, detail="Email not verified. Please check your inbox.")
     token, expires_in = create_token_for_user(user)
+    _set_auth_cookie(response, token, expires_in)
     return AuthResponse(
         token=token,
         expires_in=expires_in,
@@ -122,10 +144,11 @@ def login(
 
 @auth_router.post("/verify-email", response_model=VerifyEmailResponse)
 def verify_email(
+    response: Response,
     body: VerifyEmailRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> VerifyEmailResponse:
-    """Verify user's email using a one-time token. Returns JWT on success."""
+    """Verify user's email using a one-time token. Returns JWT on success and sets httpOnly cookie."""
     now = datetime.now(UTC)
     user = (
         db.query(User)
@@ -148,6 +171,7 @@ def verify_email(
     db.commit()
 
     jwt_token, expires_in = create_token_for_user(user)
+    _set_auth_cookie(response, jwt_token, expires_in)
     return VerifyEmailResponse(
         token=jwt_token,
         expires_in=expires_in,
@@ -251,6 +275,13 @@ def get_widget_token(
     return {"identity_token": token}
 
 
+@auth_router.post("/logout")
+def logout(response: Response) -> dict:
+    """Clear the httpOnly auth cookie. Safe to call even when not logged in."""
+    _clear_auth_cookie(response)
+    return {"message": "Logged out"}
+
+
 @auth_router.get("/me", response_model=UserResponse)
 def get_me(
     current_user: Annotated[User, Depends(require_verified_user)],
@@ -258,7 +289,7 @@ def get_me(
     """
     Get current user info (protected route).
 
-    Requires valid JWT in Authorization header.
+    Requires valid JWT in Authorization header or auth cookie.
     Errors: 401 (missing/invalid token).
     """
     return UserResponse(

@@ -305,7 +305,12 @@ JWT_SECRET=<generate random 32-char string>
 EVAL_JWT_SECRET=<separate random secret for internal /eval/* tester JWT; min 32 chars>
 ENVIRONMENT=production
 ENCRYPTION_KEY=<Fernet key for per-client OpenAI key storage>
-# Also Brevo, FRONTEND_URL, CORS_ALLOWED_ORIGINS, etc. (see .env.example)
+FRONTEND_URL=https://getchat9.live
+CORS_ALLOWED_ORIGINS=https://getchat9.live
+AUTH_COOKIE_DOMAIN=.getchat9.live
+AUTH_COOKIE_SAMESITE=lax
+AUTH_COOKIE_SECURE=true
+# Also Brevo, etc. (see .env.example)
 # Global OPENAI_API_KEY is optional—clients set keys in the dashboard
 ```
 
@@ -317,7 +322,7 @@ ENCRYPTION_KEY=<Fernet key for per-client OpenAI key storage>
 
 **Step 5: Test**
 ```bash
-curl https://api.yourdomain.com/health
+curl https://api.getchat9.live/health
 # Should return: {"status": "ok"}
 ```
 
@@ -339,7 +344,7 @@ Output Directory: .next
 
 **Step 3: Set Environment Variables**
 ```bash
-NEXT_PUBLIC_API_URL=https://api.yourdomain.com
+NEXT_PUBLIC_API_URL=https://api.getchat9.live
 ```
 
 **Step 4: Deploy**
@@ -362,7 +367,7 @@ Visit https://app.yourdomain.com
 **Typical snippet (bot's `public_id` from the dashboard, passed via `data-bot-id`):**
 ```html
 <script
-  src="https://api.yourdomain.com/embed.js"
+  src="https://api.getchat9.live/embed.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
 </script>
 ```

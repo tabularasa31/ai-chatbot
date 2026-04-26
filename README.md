@@ -149,9 +149,13 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | `ENVIRONMENT` | Backend | `development` or `production` |
 | `ENCRYPTION_KEY` | Backend | Fernet key for OpenAI key encryption |
 | `FRONTEND_URL` | Backend | Frontend URL (e.g. https://getchat9.live) |
+| `AUTH_COOKIE_DOMAIN` | Backend | Parent cookie domain for same-site auth (e.g. `.getchat9.live`) |
+| `AUTH_COOKIE_SAMESITE` | Backend | Auth cookie SameSite policy (`lax` for same-site API) |
+| `AUTH_COOKIE_SECURE` | Backend | Override auth cookie `Secure`; set `true` in production |
+| `CORS_ALLOWED_ORIGINS` | Backend | Allowed dashboard origins (e.g. `https://getchat9.live`) |
 | `EMAIL_FROM` | Backend | Sender email (e.g. no-reply@getchat9.live) |
 | `BREVO_API_KEY` | Backend | Brevo HTTP API key for transactional email |
-| `NEXT_PUBLIC_API_URL` | Frontend | Backend API base URL |
+| `NEXT_PUBLIC_API_URL` | Frontend | Backend API base URL (production: `https://api.getchat9.live`) |
 
 > Note: Each client provides their own OpenAI API key in the dashboard. The platform does not require a global `OPENAI_API_KEY`.
 

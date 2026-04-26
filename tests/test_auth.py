@@ -6,7 +6,6 @@ import datetime as dt
 from unittest.mock import patch
 
 import jwt
-import pytest
 from fastapi.testclient import TestClient
 
 from backend.core.config import settings
@@ -58,7 +57,7 @@ def test_login_success(tenant: TestClient, db_session) -> None:
     """Login with correct credentials and verified email returns token."""
     from tests.conftest import register_and_verify_user
 
-    token = register_and_verify_user(tenant, db_session, email="login@example.com")
+    register_and_verify_user(tenant, db_session, email="login@example.com")
     response = tenant.post(
         "/auth/login",
         json={"email": "login@example.com", "password": "SecurePass1!"},
@@ -278,6 +277,34 @@ def test_login_sets_httponly_cookie(tenant: TestClient, db_session) -> None:
     assert "httponly" in cookie_header.lower()
 
 
+def test_login_cookie_uses_configured_same_site_domain(
+    tenant: TestClient,
+    db_session,
+    monkeypatch,
+) -> None:
+    """Production auth cookie can be scoped to the same-site parent domain."""
+    from backend.core.config import settings
+    from tests.conftest import register_and_verify_user
+
+    monkeypatch.setattr(settings, "auth_cookie_domain", ".getchat9.live")
+    monkeypatch.setattr(settings, "auth_cookie_samesite", "lax")
+    monkeypatch.setattr(settings, "auth_cookie_secure", True)
+
+    register_and_verify_user(tenant, db_session, email="same-site-cookie@example.com")
+    response = tenant.post(
+        "/auth/login",
+        json={"email": "same-site-cookie@example.com", "password": "SecurePass1!"},
+    )
+
+    assert response.status_code == 200
+    cookie_header = response.headers.get("set-cookie", "").lower()
+    assert "chat9_token=" in cookie_header
+    assert "domain=.getchat9.live" in cookie_header
+    assert "samesite=lax" in cookie_header
+    assert "secure" in cookie_header
+    assert "httponly" in cookie_header
+
+
 def test_get_me_with_cookie_auth(tenant: TestClient, db_session) -> None:
     """Protected route accepts auth via httpOnly cookie instead of Authorization header."""
     from tests.conftest import register_and_verify_user
@@ -306,6 +333,26 @@ def test_logout_clears_cookie(tenant: TestClient) -> None:
     cookie_header = response.headers.get("set-cookie", "")
     assert "chat9_token" in cookie_header
     assert "max-age=0" in cookie_header.lower() or 'expires=' in cookie_header.lower()
+
+
+def test_logout_clears_configured_domain_and_host_cookie(
+    tenant: TestClient,
+    monkeypatch,
+) -> None:
+    """Logout clears both new parent-domain cookies and old host-only cookies."""
+    from backend.core.config import settings
+
+    monkeypatch.setattr(settings, "auth_cookie_domain", ".getchat9.live")
+    monkeypatch.setattr(settings, "auth_cookie_samesite", "lax")
+    monkeypatch.setattr(settings, "auth_cookie_secure", True)
+
+    response = tenant.post("/auth/logout")
+
+    assert response.status_code == 200
+    cookie_headers = [header.lower() for header in response.headers.get_list("set-cookie")]
+    assert any("chat9_token=" in header and "domain=.getchat9.live" in header for header in cookie_headers)
+    assert any("chat9_token=" in header and "domain=" not in header for header in cookie_headers)
+    assert all("max-age=0" in header or "expires=" in header for header in cookie_headers)
 
 
 def test_reset_password_invalid_token_returns_400(tenant: TestClient) -> None:

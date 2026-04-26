@@ -137,6 +137,20 @@ class Settings(BaseSettings):
     SMTP_USER: str | None = Field(None, alias="SMTP_USER")
     SMTP_PASSWORD: str | None = Field(None, alias="SMTP_PASSWORD")
     FRONTEND_URL: str = Field("http://localhost:3000", alias="FRONTEND_URL")
+    auth_cookie_domain: str | None = Field(
+        None,
+        alias="AUTH_COOKIE_DOMAIN",
+        description="Optional parent domain for dashboard auth cookies, e.g. .getchat9.live.",
+    )
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = Field(
+        "lax",
+        alias="AUTH_COOKIE_SAMESITE",
+    )
+    auth_cookie_secure: bool | None = Field(
+        None,
+        alias="AUTH_COOKIE_SECURE",
+        description="Override auth cookie Secure flag. Defaults to true for HTTPS frontend URLs.",
+    )
     BREVO_API_KEY: str | None = Field(None, alias="BREVO_API_KEY")
 
     # Read timeout for OpenAI HTTP calls (waiting for response headers / first streaming chunk).
@@ -313,6 +327,26 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_posthog_host(cls, v: str) -> str:
         return v.strip().strip("'\"")
+
+    @field_validator("auth_cookie_domain", mode="before")
+    @classmethod
+    def _normalize_auth_cookie_domain(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        domain = v.strip().strip("'\"")
+        return domain or None
+
+    @field_validator("auth_cookie_samesite", mode="before")
+    @classmethod
+    def _normalize_auth_cookie_samesite(cls, v: str) -> str:
+        return v.strip().strip("'\"").lower()
+
+    @field_validator("auth_cookie_secure", mode="before")
+    @classmethod
+    def _normalize_auth_cookie_secure(cls, v: bool | str | None) -> bool | str | None:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @property
     def effective_widget_chat_per_client_rate(self) -> str:

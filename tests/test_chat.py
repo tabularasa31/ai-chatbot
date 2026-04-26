@@ -3194,7 +3194,7 @@ def test_chat_succeeds_when_user_session_tracking_fails(
     )
 
     monkeypatch.setattr(
-        "backend.chat.service.record_user_session_turn",
+        "backend.chat.persistence.record_user_session_turn",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tracking failed")),
     )
 

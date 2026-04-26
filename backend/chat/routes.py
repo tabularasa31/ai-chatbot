@@ -11,6 +11,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.chat.history_service import (
+    delete_session_original_content,
+    get_chat_history,
+    get_session_logs,
+    list_chat_sessions,
+    run_debug,
+)
 from backend.chat.language import detect_language, localize_text_to_language_result
 from backend.chat.schemas import (
     BadAnswerItem,
@@ -27,13 +34,8 @@ from backend.chat.schemas import (
     MessageResponse,
 )
 from backend.chat.service import (
-    delete_session_original_content,
-    get_chat_history,
-    get_session_logs,
-    list_chat_sessions,
     process_chat_message,
     record_gap_feedback_for_message,
-    run_debug,
 )
 from backend.core.db import get_db
 from backend.core.limiter import limiter

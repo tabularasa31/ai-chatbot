@@ -808,7 +808,7 @@ def test_load_recent_user_turn_texts_prefers_decrypted_original(
     )
     db_session.commit()
 
-    original_decrypt = "backend.chat.service._decrypt_optional"
+    original_decrypt = "backend.chat.language_context._decrypt_optional"
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(original_decrypt, lambda _value: "Как сбросить пароль?")
         texts = _load_recent_user_turn_texts(

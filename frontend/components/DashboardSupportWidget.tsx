@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
 import { ChatWidget } from "./ChatWidget";
+import { getToken } from "@/lib/api";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
 const API_KEY = process.env.NEXT_PUBLIC_CHAT9_API_KEY;
@@ -15,8 +16,12 @@ export function DashboardSupportWidget() {
 
   useEffect(() => {
     if (!BOT_ID || !API_KEY) return;
+    const token = getToken();
 
-    fetch("/api/widget-identity", { credentials: "include" })
+    fetch("/api/widget-identity", {
+      credentials: "include",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
       .then((r) => r.json())
       .then((data: { identity_token?: string }) => {
         if (data.identity_token) setIdentityToken(data.identity_token);

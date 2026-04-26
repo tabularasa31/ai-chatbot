@@ -1092,8 +1092,11 @@ def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(
     db_session.add(source)
     db_session.commit()
 
+    from backend.documents import http_client as http_client_mod
+
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: [source.url])
     monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+    monkeypatch.setattr(http_client_mod, "_validate_public_hostname", lambda hostname: None)
 
     yaml_spec = """
 openapi: 3.0.0

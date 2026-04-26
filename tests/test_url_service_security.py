@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from backend.tenants.service import create_tenant
 from backend.core.security import hash_password
+from backend.documents import http_client as http_client_mod
+from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
 from backend.documents.parsers import build_openapi_ingestion_payload
 from backend.documents.schemas import (
@@ -151,9 +153,8 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
     monkeypatch.setattr(url_service.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
-    original_client_factory = url_service._http_client
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_http_client",
         lambda timeout_seconds: httpx.Client(
             transport=transport,
@@ -162,11 +163,8 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
             trust_env=False,
         ),
     )
-    try:
-        with pytest.raises(HTTPException) as exc_info:
-            url_service._fetch_reachable_page("https://docs.example.com/missing", 5.0)
-    finally:
-        monkeypatch.setattr(url_service, "_http_client", original_client_factory)
+    with pytest.raises(HTTPException) as exc_info:
+        url_service._fetch_reachable_page("https://docs.example.com/missing", 5.0)
 
     assert exc_info.value.status_code == 404
     assert "404" in str(exc_info.value.detail)
@@ -302,16 +300,6 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
 """,
     }
 
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
-
-    def fake_request(tenant, method: str, url: str, context):
-        assert method == "GET"
-        return httpx.Response(
-            200,
-            headers={"content-type": "application/xml"},
-            text=responses[url],
-        )
-
     class DummyClient:
         def __enter__(self):
             return self
@@ -319,8 +307,16 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
-    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+    def fake_request(client, method: str, url: str, context):
+        assert method == "GET"
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            text=responses[url],
+        )
+
+    monkeypatch.setattr(sitemap_mod, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(sitemap_mod, "_request_with_safe_redirects", fake_request)
 
     urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
 
@@ -352,16 +348,6 @@ def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyP
         next_url = f"https://docs.example.com/sitemap-chain-{index + 1}.xml"
         responses[current] = sitemap_index(next_url)
 
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
-
-    def fake_request(tenant, method: str, url: str, context):
-        requested_urls.append(url)
-        return httpx.Response(
-            200,
-            headers={"content-type": "application/xml"},
-            text=responses[url],
-        )
-
     class DummyClient:
         def __enter__(self):
             return self
@@ -369,8 +355,16 @@ def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyP
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
-    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+    def fake_request(client, method: str, url: str, context):
+        requested_urls.append(url)
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/xml"},
+            text=responses[url],
+        )
+
+    monkeypatch.setattr(sitemap_mod, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(sitemap_mod, "_request_with_safe_redirects", fake_request)
 
     urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
 
@@ -381,15 +375,6 @@ def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyP
 
 def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPatch) -> None:
     markdown = "# Docs\n\nThis page is served as markdown."
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
-
-    def fake_request(tenant, method: str, url: str, context):
-        assert method == "GET"
-        return httpx.Response(
-            200,
-            headers={"content-type": "text/markdown; charset=utf-8"},
-            text=markdown,
-        )
 
     class DummyClient:
         def __enter__(self):
@@ -398,8 +383,16 @@ def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPat
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
-    monkeypatch.setattr(url_service, "_request_with_safe_redirects", fake_request)
+    def fake_request(client, method: str, url: str, context):
+        assert method == "GET"
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/markdown; charset=utf-8"},
+            text=markdown,
+        )
+
+    monkeypatch.setattr(http_client_mod, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(http_client_mod, "_request_with_safe_redirects", fake_request)
 
     assert url_service._fetch_page_html("https://docs.example.com/guide") == markdown
 
@@ -819,7 +812,7 @@ paths:
 def test_fetch_openapi_source_rejects_structured_non_openapi_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+    monkeypatch.setattr(http_client_mod, "_validate_public_hostname", lambda hostname: None)
     transport = httpx.MockTransport(
         lambda request: httpx.Response(
             200,
@@ -874,7 +867,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     session.close()
 
     monkeypatch.setattr(url_service, "SessionLocal", lambda: Session(bind=engine))
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
+    monkeypatch.setattr(http_client_mod, "_validate_public_hostname", lambda hostname: None)
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: [source.url])
     transport = httpx.MockTransport(
         lambda request: httpx.Response(

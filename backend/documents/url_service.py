@@ -3,37 +3,23 @@
 from __future__ import annotations
 
 import datetime as dt
-import fnmatch
-import hashlib
-import ipaddress
 import logging
-import math
-import os
-import re
-import socket
+import socket  # exposed for test patching via url_service.socket
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
-from urllib import robotparser
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
-import defusedxml.ElementTree as ElementTree
-import httpx
-from bs4 import BeautifulSoup
 from fastapi import HTTPException
 from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
-from backend.core import db as core_db
-from backend.core.config import settings
 from backend.core.db import SessionLocal
-from backend.core.openai_client import get_openai_client
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.documents.parsers import (
-    OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
     load_openapi_spec,
     looks_like_openapi,
@@ -59,68 +45,62 @@ from backend.models import (
     UrlSourceRun,
 )
 
+# --- sub-module re-exports (keep names in this namespace for monkeypatching in tests) ---
+from backend.documents.http_client import (  # noqa: F401
+    DISCOVERY_CONTENT_TYPES,
+    FETCH_TIMEOUT_SECONDS,
+    MAX_HTML_BYTES,
+    MAX_REDIRECTS,
+    PREFLIGHT_TIMEOUT_SECONDS,
+    SUPPORTED_PAGE_CONTENT_TYPES,
+    USER_AGENT,
+    FetchContext,
+    _enforce_response_size_limit,
+    _fetch_page_html,
+    _fetch_reachable_page,
+    _http_client,
+    _is_html_like,
+    _is_forbidden_ip,
+    _is_supported_page_response,
+    _log_fetch,
+    _raise_for_upstream_status,
+    _request_with_safe_redirects,
+    _resolve_hostname,
+    _validate_public_hostname,
+)
+from backend.documents.sitemap import (  # noqa: F401
+    DISCOVERY_ESTIMATE_CAP,
+    MAX_DISCOVERY_DEPTH,
+    MAX_SITEMAPS_PER_SOURCE,
+    _apply_exclusions,
+    _extract_links,
+    _fetch_sitemap_urls,
+    _load_robots_warning,
+    _normalize_page_url,
+)
+from backend.documents.embedder import (  # noqa: F401
+    EMBED_BATCH_SIZE,
+    ExtractedPage,
+    StructuredSource,
+    _approx_tokens,
+    _build_chunk_text,
+    _build_chunks,
+    _build_structured_openapi_chunks,
+    _content_hash,
+    _detect_platform,
+    _embed_chunks,
+    _extract_page,
+    _normalize_source_format,
+    _render_structured_openapi_chunks,
+    _run_tenant_knowledge_extraction_best_effort,
+    _url_knowledge_extract_when_unchanged,
+    _SECTION_SPLIT_RE,
+)
+
 logger = logging.getLogger(__name__)
 
-MAX_DISCOVERY_DEPTH = 3
-DISCOVERY_ESTIMATE_CAP = 200
-EMBED_BATCH_SIZE = 100
-FETCH_TIMEOUT_SECONDS = 10.0
-PREFLIGHT_TIMEOUT_SECONDS = 5.0
-MAX_HTML_BYTES = 5 * 1024 * 1024
-MAX_REDIRECTS = 5
-MAX_SITEMAPS_PER_SOURCE = 20
-USER_AGENT = "Chat9Bot/1.0 (+https://getchat9.live)"
-DISCOVERY_CONTENT_TYPES = ("text/html", "application/xhtml+xml")
-SUPPORTED_PAGE_CONTENT_TYPES = (
-    "text/html",
-    "application/xhtml+xml",
-    "text/markdown",
-    "text/plain",
-)
-ALLOWED_SCHEDULES = {
-    SourceSchedule.daily.value,
-    SourceSchedule.weekly.value,
-    SourceSchedule.manual.value,
-}
-_SECTION_SPLIT_RE = re.compile(r"(?<=[.?!])\s+|\n{2,}")
-MANUAL_EXCLUDED_PAGE_URLS_KEY = "manually_excluded_page_urls"
-
-
-@dataclass
-class UrlPreflightResult:
-    normalized_url: str
-    normalized_domain: str
-    title: str | None
-    estimated_pages: int
-    warnings: list[str]
-
-
-@dataclass
-class ExtractedPage:
-    url: str
-    title: str
-    text: str
-    chunks: list[dict[str, Any]]
-
-
-@dataclass
-class FetchContext:
-    stage: str
-    url: str
-
-
-@dataclass
-class StructuredSource:
-    title: str
-    parsed_text: str
-    chunks: list[OpenAPIChunk]
-    source_format: str
-
-
-def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
-
-
+# Defined here (not re-imported from http_client) so that test patches on
+# url_service._validate_public_hostname reach calls inside this function.
 def _normalize_source_url(raw_url: str) -> tuple[str, str]:
     parsed = urlparse(raw_url.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -143,6 +123,27 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
     hostname = parsed.hostname.lower() if parsed.hostname else ""
     _validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
+
+
+ALLOWED_SCHEDULES = {
+    SourceSchedule.daily.value,
+    SourceSchedule.weekly.value,
+    SourceSchedule.manual.value,
+}
+MANUAL_EXCLUDED_PAGE_URLS_KEY = "manually_excluded_page_urls"
+
+
+@dataclass
+class UrlPreflightResult:
+    normalized_url: str
+    normalized_domain: str
+    title: str | None
+    estimated_pages: int
+    warnings: list[str]
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
@@ -178,422 +179,17 @@ def _capacity_warning(available_slots: int) -> str:
     )
 
 
-def _normalize_page_url(url: str, base_domain: str) -> str | None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    if parsed.netloc.lower() != base_domain.lower():
-        return None
-    path = parsed.path or "/"
-    if path.endswith("/") and path != "/":
-        path = path[:-1]
-    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", "", ""))
-
-
-def _http_client(timeout_seconds: float) -> httpx.Client:
-    return httpx.Client(
-        timeout=timeout_seconds,
-        follow_redirects=False,
-        trust_env=False,
-        headers={"User-Agent": USER_AGENT},
-    )
-
-
-def _log_fetch(level: int, message: str, context: FetchContext, **extra: Any) -> None:
-    logger.log(level, "%s [%s] %s", message, context.stage, context.url, extra=extra)
-
-
-def _is_forbidden_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return any(
-        (
-            ip.is_private,
-            ip.is_loopback,
-            ip.is_link_local,
-            ip.is_multicast,
-            ip.is_reserved,
-            ip.is_unspecified,
-        )
-    )
-
-
-def _resolve_hostname(hostname: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
-    try:
-        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Couldn't resolve this URL. Check the address and try again.",
-        ) from exc
-
-    resolved: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
-    for family, _, _, _, sockaddr in infos:
-        if family in (socket.AF_INET, socket.AF_INET6):
-            resolved.add(ipaddress.ip_address(sockaddr[0]))
-    if not resolved:
-        raise HTTPException(
-            status_code=400,
-            detail="Couldn't resolve this URL. Check the address and try again.",
-        )
-    return resolved
-
-
-def _validate_public_hostname(hostname: str) -> None:
-    if not hostname:
-        raise HTTPException(status_code=400, detail="Please enter a valid public URL.")
-
-    try:
-        parsed_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        candidates = _resolve_hostname(hostname)
-    else:
-        candidates = {parsed_ip}
-
-    if any(_is_forbidden_ip(candidate) for candidate in candidates):
-        raise HTTPException(
-            status_code=400,
-            detail="Private, local, and reserved network addresses are not allowed.",
-        )
-
-
-def _request_with_safe_redirects(
-    http_client: httpx.Client,
-    method: str,
-    url: str,
-    *,
-    context: FetchContext,
-    max_redirects: int = MAX_REDIRECTS,
-) -> httpx.Response:
-    current_url = url
-    for _ in range(max_redirects + 1):
-        parsed = urlparse(current_url)
-        hostname = parsed.hostname.lower() if parsed.hostname else ""
-        _validate_public_hostname(hostname)
-        try:
-            response = http_client.request(method, current_url)
-        except httpx.TimeoutException as exc:
-            _log_fetch(logging.WARNING, "Request timed out", context, method=method)
-            raise HTTPException(
-                status_code=400,
-                detail="Couldn't reach this URL. Check the address and try again.",
-            ) from exc
-        except httpx.HTTPError as exc:
-            _log_fetch(logging.WARNING, "Request failed", context, method=method, error=str(exc))
-            raise HTTPException(
-                status_code=400,
-                detail="Couldn't reach this URL. Check the address and try again.",
-            ) from exc
-
-        if response.status_code not in {301, 302, 303, 307, 308}:
-            _enforce_response_size_limit(response, context)
-            return response
-
-        location = response.headers.get("location")
-        if not location:
-            _log_fetch(logging.WARNING, "Redirect missing location header", context, method=method)
-            raise HTTPException(status_code=400, detail="URL redirect is missing a target.")
-        current_url = urljoin(current_url, location)
-        _log_fetch(logging.INFO, "Following validated redirect", context, method=method, location=current_url)
-
-    raise HTTPException(status_code=400, detail="Too many redirects while fetching this URL.")
-
-
-def _enforce_response_size_limit(response: httpx.Response, context: FetchContext) -> None:
-    content_length = response.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_HTML_BYTES:
-                _log_fetch(
-                    logging.WARNING,
-                    "Response rejected by content-length",
-                    context,
-                    status_code=response.status_code,
-                    content_length=content_length,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
-                )
-        except ValueError:
-            pass
-
-    if len(response.content) > MAX_HTML_BYTES:
-        _log_fetch(
-            logging.WARNING,
-            "Response rejected by downloaded size",
-            context,
-            status_code=response.status_code,
-            size=len(response.content),
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=f"Response is too large. Maximum size is {MAX_HTML_BYTES // (1024 * 1024)}MB.",
-        )
-
-
-def _raise_for_upstream_status(response: httpx.Response, context: FetchContext) -> None:
-    status_code = response.status_code
-    if status_code < 400:
-        return
-
-    _log_fetch(logging.WARNING, "Upstream returned error status", context, status_code=status_code)
-    if status_code == 404:
-        raise HTTPException(status_code=404, detail="The URL returned 404 Not Found.")
-    if status_code in {401, 403}:
-        raise HTTPException(status_code=400, detail="The URL requires access and can't be indexed.")
-    if 400 <= status_code < 500:
-        raise HTTPException(
-            status_code=400,
-            detail=f"The URL returned HTTP {status_code}. Check the address and try again.",
-        )
-    raise HTTPException(
-        status_code=502,
-        detail=f"The website is temporarily unavailable (HTTP {status_code}). Try again later.",
-    )
-
-
-def _load_robots_warning(root_url: str) -> str | None:
-    parsed = urlparse(root_url)
-    robots_url = urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
-    rp = robotparser.RobotFileParser()
-    context = FetchContext(stage="preflight:robots", url=robots_url)
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
-        try:
-            response = _request_with_safe_redirects(http_client, "GET", robots_url, context=context)
-        except HTTPException:
-            return None
-    if response.status_code >= 400 or not response.text.strip():
-        return None
-    try:
-        rp.parse(response.text.splitlines())
-    except Exception:
-        return None
-    if not rp.can_fetch(USER_AGENT, root_url):
-        return "robots.txt restricts crawling. We'll index only what is allowed."
-    return None
-
-
-def _fetch_reachable_page(url: str, timeout_seconds: float) -> tuple[str, str | None]:
-    context = FetchContext(stage="preflight:page", url=url)
-    with _http_client(timeout_seconds) as http_client:
-        response = _request_with_safe_redirects(http_client, "HEAD", url, context=context)
-        if response.status_code >= 400 or "text/html" not in response.headers.get("content-type", ""):
-            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
-
-        _raise_for_upstream_status(response, context)
-
-        content_type = response.headers.get("content-type", "")
-        if "text/html" not in content_type and response.request.method != "GET":
-            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
-            _raise_for_upstream_status(response, context)
-            content_type = response.headers.get("content-type", "")
-
-        text = response.text
-        title = None
-        if "text/html" in content_type:
-            soup = BeautifulSoup(text, "html.parser")
-            title_tag = soup.find("title")
-            title = title_tag.get_text(" ", strip=True) if title_tag else None
-
-        return text, title
-
-
-def _is_html_like(response: httpx.Response) -> bool:
-    content_type = response.headers.get("content-type", "").lower()
-    return any(value in content_type for value in DISCOVERY_CONTENT_TYPES)
-
-
-def _is_supported_page_response(response: httpx.Response) -> bool:
-    content_type = response.headers.get("content-type", "").lower()
-    return any(value in content_type for value in SUPPORTED_PAGE_CONTENT_TYPES)
-
-
-def _extract_links(html: str, current_url: str, domain: str) -> list[str]:
-    soup = BeautifulSoup(html, "html.parser")
-    out: list[str] = []
-    for anchor in soup.find_all("a", href=True):
-        href = anchor.get("href") or ""
-        if href.startswith("#") or href.startswith("mailto:") or href.startswith("javascript:"):
-            continue
-        joined = urljoin(current_url, href)
-        normalized = _normalize_page_url(joined, domain)
-        if normalized:
-            out.append(normalized)
-    return out
-
-
-def _fetch_sitemap_urls(root_url: str, domain: str) -> list[str]:
-    candidates = [urljoin(root_url, "/sitemap.xml"), urljoin(root_url, "/sitemap_index.xml")]
-    urls: list[str] = []
-    queued = deque(candidates)
-    seen_sitemaps: set[str] = set()
-    seen_urls: set[str] = set()
-
-    def local_name(tag: str) -> str:
-        return tag.rsplit("}", 1)[-1].lower()
-
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
-        sitemaps_fetched = 0
-        while queued and sitemaps_fetched < MAX_SITEMAPS_PER_SOURCE:
-            candidate = queued.popleft()
-            if candidate in seen_sitemaps:
-                continue
-            seen_sitemaps.add(candidate)
-            sitemaps_fetched += 1
-            context = FetchContext(stage="preflight:sitemap", url=candidate)
-            try:
-                response = _request_with_safe_redirects(http_client, "GET", candidate, context=context)
-            except HTTPException:
-                continue
-            if response.status_code >= 400 or not response.text.strip():
-                _log_fetch(
-                    logging.INFO,
-                    "Skipping sitemap candidate",
-                    context,
-                    status_code=response.status_code,
-                )
-                continue
-            try:
-                root = ElementTree.fromstring(response.text)
-            except ElementTree.ParseError:
-                _log_fetch(logging.INFO, "Skipping invalid sitemap XML", context)
-                continue
-
-            root_name = local_name(root.tag)
-            if root_name == "sitemapindex":
-                for sitemap_loc in root.findall("{*}sitemap/{*}loc"):
-                    if not sitemap_loc.text:
-                        continue
-                    normalized_sitemap = _normalize_page_url(sitemap_loc.text.strip(), domain)
-                    if normalized_sitemap and normalized_sitemap not in seen_sitemaps:
-                        queued.append(normalized_sitemap)
-                continue
-
-            if root_name != "urlset":
-                _log_fetch(logging.INFO, "Skipping unsupported sitemap root", context, root_tag=root.tag)
-                continue
-
-            for loc in root.findall("{*}url/{*}loc"):
-                if not loc.text:
-                    continue
-                normalized = _normalize_page_url(loc.text.strip(), domain)
-                if normalized and normalized not in seen_urls:
-                    seen_urls.add(normalized)
-                    urls.append(normalized)
-    return urls
-
-
-def _apply_exclusions(urls: list[str], root_url: str, exclusions: list[str]) -> list[str]:
+def _clean_exclusions(exclusions: list[str] | None) -> list[str]:
     if not exclusions:
-        return urls
-    filtered: list[str] = []
-    for url in urls:
-        parsed = urlparse(url)
-        path = parsed.path or "/"
-        if any(fnmatch.fnmatch(path, pattern.strip()) for pattern in exclusions if pattern.strip()):
-            continue
-        filtered.append(url)
-    return filtered
+        return []
+    return [item.strip() for item in exclusions if item and item.strip()]
 
 
-def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[str]:
-    normalized_root, domain = _normalize_source_url(root_url)
-    seen: set[str] = set()
-    ordered: list[str] = []
-
-    def add_url(url: str) -> None:
-        if url in seen or len(ordered) >= page_cap:
-            return
-        seen.add(url)
-        ordered.append(url)
-
-    add_url(normalized_root)
-    for url in _apply_exclusions(_fetch_sitemap_urls(normalized_root, domain), normalized_root, exclusions):
-        add_url(url)
-        if len(ordered) >= page_cap:
-            return ordered
-
-    if len(ordered) >= page_cap:
-        return ordered
-
-    queue: deque[tuple[str, int]] = deque([(normalized_root, 0)])
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as http_client:
-        while queue and len(ordered) < page_cap:
-            current_url, depth = queue.popleft()
-            if depth >= MAX_DISCOVERY_DEPTH:
-                continue
-            context = FetchContext(stage="crawl:discover", url=current_url)
-            try:
-                response = _request_with_safe_redirects(http_client, "GET", current_url, context=context)
-            except HTTPException:
-                continue
-            if response.status_code >= 400 or not _is_html_like(response):
-                _log_fetch(
-                    logging.INFO,
-                    "Skipping non-indexable discovery page",
-                    context,
-                    status_code=response.status_code,
-                    content_type=response.headers.get("content-type"),
-                )
-                continue
-            links = _extract_links(response.text, current_url, domain)
-            links = _apply_exclusions(links, normalized_root, exclusions)
-            for link in links:
-                if link in seen:
-                    continue
-                add_url(link)
-                queue.append((link, depth + 1))
-                if len(ordered) >= page_cap:
-                    break
-    return ordered
-
-
-def preflight_url_source(
-    *,
-    tenant: Tenant,
-    url: str,
-    exclusions: list[str],
-    db: Session,
-) -> UrlPreflightResult:
-    normalized_url, normalized_domain = _normalize_source_url(url)
-    _, remaining_capacity = _allowed_source_document_total(db, tenant_id=tenant.id)
-    if remaining_capacity <= 0:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Knowledge capacity reached. This tenant already uses all "
-                f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
-            ),
-        )
-    duplicate = (
-        db.query(UrlSource)
-        .filter(UrlSource.tenant_id == tenant.id)
-        .filter(UrlSource.normalized_domain == normalized_domain)
-        .first()
-    )
-    if duplicate:
-        raise HTTPException(
-            status_code=409,
-            detail="You already have a source from this domain. Manage it in the sources list.",
-        )
-
-    _, title = _fetch_reachable_page(normalized_url, PREFLIGHT_TIMEOUT_SECONDS)
-    warnings: list[str] = []
-    robots_warning = _load_robots_warning(normalized_url)
-    if robots_warning:
-        warnings.append(robots_warning)
-
-    estimate_urls = _discover_urls(normalized_url, exclusions, DISCOVERY_ESTIMATE_CAP)
-    estimated_pages = len(estimate_urls)
-    if estimated_pages > remaining_capacity:
-        warnings.append(_capacity_warning(remaining_capacity))
-
-    return UrlPreflightResult(
-        normalized_url=normalized_url,
-        normalized_domain=normalized_domain,
-        title=title,
-        estimated_pages=estimated_pages,
-        warnings=warnings,
-    )
+def _clean_schedule(schedule: str | None) -> SourceSchedule:
+    raw = (schedule or SourceSchedule.weekly.value).strip().lower()
+    if raw not in ALLOWED_SCHEDULES:
+        raise HTTPException(status_code=422, detail="Schedule must be daily, weekly, or manual")
+    return SourceSchedule(raw)
 
 
 def _schedule_next_run(schedule: SourceSchedule) -> dt.datetime | None:
@@ -603,12 +199,6 @@ def _schedule_next_run(schedule: SourceSchedule) -> dt.datetime | None:
     if schedule == SourceSchedule.daily:
         return now + dt.timedelta(days=1)
     return now + dt.timedelta(days=7)
-
-
-def _clean_exclusions(exclusions: list[str] | None) -> list[str]:
-    if not exclusions:
-        return []
-    return [item.strip() for item in exclusions if item and item.strip()]
 
 
 def _manual_excluded_page_urls(source: UrlSource) -> list[str]:
@@ -661,231 +251,67 @@ def _recalculate_source_counts(source: UrlSource, db: Session) -> None:
     source.chunks_created = sum(len(doc.embeddings) for doc in docs)
 
 
-def _clean_schedule(schedule: str | None) -> SourceSchedule:
-    raw = (schedule or SourceSchedule.weekly.value).strip().lower()
-    if raw not in ALLOWED_SCHEDULES:
-        raise HTTPException(status_code=422, detail="Schedule must be daily, weekly, or manual")
-    return SourceSchedule(raw)
+# --- URL discovery (kept here so url_service.* patches work in tests) ---
 
+def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[str]:
+    normalized_root, domain = _normalize_source_url(root_url)
+    seen: set[str] = set()
+    ordered: list[str] = []
 
-def create_url_source(
-    *,
-    tenant: Tenant,
-    url: str,
-    name: str | None,
-    schedule: str | None,
-    exclusions: list[str] | None,
-    db: Session,
-) -> tuple[UrlSource, UrlPreflightResult]:
-    cleaned_exclusions = _clean_exclusions(exclusions)
-    preflight = preflight_url_source(tenant=tenant, url=url, exclusions=cleaned_exclusions, db=db)
-    cleaned_schedule = _clean_schedule(schedule)
-    source = UrlSource(
-        tenant_id=tenant.id,
-        name=(name or preflight.title or preflight.normalized_domain).strip()[:255],
-        url=preflight.normalized_url,
-        normalized_domain=preflight.normalized_domain,
-        status=SourceStatus.paused if not tenant.openai_api_key else SourceStatus.queued,
-        crawl_schedule=cleaned_schedule,
-        exclusion_patterns=cleaned_exclusions or None,
-        pages_found=preflight.estimated_pages,
-        warning_message="\n".join(preflight.warnings) if preflight.warnings else None,
-        next_crawl_at=_schedule_next_run(cleaned_schedule),
-        metadata_json={"auto_title": preflight.title},
-    )
-    if not tenant.openai_api_key:
-        source.error_message = "Indexing paused — check your OpenAI key."
-    db.add(source)
-    db.commit()
-    db.refresh(source)
-    return source, preflight
+    def add_url(url: str) -> None:
+        if url in seen or len(ordered) >= page_cap:
+            return
+        seen.add(url)
+        ordered.append(url)
 
+    add_url(normalized_root)
+    for url in _apply_exclusions(_fetch_sitemap_urls(normalized_root, domain), normalized_root, exclusions):
+        add_url(url)
+        if len(ordered) >= page_cap:
+            return ordered
 
-def _approx_tokens(text: str) -> int:
-    return max(1, math.ceil(len(text) / 4))
+    if len(ordered) >= page_cap:
+        return ordered
 
-
-def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _detect_platform(html: str, url: str) -> str:
-    lower = html.lower()
-    hostname = urlparse(url).netloc.lower()
-    if "docusaurus" in lower:
-        return "docusaurus"
-    if "gitbook" in lower or "gitbook.io" in hostname:
-        return "gitbook"
-    if "mintlify" in lower:
-        return "mintlify"
-    if "readme.io" in hostname or "readme.com" in hostname:
-        return "readme"
-    if "vitepress" in lower:
-        return "vitepress"
-    return "generic"
-
-
-def _extract_page(url: str, html: str) -> ExtractedPage | None:
-    soup = BeautifulSoup(html, "html.parser")
-    for selector in ("script", "style", "nav", "footer", "aside", "noscript"):
-        for node in soup.select(selector):
-            node.decompose()
-    root = soup.find("main") or soup.find("article") or soup.body or soup
-
-    title = ""
-    h1 = root.find("h1")
-    if h1:
-        title = h1.get_text(" ", strip=True)
-    elif soup.title:
-        title = soup.title.get_text(" ", strip=True)
-    title = title or urlparse(url).path.strip("/") or urlparse(url).netloc
-
-    sections: list[tuple[str, str]] = []
-    current_heading = title
-    buffer: list[str] = []
-
-    def flush() -> None:
-        nonlocal buffer
-        text = "\n\n".join(part for part in buffer if part.strip()).strip()
-        if text:
-            sections.append((current_heading, text))
-        buffer = []
-
-    for node in root.find_all(["h1", "h2", "h3", "p", "li", "pre", "table"], recursive=True):
-        name = node.name.lower()
-        text = node.get_text("\n", strip=True)
-        if not text:
-            continue
-        if name in {"h1", "h2", "h3"}:
-            flush()
-            current_heading = text
-            continue
-        buffer.append(text)
-    flush()
-
-    if not sections:
-        body_text = root.get_text("\n", strip=True)
-        if not body_text:
-            return None
-        sections = [(title, body_text)]
-
-    full_text = "\n\n".join(text for _, text in sections).strip()
-    if not full_text:
-        return None
-
-    chunks = _build_chunks(title, sections)
-    if not chunks:
-        return None
-
-    return ExtractedPage(url=url, title=title[:255], text=full_text, chunks=chunks)
-
-
-def _build_chunks(title: str, sections: list[tuple[str, str]]) -> list[dict[str, Any]]:
-    chunks: list[dict[str, Any]] = []
-    chunk_index = 0
-    for section_title, text in sections:
-        parts = [p.strip() for p in _SECTION_SPLIT_RE.split(text) if p.strip()]
-        current: list[str] = []
-        current_tokens = 0
-        for part in parts:
-            part_tokens = _approx_tokens(part)
-            if current and current_tokens + part_tokens > 500:
-                raw = " ".join(current).strip()
-                if raw:
-                    chunks.append(
-                        {
-                            "chunk_index": chunk_index,
-                            "raw_text": raw,
-                            "section_title": section_title,
-                            "chunk_text": _build_chunk_text(raw, title, section_title),
-                            "token_count": _approx_tokens(raw),
-                            "content_hash": _content_hash(raw),
-                        }
-                    )
-                    chunk_index += 1
-                overlap = current[-2:] if len(current) >= 2 else current[-1:]
-                current = list(overlap)
-                current_tokens = sum(_approx_tokens(item) for item in current)
-            current.append(part)
-            current_tokens += part_tokens
-        if current:
-            raw = " ".join(current).strip()
-            if raw:
-                chunks.append(
-                    {
-                        "chunk_index": chunk_index,
-                        "raw_text": raw,
-                        "section_title": section_title,
-                        "chunk_text": _build_chunk_text(raw, title, section_title),
-                        "token_count": _approx_tokens(raw),
-                        "content_hash": _content_hash(raw),
-                    }
+    queue: deque[tuple[str, int]] = deque([(normalized_root, 0)])
+    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+        while queue and len(ordered) < page_cap:
+            current_url, depth = queue.popleft()
+            if depth >= MAX_DISCOVERY_DEPTH:
+                continue
+            context = FetchContext(stage="crawl:discover", url=current_url)
+            try:
+                response = _request_with_safe_redirects(client, "GET", current_url, context=context)
+            except HTTPException:
+                continue
+            if response.status_code >= 400 or not _is_html_like(response):
+                _log_fetch(
+                    logging.INFO,
+                    "Skipping non-indexable discovery page",
+                    context,
+                    status_code=response.status_code,
+                    content_type=response.headers.get("content-type"),
                 )
-                chunk_index += 1
-    return chunks
+                continue
+            links = _extract_links(response.text, current_url, domain)
+            links = _apply_exclusions(links, normalized_root, exclusions)
+            for link in links:
+                if link in seen:
+                    continue
+                add_url(link)
+                queue.append((link, depth + 1))
+                if len(ordered) >= page_cap:
+                    break
+    return ordered
 
 
-def _build_chunk_text(chunk_text: str, page_title: str, section: str) -> str:
-    parts: list[str] = []
-    if page_title:
-        parts.append(f"Page: {page_title}")
-    if section and section != page_title:
-        parts.append(f"Section: {section}")
-    parts.append(chunk_text)
-    return "\n\n".join(parts)
-
-
-def _normalize_source_format(source_format: str, *, from_url: bool) -> str:
-    if not from_url:
-        return source_format
-    if source_format == "json":
-        return "url-json"
-    if source_format == "yaml":
-        return "url-yaml"
-    return f"url-{source_format}"
-
-
-def _build_structured_openapi_chunks(
-    openapi_chunks: list[OpenAPIChunk],
-    *,
-    filename: str,
-    source_url: str,
-    source_format: str,
-) -> list[dict[str, Any]]:
-    normalized_source_format = _normalize_source_format(source_format, from_url=True)
-    out: list[dict[str, Any]] = []
-    for index, chunk in enumerate(openapi_chunks):
-        out.append(
-            {
-                "chunk_index": index,
-                "chunk_text": chunk.text,
-                "type": "api_endpoint",
-                "subtype": "primary",
-                "path": chunk.path,
-                "method": chunk.method,
-                "operation_id": chunk.operation_id,
-                "tags": chunk.tags,
-                "deprecated": chunk.deprecated,
-                "content_types": chunk.content_types,
-                "response_codes": chunk.response_codes,
-                "auth_schemes": chunk.auth_schemes,
-                "has_examples": chunk.has_examples,
-                "filename": filename,
-                "file_type": DocumentType.swagger.value,
-                "source_kind": "url",
-                "source_format": normalized_source_format,
-                "spec_version": chunk.spec_version,
-                "source_url": source_url,
-            }
-        )
-    return out
-
+# --- OpenAPI structured source (kept here so url_service._http_client patches work in tests) ---
 
 def _fetch_openapi_source(url: str) -> StructuredSource | None:
     context = FetchContext(stage="crawl:structured", url=url)
-    with _http_client(FETCH_TIMEOUT_SECONDS) as http_client:
+    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
         try:
-            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
+            response = _request_with_safe_redirects(client, "GET", url, context=context)
             _raise_for_upstream_status(response, context)
         except HTTPException as exc:
             _log_fetch(logging.INFO, "Skipping structured source after fetch failure", context, detail=exc.detail)
@@ -939,103 +365,7 @@ def _fetch_openapi_source(url: str) -> StructuredSource | None:
     )
 
 
-def _render_structured_openapi_chunks(
-    openapi_chunks: list[OpenAPIChunk],
-    *,
-    title: str,
-    source_url: str,
-    source_format: str,
-) -> list[dict[str, Any]]:
-    return _build_structured_openapi_chunks(
-        openapi_chunks,
-        filename=title[:255],
-        source_url=source_url,
-        source_format=source_format,
-    )
-
-
-def _fetch_page_html(url: str) -> str | None:
-    context = FetchContext(stage="crawl:page", url=url)
-    with _http_client(FETCH_TIMEOUT_SECONDS) as http_client:
-        try:
-            response = _request_with_safe_redirects(http_client, "GET", url, context=context)
-            _raise_for_upstream_status(response, context)
-        except HTTPException as exc:
-            _log_fetch(logging.INFO, "Skipping page after fetch failure", context, detail=exc.detail)
-            return None
-    if response.status_code >= 400 or not _is_supported_page_response(response):
-        _log_fetch(
-            logging.INFO,
-            "Skipping page with unsupported response",
-            context,
-            status_code=response.status_code,
-            content_type=response.headers.get("content-type"),
-        )
-        return None
-    return response.text
-
-
-def _embed_chunks(chunks: list[dict[str, Any]], api_key: str | None) -> list[list[float]]:
-    if not chunks:
-        return []
-    oai = get_openai_client(api_key)
-    vectors: list[list[float]] = []
-    for start in range(0, len(chunks), EMBED_BATCH_SIZE):
-        batch = chunks[start : start + EMBED_BATCH_SIZE]
-        response = oai.embeddings.create(
-            model=settings.embedding_model,
-            input=[chunk["chunk_text"] for chunk in batch],
-        )
-        vectors.extend(item.embedding for item in response.data)
-    return vectors
-
-
-def _url_knowledge_extract_when_unchanged() -> bool:
-    """If true, run tenant knowledge extraction even when page/spec content hash is unchanged.
-
-    Default false to avoid extra LLM cost on every scheduled re-crawl. Set env to ``1``/``true``
-    once after deploy to backfill ``tenant_faq`` / profile for already-indexed URL sources.
-    """
-    raw = os.getenv("URL_KNOWLEDGE_EXTRACT_WHEN_UNCHANGED", "")
-    return raw.strip().lower() in ("1", "true", "yes")
-
-
-def _run_tenant_knowledge_extraction_best_effort(
-    *,
-    document_id: uuid.UUID,
-    api_key: str | None,
-) -> None:
-    """
-    Match file-upload embedding flow: after chunks exist, merge profile + FAQ candidates.
-
-    URL crawls bypass ``run_embeddings_background``; without this hook, GitBook/docs
-    URLs index for RAG but never populate ``tenant_faq`` / profile extraction.
-
-    Uses a **fresh** DB session from ``backend.core.db`` so ``db.rollback()`` inside
-    ``insert_new_faq_candidates`` / extraction error paths cannot undo the crawler session.
-    """
-    if not api_key:
-        return
-    db_extract = core_db.SessionLocal()
-    try:
-        from backend.tenant_knowledge.extract_tenant_knowledge import (
-            run_extract_client_knowledge_for_document,
-        )
-
-        run_extract_client_knowledge_for_document(
-            document_id=document_id,
-            db=db_extract,
-            api_key=api_key,
-        )
-    except Exception:
-        logger.warning(
-            "Tenant knowledge extraction failed for URL document_id=%s",
-            document_id,
-            exc_info=True,
-        )
-    finally:
-        db_extract.close()
-
+# --- DB upsert (kept here so url_service._embed_chunks patches work in tests) ---
 
 def _upsert_page_document(
     *,
@@ -1123,7 +453,7 @@ def _upsert_structured_document(
     url: str,
     title: str,
     parsed_text: str,
-    chunks: list[OpenAPIChunk],
+    chunks: list,
     db: Session,
     api_key: str | None,
 ) -> tuple[Document, int]:
@@ -1224,6 +554,90 @@ def _upsert_structured_document(
             db.add(refreshed_doc)
             db.commit()
         raise HTTPException(status_code=500, detail="Structured source embedding failed") from None
+
+
+# --- Public CRUD API ---
+
+def preflight_url_source(
+    *,
+    tenant: Tenant,
+    url: str,
+    exclusions: list[str],
+    db: Session,
+) -> UrlPreflightResult:
+    normalized_url, normalized_domain = _normalize_source_url(url)
+    _, remaining_capacity = _allowed_source_document_total(db, tenant_id=tenant.id)
+    if remaining_capacity <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Knowledge capacity reached. This tenant already uses all "
+                f"{KNOWLEDGE_DOCUMENT_CAPACITY} document slots."
+            ),
+        )
+    duplicate = (
+        db.query(UrlSource)
+        .filter(UrlSource.tenant_id == tenant.id)
+        .filter(UrlSource.normalized_domain == normalized_domain)
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail="You already have a source from this domain. Manage it in the sources list.",
+        )
+
+    _, title = _fetch_reachable_page(normalized_url, PREFLIGHT_TIMEOUT_SECONDS)
+    warnings: list[str] = []
+    robots_warning = _load_robots_warning(normalized_url)
+    if robots_warning:
+        warnings.append(robots_warning)
+
+    estimate_urls = _discover_urls(normalized_url, exclusions, DISCOVERY_ESTIMATE_CAP)
+    estimated_pages = len(estimate_urls)
+    if estimated_pages > remaining_capacity:
+        warnings.append(_capacity_warning(remaining_capacity))
+
+    return UrlPreflightResult(
+        normalized_url=normalized_url,
+        normalized_domain=normalized_domain,
+        title=title,
+        estimated_pages=estimated_pages,
+        warnings=warnings,
+    )
+
+
+def create_url_source(
+    *,
+    tenant: Tenant,
+    url: str,
+    name: str | None,
+    schedule: str | None,
+    exclusions: list[str] | None,
+    db: Session,
+) -> tuple[UrlSource, UrlPreflightResult]:
+    cleaned_exclusions = _clean_exclusions(exclusions)
+    preflight = preflight_url_source(tenant=tenant, url=url, exclusions=cleaned_exclusions, db=db)
+    cleaned_schedule = _clean_schedule(schedule)
+    source = UrlSource(
+        tenant_id=tenant.id,
+        name=(name or preflight.title or preflight.normalized_domain).strip()[:255],
+        url=preflight.normalized_url,
+        normalized_domain=preflight.normalized_domain,
+        status=SourceStatus.paused if not tenant.openai_api_key else SourceStatus.queued,
+        crawl_schedule=cleaned_schedule,
+        exclusion_patterns=cleaned_exclusions or None,
+        pages_found=preflight.estimated_pages,
+        warning_message="\n".join(preflight.warnings) if preflight.warnings else None,
+        next_crawl_at=_schedule_next_run(cleaned_schedule),
+        metadata_json={"auto_title": preflight.title},
+    )
+    if not tenant.openai_api_key:
+        source.error_message = "Indexing paused — check your OpenAI key."
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return source, preflight
 
 
 def list_knowledge_sources(tenant_id: uuid.UUID, db: Session) -> dict[str, Any]:
@@ -1343,6 +757,8 @@ def trigger_refresh(
     db.refresh(source)
     return source
 
+
+# --- Crawl internals ---
 
 def _mark_run_finished(run: UrlSourceRun, *, status: str, error_message: str | None = None) -> None:
     run.status = status

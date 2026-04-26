@@ -456,3 +456,44 @@ def test_deferred_trace_logs_warning_when_ops_dropped(monkeypatch, caplog) -> No
         trace.promote()
 
     assert any("dropped" in r.message for r in caplog.records)
+
+
+def test_deferred_trace_logs_warning_when_materialize_fails(monkeypatch, caplog) -> None:
+    import logging
+
+    class _BrokenClient:
+        def trace(self, **kwargs):
+            raise RuntimeError("langfuse unavailable")
+
+        def flush(self):
+            return None
+
+    service = ObservabilityService()
+    service._client = _BrokenClient()
+    service._enabled = True
+    monkeypatch.setattr("backend.observability.service.settings.full_capture_mode", False)
+    monkeypatch.setattr("backend.observability.service.settings.trace_new_tenant_threshold", 0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_threshold", 1)
+    monkeypatch.setattr("backend.observability.service.settings.trace_high_volume_sample_rate", 0.0)
+    monkeypatch.setattr("backend.observability.service.settings.trace_sample_rate", 0.0)
+
+    service.begin_trace(name="rag-query", session_id="seed", tenant_id="broken-tenant")
+    trace = service.begin_trace(name="rag-query", session_id="broken-session", tenant_id="broken-tenant")
+
+    trace.span(name="s-1").end()
+    trace.span(name="s-2").end()
+    trace.update(output="result")
+
+    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
+        trace.promote()
+
+    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("dropping" in m and "3" in m for m in warning_messages), (
+        f"Expected a 'dropping 3 queued operations' warning, got: {warning_messages}"
+    )
+
+    # Second promote() must not re-log (operations were cleared)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
+        trace.promote()
+    assert not any("dropping" in r.message for r in caplog.records)

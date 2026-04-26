@@ -184,6 +184,7 @@ class EscalationStateMachine(PipelineHandler):
                     trace_source="escalation_email_capture",
                     chat_ended=False,
                     escalated=True,
+                    ticket_number=ticket.ticket_number,
                 )
             msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
             out = _svc.complete_escalation_openai_turn(

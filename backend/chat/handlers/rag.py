@@ -37,6 +37,7 @@ from backend.chat.decision import KbConfidence
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
     ResolvedLanguageContext,
+    detect_language,
     localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
@@ -129,7 +130,7 @@ Check if the answer is:
 1. Grounded in the provided context (not hallucinated)
 2. Actually answers the question, OR explicitly asks exactly one short clarifying question when one missing detail materially blocks a correct answer
 3. If it asks a clarifying question, it should still be helpful and not invent facts beyond the context
-4. It does not introduce unsupported concrete facts such as setting names, field names, URLs, workflow steps, or product limits that are not present in the provided context
+4. It does not introduce unsupported core facts. The main factual claim must be grounded in the context. Navigation breadcrumbs, section-path labels (e.g. "Getting Started → Step 3"), and format or limit enumerations are acceptable if the underlying fact they reference is present in the context — even if the exact label or list item is not verbatim in the retrieved chunks.
 
 Respond ONLY with JSON (no markdown, no explanation):
 {{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
@@ -902,6 +903,53 @@ def run_chat_pipeline(
     )
     _llm_ms = int((perf_counter() - _llm_start) * 1000)
 
+    # --- 7b. Language check: regenerate if answer language ≠ question language ---
+    _q_lang = detect_language(question)
+    _a_lang = detect_language(raw_answer)
+    if (
+        _q_lang.is_reliable
+        and _a_lang.is_reliable
+        and _q_lang.detected_language not in ("unknown", "en")
+        and _a_lang.detected_language != "unknown"
+        and _q_lang.detected_language != _a_lang.detected_language
+    ):
+        _lang_span = None
+        if trace is not None:
+            _lang_span = trace.span(
+                name="language-check",
+                input={
+                    "question_lang": _q_lang.detected_language,
+                    "answer_lang": _a_lang.detected_language,
+                },
+            )
+        _retry_answer, _retry_tokens = _svc.generate_answer(
+            question,
+            retrieval.chunk_texts,
+            api_key=api_key,
+            response_language=_q_lang.detected_language,
+            user_context_line=user_context_line,
+            disclosure_config=disclosure_config,
+            client_product_name=client_product_name,
+            topic_hint=topic_hint,
+            faq_context_items=faq_context_items,
+            quick_answer_items=quick_answer_items,
+            agent_instructions=agent_instructions,
+            low_context=retrieval.reliability.score == "low",
+            allow_clarification=allow_clarification,
+            trace=trace,
+            retry_bot_id=retry_bot_id,
+            stream_callback=None,
+        )
+        raw_answer = _retry_answer
+        tokens_used += _retry_tokens
+        if _lang_span is not None:
+            _lang_span.end(
+                output={
+                    "regenerated": True,
+                    "forced_language": _q_lang.detected_language,
+                }
+            )
+
     # --- 8. Validate answer ---
     validation_context = retrieval.chunk_texts + quick_answer_items
     validation = _svc.validate_answer(
@@ -1343,7 +1391,7 @@ def validate_answer(
     if not context_chunks:
         return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
 
-    context = "\n\n---\n\n".join(context_chunks[:3])
+    context = "\n\n---\n\n".join(context_chunks[:5])
     prompt = VALIDATION_PROMPT.format(
         context=context,
         question=question,

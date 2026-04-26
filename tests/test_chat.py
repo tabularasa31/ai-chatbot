@@ -366,8 +366,8 @@ def test_validate_answer_prompt_allows_single_clarifying_question(
     prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
     assert "asks exactly one short clarifying question" in prompt
     assert "materially blocks a correct answer" in prompt
-    assert "unsupported concrete facts" in prompt
-    assert "setting names, field names, URLs, workflow steps, or product limits" in prompt
+    assert "unsupported core facts" in prompt
+    assert "section-path labels" in prompt
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
@@ -4042,7 +4042,8 @@ def test_run_chat_pipeline_validation_fallback_uses_insufficient_confidence_text
     assert result.validation_outcome == "fallback"
     assert result.raw_answer == "A hallucinated answer"
     assert result.final_answer == "Je n'ai pas assez d'informations pour repondre de maniere fiable."
-    assert result.tokens_used == 23
+    # tokens_used = 10 (first LLM call) + 10 (language-check retry: fr question / en answer mismatch) + 13 (fallback)
+    assert result.tokens_used == 33
     assert result.is_reject is False  # validation fallback is not a guard_reject
 
 

@@ -26,7 +26,7 @@ class AliasEntry:
 class TenantProfile:
     tenant_id: object  # use app-level uuid/str without importing models here
     product_name: str | None
-    modules: list[str]
+    topics: list[str]
     glossary: list[GlossaryEntry]
     support_email: str | None
     support_urls: list[str]

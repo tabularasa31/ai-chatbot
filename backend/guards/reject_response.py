@@ -45,9 +45,9 @@ def _build_canonical_reject_response(
 
     topic_hint = ""
     if profile is not None:
-        modules = profile.modules or []
-        if isinstance(modules, list) and modules:
-            topic_hint = ", ".join([str(m) for m in modules[:3] if str(m).strip()])
+        topics = profile.topics or []
+        if isinstance(topics, list) and topics:
+            topic_hint = ", ".join([str(m) for m in topics[:3] if str(m).strip()])
 
     if reason == RejectReason.INJECTION_DETECTED:
         return (

@@ -42,7 +42,7 @@ def test_build_reject_response_not_relevant_no_profile() -> None:
 def test_build_reject_response_not_relevant_with_product_name() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
-    profile.modules = []
+    profile.topics = []
     text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
     assert "WidgetPro" in text
     assert "Sorry" in text
@@ -52,7 +52,7 @@ def test_build_reject_response_not_relevant_with_product_name() -> None:
 def test_build_reject_response_not_relevant_with_topic_hint() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
-    profile.modules = ["API", "Billing", "Auth"]
+    profile.topics = ["API", "Billing", "Auth"]
     text = build_reject_response(reason=RejectReason.NOT_RELEVANT, profile=profile)
     assert "API" in text or "Billing" in text
     assert "WidgetPro" in text
@@ -89,7 +89,7 @@ def test_build_reject_response_insufficient_confidence_no_profile() -> None:
 def test_build_reject_response_insufficient_confidence_with_hint() -> None:
     profile = Mock()
     profile.product_name = "WidgetPro"
-    profile.modules = ["Webhooks", "Auth"]
+    profile.topics = ["Webhooks", "Auth"]
     text = build_reject_response(reason=RejectReason.INSUFFICIENT_CONFIDENCE, profile=profile)
     assert "don't have enough information" in text
     assert "Webhooks" in text or "Auth" in text

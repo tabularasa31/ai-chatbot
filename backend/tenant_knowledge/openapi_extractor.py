@@ -15,18 +15,18 @@ def extract_openapi_knowledge(
     Note: this repo stores only `Document.parsed_text`, not the original OpenAPI JSON;
     therefore extraction is done via regex over those lines.
     """
-    modules: list[str] = []
-    seen_mods: set[str] = set()
+    topics: list[str] = []
+    seen_topics: set[str] = set()
 
     for match in re.finditer(r"^\s*(?:Tags|Tag):\s*(.+?)\s*$", swagger_text, flags=re.IGNORECASE | re.MULTILINE):
         raw = match.group(1).strip()
         # split by comma, keep order
         for part in [p.strip() for p in re.split(r",\s*", raw) if p.strip()]:
             key = part.casefold()
-            if key in seen_mods:
+            if key in seen_topics:
                 continue
-            seen_mods.add(key)
-            modules.append(part)
+            seen_topics.add(key)
+            topics.append(part)
 
     glossary_terms: list[GlossaryEntry] = []
 
@@ -88,5 +88,5 @@ def extract_openapi_knowledge(
             )
         )
 
-    return modules, glossary_terms, aliases
+    return topics, glossary_terms, aliases
 

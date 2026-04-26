@@ -123,7 +123,7 @@ def get_knowledge_profile(
     profile = _get_or_create_profile(db, tenant.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
-        topics=list(profile.modules or []),
+        topics=list(profile.topics or []),
         glossary=list(profile.glossary or []),
         support_email=profile.support_email,
         support_urls=list(profile.support_urls or []),
@@ -149,7 +149,7 @@ def patch_knowledge_profile(
     if "product_name" in payload.model_fields_set:
         profile.product_name = payload.product_name
     if "topics" in payload.model_fields_set and payload.topics is not None:
-        profile.modules = payload.topics
+        profile.topics = payload.topics
     if "glossary" in payload.model_fields_set and payload.glossary is not None:
         profile.glossary = payload.glossary
     if "support_email" in payload.model_fields_set:
@@ -162,7 +162,7 @@ def patch_knowledge_profile(
     db.refresh(profile)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
-        topics=list(profile.modules or []),
+        topics=list(profile.topics or []),
         glossary=list(profile.glossary or []),
         support_email=profile.support_email,
         support_urls=list(profile.support_urls or []),

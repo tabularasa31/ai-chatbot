@@ -124,7 +124,7 @@ def test_embedding_once(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -183,7 +183,7 @@ def test_faq_context_in_prompt(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
@@ -266,7 +266,7 @@ def test_langfuse_faq_match_span(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
@@ -359,7 +359,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
@@ -427,7 +427,7 @@ def test_faq_direct_skips_retrieval_and_generation(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
@@ -495,7 +495,7 @@ def test_guard_error_degrades_to_context(
     )
     monkeypatch.setattr(
         "backend.chat.service.check_relevance_with_profile",
-        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", modules=["ModA"])),
+        lambda **_: (True, "ok", SimpleNamespace(product_name="Product", topics=["ModA"])),
     )
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 

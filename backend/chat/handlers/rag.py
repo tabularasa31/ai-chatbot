@@ -69,8 +69,29 @@ logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 _ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
-_GUARD_POOL_WORKERS = 3   # concurrent threads: injection + relevance + semantic rewrite
 _DEFAULT_RELEVANCE_THRESHOLD = 0.22
+
+# Shared pool — created once at module import, reused across all requests.
+# Shut down via shutdown_guard_pool() in FastAPI lifespan on application exit.
+_GUARD_POOL = ThreadPoolExecutor(
+    max_workers=settings.guard_pool_workers,
+    thread_name_prefix="rag-guard",
+)
+
+
+def shutdown_guard_pool() -> None:
+    """Drain the shared guard pool and replace it with a fresh one.
+
+    Called from FastAPI lifespan on application exit.  Recreating after shutdown
+    keeps tests working: each TestClient context runs the lifespan, so without
+    recreation subsequent tests would see a dead pool.
+    """
+    global _GUARD_POOL
+    _GUARD_POOL.shutdown(wait=True)
+    _GUARD_POOL = ThreadPoolExecutor(
+        max_workers=settings.guard_pool_workers,
+        thread_name_prefix="rag-guard",
+    )
 
 DISCLOSURE_HARD_LIMITS = (
     "Hard limits (always follow):\n"
@@ -548,202 +569,192 @@ def run_chat_pipeline(
 
     # --- 1 + 4. Injection detection, relevance pre-check, and capability detection — run concurrently.
     # Profile is pre-fetched on the main thread: SQLAlchemy sessions are not thread-safe.
-    # A single try...finally ensures the pool is shut down exactly once regardless of
-    # which early-return path (injection, faq_direct, not_relevant) is taken.
+    # _GUARD_POOL is a module-level shared pool — never shut down per request.
     _guard_profile = db.get(TenantProfile, tenant_id)
-    _guard_pool = ThreadPoolExecutor(max_workers=_GUARD_POOL_WORKERS)
-    # Initialise before the try so the finally block can always reference them,
-    # even if an exception fires before the assignments inside the try.
     _rewrite_future = None
     _rewritten_variant: str | None = None
-    try:
-        _rel_future = _guard_pool.submit(
-            _svc.check_relevance_with_profile,
-            tenant_id=tenant_id,
-            user_question=question,
-            profile=_guard_profile,
+    _rel_future = _GUARD_POOL.submit(
+        _svc.check_relevance_with_profile,
+        tenant_id=tenant_id,
+        user_question=question,
+        profile=_guard_profile,
+        api_key=api_key,
+        trace=trace,
+    )
+    # Semantic query rewrite runs in the same guard pool (3rd worker).
+    # Guards take 1-2 s; the rewrite typically finishes within that window
+    # so it adds zero extra latency to the request. Fails silently on any
+    # error so retrieval degrades gracefully to lexical variants only.
+    _rewrite_future = _GUARD_POOL.submit(
+        _svc.semantic_query_rewrite,
+        question,
+        api_key=api_key,
+        timeout=settings.semantic_query_rewrite_timeout_sec,
+        bot_id=retry_bot_id,
+    )
+    _inj_start = perf_counter()
+    _inj_span = (
+        trace.span(name="injection_check", input={"question_preview": question[:80]})
+        if trace is not None and precomputed_injection is None
+        else None
+    )
+    if precomputed_injection is not None:
+        injection_result = precomputed_injection
+    else:
+        injection_result = _GUARD_POOL.submit(
+            _svc.detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
+        ).result()
+    if _inj_span is not None:
+        _inj_span.end(output={
+            "detected": injection_result.detected,
+            "level": injection_result.level,
+            "method": injection_result.method,
+            "latency_ms": round((perf_counter() - _inj_start) * 1000, 2),
+            "semantic_score": injection_result.score,
+        })
+
+    if injection_result.detected:
+        _rel_future.cancel()
+        if _rewrite_future:
+            _rewrite_future.cancel()
+        reject_result = build_reject_response_result(
+            reason=RejectReason.INJECTION_DETECTED,
+            profile=None,
+            response_language=language_context.response_language,
             api_key=api_key,
-            trace=trace,
         )
-        # Semantic query rewrite runs in the same guard pool (3rd worker).
-        # Guards take 1-2 s; the rewrite typically finishes within that window
-        # so it adds zero extra latency to the request. Fails silently on any
-        # error so retrieval degrades gracefully to lexical variants only.
-        _rewrite_future = _guard_pool.submit(
-            _svc.semantic_query_rewrite,
-            question,
-            api_key=api_key,
-            timeout=settings.semantic_query_rewrite_timeout_sec,
-            bot_id=retry_bot_id,
+        return ChatPipelineResult(
+            raw_answer=reject_result.text,
+            final_answer=reject_result.text,
+            tokens_used=reject_result.tokens_used,
+            strategy="guard_reject",
+            reject_reason="injection",
+            is_reject=True,
+            is_faq_direct=False,
+            validation_applied=False,
+            validation_outcome=None,
+            retrieval=None,
+            validation=None,
+            escalation_recommended=False,
+            escalation_trigger=None,
+            language_context=language_context,
         )
 
-        _inj_start = perf_counter()
-        _inj_span = (
-            trace.span(name="injection_check", input={"question_preview": question[:80]})
-            if trace is not None and precomputed_injection is None
-            else None
-        )
-        if precomputed_injection is not None:
-            injection_result = precomputed_injection
-        else:
-            injection_result = _guard_pool.submit(
-                _svc.detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
-            ).result()
-        if _inj_span is not None:
-            _inj_span.end(output={
-                "detected": injection_result.detected,
-                "level": injection_result.level,
-                "method": injection_result.method,
-                "latency_ms": round((perf_counter() - _inj_start) * 1000, 2),
-                "semantic_score": injection_result.score,
-            })
+    # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
+    query_variants = _svc.expand_query(question)
 
-        if injection_result.detected:
-            _rel_future.cancel()
-            if _rewrite_future:
-                _rewrite_future.cancel()
-            reject_result = build_reject_response_result(
-                reason=RejectReason.INJECTION_DETECTED,
-                profile=None,
-                response_language=language_context.response_language,
-                api_key=api_key,
-            )
-            return ChatPipelineResult(
-                raw_answer=reject_result.text,
-                final_answer=reject_result.text,
-                tokens_used=reject_result.tokens_used,
-                strategy="guard_reject",
-                reject_reason="injection",
-                is_reject=True,
-                is_faq_direct=False,
-                validation_applied=False,
-                validation_outcome=None,
-                retrieval=None,
-                validation=None,
-                escalation_recommended=False,
-                escalation_trigger=None,
-                language_context=language_context,
-            )
-
-        # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
-        query_variants = _svc.expand_query(question)
-
-        # Collect semantic rewrite result — guard checks ran concurrently so
-        # the rewrite is usually already finished by now (zero extra wait).
-        # _rewrite_pool is shut down in the outer finally regardless of exit path.
-        if _rewrite_future is not None:
-            try:
-                _rewritten_variant = _rewrite_future.result(
-                    timeout=settings.semantic_query_rewrite_timeout_sec
-                )
-                if _rewritten_variant and _rewritten_variant.casefold() not in {
-                    v.casefold() for v in query_variants
-                }:
-                    query_variants = [*query_variants, _rewritten_variant]
-            except Exception:
-                _rewritten_variant = None
-
-
-        if trace is not None:
-            _embed_span = trace.span(
-                name="query-embedding",
-                input={
-                    "query_variants": query_variants,
-                    "query_variant_count": len(query_variants),
-                    "variant_mode": "multi" if len(query_variants) > 1 else "single",
-                    "upstream_precomputed": True,
-                },
-            )
-        _embed_start = perf_counter()
+    # Collect semantic rewrite result — guard checks ran concurrently so
+    # the rewrite is usually already finished by now (zero extra wait).
+    if _rewrite_future is not None:
         try:
-            variant_vectors = _svc.embed_queries(query_variants, api_key=api_key, timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS)
-        except (APITimeoutError, APIConnectionError, RateLimitError):
-            logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
-            variant_vectors = []
-        if trace is not None:
-            _embed_span.end(
-                output={
-                    "embedded_query_count": len(variant_vectors),
-                    "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
-                    "embedding_api_request_count": 1,
-                    "extra_embedding_api_requests": 0,
-                    "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
-                    "upstream_precomputed": True,
-                }
+            _rewritten_variant = _rewrite_future.result(
+                timeout=settings.semantic_query_rewrite_timeout_sec
             )
-        base_question_embedding = variant_vectors[0] if variant_vectors else []
-
-        # --- 3. FAQ matching ---
-        try:
-            faq_match = _svc.match_faq(
-                tenant_id=tenant_id,
-                question=question,
-                question_embedding=base_question_embedding,
-                db=db,
-            )
+            if _rewritten_variant and _rewritten_variant.casefold() not in {
+                v.casefold() for v in query_variants
+            }:
+                query_variants = [*query_variants, _rewritten_variant]
         except Exception:
-            faq_match = FAQMatchResult(
-                strategy="rag_only",
-                faq_items=[],
-                top_score=None,
-                selected_score=None,
-                selected_faq_id=None,
-                direct_guard_used=False,
-                direct_guard_passed=False,
-                decision_reason="faq_match_error_degraded_to_rag_only",
-            )
+            _rewritten_variant = None
 
-        if trace is not None:
-            _faq_span = trace.span(
-                name="faq_match",
-                input={"question_preview": question[:80]},
-            )
-            _retrieval_skipped = faq_match.strategy == "faq_direct"
-            _faq_span.end(
-                metadata={
-                    "tenant_id": str(tenant_id),
-                    "strategy": faq_match.strategy,
-                    "top_score": faq_match.top_score,
-                    "selected_score": faq_match.selected_score,
-                    "faq_ids": [str(item.id) for item in faq_match.faq_items],
-                    "selected_faq_id": faq_match.selected_faq_id,
-                    "direct_guard_used": faq_match.direct_guard_used,
-                    "direct_guard_passed": faq_match.direct_guard_passed,
-                    "decision_reason": faq_match.decision_reason,
-                    "retrieval_skipped": _retrieval_skipped,
-                    "generation_skipped": _retrieval_skipped,
-                },
-            )
+    if trace is not None:
+        _embed_span = trace.span(
+            name="query-embedding",
+            input={
+                "query_variants": query_variants,
+                "query_variant_count": len(query_variants),
+                "variant_mode": "multi" if len(query_variants) > 1 else "single",
+                "upstream_precomputed": True,
+            },
+        )
+    _embed_start = perf_counter()
+    try:
+        variant_vectors = _svc.embed_queries(query_variants, api_key=api_key, timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS)
+    except (APITimeoutError, APIConnectionError, RateLimitError):
+        logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
+        variant_vectors = []
+    if trace is not None:
+        _embed_span.end(
+            output={
+                "embedded_query_count": len(variant_vectors),
+                "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
+                "embedding_api_request_count": 1,
+                "extra_embedding_api_requests": 0,
+                "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
+                "upstream_precomputed": True,
+            }
+        )
+    base_question_embedding = variant_vectors[0] if variant_vectors else []
 
-        if faq_match.strategy == "faq_direct":
-            _rel_future.cancel()
-            direct_answer_result = render_direct_faq_answer_result(
-                answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
-                response_language=language_context.response_language,
-                api_key=api_key,
-            )
-            return ChatPipelineResult(
-                raw_answer=direct_answer_result.text,
-                final_answer=direct_answer_result.text,
-                tokens_used=direct_answer_result.tokens_used,
-                strategy="faq_direct",
-                reject_reason=None,
-                is_reject=False,
-                is_faq_direct=True,
-                validation_applied=False,
-                validation_outcome=None,
-                retrieval=None,
-                validation=None,
-                escalation_recommended=False,
-                escalation_trigger=None,
-                faq_match=faq_match,
-                language_context=language_context,
-            )
+    # --- 3. FAQ matching ---
+    try:
+        faq_match = _svc.match_faq(
+            tenant_id=tenant_id,
+            question=question,
+            question_embedding=base_question_embedding,
+            db=db,
+        )
+    except Exception:
+        faq_match = FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="faq_match_error_degraded_to_rag_only",
+        )
 
-        # --- 4. Relevance pre-check ---
-        relevant, _, profile = _rel_future.result()
-    finally:
-        _guard_pool.shutdown(wait=False)
+    if trace is not None:
+        _faq_span = trace.span(
+            name="faq_match",
+            input={"question_preview": question[:80]},
+        )
+        _retrieval_skipped = faq_match.strategy == "faq_direct"
+        _faq_span.end(
+            metadata={
+                "tenant_id": str(tenant_id),
+                "strategy": faq_match.strategy,
+                "top_score": faq_match.top_score,
+                "selected_score": faq_match.selected_score,
+                "faq_ids": [str(item.id) for item in faq_match.faq_items],
+                "selected_faq_id": faq_match.selected_faq_id,
+                "direct_guard_used": faq_match.direct_guard_used,
+                "direct_guard_passed": faq_match.direct_guard_passed,
+                "decision_reason": faq_match.decision_reason,
+                "retrieval_skipped": _retrieval_skipped,
+                "generation_skipped": _retrieval_skipped,
+            },
+        )
+
+    if faq_match.strategy == "faq_direct":
+        _rel_future.cancel()
+        direct_answer_result = render_direct_faq_answer_result(
+            answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
+            response_language=language_context.response_language,
+            api_key=api_key,
+        )
+        return ChatPipelineResult(
+            raw_answer=direct_answer_result.text,
+            final_answer=direct_answer_result.text,
+            tokens_used=direct_answer_result.tokens_used,
+            strategy="faq_direct",
+            reject_reason=None,
+            is_reject=False,
+            is_faq_direct=True,
+            validation_applied=False,
+            validation_outcome=None,
+            retrieval=None,
+            validation=None,
+            escalation_recommended=False,
+            escalation_trigger=None,
+            faq_match=faq_match,
+            language_context=language_context,
+        )
+
+    # --- 4. Relevance pre-check ---
+    relevant, _, profile = _rel_future.result()
 
     if not relevant:
         reject_result = build_reject_response_result(

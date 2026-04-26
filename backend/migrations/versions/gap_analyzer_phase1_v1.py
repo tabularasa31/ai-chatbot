@@ -22,9 +22,10 @@ def _is_postgres() -> bool:
 
 
 def _create_gap_unified_view() -> None:
+    op.execute("DROP VIEW IF EXISTS gap_unified")
     op.execute(
         """
-        CREATE OR REPLACE VIEW gap_unified AS
+        CREATE VIEW gap_unified AS
         SELECT
             id,
             tenant_id,

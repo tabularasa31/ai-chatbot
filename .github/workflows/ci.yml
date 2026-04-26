@@ -152,6 +152,16 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Guard against raw fetch to backend
+        run: |
+          # Catch client-side fetch() calls using BASE_URL outside the helper file.
+          # Server-side API routes (API_URL) and the eval pages (apiBase) are intentionally excluded.
+          if grep -rn 'fetch(`\${BASE_URL}' --include="*.ts" --include="*.tsx" frontend/ \
+              | grep -v "^frontend/lib/api\.ts:"; then
+            echo "ERROR: raw fetch() using BASE_URL found outside frontend/lib/api.ts — use apiFetch() instead."
+            exit 1
+          fi
+
       - name: Lint
         working-directory: frontend
         run: npm run lint

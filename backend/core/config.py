@@ -168,6 +168,14 @@ class Settings(BaseSettings):
         gt=0,
     )
 
+    # ── Guard thread pool ────────────────────────────────────────────────
+    guard_pool_workers: int = Field(
+        8,
+        alias="GUARD_POOL_WORKERS",
+        ge=1,
+        description="Thread pool size for concurrent guard checks (injection + relevance + semantic rewrite).",
+    )
+
     # ── Injection detector v2 ────────────────────────────────────────────
     injection_semantic_threshold: float = Field(
         0.82,

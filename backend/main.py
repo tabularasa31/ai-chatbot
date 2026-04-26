@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
+from backend.chat.handlers.rag import shutdown_guard_pool
 from backend.chat.routes import chat_router
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
@@ -49,6 +50,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        shutdown_guard_pool()
         gap_graceful_shutdown()
         shutdown_metrics()
         shutdown_sentry()

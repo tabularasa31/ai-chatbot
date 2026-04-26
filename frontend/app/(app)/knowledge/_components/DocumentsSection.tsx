@@ -236,6 +236,7 @@ export function DocumentsSection({
         <input
           type="text"
           placeholder="Filter sources…"
+          aria-label="Filter sources"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           className="w-60 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 outline-none focus:border-slate-400"
@@ -257,13 +258,13 @@ export function DocumentsSection({
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">
-              <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Indexed / Updated</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Scheduled</th>
-              <th className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
-              <th className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-wider text-slate-400">Actions</th>
+              <th scope="col" className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Name</th>
+              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Type</th>
+              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Status</th>
+              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Indexed / Updated</th>
+              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Scheduled</th>
+              <th scope="col" className="px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-slate-400">Health / Warnings</th>
+              <th scope="col" className="px-4 py-3 text-right text-[11px] font-medium uppercase tracking-wider text-slate-400">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -345,7 +346,7 @@ export function DocumentsSection({
                         <SourceHealthCell status={source.status} warning={source.warning_message} error={source.error_message} />
                       </td>
                       <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-2" onClick={stopRowClick}>
+                        <div className="flex items-center justify-end gap-2" onClick={stopRowClick} role="presentation">
                           <button
                             type="button"
                             onClick={() => onOpenEdit(source)}

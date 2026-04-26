@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { AlertTriangle, Check, MessageSquare, Tag } from "lucide-react";
 import { cn } from "@/components/ui/utils";
 
@@ -50,6 +50,7 @@ export function EvalRatingPanel({
   getToken,
   onAuthFailed,
 }: Props) {
+  const uid = useId();
   const [expanded, setExpanded] = useState(false);
   const [verdict, setVerdict] = useState<Verdict>(null);
   const [errorCategory, setErrorCategory] = useState("");
@@ -233,11 +234,12 @@ export function EvalRatingPanel({
       {verdict === "fail" && (
         <div className="space-y-3 mt-3">
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
+            <label htmlFor={`${uid}-error-category`} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <Tag size={12} />
               Категория
             </label>
             <select
+              id={`${uid}-error-category`}
               value={errorCategory}
               onChange={(e) => {
                 setErrorCategory(e.target.value);
@@ -255,11 +257,12 @@ export function EvalRatingPanel({
           </div>
 
           <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
+            <label htmlFor={`${uid}-comment`} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-nd-text/70">
               <MessageSquare size={12} />
               Комментарий
             </label>
             <textarea
+              id={`${uid}-comment`}
               value={comment}
               onChange={(e) => {
                 setComment(e.target.value);

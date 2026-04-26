@@ -122,10 +122,11 @@ export default function DebugPage() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-6">
-        <label className="block text-sm font-medium text-slate-700 mb-2">
+        <label htmlFor="debug-question" className="block text-sm font-medium text-slate-700 mb-2">
           Question
         </label>
         <textarea
+          id="debug-question"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           placeholder="Type your question..."
@@ -201,13 +202,13 @@ export default function DebugPage() {
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200">
-                      <th className="text-left py-2 pr-4 text-slate-600 font-medium">
+                      <th scope="col" className="text-left py-2 pr-4 text-slate-600 font-medium">
                         document_id
                       </th>
-                      <th className="text-left py-2 pr-4 text-slate-600 font-medium">
+                      <th scope="col" className="text-left py-2 pr-4 text-slate-600 font-medium">
                         score
                       </th>
-                      <th className="text-left py-2 text-slate-600 font-medium">
+                      <th scope="col" className="text-left py-2 text-slate-600 font-medium">
                         preview
                       </th>
                     </tr>

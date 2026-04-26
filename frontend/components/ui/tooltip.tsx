@@ -42,6 +42,7 @@ export function Tooltip({ content, children, className = "", width = "w-72" }: T
       }
     : {};
 
+  /* eslint-disable jsx-a11y/no-noninteractive-tabindex */
   return (
     <span
       ref={triggerRef}
@@ -66,4 +67,5 @@ export function Tooltip({ content, children, className = "", width = "w-72" }: T
         )}
     </span>
   );
+  /* eslint-enable jsx-a11y/no-noninteractive-tabindex */
 }

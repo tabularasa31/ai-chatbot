@@ -151,11 +151,12 @@ function EmbedContent() {
         {mode === "bubble" && (
           <div className="grid grid-cols-2 gap-4 pt-1">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+              <label htmlFor="widget-color" className="block text-xs font-medium text-slate-600 mb-1.5">
                 Button color
               </label>
               <div className="flex items-center gap-2">
                 <input
+                  id="widget-color"
                   type="color"
                   value={color}
                   onChange={(e) => setColor(e.target.value)}
@@ -165,9 +166,9 @@ function EmbedContent() {
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">
+              <p className="block text-xs font-medium text-slate-600 mb-1.5">
                 Position
-              </label>
+              </p>
               <div className="flex gap-2">
                 {(["right", "left"] as const).map((p) => (
                   <button
@@ -190,10 +191,11 @@ function EmbedContent() {
         {/* Inline options */}
         {mode === "inline" && (
           <div className="pt-1">
-            <label className="block text-xs font-medium text-slate-600 mb-1.5">
+            <label htmlFor="inline-target-id" className="block text-xs font-medium text-slate-600 mb-1.5">
               Container element ID
             </label>
             <input
+              id="inline-target-id"
               type="text"
               value={targetId}
               onChange={(e) => setTargetId(e.target.value.replace(/[^a-zA-Z0-9-_]/g, "-"))}

@@ -127,34 +127,34 @@ export default function AdminMetricsPage() {
           <table className="min-w-full divide-y divide-slate-200">
             <thead className="bg-slate-50">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
                   Public ID
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-slate-600 uppercase">
                   Email
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Users
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Docs
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Embedded
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Sessions
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   User msgs
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Asst msgs
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-slate-600 uppercase">
                   Tokens
                 </th>
-                <th className="px-4 py-3 text-center text-xs font-medium text-slate-600 uppercase">
+                <th scope="col" className="px-4 py-3 text-center text-xs font-medium text-slate-600 uppercase">
                   OpenAI key
                 </th>
               </tr>

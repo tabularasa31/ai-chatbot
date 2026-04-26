@@ -94,12 +94,12 @@ export default function EscalationsPage() {
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-slate-600 text-left">
                 <tr>
-                  <th className="px-4 py-3 font-medium">Ticket</th>
-                  <th className="px-4 py-3 font-medium">Question</th>
-                  <th className="px-4 py-3 font-medium">Priority</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">User</th>
-                  <th className="px-4 py-3 font-medium">Created</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Ticket</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Question</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Priority</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Status</th>
+                  <th scope="col" className="px-4 py-3 font-medium">User</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Created</th>
                 </tr>
               </thead>
               <tbody>

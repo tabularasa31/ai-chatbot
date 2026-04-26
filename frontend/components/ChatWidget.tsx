@@ -76,6 +76,7 @@ function CodeCopyButton({ code }: { code: string }) {
 
 const MD_COMPONENTS: Components = {
   a: ({ node: _node, ...props }) => (
+    // eslint-disable-next-line jsx-a11y/anchor-has-content -- content is spread from react-markdown props at runtime
     <a {...props} target="_blank" rel="noopener noreferrer" />
   ),
   img: () => null,

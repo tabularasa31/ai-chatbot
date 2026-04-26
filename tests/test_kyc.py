@@ -208,7 +208,7 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     b64, sig = bad.split(".", 1)
     tampered = f"{b64[:-1]}X.{sig}"
 
-    with caplog.at_level(logging.INFO, logger="backend.routes.widget"):
+    with caplog.at_level(logging.INFO, logger="backend.widget.routes"):
         r = tenant.post(
             "/widget/session/init",
             json={"api_key": api_key, "identity_token": tampered},

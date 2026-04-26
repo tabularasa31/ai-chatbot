@@ -112,7 +112,7 @@ def test_per_client_ip_rate_limit(
     )
     _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
     monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
+        "backend.widget.routes.process_chat_message",
         lambda *args, **kwargs: ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False),
     )
 

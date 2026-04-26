@@ -236,7 +236,7 @@ def test_widget_chat_empty_message_bootstraps_new_session(
     bot_public_id = _create_bot(tenant, token)
 
     monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
+        "backend.widget.routes.process_chat_message",
         lambda *args, **kwargs: ChatTurnOutcome(
             text="Hello from bootstrap",
             document_ids=[],
@@ -282,7 +282,7 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
+        "backend.widget.routes.process_chat_message",
         lambda *args, **kwargs: ChatTurnOutcome(
             text="ok",
             document_ids=[],
@@ -557,7 +557,7 @@ def test_widget_chat_stream_sse(
         )
 
     monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
+        "backend.widget.routes.process_chat_message",
         fake_process,
     )
 
@@ -602,7 +602,7 @@ def test_widget_chat_returns_plain_answer_payload(
     bot_public_id = _create_bot(tenant, token)
 
     monkeypatch.setattr(
-        "backend.routes.widget.process_chat_message",
+        "backend.widget.routes.process_chat_message",
         lambda *args, **kwargs: ChatTurnOutcome(
             text="Which provider are you trying to configure?",
             document_ids=[],

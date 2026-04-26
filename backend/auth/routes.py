@@ -51,13 +51,10 @@ def _auth_cookie_secure() -> bool:
     return settings.FRONTEND_URL.startswith("https://")
 
 
-def _auth_cookie_samesite() -> str:
-    return settings.auth_cookie_samesite
-
-
 def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
     """Set httpOnly auth cookie for same-site dashboard API requests."""
-    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
+    samesite = settings.auth_cookie_samesite
+    secure = _auth_cookie_secure() or samesite == "none"
     response.set_cookie(
         key=_COOKIE_NAME,
         value=token,
@@ -65,18 +62,19 @@ def _set_auth_cookie(response: Response, token: str, expires_in: int) -> None:
         max_age=expires_in,
         path="/",
         domain=settings.auth_cookie_domain,
-        samesite=_auth_cookie_samesite(),
+        samesite=samesite,
         secure=secure,
     )
 
 
 def _clear_auth_cookie(response: Response) -> None:
-    secure = _auth_cookie_secure() or _auth_cookie_samesite() == "none"
+    samesite = settings.auth_cookie_samesite
+    secure = _auth_cookie_secure() or samesite == "none"
     response.delete_cookie(
         key=_COOKIE_NAME,
         path="/",
         domain=settings.auth_cookie_domain,
-        samesite=_auth_cookie_samesite(),
+        samesite=samesite,
         secure=secure,
         httponly=True,
     )
@@ -84,7 +82,7 @@ def _clear_auth_cookie(response: Response) -> None:
         response.delete_cookie(
             key=_COOKIE_NAME,
             path="/",
-            samesite=_auth_cookie_samesite(),
+            samesite=samesite,
             secure=secure,
             httponly=True,
         )

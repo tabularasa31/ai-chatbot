@@ -359,7 +359,7 @@ export function hasSession(): boolean {
   return localStorage.getItem(SESSION_KEY) === "1";
 }
 
-export function saveToken(_token: string): void {
+export function markSession(): void {
   if (typeof window === "undefined") return;
   localStorage.setItem(SESSION_KEY, "1");
   const secure = window.location.protocol === "https:" ? "; secure" : "";

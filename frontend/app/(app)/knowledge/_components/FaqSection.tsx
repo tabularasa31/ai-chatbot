@@ -194,7 +194,7 @@ export function FaqSection({
                                 setRemovingFaqIds((prev) => [...prev, item.id]);
                                 window.setTimeout(() => {
                                   setFaqItems((prev) => prev.filter((i) => i.id !== item.id));
-                                }, 140);
+                                }, 200);
                                 try {
                                   setUpdatingFaqId(item.id);
                                   await api.knowledge.rejectFaq(item.id, botId);

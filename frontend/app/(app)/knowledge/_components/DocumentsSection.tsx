@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DocumentListItem, UrlSource, UrlSourceDetail } from "@/lib/api";
 import {
@@ -117,7 +117,7 @@ export function DocumentsSection({
   onRecheckHealth,
   onToggleDetail,
 }: DocumentsSectionProps) {
-  const rows = (() => {
+  const rows = useMemo(() => {
     const text = filter.trim().toLowerCase();
     const mixed: MixedRow[] = [
       ...documents.map((item) => ({ kind: "file" as const, item })),
@@ -126,9 +126,9 @@ export function DocumentsSection({
     return mixed.filter((row) => {
       if (!text) return true;
       if (row.kind === "file") return row.item.filename.toLowerCase().includes(text);
-      return row.item.name.toLowerCase().includes(text) || row.item.url.toLowerCase().includes(text);
+      return (row.item.name?.toLowerCase().includes(text) ?? false) || row.item.url.toLowerCase().includes(text);
     });
-  })();
+  }, [documents, sources, filter]);
 
   return (
     <div className="max-w-7xl space-y-6">

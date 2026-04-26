@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,12 +32,11 @@ from backend.models import (
     MessageRole,
     TenantFaq,
 )
+from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
 
 CURRENT_ANALYSIS_VERSION = 1
-
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 # ── LLM concurrency guard ────────────────────────────────────────────────────
 _LLM_SEMAPHORE: asyncio.Semaphore | None = None
@@ -71,17 +69,6 @@ class ClusterMember:
 
 
 # ── Embedding helpers ─────────────────────────────────────────────────────────
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    n1 = math.sqrt(sum(x * x for x in a))
-    n2 = math.sqrt(sum(y * y for y in b))
-    if n1 == 0 or n2 == 0:
-        return 0.0
-    return max(0.0, min(1.0, dot / (n1 * n2)))
-
 
 def _centroid(vectors: list[list[float]]) -> list[float]:
     if not vectors:
@@ -270,7 +257,7 @@ async def _generate_embeddings(
     for i in range(0, len(missing), batch_size):
         batch = missing[i: i + batch_size]
         resp = oai.embeddings.create(
-            model=EMBEDDING_MODEL,
+            model=settings.embedding_model,
             input=[m.content for m in batch],
         )
         vectors = [item.embedding for item in resp.data]
@@ -383,7 +370,7 @@ def _create_faq_candidate(
     if not question or not answer:
         return False
 
-    resp = oai.embeddings.create(model=EMBEDDING_MODEL, input=question)
+    resp = oai.embeddings.create(model=settings.embedding_model, input=question)
     q_emb = resp.data[0].embedding
 
     existing = _find_existing_faq(db, tenant_id, q_emb)

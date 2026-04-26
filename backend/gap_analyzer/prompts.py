@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-
 
 @dataclass(frozen=True)
 class ModeATopicCandidate:
@@ -90,7 +88,7 @@ def embed_texts(
 
     openai_client = get_openai_client(encrypted_api_key)
     response = openai_client.embeddings.create(
-        model=EMBEDDING_MODEL,
+        model=settings.embedding_model,
         input=normalized,
     )
     vectors: list[list[float]] = []

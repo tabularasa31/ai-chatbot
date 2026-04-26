@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         "asymmetric",
         alias="BM25_EXPANSION_MODE",
     )
+    embedding_model: str = Field(
+        "text-embedding-3-small",
+        alias="EMBEDDING_MODEL",
+        description="OpenAI embedding model used across all retrieval and similarity paths.",
+    )
     chat_model: str = Field(
         "gpt-5-mini",
         alias="CHAT_MODEL",

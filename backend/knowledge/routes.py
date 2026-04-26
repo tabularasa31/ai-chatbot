@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.core import db as core_db
+from backend.core.config import settings
 from backend.core.db import get_db
 from backend.core.openai_client import get_openai_client
 from backend.knowledge.schemas import (
@@ -27,7 +28,6 @@ from backend.tenants.service import get_tenant_by_user
 
 knowledge_router = APIRouter(tags=["knowledge"])
 
-EMBEDDING_MODEL = "text-embedding-3-small"
 logger = logging.getLogger(__name__)
 
 
@@ -94,7 +94,7 @@ def _generate_faq_embedding_background(
             return
         openai_client = get_openai_client(encrypted_api_key)
         response = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
+            model=settings.embedding_model,
             input=question,
         )
         faq.question_embedding = response.data[0].embedding

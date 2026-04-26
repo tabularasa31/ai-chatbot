@@ -13,6 +13,8 @@ import json
 import math
 import re
 
+from backend.utils.math import cosine_similarity_with_norms as _cosine_similarity  # noqa: F401
+
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
 
 
@@ -62,18 +64,3 @@ def _vector_norm(vector: list[float] | None) -> float:
     return math.sqrt(sum(value * value for value in vector))
 
 
-def _cosine_similarity(
-    first: list[float] | None,
-    second: list[float] | None,
-    *,
-    first_norm: float,
-    second_norm: float,
-) -> float:
-    if first is None or second is None or len(first) != len(second):
-        return 0.0
-    if first_norm == 0.0 or second_norm == 0.0:
-        return 0.0
-    dot = 0.0
-    for left, right in zip(first, second, strict=True):
-        dot += left * right
-    return max(0.0, min(1.0, dot / (first_norm * second_norm)))

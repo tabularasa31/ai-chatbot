@@ -32,8 +32,8 @@ from backend.search.contradiction_adjudication import (
     serialize_contradiction_adjudication,
     serialize_contradiction_adjudication_run,
 )
+from backend.utils.math import cosine_similarity
 
-EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 
 # Number of vector candidates to pre-fetch before BM25 scoring.
@@ -1239,7 +1239,7 @@ def embed_query(
     response = call_openai_with_retry(
         "search_embed_query",
         lambda: openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
+            model=settings.embedding_model,
             input=query,
         ),
     )
@@ -1259,7 +1259,7 @@ def embed_queries(
     response = call_openai_with_retry(
         "search_embed_queries",
         lambda: openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
+            model=settings.embedding_model,
             input=queries,
         ),
     )
@@ -2018,7 +2018,7 @@ def search_similar_chunks_detailed(
                 "query_variants": query_variants,
                 "query_variant_count": query_variant_count,
                 "variant_mode": variant_mode,
-                "model": EMBEDDING_MODEL,
+                "model": settings.embedding_model,
             },
         ).end(
             output={
@@ -2386,7 +2386,6 @@ def _python_cosine_search(
         top_k: Number of results.
         db: Database session.
     """
-    import math
 
     embeddings = (
         db.query(Embedding)
@@ -2405,35 +2404,9 @@ def _python_cosine_search(
             meta = emb.metadata_json or {}
             vector = meta.get("vector")
 
-        if not vector or not isinstance(vector, list):
+        if not vector or not isinstance(vector, list) or len(vector) != len(query_vector):
             continue
 
-        # Cosine similarity
-        if len(vector) != len(query_vector):
-            continue
-        dot = sum(a * b for a, b in zip(query_vector, vector, strict=True))
-        norm1 = math.sqrt(sum(a * a for a in query_vector))
-        norm2 = math.sqrt(sum(b * b for b in vector))
-        if norm1 == 0 or norm2 == 0:
-            continue
-        sim = max(0.0, min(1.0, dot / (norm1 * norm2)))
-        scored.append((emb, sim))
+        scored.append((emb, cosine_similarity(query_vector, vector)))
 
     return _sort_scored_embeddings(scored)[:top_k]
-
-
-def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    """
-    Compute cosine similarity between two vectors.
-    Kept for backward compatibility. Prefer pgvector native search.
-    """
-    import math
-
-    if len(vec1) != len(vec2):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec1, vec2, strict=True))
-    norm1 = math.sqrt(sum(a * a for a in vec1))
-    norm2 = math.sqrt(sum(b * b for b in vec2))
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return max(0.0, min(1.0, dot / (norm1 * norm2)))

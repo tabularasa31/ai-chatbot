@@ -129,12 +129,14 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-// Decode user_id from identity token payload (base64url.sig format) for localStorage namespacing.
+// Decode user_id from identity token payload for localStorage namespacing.
+// Supports both our custom 2-part format (base64payload.sig) and standard 3-part JWTs (header.payload.sig).
 // No signature verification needed — this is only used as a storage key discriminator.
 function extractUserIdFromIdentityToken(token: string | null | undefined): string | null {
   if (!token) return null;
   try {
-    const b64 = token.split(".")[0];
+    const parts = token.split(".");
+    const b64 = parts.length === 3 ? parts[1] : parts[0];
     if (!b64) return null;
     const pad = "=".repeat((4 - (b64.length % 4)) % 4);
     const json = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
@@ -492,7 +494,7 @@ export function ChatWidget({
     applyAssistantMessage(data);
     if (data.chat_ended !== true) {
       setSessionId(data.session_id);
-      persistSession(botId, data.session_id);
+      persistSession(botId, data.session_id, userIdRef.current);
     }
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
 
@@ -532,7 +534,7 @@ export function ChatWidget({
     setChatClosed(false);
     setActiveTicket(null);
     appendSystemMessage("new_conversation");
-    clearStoredSession(botId);
+    clearStoredSession(botId, userIdRef.current);
     inputRef.current?.focus();
     setLoading(true);
     void fetchGreeting()
@@ -573,7 +575,7 @@ export function ChatWidget({
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
-        clearStoredSession(botId);
+        clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
         ({ res, payload } = await requestWidgetTurn({
@@ -599,7 +601,7 @@ export function ChatWidget({
       applyAssistantMessage(data);
       if (data.chat_ended !== true) {
         setSessionId(data.session_id);
-        persistSession(botId, data.session_id);
+        persistSession(botId, data.session_id, userIdRef.current);
       }
     } catch (error) {
       setMessages((prev) => [

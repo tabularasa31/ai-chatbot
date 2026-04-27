@@ -158,7 +158,7 @@ def resolve_escalation(
     return _serialize_ticket(t, include_original=False)
 
 
-@escalation_router.post("/{ticket_id}/delete-original", response_model=DeletedCountResponse)
+@escalation_router.post("/{ticket_id}/delete-original", response_model=DeletedCountResponse, include_in_schema=False)
 def delete_escalation_original(
     ticket_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_admin_user)],

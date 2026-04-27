@@ -55,7 +55,7 @@ def _tenant_to_response(tenant) -> TenantResponse:
     )
 
 
-@tenants_router.post("", response_model=TenantResponse, status_code=201)
+@tenants_router.post("", response_model=TenantResponse, status_code=201, include_in_schema=False)
 def create_tenant_route(
     body: CreateTenantRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
@@ -224,7 +224,7 @@ def update_my_client(
     return _tenant_to_response(tenant)
 
 
-@tenants_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse)
+@tenants_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse, include_in_schema=False)
 @limiter.limit("20/minute")
 def validate_api_key(
     request: Request,
@@ -243,7 +243,7 @@ def validate_api_key(
     return ValidateApiKeyResponse(tenant_id=tenant.id, name=tenant.name)
 
 
-@tenants_router.get("/{tenant_id}", response_model=TenantResponse)
+@tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)
 def get_tenant_by_id_route(
     tenant_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
@@ -258,7 +258,7 @@ def get_tenant_by_id_route(
     return _tenant_to_response(tenant)
 
 
-@tenants_router.delete("/{tenant_id}", status_code=204, response_model=None)
+@tenants_router.delete("/{tenant_id}", status_code=204, response_model=None, include_in_schema=False)
 def delete_tenant_route(
     tenant_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],

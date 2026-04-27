@@ -106,19 +106,19 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 app.include_router(auth_router, prefix="/auth")
-app.include_router(admin_router)
+app.include_router(admin_router, include_in_schema=False)
 app.include_router(bots_router)
 app.include_router(tenants_router, prefix="/tenants")
 app.include_router(documents_router, prefix="/documents")
-app.include_router(embeddings_router, prefix="/embeddings")
-app.include_router(search_router, prefix="/search")
+app.include_router(embeddings_router, prefix="/embeddings", include_in_schema=False)
+app.include_router(search_router, prefix="/search", include_in_schema=False)
 app.include_router(chat_router, prefix="/chat")
 app.include_router(escalation_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
 app.include_router(public_router)
 app.include_router(widget_router)
-app.include_router(eval_router)
+app.include_router(eval_router, include_in_schema=False)
 
 
 @app.get("/health")

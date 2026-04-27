@@ -267,7 +267,7 @@ def chat(
     )
 
 
-@chat_router.post("/debug", response_model=ChatDebugResponse)
+@chat_router.post("/debug", response_model=ChatDebugResponse, include_in_schema=False)
 @limiter.limit("30/minute")
 def chat_debug(
     request: Request,
@@ -504,7 +504,7 @@ def get_session_logs_route(
     )
 
 
-@chat_router.post("/logs/session/{session_id}/delete-original", response_model=DeletedCountResponse)
+@chat_router.post("/logs/session/{session_id}/delete-original", response_model=DeletedCountResponse, include_in_schema=False)
 def delete_session_original_route(
     session_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_admin_user)],

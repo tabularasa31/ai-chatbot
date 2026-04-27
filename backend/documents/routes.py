@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
+from backend.documents.constants import MAX_FILE_SIZE
 from backend.documents.schemas import (
     DocumentDetailResponse,
     DocumentHealthStatusResponse,
@@ -42,7 +43,6 @@ from backend.documents.url_service import (
 )
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
 from backend.observability.metrics import capture_event
-from backend.documents.constants import MAX_FILE_SIZE
 from backend.tenants.service import get_tenant_by_user
 
 documents_router = APIRouter(tags=["documents"])

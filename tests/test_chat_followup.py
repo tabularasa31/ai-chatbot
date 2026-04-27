@@ -12,8 +12,7 @@ Covers:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -114,39 +113,33 @@ def test_contextual_query_caps_long_assistant_tail() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _CapturingClient:
-    def __init__(self) -> None:
-        self.calls: list[list[dict[str, str]]] = []
+def _override_chat_completions(mock_openai_client: Mock) -> list[dict]:
+    """Replace conftest's chat.completions.create so we can inspect kwargs.
 
-        class _Chat:
-            def __init__(_self, outer: "_CapturingClient") -> None:
-                _self._outer = outer
+    Returns a list that gets populated with each create() invocation's kwargs.
+    Using the conftest-provided mock_client avoids racing the autouse patch
+    chain.
+    """
+    captured_calls: list[dict] = []
 
-                class _Completions:
-                    def create(_self_inner, **kwargs: Any):
-                        outer.calls.append(kwargs["messages"])
-                        msg = SimpleNamespace(content="ok answer")
-                        choice = SimpleNamespace(message=msg)
-                        usage = SimpleNamespace(total_tokens=42)
-                        return SimpleNamespace(
-                            choices=[choice], usage=usage
-                        )
+    def _capture(**kwargs):
+        captured_calls.append(kwargs)
+        return Mock(
+            choices=[Mock(message=Mock(content="ok answer"))],
+            usage=Mock(total_tokens=42),
+        )
 
-                _self.completions = _Completions()
-
-        self.chat = _Chat(self)
+    mock_openai_client.chat.completions.create.side_effect = _capture
+    return captured_calls
 
 
 def test_generate_answer_inserts_prior_messages_between_system_and_user(
+    mock_openai_client: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.chat import service as svc
     from backend.chat.handlers import rag as rag_mod
 
-    captured = _CapturingClient()
-    monkeypatch.setattr(svc, "get_openai_client", lambda *a, **kw: captured)
-
-    # Avoid Langfuse / metrics side-effects.
+    captured_calls = _override_chat_completions(mock_openai_client)
     monkeypatch.setattr(rag_mod, "log_llm_tokens", lambda *a, **kw: None)
 
     prior = [
@@ -164,8 +157,8 @@ def test_generate_answer_inserts_prior_messages_between_system_and_user(
 
     assert answer == "ok answer"
     assert tokens == 42
-    assert len(captured.calls) == 1
-    sent = captured.calls[0]
+    assert len(captured_calls) == 1
+    sent = captured_calls[0]["messages"]
     assert sent[0]["role"] == "system"
     assert sent[1] == prior[0]
     assert sent[2] == prior[1]
@@ -174,13 +167,12 @@ def test_generate_answer_inserts_prior_messages_between_system_and_user(
 
 
 def test_generate_answer_without_prior_messages_keeps_legacy_shape(
+    mock_openai_client: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from backend.chat import service as svc
     from backend.chat.handlers import rag as rag_mod
 
-    captured = _CapturingClient()
-    monkeypatch.setattr(svc, "get_openai_client", lambda *a, **kw: captured)
+    captured_calls = _override_chat_completions(mock_openai_client)
     monkeypatch.setattr(rag_mod, "log_llm_tokens", lambda *a, **kw: None)
 
     rag_mod.generate_answer(
@@ -190,5 +182,5 @@ def test_generate_answer_without_prior_messages_keeps_legacy_shape(
         response_language="ru",
     )
 
-    sent = captured.calls[0]
+    sent = captured_calls[0]["messages"]
     assert [m["role"] for m in sent] == ["system", "user"]

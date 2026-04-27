@@ -117,59 +117,78 @@ const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_closed",
 ]);
 
-function sessionStorageKey(botId: string): string {
-  return `chat9:${botId}:session`;
+function sessionStorageKey(botId: string, userId?: string | null): string {
+  return userId ? `chat9:${botId}:${userId}:session` : `chat9:${botId}:session`;
 }
 
-function sessionUpdatedAtStorageKey(botId: string): string {
-  return `chat9:${botId}:session_updated_at`;
+function sessionUpdatedAtStorageKey(botId: string, userId?: string | null): string {
+  return userId ? `chat9:${botId}:${userId}:session_updated_at` : `chat9:${botId}:session_updated_at`;
 }
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-function clearStoredSession(botId: string): void {
+// Decode user_id from identity token payload for localStorage namespacing.
+// Supports both our custom 2-part format (base64payload.sig) and standard 3-part JWTs (header.payload.sig).
+// No signature verification needed — this is only used as a storage key discriminator.
+function extractUserIdFromIdentityToken(token: string | null | undefined): string | null {
+  if (!token) return null;
+  try {
+    const parts = token.split(".");
+    const b64 = parts.length === 3 ? parts[1] : parts[0];
+    if (!b64) return null;
+    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+    const json = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const data = JSON.parse(json) as Record<string, unknown>;
+    if (typeof data?.user_id === "string" && data.user_id.trim()) return data.user_id.trim();
+  } catch {
+    // Ignore malformed tokens — fall back to anonymous key
+  }
+  return null;
+}
+
+function clearStoredSession(botId: string, userId?: string | null): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.removeItem(sessionStorageKey(botId));
-    window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId));
+    window.localStorage.removeItem(sessionStorageKey(botId, userId));
+    window.localStorage.removeItem(sessionUpdatedAtStorageKey(botId, userId));
   } catch {
     // localStorage can be blocked in embedded/privacy-restricted contexts.
   }
 }
 
-function readStoredSession(botId: string): string | null {
+function readStoredSession(botId: string, userId?: string | null): string | null {
   if (typeof window === "undefined") return null;
   let storedSessionId: string | null = null;
   let storedUpdatedAt: string | null = null;
   try {
-    storedSessionId = window.localStorage.getItem(sessionStorageKey(botId));
-    storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId));
+    storedSessionId = window.localStorage.getItem(sessionStorageKey(botId, userId));
+    storedUpdatedAt = window.localStorage.getItem(sessionUpdatedAtStorageKey(botId, userId));
   } catch {
     return null;
   }
   if (!storedSessionId || !storedUpdatedAt) {
-    clearStoredSession(botId);
+    clearStoredSession(botId, userId);
     return null;
   }
   if (!isUuid(storedSessionId)) {
-    clearStoredSession(botId);
+    clearStoredSession(botId, userId);
     return null;
   }
   const updatedAtMs = Number(storedUpdatedAt);
   if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs > SESSION_STORAGE_TTL_MS) {
-    clearStoredSession(botId);
+    clearStoredSession(botId, userId);
     return null;
   }
   return storedSessionId;
 }
 
-function persistSession(botId: string, sessionId: string): void {
+function persistSession(botId: string, sessionId: string, userId?: string | null): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(sessionStorageKey(botId), sessionId);
-    window.localStorage.setItem(sessionUpdatedAtStorageKey(botId), String(Date.now()));
+    window.localStorage.setItem(sessionStorageKey(botId, userId), sessionId);
+    window.localStorage.setItem(sessionUpdatedAtStorageKey(botId, userId), String(Date.now()));
   } catch {
     // Persistence is best-effort; widget can continue without browser storage.
   }
@@ -226,18 +245,23 @@ export function ChatWidget({
   const [streamingText, setStreamingText] = useState<string>("");
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Tracks the user_id derived from the current identityToken so other effects can use it.
+  const userIdRef = useRef<string | null>(null);
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
 
   useEffect(() => {
+    const userId = extractUserIdFromIdentityToken(identityToken);
+    userIdRef.current = userId;
+
     setSessionHydrated(false);
     setHistoryLoaded(false);
     setChatClosed(false);
     setActiveTicket(null);
 
-    const stored = readStoredSession(botId);
+    const stored = readStoredSession(botId, userId);
 
     if (identityToken && apiKey && !stored) {
       fetch("/api/widget-session/init", {
@@ -248,7 +272,7 @@ export function ChatWidget({
         .then((r) => r.json())
         .then((data: { session_id?: string }) => {
           if (data.session_id) {
-            persistSession(botId, data.session_id);
+            persistSession(botId, data.session_id, userId);
             setSessionId(data.session_id);
           }
         })
@@ -272,7 +296,7 @@ export function ChatWidget({
         if (r.status === 404) {
           // Session no longer exists on the backend — start fresh
           if (!cancelled) {
-            clearStoredSession(botId);
+            clearStoredSession(botId, userIdRef.current);
             setSessionId(null);
           }
           return null;
@@ -330,7 +354,7 @@ export function ChatWidget({
     setChatClosed(true);
     setSessionId(null);
     appendSystemMessage("conversation_ended");
-    clearStoredSession(botId);
+    clearStoredSession(botId, userIdRef.current);
   }, [appendSystemMessage, botId]);
 
   const applyAssistantMessage = useCallback((
@@ -470,7 +494,7 @@ export function ChatWidget({
     applyAssistantMessage(data);
     if (data.chat_ended !== true) {
       setSessionId(data.session_id);
-      persistSession(botId, data.session_id);
+      persistSession(botId, data.session_id, userIdRef.current);
     }
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
 
@@ -510,7 +534,7 @@ export function ChatWidget({
     setChatClosed(false);
     setActiveTicket(null);
     appendSystemMessage("new_conversation");
-    clearStoredSession(botId);
+    clearStoredSession(botId, userIdRef.current);
     inputRef.current?.focus();
     setLoading(true);
     void fetchGreeting()
@@ -551,7 +575,7 @@ export function ChatWidget({
       let detail = payload.detail;
       let code = apiErrorCode(detail);
       if (!res.ok && sessionId && code && RETRYABLE_SESSION_ERROR_CODES.has(code)) {
-        clearStoredSession(botId);
+        clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
         ({ res, payload } = await requestWidgetTurn({
@@ -577,7 +601,7 @@ export function ChatWidget({
       applyAssistantMessage(data);
       if (data.chat_ended !== true) {
         setSessionId(data.session_id);
-        persistSession(botId, data.session_id);
+        persistSession(botId, data.session_id, userIdRef.current);
       }
     } catch (error) {
       setMessages((prev) => [

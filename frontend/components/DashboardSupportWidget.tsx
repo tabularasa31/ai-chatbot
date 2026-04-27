@@ -76,10 +76,11 @@ export function DashboardSupportWidget() {
           className="rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col bg-white relative"
         >
           {/* Resize handle — top-left corner */}
-          <div
+          <button
+            type="button"
+            aria-label="Drag to resize chat window"
             onMouseDown={handleResizeMouseDown}
-            className="absolute top-0 left-0 z-10 w-5 h-5 cursor-nwse-resize group"
-            title="Drag to resize"
+            className="absolute top-0 left-0 z-10 w-5 h-5 cursor-nwse-resize group p-0 border-0 bg-transparent"
           >
             <svg
               viewBox="0 0 16 16"
@@ -88,7 +89,7 @@ export function DashboardSupportWidget() {
             >
               <path d="M1 8a1 1 0 0 1 1-1h5a1 1 0 0 1 0 2H3.414l8.293 8.293a1 1 0 0 1-1.414 1.414L2 10.414V13a1 1 0 1 1-2 0V8Z" />
             </svg>
-          </div>
+          </button>
 
           <ChatWidget
             botId={BOT_ID}

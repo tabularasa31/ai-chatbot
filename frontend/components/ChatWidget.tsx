@@ -261,6 +261,10 @@ export function ChatWidget({
     setChatClosed(false);
     setActiveTicket(null);
 
+    // Purge the legacy shared-key session (pre-user-scoped namespacing) so stale
+    // cross-tenant data left in existing browsers is never shown again.
+    if (userId) clearStoredSession(botId);
+
     const stored = readStoredSession(botId, userId);
 
     if (identityToken && apiKey && !stored) {

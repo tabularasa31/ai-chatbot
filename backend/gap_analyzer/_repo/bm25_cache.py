@@ -95,78 +95,74 @@ def _bm25_streamed_score(
     return score
 
 
-class _Bm25CacheOps:
-    def __init__(self, db: Session) -> None:
-        self._db = db
+def _load_or_cache_bm25_corpus(
+    db: Session,
+    *,
+    tenant_id: UUID,
+    excluded_file_types: tuple[str, ...],
+) -> _CachedBm25Corpus:
+    cache_key = _bm25_cache_key(tenant_id, excluded_file_types)
+    now_monotonic = time.monotonic()
+    with _BM25_CORPUS_CACHE_LOCK:
+        cached = _BM25_CORPUS_CACHE.get(cache_key)
+        if (
+            cached is not None
+            and now_monotonic - cached.cached_at_monotonic
+            < _BM25_CORPUS_CACHE_TTL_SECONDS
+        ):
+            return cached
+        _evict_expired_bm25_cache_entries(now_monotonic)
 
-    def load_or_cache(
-        self,
-        *,
-        tenant_id: UUID,
-        excluded_file_types: tuple[str, ...],
-    ) -> _CachedBm25Corpus:
-        cache_key = _bm25_cache_key(tenant_id, excluded_file_types)
-        now_monotonic = time.monotonic()
-        with _BM25_CORPUS_CACHE_LOCK:
-            cached = _BM25_CORPUS_CACHE.get(cache_key)
-            if (
-                cached is not None
-                and now_monotonic - cached.cached_at_monotonic
-                < _BM25_CORPUS_CACHE_TTL_SECONDS
-            ):
-                return cached
-            _evict_expired_bm25_cache_entries(now_monotonic)
-
-        excluded = set(cache_key[1])
-        documents: list[_CachedBm25Document] = []
-        rows = (
-            self._db.query(
-                Embedding.chunk_text,
-                Embedding.metadata_json,
-                Document.filename,
-                Document.file_type,
-            )
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .filter(Document.status == "ready")
-            .filter(Embedding.chunk_text.isnot(None))
-            .order_by(Document.id.asc(), Embedding.id.asc())
-            .yield_per(500)
+    excluded = set(cache_key[1])
+    documents: list[_CachedBm25Document] = []
+    rows = (
+        db.query(
+            Embedding.chunk_text,
+            Embedding.metadata_json,
+            Document.filename,
+            Document.file_type,
         )
-        for chunk_text, metadata_json, filename, file_type in rows:
-            file_type_value = str(getattr(file_type, "value", file_type)).casefold()
-            if file_type_value in excluded:
-                continue
-            metadata = metadata_json if isinstance(metadata_json, dict) else {}
-            exact_match_candidates = tuple(
-                candidate.casefold()
-                for candidate in (
-                    _string_or_none(metadata.get("section_title")),
-                    _string_or_none(metadata.get("page_title")),
-                    _string_or_none(filename),
-                )
-                if candidate
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.tenant_id == tenant_id)
+        .filter(Document.status == "ready")
+        .filter(Embedding.chunk_text.isnot(None))
+        .order_by(Document.id.asc(), Embedding.id.asc())
+        .yield_per(500)
+    )
+    for chunk_text, metadata_json, filename, file_type in rows:
+        file_type_value = str(getattr(file_type, "value", file_type)).casefold()
+        if file_type_value in excluded:
+            continue
+        metadata = metadata_json if isinstance(metadata_json, dict) else {}
+        exact_match_candidates = tuple(
+            candidate.casefold()
+            for candidate in (
+                _string_or_none(metadata.get("section_title")),
+                _string_or_none(metadata.get("page_title")),
+                _string_or_none(filename),
             )
-            tokens = tuple(_tokenize(chunk_text or ""))
-            if not exact_match_candidates and not tokens:
-                continue
-            documents.append(
-                _CachedBm25Document(
-                    exact_match_candidates=exact_match_candidates,
-                    tokens=tokens,
-                )
-            )
-
-        cached = _CachedBm25Corpus(
-            documents=tuple(documents),
-            cached_at_monotonic=now_monotonic,
+            if candidate
         )
-        with _BM25_CORPUS_CACHE_LOCK:
-            _BM25_CORPUS_CACHE[cache_key] = cached
-            if len(_BM25_CORPUS_CACHE) > _BM25_CORPUS_CACHE_MAX_ENTRIES:
-                oldest_key = min(
-                    _BM25_CORPUS_CACHE,
-                    key=lambda key: _BM25_CORPUS_CACHE[key].cached_at_monotonic,
-                )
-                _BM25_CORPUS_CACHE.pop(oldest_key, None)
-        return cached
+        tokens = tuple(_tokenize(chunk_text or ""))
+        if not exact_match_candidates and not tokens:
+            continue
+        documents.append(
+            _CachedBm25Document(
+                exact_match_candidates=exact_match_candidates,
+                tokens=tokens,
+            )
+        )
+
+    cached = _CachedBm25Corpus(
+        documents=tuple(documents),
+        cached_at_monotonic=now_monotonic,
+    )
+    with _BM25_CORPUS_CACHE_LOCK:
+        _BM25_CORPUS_CACHE[cache_key] = cached
+        if len(_BM25_CORPUS_CACHE) > _BM25_CORPUS_CACHE_MAX_ENTRIES:
+            oldest_key = min(
+                _BM25_CORPUS_CACHE,
+                key=lambda k: _BM25_CORPUS_CACHE[k].cached_at_monotonic,
+            )
+            _BM25_CORPUS_CACHE.pop(oldest_key, None)
+    return cached

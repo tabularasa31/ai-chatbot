@@ -14,6 +14,11 @@ const MAX_H = 860;
 const DEFAULT_W = 380;
 const DEFAULT_H = 560;
 
+// Pixels the panel must stay away from viewport edges.
+const BOTTOM_CLEARANCE = 100; // bottom-6 (24) + button h-14 (56) + gap-3 (12) + margin (8)
+const TOP_CLEARANCE = 56;     // fixed navbar h-12 (48) + margin (8)
+const SIDE_CLEARANCE = 32;    // right-6 (24) + margin (8)
+
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
@@ -37,9 +42,13 @@ export function DashboardSupportWidget() {
     if (!dragStart.current) return;
     const dx = dragStart.current.x - e.clientX;
     const dy = dragStart.current.y - e.clientY;
+    // Clamp against static limits AND the live viewport so the panel can't
+    // slide under the navbar or off the left edge.
+    const vpMaxW = Math.min(MAX_W, window.innerWidth - SIDE_CLEARANCE);
+    const vpMaxH = Math.min(MAX_H, window.innerHeight - BOTTOM_CLEARANCE - TOP_CLEARANCE);
     setSize({
-      w: Math.min(MAX_W, Math.max(MIN_W, dragStart.current.w + dx)),
-      h: Math.min(MAX_H, Math.max(MIN_H, dragStart.current.h + dy)),
+      w: Math.round(Math.min(vpMaxW, Math.max(MIN_W, dragStart.current.w + dx))),
+      h: Math.round(Math.min(vpMaxH, Math.max(MIN_H, dragStart.current.h + dy))),
     });
   }, []);
 

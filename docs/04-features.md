@@ -668,6 +668,50 @@ Tenants see all their tickets at `/escalations`:
 - Input is locked (chat is ended)
 - `POST /widget/escalate` is a public endpoint (no auth required) — the widget can escalate without a JWT
 
+### Escalation analytics
+
+Two PostHog events are emitted on every escalation:
+
+**`chat_escalated`** — fires once per escalation, immediately after ticket creation.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `escalation_reason` | `string` | Why the bot escalated (see table below) |
+| `escalation_trigger` | `string` | Low-level trigger enum value (e.g. `low_similarity`) |
+| `chat_id` | `string` | Chat session UUID |
+
+**`chat.turn`** — fires for every turn; escalated turns include:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `escalated` | `bool` | `true` when this turn triggered escalation |
+| `escalation_reason` | `string \| null` | Reason string; null only on non-escalated turns |
+| `escalation_trigger` | `string \| null` | Trigger enum value; null on non-escalated turns |
+
+#### Expected `escalation_reason` values
+
+| Value | Trigger path |
+|-------|-------------|
+| `explicit_human_request` | User explicitly asked for a human (T-3) |
+| `low_confidence_no_path` | RAG confidence too low and no clarification path available |
+| `clarify_loop_limit` | Max clarification rounds reached without resolution |
+| `guard_reject` | Guard pipeline rejected the turn and escalation was forced |
+| `low_similarity` | No retrieved chunk met the similarity threshold (T-1) |
+| `no_docs` | Tenant has no embedded documents (T-2) |
+
+#### Escalation rate alert
+
+A global sliding-window counter fires a `logger.warning` (captured by Sentry) and a PostHog `escalation.rate_exceeded` event when more than `ESCALATION_ALERT_THRESHOLD` (default: **10**) escalations occur within `ESCALATION_ALERT_WINDOW_SECONDS` (default: **3600 s**).
+
+Both thresholds are configurable via environment variables. To tune for a specific tenant volume, set these in Railway:
+
+```
+ESCALATION_ALERT_THRESHOLD=15
+ESCALATION_ALERT_WINDOW_SECONDS=3600
+```
+
+**Baseline:** With a healthy bot covering its knowledge base well, expect ≤ 5% escalation rate (≤ 5 per 100 turns). Rates consistently above 10% indicate a knowledge-base gap or a guard miscalibration and warrant investigation via the Gap Analyzer.
+
 ---
 
 ## 8. Response Controls / Disclosure (FI-DISC)

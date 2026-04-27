@@ -68,6 +68,18 @@ class Settings(BaseSettings):
         alias="ESCALATION_MAX_COMPLETION_TOKENS",
         ge=1,
     )
+    escalation_alert_threshold: int = Field(
+        10,
+        alias="ESCALATION_ALERT_THRESHOLD",
+        ge=1,
+        description="Number of escalations in the alert window that triggers a rate warning.",
+    )
+    escalation_alert_window_seconds: int = Field(
+        3600,
+        alias="ESCALATION_ALERT_WINDOW_SECONDS",
+        ge=60,
+        description="Sliding window length (seconds) for the escalation rate alert.",
+    )
     answer_validation_model: str = Field(
         "gpt-4.1-mini",
         alias="ANSWER_VALIDATION_MODEL",

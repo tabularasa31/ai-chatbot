@@ -1576,11 +1576,20 @@ def generate_answer(
                 latency_s=_duration_s,
                 operation="chat/generate",
             )
-        final_text = _enforce_response_language(
-            answer_text.strip(),
-            response_language=response_language,
-            api_key=api_key,
-        )
+        # Post-gen language guard runs only on non-streamed generation. In the
+        # streaming path the answer was already emitted to the client chunk-by-
+        # chunk via ``stream_callback``; rewriting the final text here would
+        # produce a UI/history mismatch. Streaming relies on the prompt-level
+        # directive (build_rag_prompt) for language enforcement.
+        if stream_callback is None:
+            final_text, extra_tokens = _enforce_response_language(
+                answer_text.strip(),
+                response_language=response_language,
+                api_key=api_key,
+            )
+            total_tokens = (total_tokens or 0) + extra_tokens
+        else:
+            final_text = answer_text.strip()
         return (final_text, total_tokens)
     except Exception as exc:
         log_llm_tokens(
@@ -1605,36 +1614,44 @@ def _enforce_response_language(
     *,
     response_language: str,
     api_key: str | None,
-) -> str:
+) -> tuple[str, int]:
     """Translate the answer to ``response_language`` if it drifted to another language.
 
     Safety net for the case where the LLM follows the context language instead
     of the language directive (notably when retrieved chunks are in a different
     language than the user's question — see PR #513 cross-lingual retrieval).
-    Returns the original text unchanged if detection is unreliable, the answer
-    is empty, the api_key is missing, or translation fails.
+    Returns ``(text, extra_tokens)`` where ``extra_tokens`` is the cost of the
+    translation call (0 when no translation was needed). Returns the original
+    text unchanged if detection is unreliable, the answer is empty, the api_key
+    is missing, or translation fails.
+
+    NOTE: only safe to call after non-streamed generation. In streaming flows,
+    chunks have already been emitted to the client via ``stream_callback`` and
+    rewriting the final text would cause a UI ↔ persisted-history mismatch.
+    Caller is responsible for skipping this guard when streaming.
     """
     stripped = (answer_text or "").strip()
     if not stripped or not api_key:
-        return answer_text
+        return answer_text, 0
     try:
         detection = detect_language(stripped)
     except LangDetectError:
-        return answer_text
+        return answer_text, 0
     if not detection.is_reliable or detection.detected_language == "unknown":
-        return answer_text
+        return answer_text, 0
     if _language_root(detection.detected_language) == _language_root(response_language):
-        return answer_text
+        return answer_text, 0
     try:
-        translated = translate_text_result(
+        result = translate_text_result(
             source_text=answer_text,
             target_language=response_language,
             api_key=api_key,
-        ).text
+        )
     except Exception as exc:  # pragma: no cover - defensive; helper already swallows internally
         logger.warning("post-gen language guard translation failed: %s", exc)
-        return answer_text
-    return translated or answer_text
+        return answer_text, 0
+    translated = result.text or answer_text
+    return translated, int(result.tokens_used or 0)
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)

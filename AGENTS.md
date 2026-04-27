@@ -47,12 +47,9 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 |---|---|
 | `records.py` | Public dataclass records (no internal deps) |
 | `capabilities.py` | Dialect capabilities, enum/value helpers, shared utils |
-| `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_Bm25CacheOps` |
-| `signals.py` | `_SignalsOps` — signal ingestion/query |
-| `mode_a_queries.py` | `_ModeAQueriesOps` — corpus/topic queries |
-| `mode_b_queries.py` | `_ModeBQueriesOps` — cluster/question queries + vector/BM25 |
-| `job_queue.py` | `_JobQueueOps` — job lifecycle + helpers |
-| `summary.py` | `_SummaryOps` — gap summary aggregation |
+| `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_load_or_cache_bm25_corpus` |
+| `job_queue_helpers.py` | Constants and pure helpers for job-queue logic |
+| `job_retry.py` | Retry policy: effective max attempts, delay with jitter |
 
 **Import-graph conventions** (design intent, not test-enforced):
 - `pipelines/` must not import `orchestrator`

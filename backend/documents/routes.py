@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session, selectinload
 from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
-from backend.documents.constants import MAX_FILE_SIZE
 from backend.documents.schemas import (
     DocumentDetailResponse,
     DocumentHealthStatusResponse,
@@ -145,8 +144,6 @@ def upload_document_route(
         )
 
     content = file.file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB")
 
     try:
         doc = upload_document(

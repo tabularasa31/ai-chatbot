@@ -97,6 +97,42 @@ def _emit_chat_escalated_event(
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
 
 
+def _emit_ai_generation_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    latency_s: float,
+    operation: str,
+    http_status: int = 200,
+) -> None:
+    """Emit a PostHog $ai_generation event for LLM Observability cost tracking."""
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "$ai_generation",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "$ai_provider": "openai",
+                "$ai_model": model,
+                "$ai_input_tokens": input_tokens,
+                "$ai_output_tokens": output_tokens,
+                "$ai_total_cost_usd": cost_usd,
+                "$ai_latency": latency_s,
+                "$ai_http_status": http_status,
+                "operation": operation,
+            },
+        )
+    except Exception:
+        logger.warning("Failed to emit $ai_generation event", exc_info=True)
+
+
 def _emit_chat_session_ended_event(
     *,
     tenant_public_id: str | None,

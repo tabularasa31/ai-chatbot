@@ -957,6 +957,8 @@ def run_chat_pipeline(
         trace=trace,
         retry_bot_id=retry_bot_id,
         stream_callback=stream_callback,
+        metrics_tenant_id=tenant_public_id,
+        metrics_bot_id=bot_public_id,
     )
     _llm_ms = int((perf_counter() - _llm_start) * 1000)
 
@@ -996,6 +998,8 @@ def run_chat_pipeline(
             trace=trace,
             retry_bot_id=retry_bot_id,
             stream_callback=None,
+            metrics_tenant_id=tenant_public_id,
+            metrics_bot_id=bot_public_id,
         )
         raw_answer = _retry_answer
         tokens_used += _retry_tokens
@@ -1015,6 +1019,8 @@ def run_chat_pipeline(
         validation_context,
         api_key=api_key,
         trace=trace,
+        metrics_tenant_id=tenant_public_id,
+        metrics_bot_id=bot_public_id,
     )
     validation_applied = True
     validation_outcome: Literal["valid", "fallback"] = "valid"
@@ -1249,6 +1255,8 @@ def generate_answer(
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    metrics_tenant_id: str | None = None,
+    metrics_bot_id: str | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI chat model with RAG prompt.
@@ -1405,6 +1413,10 @@ def generate_answer(
             tokens=total_tokens,
             model=actual_model,
         )
+        _input_tokens = _safe_int(prompt_tokens_raw)
+        _output_tokens = _safe_int(completion_tokens_raw)
+        _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
+        _duration_s = perf_counter() - started_at
         if generation is not None:
             _cost_rates = settings.openai_model_costs.get(
                 actual_model,
@@ -1416,21 +1428,29 @@ def generate_answer(
             generation.end(
                 output=answer_text.strip(),
                 usage={
-                    "input": _safe_int(prompt_tokens_raw),
-                    "output": _safe_int(completion_tokens_raw),
+                    "input": _input_tokens,
+                    "output": _output_tokens,
                 },
                 metadata={
                     "total_tokens": _safe_int(total_tokens),
                     "finish_reason": finish_reason,
                     "thought_truncated": _thought_truncated,
-                    "cost_usd": settings.compute_cost_usd(
-                        actual_model,
-                        _safe_int(prompt_tokens_raw),
-                        _safe_int(completion_tokens_raw),
-                    ),
+                    "cost_usd": _cost_usd,
                     "cost_rate_usd_per_1m": _cost_rates,
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "duration_ms": round(_duration_s * 1000, 2),
                 },
+            )
+        if metrics_tenant_id is not None or metrics_bot_id is not None:
+            from backend.chat.events import _emit_ai_generation_event
+            _emit_ai_generation_event(
+                tenant_public_id=metrics_tenant_id,
+                bot_public_id=metrics_bot_id,
+                model=actual_model,
+                input_tokens=_input_tokens,
+                output_tokens=_output_tokens,
+                cost_usd=_cost_usd,
+                latency_s=_duration_s,
+                operation="chat/generate",
             )
         return (answer_text.strip(), total_tokens)
     except Exception as exc:
@@ -1492,6 +1512,8 @@ def validate_answer(
     *,
     api_key: str,
     trace: TraceHandle | None = None,
+    metrics_tenant_id: str | None = None,
+    metrics_bot_id: str | None = None,
 ) -> dict:
     """
     Ask LLM to validate if the answer is grounded in context.
@@ -1549,12 +1571,31 @@ def validate_answer(
             "confidence": float(result.get("confidence", 1.0)),
             "reason": str(result.get("reason", "")),
         }
+        _val_duration_s = perf_counter() - started_at
         if validation_span is not None:
             validation_span.end(
                 output=result,
                 metadata={
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "duration_ms": round(_val_duration_s * 1000, 2),
                 },
+            )
+        if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
+            _val_input = getattr(response.usage, "prompt_tokens", 0) or 0
+            _val_output = getattr(response.usage, "completion_tokens", 0) or 0
+            from backend.chat.events import _emit_ai_generation_event
+            _emit_ai_generation_event(
+                tenant_public_id=metrics_tenant_id,
+                bot_public_id=metrics_bot_id,
+                model=settings.answer_validation_model,
+                input_tokens=_safe_int(_val_input),
+                output_tokens=_safe_int(_val_output),
+                cost_usd=settings.compute_cost_usd(
+                    settings.answer_validation_model,
+                    _safe_int(_val_input),
+                    _safe_int(_val_output),
+                ),
+                latency_s=_val_duration_s,
+                operation="chat/validate",
             )
         return result
     except Exception as e:

@@ -216,7 +216,7 @@ def test_final_failure_logs_warn_with_context(
     tenant_id = _create_client(db_session)
     job = _create_job(db_session, tenant_id=tenant_id, attempt_count=5, max_attempts=5)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    caplog.set_level(logging.WARNING, logger="backend.gap_analyzer._repo.job_queue")
+    caplog.set_level(logging.WARNING, logger="backend.gap_analyzer.repository")
 
     repository.fail_gap_job(
         job_id=job.id,

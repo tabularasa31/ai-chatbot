@@ -12,6 +12,7 @@ import {
   createTextMessage,
   getLastEndedMarkerIndex,
   type ChatWidgetMessage,
+  type WidgetSource,
 } from "@/lib/widget-conversation";
 
 export type ChatWidgetBelowAssistantContext = {
@@ -337,12 +338,13 @@ export function ChatWidget({
       text: string;
       chat_ended?: boolean;
       ticket_number?: string | null;
+      sources?: { title: string; url: string }[];
     },
   ) => {
     if (payload.ticket_number) setActiveTicket(payload.ticket_number);
     setMessages((prev) => [
       ...prev,
-      createTextMessage("assistant", payload.text),
+      createTextMessage("assistant", payload.text, payload.sources),
     ]);
     if (payload.chat_ended === true) {
       handleChatEnded();
@@ -392,12 +394,13 @@ export function ChatWidget({
       session_id?: string;
       chat_ended?: boolean;
       ticket_number?: string | null;
+      sources?: { title: string; url: string }[];
     } = {};
 
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
       if (!raw) return;
-      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number };
+      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: WidgetSource[] };
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -411,6 +414,7 @@ export function ChatWidget({
         payload.session_id = parsed.session_id;
         payload.chat_ended = parsed.chat_ended;
         payload.ticket_number = parsed.ticket_number ?? null;
+        payload.sources = parsed.sources ?? [];
         if (typeof parsed.text === "string" && parsed.text !== fullText) {
           onChunk?.(parsed.text);
         }
@@ -461,6 +465,7 @@ export function ChatWidget({
       session_id: string;
       chat_ended?: boolean;
       ticket_number?: string | null;
+      sources?: { title: string; url: string }[];
     };
     applyAssistantMessage(data);
     if (data.chat_ended !== true) {
@@ -566,6 +571,7 @@ export function ChatWidget({
         text: string;
         session_id: string;
         chat_ended?: boolean;
+        sources?: { title: string; url: string }[];
       };
 
       applyAssistantMessage(data);
@@ -684,6 +690,37 @@ export function ChatWidget({
                         )}
                       </div>
                     </div>
+
+                    {msg.type === "assistant" && msg.sources && msg.sources.length > 0 && (
+                      <div className="ml-1 mt-1.5 flex flex-wrap gap-1.5">
+                        {msg.sources.map((src: WidgetSource) => {
+                          let hostname: string | null = null;
+                          try { hostname = new URL(src.url).hostname; } catch { /* skip favicon */ }
+                          return (
+                            <a
+                              key={src.url}
+                              href={src.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
+                            >
+                              {hostname && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={`https://www.google.com/s2/favicons?domain=${hostname}&sz=16`}
+                                  alt=""
+                                  className="h-3 w-3"
+                                />
+                              )}
+                              <span className="max-w-[140px] truncate">{src.title}</span>
+                              <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                            </a>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     {msg.type === "assistant" && renderBelowAssistant && userQuestion.trim() ? (
                       <div className="ml-12 mt-3 max-w-[85%]">

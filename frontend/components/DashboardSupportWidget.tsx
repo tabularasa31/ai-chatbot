@@ -22,7 +22,10 @@ const SIDE_CLEARANCE = 32;    // right-6 (24) + margin (8)
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
-  const [identityToken, setIdentityToken] = useState<string | null>(null);
+  // undefined = fetch in-flight; null = fetch done, no token; string = token ready.
+  // ChatWidget must not mount until this is resolved to avoid reading stale localStorage
+  // before the user-scoped key cleanup can run.
+  const [identityToken, setIdentityToken] = useState<string | null | undefined>(undefined);
   const [size, setSize] = useState({ w: DEFAULT_W, h: DEFAULT_H });
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -33,9 +36,9 @@ export function DashboardSupportWidget() {
     fetch("/api/widget-identity", { credentials: "include" })
       .then((r) => r.json())
       .then((data: { identity_token?: string }) => {
-        if (data.identity_token) setIdentityToken(data.identity_token);
+        setIdentityToken(data.identity_token ?? null);
       })
-      .catch(() => {/* fall through to anonymous */});
+      .catch(() => { setIdentityToken(null); });
   }, []);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -92,7 +95,7 @@ export function DashboardSupportWidget() {
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
-      {everOpened && (
+      {everOpened && identityToken !== undefined && (
         <div
           ref={panelRef}
           style={{ display: open ? undefined : "none", width: size.w, height: size.h }}

@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from backend.chat.handlers import rag as rag_handler
+from backend.chat.language import LocalizationResult
 from backend.chat.service import (
     _quick_answer_keys_for_question,
     _quick_answers_context,
@@ -465,3 +467,115 @@ def test_generate_answer_logs_tokens_with_operation_generate(
         for record in caplog.records
         if record.msg == "llm_tokens_used"
     )
+
+
+# ─── Output-language enforcement tests ──────────────────────────────────────
+# Regression coverage for bug 86exdd2gw: bot must reply in the user's language
+# even when retrieved context is in a different language (PR #513 made this
+# scenario common — cross-lingual retrieval works, so RU chunks now reach
+# prompts for EN questions and the model echoed the context language).
+
+
+def test_build_rag_prompt_language_directive_uses_full_language_name() -> None:
+    """The output-language rule must use the human-readable name (English/Russian),
+    not the bare ISO code — full names steer the model far more reliably."""
+    prompt = build_rag_prompt("Q?", ["chunk"], response_language="en")
+    head = prompt[:600]
+    assert "CRITICAL — OUTPUT LANGUAGE" in head
+    assert "English" in head
+    # Bare two-letter directive removed; must not appear as a standalone rule.
+    assert "Respond strictly in en" not in prompt
+
+
+def test_build_rag_prompt_warns_about_context_language_mismatch() -> None:
+    """The prompt must explicitly tell the model that context may be in a
+    different language and that it must translate setting names / menu paths."""
+    prompt = build_rag_prompt("Q?", ["chunk"], response_language="en")
+    assert "may be in a different language" in prompt
+    assert "translate" in prompt.lower()
+
+
+def test_build_rag_prompt_repeats_language_reminder_after_context() -> None:
+    """A second reminder must appear AFTER the context block. Long retrieved
+    context biases attention toward recent tokens; the top-of-prompt rule alone
+    is not enough."""
+    prompt = build_rag_prompt(
+        "Q?", ["chunk-text"], response_language="en"
+    )
+    context_idx = prompt.index("Context:")
+    question_idx = prompt.index("Question:")
+    tail = prompt[context_idx:question_idx]
+    assert "REMINDER" in tail
+    assert "English" in tail
+
+
+def test_build_rag_prompt_full_language_name_for_russian() -> None:
+    prompt = build_rag_prompt("Q?", ["chunk"], response_language="ru")
+    assert "Russian" in prompt
+    assert "REMINDER" in prompt
+
+
+def test_enforce_response_language_translates_when_language_drifts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the model produced text in a different language than response_language,
+    the post-generation guard must translate it back."""
+    russian_answer = (
+        "Откройте панель управления TurboFlare, перейдите в раздел CDN и проверьте "
+        "статус сертификата в подразделе SSL — это самый надёжный способ."
+    )
+    captured: dict[str, str | None] = {}
+
+    def _fake_translate(*, source_text: str, target_language: str, api_key: str | None) -> LocalizationResult:
+        captured["source_text"] = source_text
+        captured["target_language"] = target_language
+        return LocalizationResult(text="TRANSLATED-EN", tokens_used=12)
+
+    monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
+    out = rag_handler._enforce_response_language(
+        russian_answer, response_language="en", api_key="sk-test"
+    )
+    assert out == "TRANSLATED-EN"
+    assert captured["target_language"] == "en"
+    assert captured["source_text"] == russian_answer
+
+
+def test_enforce_response_language_noop_when_languages_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the answer language already matches, no translation call is issued."""
+
+    def _should_not_be_called(**_kwargs: object) -> LocalizationResult:
+        raise AssertionError("translate_text_result must not be called when languages match")
+
+    monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
+    russian = "Я покажу вам, как настроить SSL-сертификат для основного домена."
+    out = rag_handler._enforce_response_language(
+        russian, response_language="ru", api_key="sk-test"
+    )
+    assert out == russian
+
+
+def test_enforce_response_language_skips_without_api_key() -> None:
+    """No api_key → cannot translate → return original text unchanged."""
+    russian = "Я не знаю, как ответить на этот вопрос."
+    out = rag_handler._enforce_response_language(
+        russian, response_language="en", api_key=None
+    )
+    assert out == russian
+
+
+def test_enforce_response_language_skips_unreliable_detection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Short / ambiguous text → langdetect unreliable → leave answer untouched
+    rather than risk a wrong forced translation."""
+
+    def _should_not_be_called(**_kwargs: object) -> LocalizationResult:
+        raise AssertionError("translate_text_result must not be called for unreliable detection")
+
+    monkeypatch.setattr(rag_handler, "translate_text_result", _should_not_be_called)
+    out = rag_handler._enforce_response_language(
+        "OK.", response_language="ru", api_key="sk-test"
+    )
+    assert out == "OK."

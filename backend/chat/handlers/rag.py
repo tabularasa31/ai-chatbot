@@ -36,11 +36,15 @@ from sqlalchemy.orm import Session, selectinload
 from backend.chat.decision import KbConfidence
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
+    LangDetectError,
     ResolvedLanguageContext,
+    _language_root,
     detect_language,
+    language_display_name,
     localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
+    translate_text_result,
 )
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
@@ -1202,7 +1206,20 @@ def build_rag_prompt(
             "- Do not ask clarifying questions. Answer with the information available, or acknowledge that you cannot answer without more context.\n"
         )
 
+    response_language_name = language_display_name(response_language)
+    language_directive = (
+        "CRITICAL — OUTPUT LANGUAGE:\n"
+        f"- Reply ONLY in {response_language_name}.\n"
+        "- The retrieved context, FAQ candidates, and quick answers may be in a "
+        f"different language than {response_language_name}. You MUST translate "
+        f"setting names, menu paths, button labels, and step text into {response_language_name}.\n"
+        "- Keep proper nouns (product names, brand names), URLs, code identifiers, "
+        "and quoted command strings exactly as they appear in the source.\n"
+        f"- Never mix languages in the same answer. If a term cannot be translated safely, keep it as-is and continue writing in {response_language_name}.\n"
+    )
+
     system_rules = (
+        f"{language_directive}\n"
         f"{DISCLOSURE_HARD_LIMITS}\n"
         "You are a technical support agent for the tenant's product.\n"
         "Rules:\n"
@@ -1216,7 +1233,6 @@ def build_rag_prompt(
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
-        f"- Respond strictly in {response_language}. Do not switch languages unless quoting user input or proper nouns.\n"
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
@@ -1277,10 +1293,22 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
             "in the documentation and inviting the user to contact support or ask something else. "
             "Do NOT claim you are unable to help — explain that the information is simply not in the docs.\n"
         )
+    # Repeat the language directive AFTER the context block. With long retrieved
+    # context, attention is biased toward recent tokens and a system-level
+    # instruction at the top can be overridden by context language. This second
+    # reminder, placed right before the question, holds the model to the target
+    # language even when the context is in a different language than the user.
+    language_reminder = (
+        f"REMINDER: Write the entire answer in {response_language_name}, "
+        "translating any context that is in a different language. Keep proper "
+        "nouns, URLs, and code identifiers as-is."
+    )
+
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
             "Context:\n(none)\n\n"
+            f"{language_reminder}\n\n"
             f"Question: {question}\n\n"
             "Answer:"
         )
@@ -1290,6 +1318,7 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
     return (
         f"{system_rules}\n\n"
         f"Context:\n{context_block}\n\n"
+        f"{language_reminder}\n\n"
         f"Question: {question}\n\n"
         "Answer:"
     )
@@ -1547,7 +1576,12 @@ def generate_answer(
                 latency_s=_duration_s,
                 operation="chat/generate",
             )
-        return (answer_text.strip(), total_tokens)
+        final_text = _enforce_response_language(
+            answer_text.strip(),
+            response_language=response_language,
+            api_key=api_key,
+        )
+        return (final_text, total_tokens)
     except Exception as exc:
         log_llm_tokens(
             operation="generate",
@@ -1564,6 +1598,43 @@ def generate_answer(
                 status_message=str(exc),
             )
         raise
+
+
+def _enforce_response_language(
+    answer_text: str,
+    *,
+    response_language: str,
+    api_key: str | None,
+) -> str:
+    """Translate the answer to ``response_language`` if it drifted to another language.
+
+    Safety net for the case where the LLM follows the context language instead
+    of the language directive (notably when retrieved chunks are in a different
+    language than the user's question — see PR #513 cross-lingual retrieval).
+    Returns the original text unchanged if detection is unreliable, the answer
+    is empty, the api_key is missing, or translation fails.
+    """
+    stripped = (answer_text or "").strip()
+    if not stripped or not api_key:
+        return answer_text
+    try:
+        detection = detect_language(stripped)
+    except LangDetectError:
+        return answer_text
+    if not detection.is_reliable or detection.detected_language == "unknown":
+        return answer_text
+    if _language_root(detection.detected_language) == _language_root(response_language):
+        return answer_text
+    try:
+        translated = translate_text_result(
+            source_text=answer_text,
+            target_language=response_language,
+            api_key=api_key,
+        ).text
+    except Exception as exc:  # pragma: no cover - defensive; helper already swallows internally
+        logger.warning("post-gen language guard translation failed: %s", exc)
+        return answer_text
+    return translated or answer_text
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)

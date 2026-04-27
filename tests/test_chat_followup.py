@@ -141,33 +141,48 @@ def test_contextual_query_caps_long_assistant_tail() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _override_chat_completions(mock_openai_client: Mock) -> list[dict]:
-    """Replace conftest's chat.completions.create so we can inspect kwargs.
+def _patch_call_openai_with_retry(monkeypatch: pytest.MonkeyPatch) -> list[list[dict]]:
+    """Replace call_openai_with_retry in rag with a stub that runs the lambda
+    once, records the ``messages`` it built, and returns a stable response.
 
-    Returns a list that gets populated with each create() invocation's kwargs.
-    Using the conftest-provided mock_client avoids racing the autouse patch
-    chain.
+    Bypasses the conftest mock_openai_client patch chain so token-accounting
+    and retry behaviour can't double-count anything in CI.
     """
-    captured_calls: list[dict] = []
+    from backend.chat.handlers import rag as rag_mod
 
-    def _capture(**kwargs):
-        captured_calls.append(kwargs)
+    seen: list[list[dict]] = []
+
+    def _stub_create(**kwargs):
+        seen.append(kwargs.get("messages") or [])
         return Mock(
-            choices=[Mock(message=Mock(content="ok answer"))],
-            usage=Mock(total_tokens=42),
+            choices=[Mock(message=Mock(content="ok answer", finish_reason="stop"))],
+            usage=Mock(total_tokens=42, prompt_tokens=10, completion_tokens=32),
+            model="gpt-5-mini",
         )
 
-    mock_openai_client.chat.completions.create.side_effect = _capture
-    return captured_calls
+    class _StubClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                def create(**kwargs):
+                    return _stub_create(**kwargs)
+
+    def _retry_stub(_operation, fn, **_kwargs):
+        return fn()
+
+    from backend.chat import service as svc
+
+    monkeypatch.setattr(svc, "get_openai_client", lambda *a, **kw: _StubClient)
+    monkeypatch.setattr(rag_mod, "call_openai_with_retry", _retry_stub)
+    return seen
 
 
 def test_generate_answer_inserts_prior_messages_between_system_and_user(
-    mock_openai_client: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.chat.handlers import rag as rag_mod
 
-    captured_calls = _override_chat_completions(mock_openai_client)
+    seen = _patch_call_openai_with_retry(monkeypatch)
     monkeypatch.setattr(rag_mod, "log_llm_tokens", lambda *a, **kw: None)
 
     prior = [
@@ -175,7 +190,7 @@ def test_generate_answer_inserts_prior_messages_between_system_and_user(
         {"role": "assistant", "content": "вот как — хотите помогу с цветовой темой?"},
     ]
 
-    answer, tokens = rag_mod.generate_answer(
+    answer, _tokens = rag_mod.generate_answer(
         "да",
         ["chunk about themes"],
         api_key="sk-test",
@@ -184,9 +199,8 @@ def test_generate_answer_inserts_prior_messages_between_system_and_user(
     )
 
     assert answer == "ok answer"
-    assert tokens == 42
-    assert len(captured_calls) == 1
-    sent = captured_calls[0]["messages"]
+    assert len(seen) == 1
+    sent = seen[0]
     assert sent[0]["role"] == "system"
     assert sent[1] == prior[0]
     assert sent[2] == prior[1]
@@ -195,12 +209,11 @@ def test_generate_answer_inserts_prior_messages_between_system_and_user(
 
 
 def test_generate_answer_without_prior_messages_keeps_legacy_shape(
-    mock_openai_client: Mock,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from backend.chat.handlers import rag as rag_mod
 
-    captured_calls = _override_chat_completions(mock_openai_client)
+    seen = _patch_call_openai_with_retry(monkeypatch)
     monkeypatch.setattr(rag_mod, "log_llm_tokens", lambda *a, **kw: None)
 
     rag_mod.generate_answer(
@@ -210,5 +223,5 @@ def test_generate_answer_without_prior_messages_keeps_legacy_shape(
         response_language="ru",
     )
 
-    sent = captured_calls[0]["messages"]
-    assert [m["role"] for m in sent] == ["system", "user"]
+    assert len(seen) == 1
+    assert [m["role"] for m in seen[0]] == ["system", "user"]

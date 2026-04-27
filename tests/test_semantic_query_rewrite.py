@@ -284,10 +284,11 @@ class TestDetectTenantKbScript:
         tenant_id = uuid.uuid4()
         _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
 
+        # Column-only query returns Row tuples, not full ORM objects
         russian_chunks = [
-            MagicMock(chunk_text="Сайт не открывается после подключения к CDN."),
-            MagicMock(chunk_text="Проверьте NS-пропагацию и статус SSL-сертификата."),
-            MagicMock(chunk_text="A-запись домена должна указывать на IP-адреса CDN."),
+            ("Сайт не открывается после подключения к CDN.",),
+            ("Проверьте NS-пропагацию и статус SSL-сертификата.",),
+            ("A-запись домена должна указывать на IP-адреса CDN.",),
         ]
         mock_db = MagicMock()
         mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
@@ -306,8 +307,8 @@ class TestDetectTenantKbScript:
         _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
 
         english_chunks = [
-            MagicMock(chunk_text="Check your DNS A-record and NS propagation status."),
-            MagicMock(chunk_text="SSL certificate must be valid before traffic flows through CDN."),
+            ("Check your DNS A-record and NS propagation status.",),
+            ("SSL certificate must be valid before traffic flows through CDN.",),
         ]
         mock_db = MagicMock()
         mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
@@ -339,7 +340,7 @@ class TestDetectTenantKbScript:
         tenant_id = uuid.uuid4()
         _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
 
-        chunks = [MagicMock(chunk_text="Проверьте DNS.")]
+        chunks = [("Проверьте DNS.",)]
         mock_db = MagicMock()
         mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = chunks
 
@@ -411,18 +412,34 @@ class TestSemanticQueryRewriteForKb:
 # ---------------------------------------------------------------------------
 
 class TestBm25QueriesForScriptNonEn:
-    """Non-EN queries include the original query for same-language BM25 signal."""
+    """Non-EN queries: order depends on whether KB script matches query script."""
 
-    def test_cyrillic_query_includes_original(self):
+    def test_same_script_kb_puts_original_first(self):
+        """Cyrillic query + Cyrillic KB → original first for same-language BM25."""
         from backend.search.service import _bm25_queries_for_script
 
         query = "сайт не открывается после подключения"
-        variants = [query, "site connectivity troubleshooting"]  # EN rewrite added
-        result = _bm25_queries_for_script(query, variants, "cyrillic")
+        en_rewrite = "site connectivity troubleshooting"
+        variants = [query, en_rewrite]
+        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="cyrillic")
 
-        assert query in result, "Original Cyrillic query must be in BM25 candidates"
+        assert result[0] == query, "Original must be first when KB is same-script"
+        assert en_rewrite in result
 
-    def test_cyrillic_query_also_includes_en_rewrite(self):
+    def test_cross_script_kb_puts_en_rewrite_first(self):
+        """Cyrillic query + Latin KB → EN rewrite first so asymmetric BM25 uses it."""
+        from backend.search.service import _bm25_queries_for_script
+
+        query = "сайт не открывается"
+        en_rewrite = "CDN site connectivity troubleshooting"
+        variants = [query, en_rewrite]
+        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="latin")
+
+        assert result[0] == en_rewrite, "EN rewrite must be first for cross-script KB"
+        assert query in result
+
+    def test_unknown_kb_script_puts_en_rewrite_first(self):
+        """No kb_script → EN rewrite first (safe default for unknown KB language)."""
         from backend.search.service import _bm25_queries_for_script
 
         query = "сайт не открывается"
@@ -430,7 +447,7 @@ class TestBm25QueriesForScriptNonEn:
         variants = [query, en_rewrite]
         result = _bm25_queries_for_script(query, variants, "cyrillic")
 
-        assert en_rewrite in result, "EN rewrite should still be included as secondary"
+        assert result[0] == en_rewrite
 
     def test_en_query_unchanged(self):
         from backend.search.service import _bm25_queries_for_script

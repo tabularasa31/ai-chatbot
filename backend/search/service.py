@@ -1188,8 +1188,12 @@ def semantic_query_rewrite(
 # module-level cache: str(tenant_id) -> (script_bucket | None, monotonic_ts)
 _TENANT_KB_SCRIPT_CACHE: dict[str, tuple[str | None, float]] = {}
 _TENANT_KB_SCRIPT_CACHE_TTL = 300.0  # 5 minutes
+_KB_SCRIPT_SAMPLE_SIZE = 20
 
 _SCRIPT_TO_LANGUAGE_NAME: dict[str, str] = {
+    # NOTE: script bucket ≠ language — Cyrillic covers Russian, Ukrainian, Bulgarian,
+    # etc.; Latin covers English, Spanish, French, etc.  This map is a pragmatic
+    # approximation until per-document language metadata is stored at parse time.
     "cyrillic": "Russian",
     "latin": "English",
 }
@@ -1209,18 +1213,22 @@ def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
     if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
         return cached[0]
 
-    sample: list[Embedding] = (
-        db.query(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.tenant_id == tenant_id)
-        .limit(20)
-        .all()
-    )
+    try:
+        sample: list[tuple[str]] = (
+            db.query(Embedding.chunk_text)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .limit(_KB_SCRIPT_SAMPLE_SIZE)
+            .all()
+        )
+    except Exception:
+        return None
+
     result: str | None = None
     if sample:
         counts: dict[str, int] = {}
-        for emb in sample:
-            bucket = detect_query_script_bucket(emb.chunk_text or "")
+        for (chunk_text,) in sample:
+            bucket = detect_query_script_bucket(chunk_text or "")
             counts[bucket] = counts.get(bucket, 0) + 1
         dominant = max(counts, key=counts.__getitem__)
         if dominant in ("cyrillic", "latin"):
@@ -1600,15 +1608,20 @@ def _bm25_queries_for_script(
     query: str,
     query_variants: list[str],
     query_script_bucket: str,
+    *,
+    kb_script: str | None = None,
 ) -> list[str]:
-    """Select BM25 query list based on script bucket.
+    """Select BM25 query list based on script bucket and KB language.
 
-    English queries use the original text — lexical signal is accurate against
-    an English corpus.  Non-EN queries include the original text first (so BM25
-    works when the KB is in the same language as the query) and also add the EN
-    rewrite variant as a secondary candidate (covers cross-script or EN-corpus
-    tenants).  Returning both avoids the previous behaviour of silently dropping
-    all BM25 signal for Cyrillic/CJK queries against a same-language corpus.
+    English queries use the original text.  For non-EN queries the order depends
+    on whether the KB is in the same script as the query:
+
+    - Same script (e.g. Russian query, Russian KB): original first so that the
+      asymmetric BM25 mode uses the native-language query for lexical matching.
+    - Different script / unknown (e.g. Russian query, English KB): EN rewrite
+      first so asymmetric mode uses the rewrite for lexical matching.
+
+    Both variants are always included so symmetric mode evaluates both.
     """
     if _is_en_query(query, query_script_bucket):
         return [query]
@@ -1620,8 +1633,13 @@ def _bm25_queries_for_script(
         ),
         None,
     )
-    # Always keep the original so BM25 has signal when KB matches query language.
-    return [query, rewritten] if rewritten else [query]
+    if not rewritten:
+        return [query]
+    # Same-language KB: original first (asymmetric uses [0] = native query).
+    if kb_script and kb_script == query_script_bucket:
+        return [query, rewritten]
+    # Cross-lingual KB or unknown: EN rewrite first (asymmetric uses [0] = EN).
+    return [rewritten, query]
 
 
 def _format_bm25_trace_results(
@@ -2207,7 +2225,10 @@ def _run_candidate_stage(
     vector_search_fn = _python_cosine_search if "sqlite" in db_url else _pgvector_search
     bm25_expansion_mode = _resolve_bm25_expansion_mode()
 
-    bm25_variant_queries = _bm25_queries_for_script(query, q.query_variants, q.query_script_bucket)
+    kb_script = detect_tenant_kb_script(tenant_id, db)
+    bm25_variant_queries = _bm25_queries_for_script(
+        query, q.query_variants, q.query_script_bucket, kb_script=kb_script
+    )
     # EN rewrite to use for lexical scoring in reranker when query is non-EN.
     rerank_lexical_query: str | None = (
         None

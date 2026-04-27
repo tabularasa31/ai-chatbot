@@ -42,6 +42,7 @@ from backend.documents.url_service import (
 )
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
 from backend.observability.metrics import capture_event
+from backend.documents.constants import MAX_FILE_SIZE
 from backend.tenants.service import get_tenant_by_user
 
 documents_router = APIRouter(tags=["documents"])
@@ -56,7 +57,6 @@ EXT_TO_TYPE = {
     ".docx": "docx",
     ".txt": "plaintext",
 }
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
 def _detect_file_type(filename: str) -> str | None:

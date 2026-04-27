@@ -172,7 +172,6 @@ def _emit_language_resolved_event(
         properties={
             "language": context.response_language,
             "detected": context.detected_language,
-            "final": context.response_language,
             "source": _RESOLUTION_REASON_TO_SOURCE.get(
                 context.response_language_resolution_reason,
                 "default",

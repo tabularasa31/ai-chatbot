@@ -348,7 +348,6 @@ def _emit_quick_answer_lookup_event(
                 "selected_count": len(selected_keys),
                 "matched_count": matched_count,
                 "found": matched_count > 0,
-                "hit": matched_count > 0,
                 "text_length": text_length,
                 "chat_id": chat_id,
             },

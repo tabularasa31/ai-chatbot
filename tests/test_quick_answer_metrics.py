@@ -39,7 +39,6 @@ def test_emits_quick_answer_lookup_hit(captured_events):
     assert props["selected_count"] == 2
     assert props["matched_count"] == 2
     assert props["found"] is True
-    assert props["hit"] is True
     assert props["text_length"] == 42
     assert props["chat_id"] == "chat_test"
 
@@ -59,7 +58,6 @@ def test_emits_quick_answer_lookup_miss(captured_events):
     assert e["distinct_id"] == "tnt_test"
     assert e["properties"]["matched_count"] == 0
     assert e["properties"]["found"] is False
-    assert e["properties"]["hit"] is False
 
 
 def test_skips_emit_when_no_identifiers(captured_events):

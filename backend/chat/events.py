@@ -91,7 +91,6 @@ def _emit_chat_escalated_event(
             properties={
                 "chat_id": chat_id,
                 "reason": escalation_reason,
-                "escalation_reason": escalation_reason,
                 "escalation_trigger": escalation_trigger,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,

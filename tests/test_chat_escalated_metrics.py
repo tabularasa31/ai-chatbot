@@ -35,7 +35,6 @@ def test_emits_chat_escalated_with_reason(captured_events):
     assert e["bot_id"] == "bot_test"
     props = e["properties"]
     assert props["reason"] == "low_confidence"
-    assert props["escalation_reason"] == "low_confidence"
     assert props["escalation_trigger"] == "auto"
     assert props["chat_id"] == "chat_test"
 

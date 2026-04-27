@@ -953,7 +953,7 @@ def run_chat_pipeline(
         faq_context_items=faq_context_items,
         quick_answer_items=quick_answer_items,
         agent_instructions=agent_instructions,
-        low_context=retrieval.reliability.score == "low",
+        low_context=not _reranker_rescued and retrieval.reliability.score == "low",
         allow_clarification=allow_clarification,
         trace=trace,
         retry_bot_id=retry_bot_id,
@@ -994,7 +994,7 @@ def run_chat_pipeline(
             faq_context_items=faq_context_items,
             quick_answer_items=quick_answer_items,
             agent_instructions=agent_instructions,
-            low_context=retrieval.reliability.score == "low",
+            low_context=not _reranker_rescued and retrieval.reliability.score == "low",
             allow_clarification=allow_clarification,
             trace=trace,
             retry_bot_id=retry_bot_id,
@@ -1043,6 +1043,7 @@ def run_chat_pipeline(
         retrieval.best_confidence_score,
         len(retrieval.chunk_texts),
         validation=validation,
+        best_rank_score=retrieval.best_rank_score,
     )
 
     return ChatPipelineResult(

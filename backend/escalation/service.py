@@ -105,6 +105,7 @@ def should_escalate(
     *,
     validation: dict[str, Any] | None = None,
     trigger_override: EscalationTrigger | None = None,
+    best_rank_score: float | None = None,
 ) -> tuple[bool, EscalationTrigger | None]:
     if trigger_override is not None:
         return True, trigger_override
@@ -112,7 +113,13 @@ def should_escalate(
         return True, EscalationTrigger.no_documents
     if validation and validation.get("is_valid") is True:
         return False, None
-    if best_similarity_score is None or best_similarity_score < ESCALATION_THRESHOLD:
+    # Use the stronger of vector similarity and hybrid rank score.
+    # A high rank score (driven by BM25) indicates relevant content even when
+    # the vector similarity is below the threshold — prevents false escalation
+    # on lexically-matched Russian-language queries.
+    candidates = [s for s in (best_similarity_score, best_rank_score) if s is not None]
+    effective_score = max(candidates) if candidates else None
+    if effective_score is None or effective_score < ESCALATION_THRESHOLD:
         return True, EscalationTrigger.low_similarity
     return False, None
 

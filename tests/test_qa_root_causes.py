@@ -563,3 +563,166 @@ class TestShortFollowupFalseEscalation:
         assert data.get("ticket_number") is None, (
             "RC-4 fix: no escalation ticket must be created when validation passes"
         )
+
+
+# ---------------------------------------------------------------------------
+# RC-5 — false escalation on TurboFlare topical questions (task 86exd8kxv)
+# ---------------------------------------------------------------------------
+
+
+class TestTurboFlareFalseEscalation:
+    """RC-5: Russian-language TurboFlare questions were escalated because:
+    (a) should_escalate only checked vector similarity, ignoring the stronger
+        BM25 hybrid rank score — now fixed: max(vector_sim, rank_score) used.
+    (b) low_context was set even when _reranker_rescued=True, causing the LLM
+        to decline answering — now low_context respects _reranker_rescued.
+    """
+
+    def test_should_escalate_suppressed_by_high_rank_score(self) -> None:
+        """RC-5a: high hybrid rank score (BM25) should prevent escalation even
+        when vector similarity is below ESCALATION_THRESHOLD."""
+        from backend.escalation.service import should_escalate, EscalationTrigger
+
+        escalate, trigger = should_escalate(
+            0.35,  # vector similarity below threshold (0.45)
+            chunk_count=3,
+            validation=None,
+            best_rank_score=0.52,  # strong BM25 hybrid score
+        )
+
+        assert escalate is False, (
+            "RC-5a: high rank_score=0.52 must suppress escalation even if vector_sim=0.35"
+        )
+        assert trigger is None
+
+    def test_should_escalate_fires_when_both_scores_low(self) -> None:
+        """RC-5a regression guard: escalation must still fire when both scores are low."""
+        from backend.escalation.service import should_escalate, EscalationTrigger
+
+        escalate, trigger = should_escalate(
+            0.35,
+            chunk_count=3,
+            validation=None,
+            best_rank_score=0.40,  # both below ESCALATION_THRESHOLD (0.45)
+        )
+
+        assert escalate is True
+        assert trigger == EscalationTrigger.low_similarity
+
+    def test_should_escalate_suppressed_by_valid_answer_with_low_both_scores(self) -> None:
+        """Existing is_valid=True path still suppresses escalation regardless of scores."""
+        from backend.escalation.service import should_escalate
+
+        escalate, trigger = should_escalate(
+            0.15,
+            chunk_count=3,
+            validation={"is_valid": True, "confidence": 0.9, "reason": "grounded"},
+            best_rank_score=0.20,
+        )
+
+        assert escalate is False
+        assert trigger is None
+
+    def test_low_context_not_set_when_reranker_rescued(self) -> None:
+        """RC-5b: when _reranker_rescued=True, low_context must be False even if
+        reliability.score == 'low', so the LLM answers instead of declining.
+
+        Direct unit test of the boolean expression used in run_chat_pipeline.
+        """
+        from backend.core.config import settings
+
+        reranker_bypass_threshold = settings.reranker_bypass_threshold
+
+        # Case 1: rank_score above threshold → rescued → low_context must be False.
+        best_rank_score = 0.55
+        reliability_score = "low"
+        _reranker_rescued = best_rank_score >= reranker_bypass_threshold
+        low_context = not _reranker_rescued and reliability_score == "low"
+
+        assert _reranker_rescued is True, "test setup: rank_score=0.55 must trigger rescue"
+        assert low_context is False, (
+            "RC-5b: low_context must be False when reranker rescued, "
+            "even if reliability.score == 'low'"
+        )
+
+        # Case 2: rank_score below threshold → not rescued → low_context=True when low.
+        best_rank_score_low = 0.38
+        _reranker_rescued_low = best_rank_score_low >= reranker_bypass_threshold
+        low_context_low = not _reranker_rescued_low and reliability_score == "low"
+
+        assert _reranker_rescued_low is False
+        assert low_context_low is True, (
+            "RC-5b: low_context must be True when rank_score is below threshold"
+        )
+
+    def test_ru_query_strong_bm25_no_escalation(
+        self,
+        mock_openai_client: Mock,
+        tenant: TestClient,
+        db_session: Session,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """RC-5 end-to-end: Russian TurboFlare question with strong BM25 rank score
+        must not escalate even when vector similarity is below ESCALATION_THRESHOLD."""
+        from backend.chat.service import RetrievalContext
+        from backend.search.service import build_reliability_assessment
+
+        token = register_and_verify_user(
+            tenant, db_session, email="rc5-turboflare@example.com"
+        )
+        cl_resp = tenant.post(
+            "/tenants",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"name": "RC-5 TurboFlare Tenant"},
+        )
+        assert cl_resp.status_code == 201
+        set_client_openai_key(tenant, token)
+        api_key = cl_resp.json()["api_key"]
+
+        # Mocked retrieval: strong hybrid rank score (BM25), weak vector similarity.
+        def _fake_retrieve(*args, **kwargs) -> RetrievalContext:
+            return RetrievalContext(
+                chunk_texts=[
+                    "TurboFlare: для удаления домена обратитесь в поддержку. "
+                    "Кнопки удаления в интерфейсе нет."
+                ],
+                document_ids=[],
+                scores=[0.38],
+                mode="hybrid",
+                best_rank_score=0.55,         # strong BM25 — above reranker_bypass_threshold
+                best_confidence_score=0.38,    # weak vector — below ESCALATION_THRESHOLD
+                confidence_source="vector_similarity",
+                reliability=build_reliability_assessment(top_score=0.55, result_count=1),
+            )
+
+        expected_answer = "Для удаления домена из TurboFlare обратитесь в службу поддержки."
+
+        monkeypatch.setattr("backend.chat.service.retrieve_context", _fake_retrieve)
+        monkeypatch.setattr(
+            "backend.chat.service.generate_answer",
+            lambda *a, **kw: (expected_answer, 50),
+        )
+        monkeypatch.setattr(
+            "backend.chat.service.validate_answer",
+            lambda *a, **kw: {"is_valid": True, "confidence": 0.88, "reason": "grounded"},
+        )
+
+        session_id = uuid.uuid4()
+        response = tenant.post(
+            "/chat",
+            headers={"X-API-Key": api_key},
+            json={
+                "session_id": str(session_id),
+                "question": "Как удалить домен из TurboFlare?",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data.get("ticket_number") is None, (
+            "RC-5 end-to-end: must not escalate when rank_score=0.55 (above threshold)"
+        )
+        assert data.get("text") == expected_answer, (
+            "RC-5 end-to-end: must return the RAG answer, not a deflection/escalation message"
+        )

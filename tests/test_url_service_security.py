@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.security import hash_password
 from backend.tenants.service import create_tenant
+from backend.documents import embedder as embedder_mod
 from backend.documents import http_client as http_client_mod
 from backend.documents import sitemap as sitemap_mod
 from backend.documents import url_service
@@ -87,7 +88,7 @@ def test_scan_html_for_quick_answers_prefers_support_mailto_when_multiple_exist(
 
 def test_validate_public_hostname_rejects_private_ip() -> None:
     with pytest.raises(HTTPException) as exc_info:
-        url_service._validate_public_hostname("127.0.0.1")
+        http_client_mod._validate_public_hostname("127.0.0.1")
 
     assert exc_info.value.status_code == 400
     assert "not allowed" in str(exc_info.value.detail).lower()
@@ -98,10 +99,10 @@ def test_validate_public_hostname_rejects_private_dns(monkeypatch: pytest.Monkey
         assert host == "internal.example.com"
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
 
-    monkeypatch.setattr(url_service.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
 
     with pytest.raises(HTTPException) as exc_info:
-        url_service._validate_public_hostname("internal.example.com")
+        http_client_mod._validate_public_hostname("internal.example.com")
 
     assert exc_info.value.status_code == 400
     assert "not allowed" in str(exc_info.value.detail).lower()
@@ -125,16 +126,16 @@ def test_request_with_safe_redirects_blocks_local_redirect(
             request=request,
         )
 
-    monkeypatch.setattr(url_service.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     with httpx.Client(transport=transport, follow_redirects=False, trust_env=False) as tenant:
         with pytest.raises(HTTPException) as exc_info:
-            url_service._request_with_safe_redirects(
+            http_client_mod._request_with_safe_redirects(
                 tenant,
                 "GET",
                 "https://docs.example.com/start",
-                context=url_service.FetchContext(stage="test", url="https://docs.example.com/start"),
+                context=http_client_mod.FetchContext(stage="test", url="https://docs.example.com/start"),
             )
 
     assert exc_info.value.status_code == 400
@@ -151,7 +152,7 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, request=request)
 
-    monkeypatch.setattr(url_service.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(http_client_mod.socket, "getaddrinfo", fake_getaddrinfo)
     transport = httpx.MockTransport(handler)
 
     monkeypatch.setattr(
@@ -165,7 +166,7 @@ def test_fetch_reachable_page_returns_404_for_missing_page(
         ),
     )
     with pytest.raises(HTTPException) as exc_info:
-        url_service._fetch_reachable_page("https://docs.example.com/missing", 5.0)
+        http_client_mod._fetch_reachable_page("https://docs.example.com/missing", 5.0)
 
     assert exc_info.value.status_code == 404
     assert "404" in str(exc_info.value.detail)
@@ -242,10 +243,10 @@ def test_discover_urls_respects_page_cap(monkeypatch: pytest.MonkeyPatch) -> Non
         "_normalize_source_url",
         lambda root_url: ("https://docs.example.com/", "docs.example.com"),
     )
-    monkeypatch.setattr(url_service, "_fetch_sitemap_urls", lambda root_url, domain: [])
-    monkeypatch.setattr(url_service, "_is_html_like", lambda response: True)
+    monkeypatch.setattr(sitemap_mod, "_fetch_sitemap_urls", lambda root_url, domain: [])
+    monkeypatch.setattr(http_client_mod, "_is_html_like", lambda response: True)
     monkeypatch.setattr(
-        url_service,
+        sitemap_mod,
         "_extract_links",
         lambda html, current_url, domain: adjacency.get(current_url, []),
     )
@@ -257,9 +258,9 @@ def test_discover_urls_respects_page_cap(monkeypatch: pytest.MonkeyPatch) -> Non
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(url_service, "_http_client", lambda timeout_seconds: DummyClient())
+    monkeypatch.setattr(http_client_mod, "_http_client", lambda timeout_seconds: DummyClient())
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_request_with_safe_redirects",
         lambda tenant, method, url, context: httpx.Response(
             200,
@@ -319,7 +320,7 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(sitemap_mod, "_http_client", lambda timeout_seconds: DummyClient())
     monkeypatch.setattr(sitemap_mod, "_request_with_safe_redirects", fake_request)
 
-    urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
+    urls = sitemap_mod._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
 
     assert urls == [
         "https://docs.example.com/guide",
@@ -329,7 +330,7 @@ def test_fetch_sitemap_urls_expands_sitemapindex(monkeypatch: pytest.MonkeyPatch
 
 def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
     requested_urls: list[str] = []
-    chain_length = url_service.MAX_SITEMAPS_PER_SOURCE + 5
+    chain_length = sitemap_mod.MAX_SITEMAPS_PER_SOURCE + 5
 
     def sitemap_index(next_url: str) -> str:
         return f"""<?xml version="1.0" encoding="utf-8"?>
@@ -367,10 +368,10 @@ def test_fetch_sitemap_urls_limits_recursive_fetches(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(sitemap_mod, "_http_client", lambda timeout_seconds: DummyClient())
     monkeypatch.setattr(sitemap_mod, "_request_with_safe_redirects", fake_request)
 
-    urls = url_service._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
+    urls = sitemap_mod._fetch_sitemap_urls("https://docs.example.com/", "docs.example.com")
 
     assert urls == []
-    assert len(requested_urls) == url_service.MAX_SITEMAPS_PER_SOURCE
+    assert len(requested_urls) == sitemap_mod.MAX_SITEMAPS_PER_SOURCE
     assert "https://docs.example.com/sitemap-chain-19.xml" not in requested_urls
 
 
@@ -395,7 +396,7 @@ def test_fetch_page_html_accepts_markdown_response(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(http_client_mod, "_http_client", lambda timeout_seconds: DummyClient())
     monkeypatch.setattr(http_client_mod, "_request_with_safe_redirects", fake_request)
 
-    assert url_service._fetch_page_html("https://docs.example.com/guide") == markdown
+    assert http_client_mod._fetch_page_html("https://docs.example.com/guide") == markdown
 
 
 def test_summarize_crawl_failure_prefers_fetch_and_format_message() -> None:
@@ -479,7 +480,7 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     def fail_embed(*args, **kwargs):
         raise AssertionError("_embed_chunks should not be called for unchanged content")
 
-    monkeypatch.setattr(url_service, "_embed_chunks", fail_embed)
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", fail_embed)
 
     updated_doc, chunk_count = url_service._upsert_page_document(
         source=source,
@@ -502,7 +503,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     def capture_extraction(**kwargs):
         calls.append(dict(kwargs))
 
-    monkeypatch.setattr(url_service, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
+    monkeypatch.setattr(embedder_mod, "_run_tenant_knowledge_extraction_best_effort", capture_extraction)
 
     user = User(
         email="hash-extract-env@example.com",
@@ -556,7 +557,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     def fail_embed(*args, **kwargs):
         raise AssertionError("_embed_chunks should not be called for unchanged content")
 
-    monkeypatch.setattr(url_service, "_embed_chunks", fail_embed)
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", fail_embed)
 
     updated_doc, chunk_count = url_service._upsert_page_document(
         source=source,
@@ -610,7 +611,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
         ],
     )
 
-    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: None)
+    monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: None)
 
     url_service.crawl_url_source(source_id, "sk-test")
 
@@ -673,7 +674,7 @@ def test_crawl_url_source_persists_quick_answers(
         lambda url: None,
     )
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_fetch_page_html",
         lambda url: """
         <html>
@@ -686,9 +687,9 @@ def test_crawl_url_source_persists_quick_answers(
         </html>
         """,
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [[0.1] * 1536 for _ in chunks])
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [[0.1] * 1536 for _ in chunks])
     monkeypatch.setattr(
-        url_service,
+        embedder_mod,
         "_run_tenant_knowledge_extraction_best_effort",
         lambda **kwargs: None,
     )
@@ -784,7 +785,7 @@ paths:
     def fail_embed(*args, **kwargs):
         raise AssertionError("_embed_chunks should not be called for unchanged structured content")
 
-    monkeypatch.setattr(url_service, "_embed_chunks", fail_embed)
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", fail_embed)
 
     updated_doc, chunk_count = url_service._upsert_structured_document(
         source=source,
@@ -815,7 +816,7 @@ def test_fetch_openapi_source_rejects_structured_non_openapi_payload(
         )
     )
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_http_client",
         lambda timeout_seconds: httpx.Client(
             transport=transport,
@@ -871,7 +872,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
         )
     )
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_http_client",
         lambda timeout_seconds: httpx.Client(
             transport=transport,

@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session
 
 from backend.auth.service import create_token_for_user
 from backend.tenants.service import create_tenant
+from backend.documents import embedder as embedder_mod
+from backend.documents import http_client as http_client_mod
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
 from backend.core.security import hash_password
 from backend.models import (
@@ -569,11 +571,11 @@ def test_create_url_source_rejects_duplicate_normalized_domain(
     )
 
     monkeypatch.setattr(
-        "backend.documents.url_service._fetch_reachable_page",
+        "backend.documents.http_client._fetch_reachable_page",
         lambda url, timeout_seconds: ("<html></html>", "Docs"),
     )
-    monkeypatch.setattr("backend.documents.url_service._validate_public_hostname", lambda hostname: None)
-    monkeypatch.setattr("backend.documents.url_service._load_robots_warning", lambda url: None)
+    monkeypatch.setattr("backend.documents.http_client._validate_public_hostname", lambda hostname: None)
+    monkeypatch.setattr("backend.documents.sitemap._load_robots_warning", lambda url: None)
     monkeypatch.setattr(
         "backend.documents.url_service._discover_urls",
         lambda root_url, exclusions, page_cap: [root_url],
@@ -678,9 +680,9 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
 
     discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(60)]
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
-    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: f"<html>{url}</html>")
     monkeypatch.setattr(
-        url_service,
+        embedder_mod,
         "_extract_page",
         lambda url, html: type("Page", (), {
             "url": url,
@@ -689,7 +691,7 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
@@ -763,9 +765,9 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
 
     discovered_urls = [f"https://docs.example.com/page-{index}" for index in range(70)]
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: discovered_urls)
-    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: f"<html>{url}</html>")
+    monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: f"<html>{url}</html>")
     monkeypatch.setattr(
-        url_service,
+        embedder_mod,
         "_extract_page",
         lambda url, html: type("Page", (), {
             "url": url,
@@ -774,7 +776,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
             "chunks": [{"chunk_text": html, "chunk_index": 0, "section_title": None, "token_count": 1, "content_hash": url, "raw_text": html}],
         })(),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
@@ -1023,9 +1025,9 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
     assert delete_response.status_code == 204
 
     monkeypatch.setattr(url_service, "_discover_urls", lambda root_url, exclusions, page_cap: ["https://docs.example.com/start"])
-    monkeypatch.setattr(url_service, "_fetch_page_html", lambda url: "<html><body>start</body></html>")
+    monkeypatch.setattr(http_client_mod, "_fetch_page_html", lambda url: "<html><body>start</body></html>")
     monkeypatch.setattr(
-        url_service,
+        embedder_mod,
         "_extract_page",
         lambda url, html: type(
             "Page",
@@ -1047,7 +1049,7 @@ def test_manually_deleted_source_page_is_not_recreated_on_refresh(
             },
         )(),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()
@@ -1092,10 +1094,7 @@ def test_crawl_url_source_detects_openapi_yaml_and_indexes_as_swagger(
     db_session.add(source)
     db_session.commit()
 
-    from backend.documents import http_client as http_client_mod
-
     monkeypatch.setattr(url_service, "_discover_urls", lambda *_args, **_kwargs: [source.url])
-    monkeypatch.setattr(url_service, "_validate_public_hostname", lambda hostname: None)
     monkeypatch.setattr(http_client_mod, "_validate_public_hostname", lambda hostname: None)
 
     yaml_spec = """
@@ -1126,7 +1125,7 @@ paths:
 """
 
     monkeypatch.setattr(
-        url_service,
+        http_client_mod,
         "_http_client",
         lambda timeout_seconds: httpx.Client(
             transport=httpx.MockTransport(
@@ -1142,7 +1141,7 @@ paths:
             trust_env=False,
         ),
     )
-    monkeypatch.setattr(url_service, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
+    monkeypatch.setattr(embedder_mod, "_embed_chunks", lambda chunks, api_key: [_fake_embedding_vector() for _ in chunks])
 
     url_service.crawl_url_source(source.id, api_key="test-key")
     db_session.expire_all()

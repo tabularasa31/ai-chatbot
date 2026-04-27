@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import socket  # noqa: F401  # exposed for test patching via url_service.socket
 import time
 import uuid
 from collections import deque
@@ -17,48 +16,17 @@ from openai import APIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
+import backend.documents.embedder as _embedder_mod
+import backend.documents.http_client as _http_client_mod
+import backend.documents.sitemap as _sitemap_mod
 from backend.core.db import SessionLocal
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
-
-# --- sub-module re-exports (keep names in this namespace for monkeypatching in tests) ---
-from backend.documents.embedder import (  # noqa: F401
-    _SECTION_SPLIT_RE,
-    EMBED_BATCH_SIZE,
-    ExtractedPage,
-    StructuredSource,
-    _approx_tokens,
-    _build_chunk_text,
-    _build_chunks,
-    _build_structured_openapi_chunks,
-    _content_hash,
-    _embed_chunks,
-    _extract_page,
-    _normalize_source_format,
-    _render_structured_openapi_chunks,
-    _run_tenant_knowledge_extraction_best_effort,
-    _url_knowledge_extract_when_unchanged,
-)
-from backend.documents.http_client import (  # noqa: F401
-    DISCOVERY_CONTENT_TYPES,
+from backend.documents.embedder import ExtractedPage, StructuredSource
+from backend.documents.http_client import (
     FETCH_TIMEOUT_SECONDS,
     MAX_HTML_BYTES,
-    MAX_REDIRECTS,
     PREFLIGHT_TIMEOUT_SECONDS,
-    SUPPORTED_PAGE_CONTENT_TYPES,
-    USER_AGENT,
     FetchContext,
-    _enforce_response_size_limit,
-    _fetch_page_html,
-    _fetch_reachable_page,
-    _http_client,
-    _is_forbidden_ip,
-    _is_html_like,
-    _is_supported_page_response,
-    _log_fetch,
-    _raise_for_upstream_status,
-    _request_with_safe_redirects,
-    _resolve_hostname,
-    _validate_public_hostname,
 )
 from backend.documents.parsers import (
     OpenAPIChunk,
@@ -72,16 +40,7 @@ from backend.documents.quick_answers import (
     merge_quick_answer_candidates,
     scan_html_for_quick_answers,
 )
-from backend.documents.sitemap import (  # noqa: F401
-    DISCOVERY_ESTIMATE_CAP,
-    MAX_DISCOVERY_DEPTH,
-    MAX_SITEMAPS_PER_SOURCE,
-    _apply_exclusions,
-    _extract_links,
-    _fetch_sitemap_urls,
-    _load_robots_warning,
-    _normalize_page_url,
-)
+from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import (
@@ -99,7 +58,7 @@ from backend.models import (
 
 logger = logging.getLogger(__name__)
 
-# Defined here (not re-imported from http_client) so that test patches on
+# Defined here (not delegated to http_client) so that test patches on
 # url_service._validate_public_hostname reach calls inside this function.
 def _normalize_source_url(raw_url: str) -> tuple[str, str]:
     parsed = urlparse(raw_url.strip())
@@ -121,7 +80,7 @@ def _normalize_source_url(raw_url: str) -> tuple[str, str]:
         )
     )
     hostname = parsed.hostname.lower() if parsed.hostname else ""
-    _validate_public_hostname(hostname)
+    _http_client_mod._validate_public_hostname(hostname)
     return normalized, parsed.netloc.lower()
 
 
@@ -212,7 +171,7 @@ def _manual_excluded_page_urls(source: UrlSource) -> list[str]:
     for item in raw_urls:
         if not isinstance(item, str):
             continue
-        normalized = _normalize_page_url(item, source.normalized_domain)
+        normalized = _sitemap_mod._normalize_page_url(item, source.normalized_domain)
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)
@@ -230,7 +189,7 @@ def _store_manual_excluded_page_urls(source: UrlSource, urls: list[str]) -> None
 def _exclude_url_from_future_crawls(source: UrlSource, url: str | None) -> None:
     if not url:
         return
-    normalized = _normalize_page_url(url, source.normalized_domain)
+    normalized = _sitemap_mod._normalize_page_url(url, source.normalized_domain)
     if not normalized:
         return
 
@@ -265,7 +224,9 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
         ordered.append(url)
 
     add_url(normalized_root)
-    for url in _apply_exclusions(_fetch_sitemap_urls(normalized_root, domain), normalized_root, exclusions):
+    for url in _sitemap_mod._apply_exclusions(
+        _sitemap_mod._fetch_sitemap_urls(normalized_root, domain), normalized_root, exclusions
+    ):
         add_url(url)
         if len(ordered) >= page_cap:
             return ordered
@@ -274,18 +235,20 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
         return ordered
 
     queue: deque[tuple[str, int]] = deque([(normalized_root, 0)])
-    with _http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
+    with _http_client_mod._http_client(PREFLIGHT_TIMEOUT_SECONDS) as client:
         while queue and len(ordered) < page_cap:
             current_url, depth = queue.popleft()
             if depth >= MAX_DISCOVERY_DEPTH:
                 continue
             context = FetchContext(stage="crawl:discover", url=current_url)
             try:
-                response = _request_with_safe_redirects(client, "GET", current_url, context=context)
+                response = _http_client_mod._request_with_safe_redirects(
+                    client, "GET", current_url, context=context
+                )
             except HTTPException:
                 continue
-            if response.status_code >= 400 or not _is_html_like(response):
-                _log_fetch(
+            if response.status_code >= 400 or not _http_client_mod._is_html_like(response):
+                _http_client_mod._log_fetch(
                     logging.INFO,
                     "Skipping non-indexable discovery page",
                     context,
@@ -293,8 +256,8 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
                     content_type=response.headers.get("content-type"),
                 )
                 continue
-            links = _extract_links(response.text, current_url, domain)
-            links = _apply_exclusions(links, normalized_root, exclusions)
+            links = _sitemap_mod._extract_links(response.text, current_url, domain)
+            links = _sitemap_mod._apply_exclusions(links, normalized_root, exclusions)
             for link in links:
                 if link in seen:
                     continue
@@ -309,12 +272,16 @@ def _discover_urls(root_url: str, exclusions: list[str], page_cap: int) -> list[
 
 def _fetch_openapi_source(url: str) -> StructuredSource | None:
     context = FetchContext(stage="crawl:structured", url=url)
-    with _http_client(FETCH_TIMEOUT_SECONDS) as client:
+    with _http_client_mod._http_client(FETCH_TIMEOUT_SECONDS) as client:
         try:
-            response = _request_with_safe_redirects(client, "GET", url, context=context)
-            _raise_for_upstream_status(response, context)
+            response = _http_client_mod._request_with_safe_redirects(
+                client, "GET", url, context=context
+            )
+            _http_client_mod._raise_for_upstream_status(response, context)
         except HTTPException as exc:
-            _log_fetch(logging.INFO, "Skipping structured source after fetch failure", context, detail=exc.detail)
+            _http_client_mod._log_fetch(
+                logging.INFO, "Skipping structured source after fetch failure", context, detail=exc.detail
+            )
             return None
 
     content_type = response.headers.get("content-type", "").lower()
@@ -381,13 +348,13 @@ def _upsert_page_document(
         .filter(Document.source_url == page.url)
         .first()
     )
-    content_hash = _content_hash(page.text)
-    if existing and _content_hash(existing.parsed_text or "") == content_hash:
+    content_hash = _embedder_mod._content_hash(page.text)
+    if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = page.title[:255]
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.url
-        if _url_knowledge_extract_when_unchanged():
-            _run_tenant_knowledge_extraction_best_effort(
+        if _embedder_mod._url_knowledge_extract_when_unchanged():
+            _embedder_mod._run_tenant_knowledge_extraction_best_effort(
                 document_id=existing.id,
                 api_key=api_key,
             )
@@ -415,7 +382,7 @@ def _upsert_page_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    vectors = _embed_chunks(page.chunks, api_key)
+    vectors = _embedder_mod._embed_chunks(page.chunks, api_key)
     for chunk, vector in zip(page.chunks, vectors, strict=True):
         db.add(
             Embedding(
@@ -440,7 +407,7 @@ def _upsert_page_document(
     db.flush()
     db.commit()
     invalidate_bm25_cache_for_tenant(source.tenant_id)
-    _run_tenant_knowledge_extraction_best_effort(
+    _embedder_mod._run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
         api_key=api_key,
     )
@@ -464,13 +431,13 @@ def _upsert_structured_document(
         .filter(Document.source_url == url)
         .first()
     )
-    content_hash = _content_hash(parsed_text)
-    if existing and _content_hash(existing.parsed_text or "") == content_hash:
+    content_hash = _embedder_mod._content_hash(parsed_text)
+    if existing and _embedder_mod._content_hash(existing.parsed_text or "") == content_hash:
         existing.filename = title[:255]
         existing.status = DocumentStatus.ready
         existing.file_type = DocumentType.swagger
-        if _url_knowledge_extract_when_unchanged():
-            _run_tenant_knowledge_extraction_best_effort(
+        if _embedder_mod._url_knowledge_extract_when_unchanged():
+            _embedder_mod._run_tenant_knowledge_extraction_best_effort(
                 document_id=existing.id,
                 api_key=api_key,
             )
@@ -498,14 +465,14 @@ def _upsert_structured_document(
     doc.status = DocumentStatus.embedding
     db.flush()
 
-    rendered_chunks = _render_structured_openapi_chunks(
+    rendered_chunks = _embedder_mod._render_structured_openapi_chunks(
         chunks,
         title=title,
         source_url=url,
         source_format=chunks[0].source_format if chunks else "yaml",
     )
     try:
-        vectors = _embed_chunks(rendered_chunks, api_key)
+        vectors = _embedder_mod._embed_chunks(rendered_chunks, api_key)
         for chunk, vector in zip(rendered_chunks, vectors, strict=True):
             db.add(
                 Embedding(
@@ -539,7 +506,7 @@ def _upsert_structured_document(
         db.flush()
         db.commit()
         invalidate_bm25_cache_for_tenant(source.tenant_id)
-        _run_tenant_knowledge_extraction_best_effort(
+        _embedder_mod._run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
             api_key=api_key,
         )
@@ -587,9 +554,9 @@ def preflight_url_source(
             detail="You already have a source from this domain. Manage it in the sources list.",
         )
 
-    _, title = _fetch_reachable_page(normalized_url, PREFLIGHT_TIMEOUT_SECONDS)
+    _, title = _http_client_mod._fetch_reachable_page(normalized_url, PREFLIGHT_TIMEOUT_SECONDS)
     warnings: list[str] = []
-    robots_warning = _load_robots_warning(normalized_url)
+    robots_warning = _sitemap_mod._load_robots_warning(normalized_url)
     if robots_warning:
         warnings.append(robots_warning)
 
@@ -853,7 +820,9 @@ def _index_pages(
             "platform": "openapi",
             "limit_reached": False,
             "source_kind": "url",
-            "source_format": _normalize_source_format(structured_source.source_format, from_url=True),
+            "source_format": _embedder_mod._normalize_source_format(
+                structured_source.source_format, from_url=True
+            ),
         }
         return _CrawlResult(
             indexed_urls={source.url},
@@ -881,7 +850,7 @@ def _index_pages(
     }
 
     for url in plan.urls:
-        html = _fetch_page_html(url)
+        html = _http_client_mod._fetch_page_html(url)
         if not html:
             failures.append({"url": url, "reason": "Could not fetch HTML"})
             continue
@@ -893,7 +862,7 @@ def _index_pages(
                 root_url=source.url,
             ),
         )
-        page = _extract_page(url, html)
+        page = _embedder_mod._extract_page(url, html)
         if not page:
             failures.append({"url": url, "reason": "No readable content extracted"})
             continue

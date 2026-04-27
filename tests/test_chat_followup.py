@@ -92,6 +92,34 @@ def test_contextual_query_combines_assistant_tail_and_user_reply() -> None:
     assert out.endswith("\nда")
 
 
+def test_contextual_query_picks_latest_assistant_when_messages_out_of_order() -> None:
+    # Chat.messages has no DB ``order_by``; the helper must not blindly trust
+    # iteration order. Build a list where the older assistant message comes
+    # AFTER the newer one and confirm the latest tail (by created_at) wins.
+    from datetime import datetime, timedelta
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    older_assistant = _StubMessage(
+        MessageRole.assistant,
+        "Старый ответ. Хотите старую тему?",
+        idx=1,
+    )
+    older_assistant.created_at = base
+    newer_assistant = _StubMessage(
+        MessageRole.assistant,
+        "Свежий ответ. Хотите помогу с цветовой темой?",
+        idx=2,
+    )
+    newer_assistant.created_at = base + timedelta(minutes=5)
+    out = build_contextual_retrieval_query(
+        [newer_assistant, older_assistant],  # intentionally reversed
+        "да",
+    )
+    assert out is not None
+    assert "цветовой темой" in out
+    assert "старую тему" not in out
+
+
 def test_contextual_query_returns_none_without_assistant_history() -> None:
     messages = [_StubMessage(MessageRole.user, "первый ход", idx=1)]
     assert build_contextual_retrieval_query(messages, "да") is None

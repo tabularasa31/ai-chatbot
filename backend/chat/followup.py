@@ -21,8 +21,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from datetime import datetime
 
 from backend.models import Message, MessageRole
+
+_MIN_DATETIME = datetime.min
 
 # Multilingual affirmations / continuation cues. Lowercased, casefold-compared.
 # Keep this list short and obvious — anything ambiguous should fall through to
@@ -74,8 +77,18 @@ def looks_like_short_followup(text: str) -> bool:
 
 
 def _last_assistant_message(messages: Iterable[Message]) -> Message | None:
+    # Chat.messages has no DB-level ``order_by``, so iteration order on a
+    # freshly loaded relationship is not guaranteed to match send order.
+    # Sort by ``created_at`` (with ``id`` as a tiebreaker for messages
+    # persisted in the same millisecond) before picking the latest assistant
+    # turn — otherwise a short follow-up could attach to a stale assistant
+    # message and steer retrieval to outdated context.
+    ordered = sorted(
+        messages,
+        key=lambda m: (m.created_at or _MIN_DATETIME, m.id or 0),
+    )
     last: Message | None = None
-    for m in messages:
+    for m in ordered:
         if m.role == MessageRole.assistant and (m.content or "").strip():
             last = m
     return last

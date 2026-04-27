@@ -36,7 +36,7 @@ export function DashboardSupportWidget() {
     fetch("/api/widget-identity", { credentials: "include" })
       .then((r) => r.json())
       .then((data: { identity_token?: string }) => {
-        if (data.identity_token) setIdentityToken(data.identity_token);
+        setIdentityToken(data.identity_token ?? null);
       })
       .catch(() => { setIdentityToken(null); });
   }, []);

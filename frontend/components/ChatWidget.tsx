@@ -400,7 +400,7 @@ export function ChatWidget({
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
       if (!raw) return;
-      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: { title: string; url: string }[] };
+      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: WidgetSource[] };
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -693,26 +693,32 @@ export function ChatWidget({
 
                     {msg.type === "assistant" && msg.sources && msg.sources.length > 0 && (
                       <div className="ml-1 mt-1.5 flex flex-wrap gap-1.5">
-                        {msg.sources.map((src: WidgetSource) => (
-                          <a
-                            key={src.url}
-                            href={src.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={`https://www.google.com/s2/favicons?domain=${new URL(src.url).hostname}&sz=16`}
-                              alt=""
-                              className="h-3 w-3"
-                            />
-                            <span className="max-w-[140px] truncate">{src.title}</span>
-                            <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                          </a>
-                        ))}
+                        {msg.sources.map((src: WidgetSource) => {
+                          let hostname: string | null = null;
+                          try { hostname = new URL(src.url).hostname; } catch { /* skip favicon */ }
+                          return (
+                            <a
+                              key={src.url}
+                              href={src.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
+                            >
+                              {hostname && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={`https://www.google.com/s2/favicons?domain=${hostname}&sz=16`}
+                                  alt=""
+                                  className="h-3 w-3"
+                                />
+                              )}
+                              <span className="max-w-[140px] truncate">{src.title}</span>
+                              <svg className="h-2.5 w-2.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                              </svg>
+                            </a>
+                          );
+                        })}
                       </div>
                     )}
 

@@ -337,18 +337,21 @@ def _widget_chat_stream(
             )
             result_holder["outcome"] = outcome
             if outcome and outcome.document_ids:
-                seen: dict[str, str] = {}
-                docs = (
-                    worker_db.query(Document.filename, Document.source_url)
-                    .filter(Document.id.in_(outcome.document_ids))
-                    .all()
-                )
-                for d in docs:
-                    if d.source_url and d.source_url not in seen:
-                        seen[d.source_url] = d.filename
-                result_holder["sources"] = [
-                    {"title": title, "url": url} for url, title in seen.items()
-                ]
+                try:
+                    seen: dict[str, str] = {}
+                    docs = (
+                        worker_db.query(Document.filename, Document.source_url)
+                        .filter(Document.id.in_(outcome.document_ids))
+                        .all()
+                    )
+                    for d in docs:
+                        if d.source_url and d.source_url not in seen:
+                            seen[d.source_url] = d.filename
+                    result_holder["sources"] = [
+                        {"title": title, "url": url} for url, title in seen.items()
+                    ]
+                except Exception:
+                    logger.warning("widget_source_lookup_failed", exc_info=True)
         except BaseException as exc:
             result_holder["error"] = exc
         finally:

@@ -34,6 +34,10 @@ from openai import APIConnectionError, APITimeoutError, RateLimitError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.chat.decision import KbConfidence
+from backend.chat.followup import (
+    build_contextual_retrieval_query,
+    looks_like_short_followup,
+)
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
     ResolvedLanguageContext,
@@ -52,7 +56,7 @@ from backend.guards.reject_response import (
     RejectReason,
     build_reject_response_result,
 )
-from backend.models import TenantProfile
+from backend.models import Chat, MessageRole, TenantProfile
 from backend.observability import TraceHandle
 from backend.observability.formatters import truncate_text
 from backend.search.service import (
@@ -506,6 +510,34 @@ def _safe_int(value: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _build_prior_messages_for_llm(
+    chat: Chat | None,
+    *,
+    max_messages: int,
+    char_cap: int,
+) -> list[dict[str, str]] | None:
+    """Take the trailing N persisted turns of ``chat`` and format them for the
+    OpenAI chat API. Returns None when there is nothing to add.
+
+    The current user turn is NOT yet persisted at this point in the pipeline
+    (run_chat_pipeline runs before _persist_turn_with_response_language), so
+    the full chat.messages list is "prior" context.
+    """
+    if chat is None or max_messages <= 0:
+        return None
+    persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
+    out: list[dict[str, str]] = []
+    for m in persisted[-max_messages:]:
+        text = (m.content or "").strip()
+        if not text:
+            continue
+        if len(text) > char_cap:
+            text = text[:char_cap].rstrip() + "…"
+        role = "user" if m.role == MessageRole.user else "assistant"
+        out.append({"role": role, "content": text})
+    return out or None
+
+
 def retrieve_context(
     tenant_id: uuid.UUID,
     question: str,
@@ -637,6 +669,7 @@ def run_chat_pipeline(
     bot_public_id: str | None = None,
     retry_bot_id: str | None = None,
     chat_id: str | None = None,
+    chat: Chat | None = None,
     stream_callback: Callable[[str], None] | None = None,
     agent_instructions: str | None = None,
     allow_clarification: bool = True,
@@ -959,6 +992,17 @@ def run_chat_pipeline(
     )
 
     # --- 5. Retrieve context ---
+    # When the user replies with a short follow-up (e.g. "да", "yes please")
+    # to the bot's prior question, the bare reply has no meaningful retrieval
+    # signal on its own. Stitch it with the tail of the last assistant message
+    # so BM25 / vector matching has real terms to work with. The current
+    # question text itself stays unchanged for prompt assembly downstream.
+    _contextual_retrieval_query: str | None = None
+    if chat is not None and looks_like_short_followup(question):
+        _contextual_retrieval_query = build_contextual_retrieval_query(
+            chat.messages, question
+        )
+
     # When embedding failed upstream, skip retrieve_context entirely to avoid a
     # redundant second embedding attempt (and another 5s timeout) inside it.
     if not variant_vectors:
@@ -970,6 +1014,21 @@ def run_chat_pipeline(
             best_rank_score=None,
             best_confidence_score=None,
             confidence_source="none",
+        )
+    elif _contextual_retrieval_query is not None:
+        # Contextual path: re-embed the stitched query inside search instead
+        # of reusing the precomputed variants/vectors of the bare follow-up.
+        retrieval = _svc.retrieve_context(
+            tenant_id=tenant_id,
+            question=_contextual_retrieval_query,
+            db=db,
+            api_key=api_key,
+            top_k=5,
+            trace=trace,
+            precomputed_query_variants=None,
+            precomputed_variant_vectors=None,
+            precomputed_embedding_api_request_count=None,
+            rewritten_variant=None,
         )
     else:
         retrieval = _svc.retrieve_context(
@@ -1030,6 +1089,16 @@ def run_chat_pipeline(
         )
 
     # --- 7. Generate answer ---
+    # Build trailing conversation history for the LLM so short follow-up
+    # replies ("да", "yes please") are interpreted in context of the bot's
+    # previous question. Falls back to None on empty / first-turn chats —
+    # generate_answer then behaves exactly as before.
+    _prior_messages = _build_prior_messages_for_llm(
+        chat,
+        max_messages=settings.chat_history_turns,
+        char_cap=settings.chat_history_message_char_cap,
+    )
+
     _llm_start = perf_counter()
     raw_answer, tokens_used = _svc.generate_answer(
         question,
@@ -1050,6 +1119,7 @@ def run_chat_pipeline(
         stream_callback=stream_callback,
         metrics_tenant_id=tenant_public_id,
         metrics_bot_id=bot_public_id,
+        prior_messages=_prior_messages,
     )
     _llm_ms = int((perf_counter() - _llm_start) * 1000)
 
@@ -1091,6 +1161,7 @@ def run_chat_pipeline(
             stream_callback=None,
             metrics_tenant_id=tenant_public_id,
             metrics_bot_id=bot_public_id,
+            prior_messages=_prior_messages,
         )
         raw_answer = _retry_answer
         tokens_used += _retry_tokens
@@ -1352,6 +1423,7 @@ def generate_answer(
     stream_callback: Callable[[str], None] | None = None,
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
+    prior_messages: list[dict[str, str]] | None = None,
 ) -> tuple[str, int]:
     """
     Call OpenAI chat model with RAG prompt.
@@ -1361,6 +1433,9 @@ def generate_answer(
         context_chunks: Retrieved context chunks.
         allow_clarification: Passed through to build_rag_prompt; when False the
             model is instructed not to ask clarifying questions.
+        prior_messages: Optional trailing transcript (user/assistant pairs)
+            inserted between the system prompt and the current user message,
+            so the model can resolve short follow-up replies in context.
 
     Returns:
         Tuple of (answer_text, total_tokens).
@@ -1395,10 +1470,12 @@ def generate_answer(
         low_context=low_context,
         allow_clarification=allow_clarification,
     )
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt}
     ]
+    if prior_messages:
+        messages.extend(prior_messages)
+    messages.append({"role": "user", "content": user_message})
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _temperature: float | None = None if _reasoning else 0.2
@@ -1783,6 +1860,7 @@ class RagHandler(PipelineHandler):
             bot_public_id=ctx.bot_public_id,
             retry_bot_id=str(ctx.bot_id) if ctx.bot_id is not None else None,
             chat_id=str(chat.id) if chat is not None else None,
+            chat=chat,
             stream_callback=ctx.stream_callback,
             agent_instructions=ctx.bot_agent_instructions,
             allow_clarification=ctx.allow_clarification,

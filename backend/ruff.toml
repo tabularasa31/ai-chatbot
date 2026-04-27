@@ -18,3 +18,6 @@ ignore = [
 # Imports after module-level setup (logging / constants) are intentional.
 "main.py" = ["E402"]
 "chat/service.py" = ["E402"]
+# Multilingual data (affirmations, regex char classes) intentionally mixes
+# Cyrillic / Latin / typographic characters that trip RUF001/003.
+"chat/followup.py" = ["RUF001", "RUF003"]

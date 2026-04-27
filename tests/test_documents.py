@@ -261,8 +261,8 @@ def test_upload_no_client(tenant: TestClient, db_session: Session) -> None:
     assert "tenant" in response.json()["detail"].lower()
 
 
-def test_upload_document_limit_is_shared_capacity_100(tenant: TestClient, db_session: Session) -> None:
-    """The tenant-wide document capacity should allow 100 docs and reject the 101st."""
+def test_upload_document_limit_is_shared_capacity(tenant: TestClient, db_session: Session) -> None:
+    """The tenant-wide document capacity should fill up and reject the next upload."""
     token = register_and_verify_user(tenant, db_session, email="limit100@example.com")
     create_client_response = tenant.post(
         "/tenants",
@@ -652,7 +652,8 @@ def test_url_source_crawl_uses_remaining_shared_capacity(
     )
     tenant_id = uuid.UUID(create_client_response.json()["id"])
 
-    for index in range(60):
+    prefill_count = KNOWLEDGE_DOCUMENT_CAPACITY - 40
+    for index in range(prefill_count):
         db_session.add(
             Document(
                 tenant_id=tenant_id,
@@ -739,7 +740,7 @@ def test_url_source_refresh_updates_existing_pages_without_exceeding_shared_capa
     db_session.add(source)
     db_session.flush()
 
-    for index in range(40):
+    for index in range(KNOWLEDGE_DOCUMENT_CAPACITY - 60):
         db_session.add(
             Document(
                 tenant_id=tenant_id,

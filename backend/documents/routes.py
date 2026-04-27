@@ -56,7 +56,6 @@ EXT_TO_TYPE = {
     ".docx": "docx",
     ".txt": "plaintext",
 }
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
 def _detect_file_type(filename: str) -> str | None:
@@ -145,8 +144,6 @@ def upload_document_route(
         )
 
     content = file.file.read()
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=400, detail="File too large. Maximum size is 50MB")
 
     try:
         doc = upload_document(

@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY
+from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY, MAX_FILE_SIZE
 from backend.documents.parsers import (
     parse_docx,
     parse_markdown,
@@ -361,7 +361,6 @@ def run_document_health_check(
         db.refresh(doc)
         return err_result
 
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 ALLOWED_TYPES = {"pdf", "markdown", "swagger", "docx", "doc", "plaintext"}
 
 

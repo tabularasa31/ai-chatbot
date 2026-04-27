@@ -32,6 +32,7 @@ from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResp
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
     Chat,
+    Document,
     EscalationTicket,
     EscalationTrigger,
     Message,
@@ -335,6 +336,19 @@ def _widget_chat_stream(
                 **process_kwargs,
             )
             result_holder["outcome"] = outcome
+            if outcome and outcome.document_ids:
+                seen: dict[str, str] = {}
+                docs = (
+                    worker_db.query(Document.filename, Document.source_url)
+                    .filter(Document.id.in_(outcome.document_ids))
+                    .all()
+                )
+                for d in docs:
+                    if d.source_url and d.source_url not in seen:
+                        seen[d.source_url] = d.filename
+                result_holder["sources"] = [
+                    {"title": title, "url": url} for url, title in seen.items()
+                ]
         except BaseException as exc:
             result_holder["error"] = exc
         finally:
@@ -387,6 +401,9 @@ def _widget_chat_stream(
                 mode="json",
             ),
         }
+        sources = result_holder.get("sources")
+        if sources:
+            done_payload["sources"] = sources
         yield f"data: {json.dumps(done_payload)}\n\n"
 
     return StreamingResponse(

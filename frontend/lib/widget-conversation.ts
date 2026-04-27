@@ -1,8 +1,11 @@
+export type WidgetSource = { title: string; url: string };
+
 export type ChatWidgetMessage =
   | {
       id: string;
       type: "assistant" | "user" | "error";
       text: string;
+      sources?: WidgetSource[];
     }
   | {
       id: string;
@@ -20,11 +23,13 @@ function createMessageId(): string {
 export function createTextMessage(
   type: "assistant" | "user" | "error",
   text: string,
+  sources?: WidgetSource[],
 ): ChatWidgetMessage {
   return {
     id: createMessageId(),
     type,
     text,
+    sources,
   };
 }
 

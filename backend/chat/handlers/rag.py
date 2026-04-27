@@ -351,6 +351,7 @@ def _emit_quick_answer_lookup_event(
                 "text_length": text_length,
                 "chat_id": chat_id,
             },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
     except Exception:
         logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)

@@ -194,6 +194,7 @@ def _emit_call_attempt(
                 "attempt": attempt,
                 "elapsed_ms": int(elapsed * 1000),
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
     except Exception:
         logger.warning("Failed to emit openai_retry.attempt event", exc_info=True)
@@ -226,6 +227,7 @@ def _emit_retry_scheduled(
                 "elapsed_ms": int(elapsed * 1000),
                 "remaining_budget_ms": max(int(remaining * 1000), 0),
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
     except Exception:
         logger.warning("Failed to emit openai_retry.retry_scheduled event", exc_info=True)
@@ -255,6 +257,7 @@ def _emit_retry_exhausted(
                 "elapsed_ms": int(elapsed * 1000),
                 "reason": reason,
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
     except Exception:
         logger.warning("Failed to emit openai_retry.exhausted event", exc_info=True)

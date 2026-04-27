@@ -22,6 +22,9 @@ class _PostHogClientProtocol(Protocol):
     def capture(self, *args: Any, **kwargs: Any) -> Any:
         ...
 
+    def group_identify(self, *args: Any, **kwargs: Any) -> Any:
+        ...
+
     def flush(self) -> None:
         ...
 
@@ -111,6 +114,7 @@ class MetricsService:
         tenant_id: str | None = None,
         bot_id: str | None = None,
         properties: dict[str, Any] | None = None,
+        groups: dict[str, str] | None = None,
     ) -> None:
         if not self._enabled or self._client is None:
             return
@@ -131,9 +135,23 @@ class MetricsService:
                 distinct_id=distinct_id,
                 event=event,
                 properties=merged,
+                groups=groups,
             )
         except Exception:
             logger.exception("PostHog capture failed", extra={"event": event})
+
+    def group_identify(
+        self,
+        group_type: str,
+        group_key: str,
+        properties: dict[str, Any] | None = None,
+    ) -> None:
+        if not self._enabled or self._client is None:
+            return
+        try:
+            self._client.group_identify(group_type, group_key, properties or {})
+        except Exception:
+            logger.exception("PostHog group_identify failed", extra={"group_type": group_type})
 
 
 _service = MetricsService()
@@ -158,6 +176,7 @@ def capture_event(
     tenant_id: str | None = None,
     bot_id: str | None = None,
     properties: dict[str, Any] | None = None,
+    groups: dict[str, str] | None = None,
 ) -> None:
     _service.capture(
         event,
@@ -165,4 +184,13 @@ def capture_event(
         tenant_id=tenant_id,
         bot_id=bot_id,
         properties=properties,
+        groups=groups,
     )
+
+
+def group_identify(
+    group_type: str,
+    group_key: str,
+    properties: dict[str, Any] | None = None,
+) -> None:
+    _service.group_identify(group_type, group_key, properties)

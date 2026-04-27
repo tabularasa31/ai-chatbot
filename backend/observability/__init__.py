@@ -4,6 +4,7 @@ from backend.observability.metrics import (
     MetricsService,
     capture_event,
     get_metrics,
+    group_identify,
     init_metrics,
     shutdown_metrics,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "capture_event",
     "get_metrics",
     "get_observability",
+    "group_identify",
     "init_metrics",
     "init_observability",
     "init_sentry",

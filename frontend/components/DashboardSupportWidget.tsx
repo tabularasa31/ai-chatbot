@@ -60,8 +60,22 @@ export function DashboardSupportWidget() {
     window.addEventListener("mouseup", handleMouseUp);
   }, [size, handleMouseMove, handleMouseUp]);
 
+  // Clean up drag listeners and body overrides if the component unmounts mid-drag.
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   const handleToggle = () => {
-    if (!open) setEverOpened(true);
+    if (!open) {
+      setEverOpened(true);
+    } else {
+      setSize({ w: DEFAULT_W, h: DEFAULT_H });
+    }
     setOpen((v) => !v);
   };
 

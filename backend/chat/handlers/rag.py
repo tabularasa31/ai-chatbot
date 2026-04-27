@@ -63,6 +63,58 @@ from backend.search.service import (
 
 logger = logging.getLogger(__name__)
 
+_INLINE_CITATION_RE = re.compile(
+    r"\s*\((?:Page|Section):[^()]*(?:\([^()]*\)[^()]*)*\)",
+    re.IGNORECASE,
+)
+
+# Matches any partial prefix of "(Page:..." or "(Section:..." at the end of a
+# string (no closing ")") — used by _CitationStreamFilter to detect incomplete
+# citations that span multiple streamed tokens.
+_CITATION_TAIL_RE = re.compile(
+    r"\((?:P(?:a(?:g(?:e(?::[^)]*)?)?)?)?|S(?:e(?:c(?:t(?:i(?:o(?:n(?::[^)]*)?)?)?)?)?)?)?)?$",
+    re.IGNORECASE,
+)
+
+
+def _strip_inline_citations(text: str) -> str:
+    """Remove (Page: ...) and (Section: ...) annotations the LLM may echo back."""
+    return _INLINE_CITATION_RE.sub("", text).strip()
+
+
+class _CitationStreamFilter:
+    """Wraps a stream_callback and strips inline citations from streamed tokens.
+
+    Citations like ``(Page: FAQ)`` often span many tokens. This class buffers
+    the incoming stream, strips complete patterns with ``_INLINE_CITATION_RE``,
+    and holds back any partial citation prefix at the tail until the closing
+    ``)`` arrives or the stream ends.
+    """
+
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        self._cb = callback
+        self._buf = ""
+
+    def feed(self, chunk: str) -> None:
+        self._buf += chunk
+        self._buf = _INLINE_CITATION_RE.sub("", self._buf)
+        m = _CITATION_TAIL_RE.search(self._buf)
+        if m:
+            safe = self._buf[: m.start()].rstrip(" \t")
+            self._buf = self._buf[m.start() :]
+        else:
+            safe = self._buf
+            self._buf = ""
+        if safe:
+            self._cb(safe)
+
+    def finish(self) -> None:
+        if self._buf:
+            cleaned = _INLINE_CITATION_RE.sub("", self._buf).strip()
+            if cleaned:
+                self._cb(cleaned)
+            self._buf = ""
+
 
 # ---------------------------------------------------------------------------
 # Constants moved with the RAG functions.
@@ -1012,6 +1064,8 @@ def run_chat_pipeline(
                 }
             )
 
+    raw_answer = _strip_inline_citations(raw_answer)
+
     # --- 8. Validate answer ---
     validation_context = retrieval.chunk_texts + quick_answer_items
     validation = _svc.validate_answer(
@@ -1117,7 +1171,8 @@ def build_rag_prompt(
         "- Answer using ONLY the provided context, verified FAQ candidates, and structured quick answers.\n"
         "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
         "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
-        "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
+        "- Do NOT include inline source citations such as (Page: ...) or (Section: ...) in your answer — sources are shown separately in the UI.\n"
+        "- When the context provides a specific setting name, menu path, field name, or URL, include that detail directly in your answer text.\n"
         "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer STRUCTURED QUICK ANSWERS when relevant.\n"
         f"{clarification_rules}"
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.schemas import ChatTurnResponse
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session
@@ -323,9 +324,11 @@ def _widget_chat_stream(
     q: queue.Queue[Any] = queue.Queue()
     result_holder: dict[str, Any] = {}
 
+    _citation_filter = _CitationStreamFilter(lambda t: q.put(("chunk", t)))
+
     def on_chunk(text: str) -> None:
         if text:
-            q.put(("chunk", text))
+            _citation_filter.feed(text)
 
     def run_pipeline() -> None:
         worker_db = core_db.SessionLocal()
@@ -355,6 +358,7 @@ def _widget_chat_stream(
         except BaseException as exc:
             result_holder["error"] = exc
         finally:
+            _citation_filter.finish()
             worker_db.close()
             q.put(_STREAM_SENTINEL)
 

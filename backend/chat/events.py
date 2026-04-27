@@ -90,6 +90,7 @@ def _emit_chat_escalated_event(
             bot_id=bot_public_id,
             properties={
                 "chat_id": chat_id,
+                "reason": escalation_reason,
                 "escalation_reason": escalation_reason,
                 "escalation_trigger": escalation_trigger,
             },

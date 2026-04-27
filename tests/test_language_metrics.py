@@ -49,8 +49,8 @@ def test_resolve_language_context_emits_resolved(captured_events):
     assert e["bot_id"] == "bot_test"
     props = e["properties"]
     assert props["chat_id"] == "chat_test"
+    assert props["language"] == "fr"
     assert props["detected"] == "fr"
-    assert props["final"] == "fr"
     assert props["source"] == "detector"
     assert "confidence" in props
     assert props["text_length"] == len("Bonjour")

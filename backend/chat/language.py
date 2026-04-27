@@ -170,8 +170,8 @@ def _emit_language_resolved_event(
         tenant_id=tenant_id,
         bot_id=bot_id,
         properties={
+            "language": context.response_language,
             "detected": context.detected_language,
-            "final": context.response_language,
             "source": _RESOLUTION_REASON_TO_SOURCE.get(
                 context.response_language_resolution_reason,
                 "default",

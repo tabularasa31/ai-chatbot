@@ -32,6 +32,7 @@ def call_openai_with_retry(
     *,
     tenant_id: str | None = None,
     bot_id: str | None = None,
+    endpoint: str | None = None,
 ) -> T:
     started = time.monotonic()
     max_attempts = settings.openai_user_retry_max_attempts
@@ -69,6 +70,8 @@ def call_openai_with_retry(
                     reason="rate_limit_over_budget",
                     tenant_id=tenant_id,
                     bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
                 )
                 raise
             if attempt >= max_attempts or remaining <= 0:
@@ -81,6 +84,8 @@ def call_openai_with_retry(
                     reason="max_attempts" if attempt >= max_attempts else "budget_exhausted",
                     tenant_id=tenant_id,
                     bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
                 )
                 raise
 
@@ -99,6 +104,8 @@ def call_openai_with_retry(
                     reason="delay_over_remaining",
                     tenant_id=tenant_id,
                     bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
                 )
                 raise
 
@@ -240,6 +247,8 @@ def _emit_retry_exhausted(
     reason: str,
     tenant_id: str | None,
     bot_id: str | None,
+    exc: Exception | None = None,
+    endpoint: str | None = None,
 ) -> None:
     try:
         capture_event(
@@ -250,7 +259,10 @@ def _emit_retry_exhausted(
             properties={
                 "operation": operation,
                 "final_attempt": attempt,
+                "attempt_count": attempt,
                 "failure_kind": classified.kind.value,
+                "error_type": type(exc).__name__ if exc is not None else classified.kind.value,
+                "endpoint": endpoint,
                 "status_code": classified.status_code,
                 "elapsed_ms": int(elapsed * 1000),
                 "reason": reason,

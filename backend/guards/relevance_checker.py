@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -17,6 +18,13 @@ from backend.observability import TraceHandle
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
 MAX_CACHE_SIZE = 2048
+
+# Circuit breaker: after this many consecutive guard failures (timeouts / errors),
+# stop calling the LLM and fail open to avoid hammering OpenAI during an outage.
+CIRCUIT_BREAKER_THRESHOLD = 5
+
+_cb_lock = threading.Lock()
+_consecutive_failures: int = 0
 
 # Short queries (≤ SHORT_QUERY_WORD_LIMIT words) are passed through as relevant so the
 # LLM can ask a clarifying question rather than the guard blindly rejecting them.
@@ -99,6 +107,13 @@ def check_relevance_with_profile(
     if word_count <= SHORT_QUERY_WORD_LIMIT:
         return True, "short_query_bypass", profile
 
+    # Circuit breaker: fail open immediately if the guard has timed out/errored too many
+    # times in a row (e.g. OpenAI embeddings endpoint degraded), to stop hammering the API.
+    global _consecutive_failures
+    with _cb_lock:
+        if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            return True, "circuit_open", None
+
     # Cache key: hash(tenant_id + question[:100])
     key_src = f"{tenant_id}:{user_question[:100]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
@@ -136,7 +151,7 @@ def check_relevance_with_profile(
         )
 
     def _call_llm() -> tuple[bool, str]:
-        openai_client = get_openai_client(api_key)
+        openai_client = get_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)
         response = call_openai_with_retry(
             "guard_relevance_check",
             lambda: openai_client.chat.completions.create(
@@ -149,6 +164,7 @@ def check_relevance_with_profile(
                 max_completion_tokens=80,
                 response_format={"type": "json_object"},
             ),
+            endpoint="chat.completions",
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)
@@ -171,6 +187,8 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
+        with _cb_lock:
+            _consecutive_failures += 1
         return True, "timeout", None
     except Exception:
         if span is not None:
@@ -179,12 +197,18 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False)
         except Exception:
             pass
+        with _cb_lock:
+            _consecutive_failures += 1
         return True, "error", None
     else:
         try:
             ex.shutdown(wait=False)
         except Exception:
             pass
+
+    # Successful call — reset the circuit breaker.
+    with _cb_lock:
+        _consecutive_failures = 0
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 

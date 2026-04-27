@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -1182,6 +1183,106 @@ def semantic_query_rewrite(
     return None
 
 
+# ── Cross-lingual retrieval helpers ──────────────────────────────────────────
+
+# module-level cache: str(tenant_id) -> (script_bucket | None, monotonic_ts)
+_TENANT_KB_SCRIPT_CACHE: dict[str, tuple[str | None, float]] = {}
+_TENANT_KB_SCRIPT_CACHE_TTL = 300.0  # 5 minutes
+
+_SCRIPT_TO_LANGUAGE_NAME: dict[str, str] = {
+    "cyrillic": "Russian",
+    "latin": "English",
+}
+
+
+def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
+    """Return the predominant script bucket of a tenant's indexed chunks.
+
+    Samples up to 20 embeddings to detect whether the knowledge base is
+    primarily Cyrillic, Latin, or mixed.  Result is cached per tenant to avoid
+    a DB round-trip on every chat turn.  Returns None when no chunks exist or
+    the distribution is ambiguous ("other" bucket dominates).
+    """
+    key = str(tenant_id)
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
+
+    sample: list[Embedding] = (
+        db.query(Embedding)
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.tenant_id == tenant_id)
+        .limit(20)
+        .all()
+    )
+    result: str | None = None
+    if sample:
+        counts: dict[str, int] = {}
+        for emb in sample:
+            bucket = detect_query_script_bucket(emb.chunk_text or "")
+            counts[bucket] = counts.get(bucket, 0) + 1
+        dominant = max(counts, key=counts.__getitem__)
+        if dominant in ("cyrillic", "latin"):
+            result = dominant
+
+    _TENANT_KB_SCRIPT_CACHE[key] = (result, now)
+    return result
+
+
+def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
+    """Drop the cached KB script for this tenant (call after document upload/delete)."""
+    _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+
+
+def semantic_query_rewrite_for_kb(
+    query: str,
+    *,
+    kb_script: str,
+    api_key: str,
+    timeout: float = 2.0,
+    bot_id: str | None = None,
+) -> str | None:
+    """Rewrite the user query in the language of the knowledge base.
+
+    Used when the query language and KB language differ (e.g. English query
+    against a Cyrillic corpus).  Generates a KB-language variant that is added
+    to the vector query pool so embeddings match same-language chunks more
+    reliably.  Fails silently — returns None on any error.
+    """
+    lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
+    if not lang_name or not query or not api_key:
+        return None
+    prompt = (
+        _SEMANTIC_REWRITE_PROMPT_PREFIX
+        + query
+        + "\"\n\n"
+        "Write a short technical search query (5-10 words) using product feature "
+        "terminology and technical concepts that would retrieve the relevant "
+        f"documentation. Focus on the FEATURE or SETTING being asked about, not "
+        f"the user's symptom. Output ONLY in {lang_name}, regardless of the input "
+        "language. Reply with ONLY the search query, nothing else."
+    )
+    try:
+        client = get_openai_client(api_key, timeout=timeout)
+        response = call_openai_with_retry(
+            "semantic_query_rewrite_for_kb",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None
+
+
 def _normalize_query_variants(values: list[str]) -> list[str]:
     """Normalize and dedupe query variants while preserving first-seen order."""
     variants: list[str] = []
@@ -1503,10 +1604,11 @@ def _bm25_queries_for_script(
     """Select BM25 query list based on script bucket.
 
     English queries use the original text — lexical signal is accurate against
-    the English corpus.  Non-EN queries (Cyrillic, CJK, non-ASCII Latin like
-    Polish/French/German) skip the original text and use only the EN rewrite
-    variant, so BM25 operates on English terms that actually match the corpus
-    instead of producing false positives from loanword collisions.
+    an English corpus.  Non-EN queries include the original text first (so BM25
+    works when the KB is in the same language as the query) and also add the EN
+    rewrite variant as a secondary candidate (covers cross-script or EN-corpus
+    tenants).  Returning both avoids the previous behaviour of silently dropping
+    all BM25 signal for Cyrillic/CJK queries against a same-language corpus.
     """
     if _is_en_query(query, query_script_bucket):
         return [query]
@@ -1518,7 +1620,8 @@ def _bm25_queries_for_script(
         ),
         None,
     )
-    return [rewritten] if rewritten else []
+    # Always keep the original so BM25 has signal when KB matches query language.
+    return [query, rewritten] if rewritten else [query]
 
 
 def _format_bm25_trace_results(

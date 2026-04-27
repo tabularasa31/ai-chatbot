@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MessageCircle, X } from "lucide-react";
+import { MessageCircle, Minimize2, X } from "lucide-react";
 import { ChatWidget } from "./ChatWidget";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
@@ -14,11 +14,16 @@ const MAX_H = 860;
 const DEFAULT_W = 380;
 const DEFAULT_H = 560;
 
+// Pixels the panel must stay away from viewport edges.
+const BOTTOM_CLEARANCE = 100; // bottom-6 (24) + button h-14 (56) + gap-3 (12) + margin (8)
+const SIDE_CLEARANCE = 32;    // right-6 (24) + margin (8)
+
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
   const [identityToken, setIdentityToken] = useState<string | null>(null);
   const [size, setSize] = useState({ w: DEFAULT_W, h: DEFAULT_H });
+  const isResized = size.w !== DEFAULT_W || size.h !== DEFAULT_H;
   const panelRef = useRef<HTMLDivElement>(null);
   const dragStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
@@ -37,9 +42,13 @@ export function DashboardSupportWidget() {
     if (!dragStart.current) return;
     const dx = dragStart.current.x - e.clientX;
     const dy = dragStart.current.y - e.clientY;
+    // Clamp against static limits AND the live viewport so the panel can't
+    // slide under the navbar or off the left edge.
+    const vpMaxW = Math.min(MAX_W, window.innerWidth - SIDE_CLEARANCE);
+    const vpMaxH = Math.min(MAX_H, window.innerHeight - BOTTOM_CLEARANCE);
     setSize({
-      w: Math.min(MAX_W, Math.max(MIN_W, dragStart.current.w + dx)),
-      h: Math.min(MAX_H, Math.max(MIN_H, dragStart.current.h + dy)),
+      w: Math.min(vpMaxW, Math.max(MIN_W, dragStart.current.w + dx)),
+      h: Math.min(vpMaxH, Math.max(MIN_H, dragStart.current.h + dy)),
     });
   }, []);
 
@@ -104,6 +113,19 @@ export function DashboardSupportWidget() {
               <path d="M1 8a1 1 0 0 1 1-1h5a1 1 0 0 1 0 2H3.414l8.293 8.293a1 1 0 0 1-1.414 1.414L2 10.414V13a1 1 0 1 1-2 0V8Z" />
             </svg>
           </button>
+
+          {/* Reset-size button — visible in header area whenever panel is non-default size */}
+          {isResized && (
+            <button
+              type="button"
+              aria-label="Reset chat window to default size"
+              onClick={() => setSize({ w: DEFAULT_W, h: DEFAULT_H })}
+              title="Reset size"
+              className="absolute top-3 right-3 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-white/20 hover:bg-white/40 text-white transition-colors"
+            >
+              <Minimize2 size={14} />
+            </button>
+          )}
 
           <ChatWidget
             botId={BOT_ID}

@@ -267,3 +267,192 @@ class TestSemanticRewriteDeduplication:
         combined = [*lexical, rewrite]
         assert rewrite in combined
         assert len(combined) == len(lexical) + 1
+
+
+# ---------------------------------------------------------------------------
+# detect_tenant_kb_script
+# ---------------------------------------------------------------------------
+
+class TestDetectTenantKbScript:
+    """detect_tenant_kb_script() samples chunks and returns the dominant script."""
+
+    def test_returns_cyrillic_for_russian_chunks(self):
+        from unittest.mock import MagicMock, patch
+        import uuid
+        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+
+        tenant_id = uuid.uuid4()
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+
+        # Column-only query returns Row tuples, not full ORM objects
+        russian_chunks = [
+            ("Сайт не открывается после подключения к CDN.",),
+            ("Проверьте NS-пропагацию и статус SSL-сертификата.",),
+            ("A-запись домена должна указывать на IP-адреса CDN.",),
+        ]
+        mock_db = MagicMock()
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
+            russian_chunks
+        )
+
+        result = detect_tenant_kb_script(tenant_id, mock_db)
+        assert result == "cyrillic"
+
+    def test_returns_latin_for_english_chunks(self):
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+
+        tenant_id = uuid.uuid4()
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+
+        english_chunks = [
+            ("Check your DNS A-record and NS propagation status.",),
+            ("SSL certificate must be valid before traffic flows through CDN.",),
+        ]
+        mock_db = MagicMock()
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
+            english_chunks
+        )
+
+        result = detect_tenant_kb_script(tenant_id, mock_db)
+        assert result == "latin"
+
+    def test_returns_none_for_empty_kb(self):
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+
+        tenant_id = uuid.uuid4()
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = []
+
+        result = detect_tenant_kb_script(tenant_id, mock_db)
+        assert result is None
+
+    def test_uses_cache_on_second_call(self):
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+
+        tenant_id = uuid.uuid4()
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+
+        chunks = [("Проверьте DNS.",)]
+        mock_db = MagicMock()
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = chunks
+
+        detect_tenant_kb_script(tenant_id, mock_db)
+        detect_tenant_kb_script(tenant_id, mock_db)
+
+        # DB should be queried only once — second call hits cache
+        assert mock_db.query.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# semantic_query_rewrite_for_kb
+# ---------------------------------------------------------------------------
+
+class TestSemanticQueryRewriteForKb:
+    """semantic_query_rewrite_for_kb() produces a KB-language rewrite."""
+
+    def test_returns_russian_rewrite_for_cyrillic_kb(self):
+        from backend.search.service import semantic_query_rewrite_for_kb
+
+        with (
+            patch("backend.search.service.get_openai_client") as mock_client,
+            patch("backend.search.service.call_openai_with_retry") as mock_retry,
+        ):
+            mock_retry.return_value = _make_openai_response(
+                "диагностика подключения CDN NS-пропагация A-запись SSL"
+            )
+            mock_client.return_value = MagicMock()
+
+            result = semantic_query_rewrite_for_kb(
+                "The site doesn't open after connecting — what should I check?",
+                kb_script="cyrillic",
+                api_key="sk-test",
+            )
+
+        assert result == "диагностика подключения CDN NS-пропагация A-запись SSL"
+
+    def test_returns_none_for_unknown_script(self):
+        from backend.search.service import semantic_query_rewrite_for_kb
+
+        result = semantic_query_rewrite_for_kb(
+            "Some question",
+            kb_script="other",
+            api_key="sk-test",
+        )
+        assert result is None
+
+    def test_returns_none_on_llm_failure(self):
+        from backend.search.service import semantic_query_rewrite_for_kb
+
+        with (
+            patch("backend.search.service.get_openai_client") as mock_client,
+            patch("backend.search.service.call_openai_with_retry") as mock_retry,
+        ):
+            mock_retry.side_effect = RuntimeError("LLM error")
+            mock_client.return_value = MagicMock()
+
+            result = semantic_query_rewrite_for_kb(
+                "The site doesn't open after connecting",
+                kb_script="cyrillic",
+                api_key="sk-test",
+            )
+
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _bm25_queries_for_script — non-EN now includes original query
+# ---------------------------------------------------------------------------
+
+class TestBm25QueriesForScriptNonEn:
+    """Non-EN queries: order depends on whether KB script matches query script."""
+
+    def test_same_script_kb_puts_original_first(self):
+        """Cyrillic query + Cyrillic KB → original first for same-language BM25."""
+        from backend.search.service import _bm25_queries_for_script
+
+        query = "сайт не открывается после подключения"
+        en_rewrite = "site connectivity troubleshooting"
+        variants = [query, en_rewrite]
+        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="cyrillic")
+
+        assert result[0] == query, "Original must be first when KB is same-script"
+        assert en_rewrite in result
+
+    def test_cross_script_kb_puts_en_rewrite_first(self):
+        """Cyrillic query + Latin KB → EN rewrite first so asymmetric BM25 uses it."""
+        from backend.search.service import _bm25_queries_for_script
+
+        query = "сайт не открывается"
+        en_rewrite = "CDN site connectivity troubleshooting"
+        variants = [query, en_rewrite]
+        result = _bm25_queries_for_script(query, variants, "cyrillic", kb_script="latin")
+
+        assert result[0] == en_rewrite, "EN rewrite must be first for cross-script KB"
+        assert query in result
+
+    def test_unknown_kb_script_puts_en_rewrite_first(self):
+        """No kb_script → EN rewrite first (safe default for unknown KB language)."""
+        from backend.search.service import _bm25_queries_for_script
+
+        query = "сайт не открывается"
+        en_rewrite = "CDN site connectivity troubleshooting"
+        variants = [query, en_rewrite]
+        result = _bm25_queries_for_script(query, variants, "cyrillic")
+
+        assert result[0] == en_rewrite
+
+    def test_en_query_unchanged(self):
+        from backend.search.service import _bm25_queries_for_script
+
+        query = "site does not open after connecting"
+        result = _bm25_queries_for_script(query, [query], "latin")
+
+        assert result == [query]

@@ -59,6 +59,9 @@ from backend.search.service import (
     EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
     default_retrieval_reliability,
+    detect_query_script_bucket,
+    detect_tenant_kb_script,
+    semantic_query_rewrite_for_kb,
 )
 
 logger = logging.getLogger(__name__)
@@ -684,6 +687,13 @@ def run_chat_pipeline(
     _guard_profile = db.get(TenantProfile, tenant_id)
     _rewrite_future = None
     _rewritten_variant: str | None = None
+
+    # Detect KB language once (cheap cached DB read) so we can submit a
+    # cross-lingual rewrite when the query and KB are in different scripts.
+    _kb_script = detect_tenant_kb_script(tenant_id, db)
+    _query_script = detect_query_script_bucket(question)
+    _cross_lingual_future = None
+
     _rel_future = _GUARD_POOL.submit(
         _svc.check_relevance_with_profile,
         tenant_id=tenant_id,
@@ -703,6 +713,19 @@ def run_chat_pipeline(
         timeout=settings.semantic_query_rewrite_timeout_sec,
         bot_id=retry_bot_id,
     )
+    # Cross-lingual variant: when the query script and KB script differ, generate
+    # an additional rewrite in the KB's language so the embedding model can match
+    # same-language chunks more reliably.  This is language-agnostic — it adapts
+    # to whatever language the KB is in (detected from actual indexed chunks).
+    if _kb_script and _kb_script != _query_script:
+        _cross_lingual_future = _GUARD_POOL.submit(
+            semantic_query_rewrite_for_kb,
+            question,
+            kb_script=_kb_script,
+            api_key=api_key,
+            timeout=settings.semantic_query_rewrite_timeout_sec,
+            bot_id=retry_bot_id,
+        )
     _inj_start = perf_counter()
     _inj_span = (
         trace.span(name="injection_check", input={"question_preview": question[:80]})
@@ -728,6 +751,8 @@ def run_chat_pipeline(
         _rel_future.cancel()
         if _rewrite_future:
             _rewrite_future.cancel()
+        if _cross_lingual_future:
+            _cross_lingual_future.cancel()
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
@@ -767,6 +792,19 @@ def run_chat_pipeline(
                 query_variants = [*query_variants, _rewritten_variant]
         except Exception:
             _rewritten_variant = None
+
+    # Collect cross-lingual variant (KB-language rewrite for cross-script queries).
+    if _cross_lingual_future is not None:
+        try:
+            _cross_lingual_variant = _cross_lingual_future.result(
+                timeout=settings.semantic_query_rewrite_timeout_sec
+            )
+            if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
+                v.casefold() for v in query_variants
+            }:
+                query_variants = [*query_variants, _cross_lingual_variant]
+        except Exception:
+            pass
 
     if trace is not None:
         _embed_span = trace.span(

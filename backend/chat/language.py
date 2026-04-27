@@ -203,6 +203,60 @@ def log_llm_tokens(
     )
 
 
+# ISO 639-1 → English language name. Used to build prompts that instruct the
+# model to reply in a specific language: "English"/"Russian" steer behavior far
+# more reliably than two-letter codes ("en"/"ru"). When a tag is not in this
+# map (rare locale, regional variant) the caller falls back to the raw tag.
+LANGUAGE_DISPLAY_NAMES: dict[str, str] = {
+    "en": "English",
+    "ru": "Russian",
+    "uk": "Ukrainian",
+    "be": "Belarusian",
+    "kk": "Kazakh",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "tr": "Turkish",
+    "ar": "Arabic",
+    "he": "Hebrew",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "cs": "Czech",
+    "sk": "Slovak",
+    "ro": "Romanian",
+    "bg": "Bulgarian",
+    "sr": "Serbian",
+    "hr": "Croatian",
+    "el": "Greek",
+    "fi": "Finnish",
+    "sv": "Swedish",
+    "no": "Norwegian",
+    "da": "Danish",
+    "hu": "Hungarian",
+}
+
+
+def language_display_name(tag: str | None) -> str:
+    """Return the English-language name for an ISO/BCP-47 tag (e.g. en → English).
+
+    Falls back to the normalized tag (and finally "English") when the language
+    is not in the display map. Used by chat prompts and the post-generation
+    language guard to give the model a recognizable language instruction.
+    """
+    normalized = _normalize_language_tag(tag) or "en"
+    root = normalized.split("-", 1)[0].lower()
+    return LANGUAGE_DISPLAY_NAMES.get(root, normalized)
+
+
 def _normalize_language_tag(raw: str | None) -> str | None:
     text = (raw or "").strip()
     if not text:

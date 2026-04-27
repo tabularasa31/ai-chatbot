@@ -36,11 +36,15 @@ from sqlalchemy.orm import Session, selectinload
 from backend.chat.decision import KbConfidence
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
+    LangDetectError,
     ResolvedLanguageContext,
+    _language_root,
     detect_language,
+    language_display_name,
     localize_text_to_language_result,
     log_llm_tokens,
     render_direct_faq_answer_result,
+    translate_text_result,
 )
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
@@ -1202,7 +1206,20 @@ def build_rag_prompt(
             "- Do not ask clarifying questions. Answer with the information available, or acknowledge that you cannot answer without more context.\n"
         )
 
+    response_language_name = language_display_name(response_language)
+    language_directive = (
+        "CRITICAL — OUTPUT LANGUAGE:\n"
+        f"- Reply ONLY in {response_language_name}.\n"
+        "- The retrieved context, FAQ candidates, and quick answers may be in a "
+        f"different language than {response_language_name}. You MUST translate "
+        f"setting names, menu paths, button labels, and step text into {response_language_name}.\n"
+        "- Keep proper nouns (product names, brand names), URLs, code identifiers, "
+        "and quoted command strings exactly as they appear in the source.\n"
+        f"- Never mix languages in the same answer. If a term cannot be translated safely, keep it as-is and continue writing in {response_language_name}.\n"
+    )
+
     system_rules = (
+        f"{language_directive}\n"
         f"{DISCLOSURE_HARD_LIMITS}\n"
         "You are a technical support agent for the tenant's product.\n"
         "Rules:\n"
@@ -1216,7 +1233,6 @@ def build_rag_prompt(
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
-        f"- Respond strictly in {response_language}. Do not switch languages unless quoting user input or proper nouns.\n"
     )
     if user_context_line:
         system_rules = f"{system_rules}\n{user_context_line}\n"
@@ -1277,10 +1293,22 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
             "in the documentation and inviting the user to contact support or ask something else. "
             "Do NOT claim you are unable to help — explain that the information is simply not in the docs.\n"
         )
+    # Repeat the language directive AFTER the context block. With long retrieved
+    # context, attention is biased toward recent tokens and a system-level
+    # instruction at the top can be overridden by context language. This second
+    # reminder, placed right before the question, holds the model to the target
+    # language even when the context is in a different language than the user.
+    language_reminder = (
+        f"REMINDER: Write the entire answer in {response_language_name}, "
+        "translating any context that is in a different language. Keep proper "
+        "nouns, URLs, and code identifiers as-is."
+    )
+
     if not context_chunks:
         return (
             f"{system_rules}\n\n"
             "Context:\n(none)\n\n"
+            f"{language_reminder}\n\n"
             f"Question: {question}\n\n"
             "Answer:"
         )
@@ -1290,6 +1318,7 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
     return (
         f"{system_rules}\n\n"
         f"Context:\n{context_block}\n\n"
+        f"{language_reminder}\n\n"
         f"Question: {question}\n\n"
         "Answer:"
     )
@@ -1547,7 +1576,21 @@ def generate_answer(
                 latency_s=_duration_s,
                 operation="chat/generate",
             )
-        return (answer_text.strip(), total_tokens)
+        # Post-gen language guard runs only on non-streamed generation. In the
+        # streaming path the answer was already emitted to the client chunk-by-
+        # chunk via ``stream_callback``; rewriting the final text here would
+        # produce a UI/history mismatch. Streaming relies on the prompt-level
+        # directive (build_rag_prompt) for language enforcement.
+        if stream_callback is None:
+            final_text, extra_tokens = _enforce_response_language(
+                answer_text.strip(),
+                response_language=response_language,
+                api_key=api_key,
+            )
+            total_tokens = (total_tokens or 0) + extra_tokens
+        else:
+            final_text = answer_text.strip()
+        return (final_text, total_tokens)
     except Exception as exc:
         log_llm_tokens(
             operation="generate",
@@ -1564,6 +1607,51 @@ def generate_answer(
                 status_message=str(exc),
             )
         raise
+
+
+def _enforce_response_language(
+    answer_text: str,
+    *,
+    response_language: str,
+    api_key: str | None,
+) -> tuple[str, int]:
+    """Translate the answer to ``response_language`` if it drifted to another language.
+
+    Safety net for the case where the LLM follows the context language instead
+    of the language directive (notably when retrieved chunks are in a different
+    language than the user's question — see PR #513 cross-lingual retrieval).
+    Returns ``(text, extra_tokens)`` where ``extra_tokens`` is the cost of the
+    translation call (0 when no translation was needed). Returns the original
+    text unchanged if detection is unreliable, the answer is empty, the api_key
+    is missing, or translation fails.
+
+    NOTE: only safe to call after non-streamed generation. In streaming flows,
+    chunks have already been emitted to the client via ``stream_callback`` and
+    rewriting the final text would cause a UI ↔ persisted-history mismatch.
+    Caller is responsible for skipping this guard when streaming.
+    """
+    stripped = (answer_text or "").strip()
+    if not stripped or not api_key:
+        return answer_text, 0
+    try:
+        detection = detect_language(stripped)
+    except LangDetectError:
+        return answer_text, 0
+    if not detection.is_reliable or detection.detected_language == "unknown":
+        return answer_text, 0
+    if _language_root(detection.detected_language) == _language_root(response_language):
+        return answer_text, 0
+    try:
+        result = translate_text_result(
+            source_text=answer_text,
+            target_language=response_language,
+            api_key=api_key,
+        )
+    except Exception as exc:  # pragma: no cover - defensive; helper already swallows internally
+        logger.warning("post-gen language guard translation failed: %s", exc)
+        return answer_text, 0
+    translated = result.text or answer_text
+    return translated, int(result.tokens_used or 0)
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)

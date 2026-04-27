@@ -63,6 +63,13 @@ from backend.search.service import (
 
 logger = logging.getLogger(__name__)
 
+_INLINE_CITATION_RE = re.compile(r"\s*\((Page|Section):[^)]+\)", re.IGNORECASE)
+
+
+def _strip_inline_citations(text: str) -> str:
+    """Remove (Page: ...) and (Section: ...) annotations the LLM may echo back."""
+    return _INLINE_CITATION_RE.sub("", text).strip()
+
 
 # ---------------------------------------------------------------------------
 # Constants moved with the RAG functions.
@@ -1012,6 +1019,8 @@ def run_chat_pipeline(
                 }
             )
 
+    raw_answer = _strip_inline_citations(raw_answer)
+
     # --- 8. Validate answer ---
     validation_context = retrieval.chunk_texts + quick_answer_items
     validation = _svc.validate_answer(
@@ -1117,7 +1126,8 @@ def build_rag_prompt(
         "- Answer using ONLY the provided context, verified FAQ candidates, and structured quick answers.\n"
         "- Treat the provided context as the source of truth for this reply. Do not rely on outside knowledge.\n"
         "- If the context contains the answer, answer directly and concretely from it. Do not say you do not know when relevant evidence is present.\n"
-        "- Prefer source-grounded wording: mention the relevant document location, page, section, menu, setting, or source URL when the context provides it.\n"
+        "- Do NOT include inline source citations such as (Page: ...) or (Section: ...) in your answer — sources are shown separately in the UI.\n"
+        "- When the context provides a specific setting name, menu path, field name, or URL, include that detail directly in your answer text.\n"
         "- For short factual answers such as links, contact details, pricing URLs, status URLs, or support contacts, prefer STRUCTURED QUICK ANSWERS when relevant.\n"
         f"{clarification_rules}"
         "- Do not invent facts, settings, steps, page names, field names, URLs, or multiple-choice options unless they are supported by the provided context.\n"

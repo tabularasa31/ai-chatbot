@@ -159,6 +159,14 @@ class Settings(BaseSettings):
         60.0,
         alias="OPENAI_REQUEST_TIMEOUT_SECONDS",
     )
+    # Separate read timeout for guard calls (relevance check, injection detection).
+    # Guards run inside a ThreadPoolExecutor with a short wall-clock deadline; giving them
+    # a dedicated HTTP timeout avoids leaked connections when the executor gives up first.
+    guards_openai_timeout_seconds: float = Field(
+        15.0,
+        alias="GUARDS_OPENAI_TIMEOUT_SECONDS",
+        description="Read timeout (seconds) for OpenAI HTTP calls made by guards (relevance, injection).",
+    )
     openai_user_retry_max_attempts: int = Field(
         3,
         alias="OPENAI_USER_RETRY_MAX_ATTEMPTS",

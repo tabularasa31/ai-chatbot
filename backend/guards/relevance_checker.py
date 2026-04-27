@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -17,6 +18,17 @@ from backend.observability import TraceHandle
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
 MAX_CACHE_SIZE = 2048
+
+# Circuit breaker: after this many consecutive guard failures (timeouts / errors),
+# stop calling the LLM and fail open to avoid hammering OpenAI during an outage.
+# After CIRCUIT_HALF_OPEN_AFTER_SECONDS the circuit enters half-open: one probe request
+# is allowed through. On success the circuit closes; on failure the timer resets.
+CIRCUIT_BREAKER_THRESHOLD = 5
+CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
+
+_cb_lock = threading.Lock()
+_consecutive_failures: int = 0
+_circuit_opened_at: float | None = None
 
 # Short queries (≤ SHORT_QUERY_WORD_LIMIT words) are passed through as relevant so the
 # LLM can ask a clarifying question rather than the guard blindly rejecting them.
@@ -99,6 +111,21 @@ def check_relevance_with_profile(
     if word_count <= SHORT_QUERY_WORD_LIMIT:
         return True, "short_query_bypass", profile
 
+    # Circuit breaker: fail open if the guard has timed out/errored too many times in a row.
+    # Half-open after CIRCUIT_HALF_OPEN_AFTER_SECONDS: one probe is allowed through; success
+    # closes the circuit, failure resets the timer so we wait another full interval.
+    global _consecutive_failures, _circuit_opened_at
+    with _cb_lock:
+        if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            now = time.monotonic()
+            if _circuit_opened_at is None:
+                _circuit_opened_at = now
+            if now - _circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
+                return True, "circuit_open", None
+            # Half-open: reset timer so only one probe gets through at a time; if it
+            # fails below we set _circuit_opened_at = now again to enforce another wait.
+            _circuit_opened_at = None
+
     # Cache key: hash(tenant_id + question[:100])
     key_src = f"{tenant_id}:{user_question[:100]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
@@ -136,7 +163,7 @@ def check_relevance_with_profile(
         )
 
     def _call_llm() -> tuple[bool, str]:
-        openai_client = get_openai_client(api_key)
+        openai_client = get_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)
         response = call_openai_with_retry(
             "guard_relevance_check",
             lambda: openai_client.chat.completions.create(
@@ -149,6 +176,7 @@ def check_relevance_with_profile(
                 max_completion_tokens=80,
                 response_format={"type": "json_object"},
             ),
+            endpoint="chat.completions",
         )
         raw = response.choices[0].message.content or "{}"
         parsed = json.loads(raw)
@@ -171,6 +199,9 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
+        with _cb_lock:
+            _consecutive_failures += 1
+            _circuit_opened_at = time.monotonic()
         return True, "timeout", None
     except Exception:
         if span is not None:
@@ -179,12 +210,20 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False)
         except Exception:
             pass
+        with _cb_lock:
+            _consecutive_failures += 1
+            _circuit_opened_at = time.monotonic()
         return True, "error", None
     else:
         try:
             ex.shutdown(wait=False)
         except Exception:
             pass
+
+    # Successful call — close the circuit breaker.
+    with _cb_lock:
+        _consecutive_failures = 0
+        _circuit_opened_at = None
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 

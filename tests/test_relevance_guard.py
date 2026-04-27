@@ -228,7 +228,7 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     mock_openai.chat.completions.create = slow_create
     monkeypatch.setattr(
         "backend.guards.relevance_checker.get_openai_client",
-        lambda _key: mock_openai,
+        lambda _key, **_kw: mock_openai,
     )
 
     from backend.guards.relevance_checker import check_relevance_precheck

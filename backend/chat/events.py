@@ -62,10 +62,11 @@ def _emit_chat_turn_event(
             props["escalation_reason"] = decision.escalate_reason
         capture_event(
             "chat.turn",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
             properties=props,
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
     except Exception:
         logger.warning("Failed to emit chat.turn event", exc_info=True)
@@ -84,7 +85,7 @@ def _emit_chat_escalated_event(
     try:
         capture_event(
             "chat_escalated",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
             properties={
@@ -92,6 +93,7 @@ def _emit_chat_escalated_event(
                 "escalation_reason": escalation_reason,
                 "escalation_trigger": escalation_trigger,
             },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
     except Exception:
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
@@ -109,13 +111,14 @@ def _emit_chat_session_ended_event(
     try:
         capture_event(
             "chat_session_ended",
-            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
             properties={
                 "chat_id": chat_id,
                 "outcome": outcome,
             },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
     except Exception:
         logger.warning("Failed to emit chat_session_ended event", exc_info=True)

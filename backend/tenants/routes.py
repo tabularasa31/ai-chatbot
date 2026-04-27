@@ -10,7 +10,7 @@ from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.models import User
-from backend.observability.metrics import capture_event
+from backend.observability.metrics import capture_event, group_identify
 from backend.tenants.schemas import (
     CreateTenantRequest,
     KycSecretGeneratedResponse,
@@ -68,10 +68,13 @@ def create_tenant_route(
     """
     tenant = create_tenant(current_user.id, body.name, db)
     try:
+        tenant_id = str(tenant.public_id)
+        group_identify("tenant", tenant_id, {"name": body.name})
         capture_event(
             "tenant.created",
-            distinct_id=str(tenant.public_id),
-            tenant_id=str(tenant.public_id),
+            distinct_id=tenant_id,
+            tenant_id=tenant_id,
+            groups={"tenant": tenant_id},
         )
     except Exception:
         pass

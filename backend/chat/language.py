@@ -181,6 +181,7 @@ def _emit_language_resolved_event(
             "text_length": text_length,
             "chat_id": chat_id,
         },
+        groups={"tenant": tenant_id} if tenant_id else None,
     )
 
 
@@ -608,6 +609,7 @@ def _resolve_language_context_inner(
                 "text_length": len(current_turn_text or ""),
                 "chat_id": chat_id,
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
         return ResolvedLanguageContext(
             detected_language="unknown",
@@ -630,6 +632,7 @@ def _resolve_language_context_inner(
                 "text_length": len(current_turn_text or ""),
                 "chat_id": chat_id,
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
 
     recent_turns = [text for text in (recent_user_turn_texts or [current_turn_text or ""]) if str(text or "").strip()]
@@ -689,6 +692,7 @@ def _resolve_language_context_inner(
                 "margin": votes.get(winner, 0) - votes.get(previous_root, 0),
                 "chat_id": chat_id,
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
     response_language = winner
     for text in recent_turns[:STICKY_WINDOW]:
@@ -1071,6 +1075,7 @@ def _emit_localized_event_safely(
                 "operation": operation,
                 "chat_id": chat_id,
             },
+            groups={"tenant": tenant_id} if tenant_id else None,
         )
     except Exception:
         logger.warning("Failed to emit language.localized event", exc_info=True)

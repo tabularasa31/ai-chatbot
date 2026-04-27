@@ -510,6 +510,26 @@ def _safe_int(value: Any) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _assemble_chat_messages(
+    *,
+    system_prompt: str,
+    user_message: str,
+    prior_messages: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    """Build the OpenAI ``messages`` list: system → optional history → user.
+
+    The history is sandwiched so the model interprets the latest user turn
+    in the context of its prior follow-up questions instead of in isolation.
+    """
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system_prompt}
+    ]
+    if prior_messages:
+        messages.extend(prior_messages)
+    messages.append({"role": "user", "content": user_message})
+    return messages
+
+
 def _build_prior_messages_for_llm(
     chat: Chat | None,
     *,
@@ -1470,12 +1490,11 @@ def generate_answer(
         low_context=low_context,
         allow_clarification=allow_clarification,
     )
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": system_prompt}
-    ]
-    if prior_messages:
-        messages.extend(prior_messages)
-    messages.append({"role": "user", "content": user_message})
+    messages = _assemble_chat_messages(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        prior_messages=prior_messages,
+    )
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _temperature: float | None = None if _reasoning else 0.2

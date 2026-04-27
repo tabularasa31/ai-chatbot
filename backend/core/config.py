@@ -137,6 +137,18 @@ class Settings(BaseSettings):
         ge=1,
         description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family) that consume tokens for internal chain-of-thought.",
     )
+    chat_history_turns: int = Field(
+        6,
+        alias="CHAT_HISTORY_TURNS",
+        ge=0,
+        description="Number of trailing transcript messages (user+assistant combined) passed to the LLM as conversation history. 0 disables; default 6 ≈ last 3 exchanges.",
+    )
+    chat_history_message_char_cap: int = Field(
+        1500,
+        alias="CHAT_HISTORY_MESSAGE_CHAR_CAP",
+        ge=1,
+        description="Per-message character cap when assembling history for the LLM, to bound prompt size.",
+    )
     widget_chat_per_client_rate: str | None = Field(
         None,
         alias="WIDGET_CHAT_PER_CLIENT_RATE",

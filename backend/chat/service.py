@@ -194,6 +194,7 @@ def _escalation_turn_response(
         extra_tokens=out.tokens_used,
         optional_entity_types=optional_entity_types,
         language_context=language_context,
+        trace=trace,
     )
     trace.update(
         output={"answer": out.message_to_user, "source": trace_source},
@@ -472,15 +473,43 @@ def process_chat_message(
     optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
 
-    chat, effective_user_ctx = _ensure_chat(db, tenant_id, session_id, bot_id, user_context, browser_locale)
+    explicit_human_request = detect_human_request(redacted_question, api_key)
 
+    # Create trace early so chat_setup and language_detect spans are attached.
+    trace = begin_trace(
+        name="rag-query",
+        session_id=str(session_id),
+        tenant_id=str(tenant_id),
+        input=redacted_question or None,
+        metadata={"tenant_id": str(tenant_id), "session_id": str(session_id)},
+        tags=[f"tenant:{tenant_id}"],
+        force_trace=explicit_human_request,
+    )
+
+    _setup_start = perf_counter()
+    _setup_span = trace.span(
+        name="chat_setup",
+        input={"session_id": str(session_id), "has_bot_id": bot_id is not None},
+    )
+    chat, effective_user_ctx = _ensure_chat(db, tenant_id, session_id, bot_id, user_context, browser_locale)
     tenant_profile = (
         db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
         if tenant_row is not None
         else None
     )
+    _setup_span.end(
+        output={"is_new_session": not chat.messages, "chat_id": str(chat.id)},
+        metadata={"duration_ms": round((perf_counter() - _setup_start) * 1000, 2)},
+    )
+
     question_text = question.strip()
     is_new_session = not chat.messages
+
+    _lang_start = perf_counter()
+    _lang_span = trace.span(
+        name="language_detect",
+        input={"question_preview": question_text[:80]},
+    )
     language_context = _resolve_chat_language_context(
         current_turn_text=question_text,
         tenant_row=tenant_row,
@@ -491,14 +520,18 @@ def process_chat_message(
         chat=chat,
         db=db,
     )
+    _lang_span.end(
+        output={
+            "detected_language": language_context.detected_language,
+            "response_language": language_context.response_language,
+            "confidence": language_context.confidence,
+            "is_reliable": language_context.is_reliable,
+        },
+        metadata={"duration_ms": round((perf_counter() - _lang_start) * 1000, 2)},
+    )
 
-    explicit_human_request = detect_human_request(redacted_question, api_key)
-    trace = begin_trace(
-        name="rag-query",
-        session_id=str(session_id),
-        tenant_id=str(tenant_id),
-        user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
-        input=redacted_question or None,
+    # Update trace with full metadata now that chat and language context are resolved.
+    trace.update(
         metadata={
             "tenant_id": str(tenant_id),
             "session_id": str(session_id),
@@ -514,8 +547,6 @@ def process_chat_message(
             "escalation_language": language_context.escalation_language,
             "escalation_language_source": language_context.escalation_language_source,
         },
-        tags=[f"tenant:{tenant_id}"],
-        force_trace=explicit_human_request,
     )
 
     if not question_text and not is_new_session:

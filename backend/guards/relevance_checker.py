@@ -17,6 +17,20 @@ from backend.observability import TraceHandle
 
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
+
+
+def _emit_relevance_guard_metric(*, tenant_id: uuid.UUID, cache_hit: bool) -> None:
+    """Emit relevance_guard.check event to PostHog with cache_hit attribute."""
+    try:
+        from backend.observability.metrics import capture_event
+        capture_event(
+            "relevance_guard.check",
+            distinct_id=str(tenant_id),
+            tenant_id=str(tenant_id),
+            properties={"cache_hit": cache_hit},
+        )
+    except Exception:
+        pass
 MAX_CACHE_SIZE = 2048
 
 # Circuit breaker: after this many consecutive guard failures (timeouts / errors),
@@ -126,12 +140,26 @@ def check_relevance_with_profile(
             # fails below we set _circuit_opened_at = now again to enforce another wait.
             _circuit_opened_at = None
 
+    start = time.perf_counter()
+    span = None
+    if trace is not None:
+        span = trace.span(
+            name="relevance_guard",
+            input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
+        )
+
     # Cache key: hash(tenant_id + question[:100])
     key_src = f"{tenant_id}:{user_question[:100]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
         relevant, reason = cached
+        if span is not None:
+            span.end(
+                output={"relevant": relevant, "reason": reason},
+                metadata={"cache_hit": True, "latency_ms": 0},
+            )
+        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True)
         return relevant, reason, profile
 
     product_name, modules_list, glossary_terms_list = _build_context(profile)
@@ -153,14 +181,6 @@ def check_relevance_with_profile(
         f"User question: {json.dumps(user_question)}\n"
         "Is this question related to this product or its use?"
     )
-
-    start = time.perf_counter()
-    span = None
-    if trace is not None:
-        span = trace.span(
-            name="relevance_check",
-            input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
-        )
 
     def _call_llm() -> tuple[bool, str]:
         openai_client = get_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)
@@ -230,9 +250,10 @@ def check_relevance_with_profile(
     if span is not None:
         span.end(
             output={"relevant": relevant, "reason": reason},
-            metadata={"latency_ms": latency_ms},
+            metadata={"latency_ms": latency_ms, "cache_hit": False},
         )
 
+    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False)
     _cache_set(cache_key, relevant, reason)
     return relevant, reason, profile
 

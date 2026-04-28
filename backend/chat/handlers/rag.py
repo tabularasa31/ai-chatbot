@@ -804,26 +804,16 @@ def run_chat_pipeline(
                 bot_id=retry_bot_id,
             )
         )
-    _inj_start = perf_counter()
-    _inj_span = (
-        trace.span(name="injection_check", input={"question_preview": question[:80]})
-        if trace is not None and precomputed_injection is None
-        else None
-    )
     if precomputed_injection is not None:
         injection_result = precomputed_injection
     else:
         injection_result = _GUARD_POOL.submit(
-            _svc.detect_injection, question, tenant_id=str(tenant_id), api_key=api_key
+            _svc.detect_injection,
+            question,
+            tenant_id=str(tenant_id),
+            api_key=api_key,
+            trace=trace,
         ).result()
-    if _inj_span is not None:
-        _inj_span.end(output={
-            "detected": injection_result.detected,
-            "level": injection_result.level,
-            "method": injection_result.method,
-            "latency_ms": round((perf_counter() - _inj_start) * 1000, 2),
-            "semantic_score": injection_result.score,
-        })
 
     if injection_result.detected:
         _rel_future.cancel()
@@ -859,6 +849,7 @@ def run_chat_pipeline(
 
     # Collect semantic rewrite result — guard checks ran concurrently so
     # the rewrite is usually already finished by now (zero extra wait).
+    _rewrite_collect_start = perf_counter()
     if _rewrite_future is not None:
         try:
             _rewritten_variant = _rewrite_future.result(
@@ -870,6 +861,15 @@ def run_chat_pipeline(
                 query_variants = [*query_variants, _rewritten_variant]
         except Exception:
             _rewritten_variant = None
+    if trace is not None:
+        _rewrite_span = trace.span(name="query_rewrite")
+        _rewrite_span.end(
+            output={
+                "rewritten": _rewritten_variant is not None,
+                "variant_preview": _rewritten_variant[:100] if _rewritten_variant else None,
+            },
+            metadata={"wait_ms": round((perf_counter() - _rewrite_collect_start) * 1000, 2)},
+        )
 
     # Collect cross-lingual variants — one per KB script the query does not
     # natively cover. Each is added to query_variants for fan-out retrieval.
@@ -2020,6 +2020,7 @@ class RagHandler(PipelineHandler):
                 extra_tokens=result.tokens_used,
                 optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
+                trace=ctx.trace,
             )
             _try_ingest_gap_signal(
                 chat=chat,
@@ -2236,6 +2237,7 @@ class RagHandler(PipelineHandler):
             extra_tokens=tokens_used,
             optional_entity_types=ctx.optional_entity_types,
             language_context=ctx.language_context,
+            trace=ctx.trace,
         )
         _try_ingest_gap_signal(
             chat=chat,

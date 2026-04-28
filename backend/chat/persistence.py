@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from time import perf_counter
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from backend.chat.pii import redact
 from backend.contact_sessions.service import record_user_session_turn
 from backend.core.crypto import encrypt_value
 from backend.models import Chat, Message, MessageRole, PiiEvent, PiiEventDirection
+from backend.observability import TraceHandle
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +96,15 @@ def _persist_turn(
     document_ids: list[uuid.UUID],
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
+    trace: TraceHandle | None = None,
 ) -> tuple[Message, Message]:
+    _persist_start = perf_counter()
+    _persist_span = None
+    if trace is not None:
+        _persist_span = trace.span(
+            name="persistence",
+            input={"doc_count": len(document_ids), "tokens": extra_tokens},
+        )
     user_message = _create_message(
         db,
         chat=chat,
@@ -118,6 +128,11 @@ def _persist_turn(
         tenant_id=tenant_id,
         extra_tokens=extra_tokens,
     )
+    if _persist_span is not None:
+        _persist_span.end(
+            output={"user_msg_id": str(user_message.id), "asst_msg_id": str(assistant_message.id)},
+            metadata={"duration_ms": round((perf_counter() - _persist_start) * 1000, 2)},
+        )
     return user_message, assistant_message
 
 
@@ -134,6 +149,7 @@ def _persist_turn_with_response_language(
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
     language_context: ResolvedLanguageContext | None = None,
+    trace: TraceHandle | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -152,6 +168,7 @@ def _persist_turn_with_response_language(
         document_ids,
         extra_tokens,
         optional_entity_types=optional_entity_types,
+        trace=trace,
     )
 
 

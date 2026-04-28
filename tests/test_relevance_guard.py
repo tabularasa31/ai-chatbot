@@ -44,7 +44,7 @@ def test_injection_rejects_before_rag(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=True, level=1, method="structural", pattern="x", score=None,
         ),
     )
@@ -85,7 +85,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -146,7 +146,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )

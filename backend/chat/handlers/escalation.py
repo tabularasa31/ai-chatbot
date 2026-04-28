@@ -376,6 +376,7 @@ class EscalationStateMachine(PipelineHandler):
                 [],
                 out.tokens_used,
                 optional_entity_types=ctx.optional_entity_types,
+                trace=ctx.trace,
             )
             _svc._try_ingest_gap_signal(
                 chat=chat,

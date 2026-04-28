@@ -506,7 +506,7 @@ Build RAG prompt (system + context + history + question)
   ↓
 gpt-5-mini → answer
   ↓
-Answer validation (second gpt-4.1-mini call)
+Answer validation (second gpt-4o-mini call by default; rollback via `VALIDATION_MODEL=gpt-4.1-mini`)
   ↓
 Store message → return response
 ```

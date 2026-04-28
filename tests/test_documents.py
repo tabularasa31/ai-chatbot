@@ -531,7 +531,7 @@ def test_delete_url_source_requires_verified_user(
 
     user = db_session.query(User).filter(User.email == "unverified-source-delete@example.com").first()
     assert user is not None
-    owner_client = create_tenant(user.id, "Unverified Tenant", db_session)
+    owner_client, _ = create_tenant(user.id, "Unverified Tenant", db_session)
 
     source = UrlSource(
         tenant_id=owner_client.id,

@@ -48,9 +48,7 @@ def client_row(db_session):
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Test Tenant",
-        api_key="test-api-key",
-        public_id="test-public-id",
+                name="Test Tenant",public_id="test-public-id",
     )
     db_session.add(tenant)
     db_session.commit()

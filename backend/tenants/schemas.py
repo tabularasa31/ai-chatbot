@@ -26,17 +26,54 @@ class CreateTenantRequest(BaseModel):
 
 
 class TenantResponse(BaseModel):
-    """Tenant data in API responses."""
+    """Tenant data in API responses.
+
+    The widget API key is not returned here — it is only ever surfaced
+    once via /api-keys/rotate. Use ``api_key_hint`` (last 4 chars of the
+    primary active key) to identify the active key in the UI.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     name: str
-    api_key: str
+    api_key_hint: str | None = None
     public_id: str
     has_openai_key: bool
     created_at: datetime
     updated_at: datetime
+
+
+class TenantApiKeyResponse(BaseModel):
+    """A single tenant API key as exposed in the dashboard."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    key_hint: str
+    status: Literal["active", "revoking", "revoked"]
+    created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    revoked_reason: str | None = None
+    last_used_at: datetime | None = None
+
+
+class TenantApiKeyListResponse(BaseModel):
+    items: list[TenantApiKeyResponse]
+
+
+class RotateTenantApiKeyRequest(BaseModel):
+    reason: Literal["leaked", "scheduled", "compromise", "other"] = "scheduled"
+    revoke_old_immediately: bool = False
+
+
+class RotateTenantApiKeyResponse(BaseModel):
+    """One-time plaintext key surfaced after a successful rotation."""
+
+    api_key: str
+    key: TenantApiKeyResponse
+    message: str = "Store this key securely. It will not be shown again."
 
 
 class TenantMeResponse(TenantResponse):
@@ -44,6 +81,13 @@ class TenantMeResponse(TenantResponse):
 
     is_admin: bool
     is_verified: bool
+
+
+class CreateTenantResponse(TenantResponse):
+    """Returned once when a tenant is created. Includes plaintext widget
+    key — this is the only point in the API where it is exposed."""
+
+    api_key: str
 
 
 class UpdateTenantRequest(BaseModel):

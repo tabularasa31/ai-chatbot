@@ -28,7 +28,6 @@ from backend.models.base import _utcnow
 def _make_tenant(db: Session) -> Tenant:
     t = Tenant(
         name="test-tenant",
-        api_key=f"key-{uuid.uuid4().hex[:12]}",
         public_id=f"pub_{uuid.uuid4().hex[:16]}",
         openai_api_key="sk-test",
         is_active=True,

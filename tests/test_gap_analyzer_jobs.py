@@ -67,7 +67,6 @@ def _create_tenant_direct(db_session: Session) -> uuid.UUID:
     db_session.flush()
     tenant = Tenant(
         name=f"Gap Jobs {uuid.uuid4().hex[:8]}",
-        api_key=f"gap-{uuid.uuid4().hex[:28]}",
     )
     db_session.add(tenant)
     db_session.commit()
@@ -335,7 +334,7 @@ def test_bm25_cache_reuses_corpus_until_invalidated(
     )
     db_session.add(user)
     db_session.flush()
-    client_record = Tenant(name="Gap BM25 Cache", api_key="k" * 32)
+    client_record = Tenant(name="Gap BM25 Cache")
     db_session.add(client_record)
     db_session.flush()
     document = Document(

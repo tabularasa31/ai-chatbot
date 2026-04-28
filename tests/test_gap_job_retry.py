@@ -26,8 +26,7 @@ def _create_client(db_session: Session) -> uuid.UUID:
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Retry Tenant",
-        api_key=uuid.uuid4().hex[:32],
+        name="Retry Tenant",
     )
     db_session.add(tenant)
     db_session.commit()

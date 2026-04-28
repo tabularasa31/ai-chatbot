@@ -65,7 +65,7 @@ def test_ensure_client_for_user_returns_existing_on_conflict(
     db_session.commit()
     db_session.refresh(user)
 
-    existing_client = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
+    existing_client, _ = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
     lookup_calls = 0
 
     def fake_create_client(user_id, name, db):
@@ -112,7 +112,8 @@ def test_get_my_client_success(tenant: TestClient, db_session: Session) -> None:
     data = response.json()
     assert data["id"] == tenant_id
     assert data["name"] == "My Tenant"
-    assert "api_key" in data
+    assert data.get("api_key_hint") and len(data["api_key_hint"]) == 4
+    assert "api_key" not in data
 
 
 def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> None:

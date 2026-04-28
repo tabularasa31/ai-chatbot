@@ -32,9 +32,7 @@ def client_with_profile(db_session):
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Alias Tenant",
-        api_key="test-key",
-        public_id="alias-pub-id",
+                name="Alias Tenant",public_id="alias-pub-id",
     )
     db_session.add(tenant)
     db_session.flush()

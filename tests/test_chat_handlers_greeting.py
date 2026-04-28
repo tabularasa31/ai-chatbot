@@ -60,7 +60,7 @@ def _make_handler_context(
 
 
 def _make_persisted_tenant(db: Session, *, name: str = "Acme") -> Tenant:
-    tenant = Tenant(name=name, api_key="k" * 32)
+    tenant = Tenant(name=name)
     db.add(tenant)
     db.flush()
     return tenant

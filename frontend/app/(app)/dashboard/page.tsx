@@ -1,6 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect } from "react";
+import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
@@ -15,7 +16,6 @@ function DashboardContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const showVerificationBanner = searchParams.get("verification_sent") === "1";
-  const [copiedApiKey, setCopiedApiKey] = useState(false);
 
   const { data: client, error: clientError, isLoading: clientLoading } = useClientMe();
   const { data: bots, isLoading: botsLoading } = useBots();
@@ -32,14 +32,6 @@ function DashboardContent() {
       router.replace("/login?error=email_not_verified");
     }
   }, [clientError, router]);
-
-  function copyApiKey() {
-    if (client?.api_key) {
-      navigator.clipboard.writeText(client.api_key);
-      setCopiedApiKey(true);
-      setTimeout(() => setCopiedApiKey(false), 2000);
-    }
-  }
 
   function getEmbedSnippet() {
     const base = API_URL || APP_URL;
@@ -90,18 +82,22 @@ function DashboardContent() {
             </code>
           </div>
         )}
-        <h2 className="text-base font-semibold text-slate-800 mb-1">Your API Key</h2>
-        <p className="text-slate-500 text-sm mb-3">Use this key to authenticate API requests.</p>
+        <h2 className="text-base font-semibold text-slate-800 mb-1">Your widget API key</h2>
+        <p className="text-slate-500 text-sm mb-3">
+          The plaintext key is only shown once at creation or rotation. Identify
+          the active key by its last 4 characters; rotate it from{" "}
+          <Link href="/settings/api-keys" className="underline font-medium">Settings → API keys</Link>.
+        </p>
         <div className="flex items-center gap-2 flex-wrap">
-          <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all">
-            {client?.api_key}
+          <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
+            {client?.api_key_hint ? `ck_••••••••••••••••••••••••••••${client.api_key_hint}` : "—"}
           </code>
-          <button
-            onClick={copyApiKey}
+          <Link
+            href="/settings/api-keys"
             className="px-4 py-2 bg-violet-600 text-white text-sm font-medium rounded-lg hover:bg-violet-700 transition-colors"
           >
-            {copiedApiKey ? "Copied!" : "Copy"}
-          </button>
+            Manage
+          </Link>
         </div>
       </div>
 

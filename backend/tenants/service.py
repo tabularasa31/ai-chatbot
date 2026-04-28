@@ -13,10 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import decrypt_value, encrypt_value
-from backend.core.utils import generate_api_key
 from backend.models import Bot, Chat, Tenant, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
+from backend.tenants.api_keys_service import (
+    create_initial_api_key,
+    find_active_tenant_by_plain_key,
+    get_primary_active_key,
+)
 
 DEFAULT_TENANT_NAME = "My Workspace"
 
@@ -29,11 +33,15 @@ def _dt_utc_aware(d: dt.datetime | None) -> dt.datetime | None:
     return d.astimezone(dt.UTC)
 
 
-def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
+def create_tenant(
+    user_id: uuid.UUID, name: str, db: Session
+) -> tuple[Tenant, str]:
     """
     Create a tenant for a user.
 
-    Generates a ck_-prefixed API key. Raises 409 if user already has a tenant.
+    Generates the initial widget API key (ck_-prefixed) and returns it
+    as plaintext alongside the tenant — this is the only point where the
+    plaintext is ever surfaced. Raises 409 if user already has a tenant.
     """
     existing = get_tenant_by_user(user_id, db)
     if existing:
@@ -41,14 +49,13 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
             status_code=409,
             detail="Tenant already exists for this user",
         )
-    api_key = generate_api_key()
-    tenant = Tenant(
-        name=name,
-        api_key=api_key,
-    )
+    tenant = Tenant(name=name)
     db.add(tenant)
     try:
         db.flush()
+        plaintext_key = create_initial_api_key(
+            tenant.id, db, created_by_user_id=user_id
+        )
         user = db.query(User).filter(User.id == user_id).first()
         if user:
             user.tenant_id = tenant.id
@@ -64,7 +71,7 @@ def create_tenant(user_id: uuid.UUID, name: str, db: Session) -> Tenant:
             ) from exc
         raise
 
-    return tenant
+    return tenant, plaintext_key
 
 
 def ensure_tenant_for_user(
@@ -72,12 +79,18 @@ def ensure_tenant_for_user(
     db: Session,
     name: str = DEFAULT_TENANT_NAME,
 ) -> Tenant:
-    """Return the user's tenant, creating it if needed."""
+    """Return the user's tenant, creating it if needed.
+
+    The plaintext widget key generated on creation is intentionally
+    discarded here — callers that need it must use ``create_tenant``
+    directly.
+    """
     tenant = get_tenant_by_user(user_id, db)
     if tenant:
         return tenant
     try:
-        return create_tenant(user_id, name, db)
+        tenant, _plain = create_tenant(user_id, name, db)
+        return tenant
     except HTTPException as exc:
         if exc.status_code != 409:
             raise
@@ -119,8 +132,18 @@ def get_tenant_by_id(
 
 
 def get_tenant_by_api_key(api_key: str, db: Session) -> Tenant | None:
-    """Get tenant by API key. Used by widget/chat to validate API key."""
-    return db.query(Tenant).filter(Tenant.api_key == api_key).first()
+    """Get tenant by widget API key. Lookup goes through tenant_api_keys
+    by hash; revoked / expired keys return None."""
+    result = find_active_tenant_by_plain_key(api_key, db)
+    if result is None:
+        return None
+    return result[0]
+
+
+def get_primary_api_key_hint(tenant_id: uuid.UUID, db: Session) -> str | None:
+    """Last 4 chars of the tenant's primary active key, for UI display."""
+    row = get_primary_active_key(tenant_id, db)
+    return row.key_hint if row else None
 
 
 def get_redaction_config_for_user(user_id: uuid.UUID, db: Session) -> dict[str, list[str]]:

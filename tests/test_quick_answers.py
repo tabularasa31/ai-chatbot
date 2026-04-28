@@ -37,9 +37,7 @@ def _create_quick_answer(
     db_session.flush()
 
     tenant = Tenant(
-                name=f"Tenant {suffix}",
-        api_key=suffix[:32],
-    )
+                name=f"Tenant {suffix}",)
     db_session.add(tenant)
     db_session.flush()
 

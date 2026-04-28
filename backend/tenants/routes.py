@@ -11,12 +11,23 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.models import User
 from backend.observability.metrics import capture_event, group_identify
+from backend.tenants.api_keys_service import (
+    assert_owner,
+    list_api_keys,
+    revoke_api_key,
+    rotate_api_key,
+)
 from backend.tenants.schemas import (
     CreateTenantRequest,
+    CreateTenantResponse,
     KycSecretGeneratedResponse,
     KycStatusResponse,
     PrivacyConfigResponse,
+    RotateTenantApiKeyRequest,
+    RotateTenantApiKeyResponse,
     SupportSettingsResponse,
+    TenantApiKeyListResponse,
+    TenantApiKeyResponse,
     TenantMeResponse,
     TenantResponse,
     UpdatePrivacyConfigRequest,
@@ -29,6 +40,7 @@ from backend.tenants.service import (
     delete_tenant,
     generate_kyc_secret_for_tenant,
     get_kyc_status,
+    get_primary_api_key_hint,
     get_redaction_config_for_user,
     get_support_settings_for_user,
     get_tenant_by_api_key,
@@ -43,11 +55,12 @@ from backend.tenants.service import (
 tenants_router = APIRouter(tags=["tenants"])
 
 
-def _tenant_to_response(tenant) -> TenantResponse:
+def _tenant_to_response(tenant, db: Session | None = None) -> TenantResponse:
+    hint = get_primary_api_key_hint(tenant.id, db) if db is not None else None
     return TenantResponse(
         id=tenant.id,
         name=tenant.name,
-        api_key=tenant.api_key,
+        api_key_hint=hint,
         public_id=tenant.public_id,
         has_openai_key=bool(tenant.openai_api_key),
         created_at=tenant.created_at,
@@ -55,18 +68,19 @@ def _tenant_to_response(tenant) -> TenantResponse:
     )
 
 
-@tenants_router.post("", response_model=TenantResponse, status_code=201, include_in_schema=False)
+@tenants_router.post("", response_model=CreateTenantResponse, status_code=201, include_in_schema=False)
 def create_tenant_route(
     body: CreateTenantRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-) -> TenantResponse:
+) -> CreateTenantResponse:
     """
     Create a tenant (protected JWT).
 
-    Returns 201 Created. Error 409 if tenant already exists for this user.
+    Returns 201 Created with the plaintext widget API key — the only
+    time it is shown. Error 409 if tenant already exists for this user.
     """
-    tenant = create_tenant(current_user.id, body.name, db)
+    tenant, plaintext = create_tenant(current_user.id, body.name, db)
     try:
         tenant_id = str(tenant.public_id)
         group_identify("tenant", tenant_id, {"name": body.name})
@@ -78,7 +92,8 @@ def create_tenant_route(
         )
     except Exception:
         pass
-    return _tenant_to_response(tenant)
+    base = _tenant_to_response(tenant, db)
+    return CreateTenantResponse(**base.model_dump(), api_key=plaintext)
 
 
 @tenants_router.get("/me", response_model=TenantMeResponse)
@@ -94,7 +109,7 @@ def get_my_client(
     tenant = get_tenant_by_user(current_user.id, db)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    base = _tenant_to_response(tenant)
+    base = _tenant_to_response(tenant, db)
     return TenantMeResponse(
         **base.model_dump(),
         is_admin=current_user.is_admin,
@@ -129,6 +144,93 @@ def rotate_kyc_secret_route(
     """Rotate signing secret; previous key remains valid for 1 hour."""
     _client, raw = rotate_kyc_secret(current_user.id, db)
     return KycSecretGeneratedResponse(secret_key=raw)
+
+
+@tenants_router.get(
+    "/me/api-keys",
+    response_model=TenantApiKeyListResponse,
+)
+def list_api_keys_route(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantApiKeyListResponse:
+    """List widget API keys for the current tenant (no plaintext)."""
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    rows = list_api_keys(tenant.id, db)
+    return TenantApiKeyListResponse(
+        items=[TenantApiKeyResponse.model_validate(r) for r in rows]
+    )
+
+
+@tenants_router.post(
+    "/me/api-keys/rotate",
+    response_model=RotateTenantApiKeyResponse,
+    status_code=201,
+)
+def rotate_api_key_route(
+    body: RotateTenantApiKeyRequest,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> RotateTenantApiKeyResponse:
+    """Issue a new widget API key. Existing active key enters a 24h
+    grace window unless ``revoke_old_immediately`` is set."""
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    assert_owner(current_user, tenant.id)
+    new_row, plaintext = rotate_api_key(
+        tenant.id,
+        db,
+        reason=body.reason,
+        revoke_old_immediately=body.revoke_old_immediately,
+        actor_user_id=current_user.id,
+    )
+    try:
+        capture_event(
+            "tenant.api_key.rotated",
+            distinct_id=str(tenant.public_id),
+            tenant_id=str(tenant.public_id),
+            properties={
+                "reason": body.reason,
+                "revoke_old_immediately": body.revoke_old_immediately,
+            },
+        )
+    except Exception:
+        pass
+    return RotateTenantApiKeyResponse(
+        api_key=plaintext,
+        key=TenantApiKeyResponse.model_validate(new_row),
+    )
+
+
+@tenants_router.delete(
+    "/me/api-keys/{key_id}",
+    response_model=TenantApiKeyResponse,
+)
+def revoke_api_key_route(
+    key_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantApiKeyResponse:
+    """Immediately revoke a single key (no grace). Refuses if it would
+    leave the tenant with no usable key."""
+    tenant = get_tenant_by_user(current_user.id, db)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    assert_owner(current_user, tenant.id)
+    row = revoke_api_key(tenant.id, key_id, db, reason="compromise")
+    try:
+        capture_event(
+            "tenant.api_key.revoked",
+            distinct_id=str(tenant.public_id),
+            tenant_id=str(tenant.public_id),
+            properties={"key_id": str(key_id)},
+        )
+    except Exception:
+        pass
+    return TenantApiKeyResponse.model_validate(row)
 
 
 @tenants_router.get("/me/kyc/status", response_model=KycStatusResponse)
@@ -224,7 +326,7 @@ def update_my_client(
                 detail="Server misconfiguration: encryption is not configured. Contact support.",
             ) from e
         raise
-    return _tenant_to_response(tenant)
+    return _tenant_to_response(tenant, db)
 
 
 @tenants_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse, include_in_schema=False)
@@ -258,7 +360,7 @@ def get_tenant_by_id_route(
     Returns 404 if not found or not owner.
     """
     tenant = get_tenant_by_id(tenant_id, current_user.id, db)
-    return _tenant_to_response(tenant)
+    return _tenant_to_response(tenant, db)
 
 
 @tenants_router.delete("/{tenant_id}", status_code=204, response_model=None, include_in_schema=False)

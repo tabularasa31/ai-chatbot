@@ -148,7 +148,7 @@ def test_create_embeddings_forbidden_for_unverified_user(
     db_session.refresh(user)
 
     token, _ = create_token_for_user(user)
-    cl = create_tenant(user.id, "Emb Tenant", db_session)
+    cl, _ = create_tenant(user.id, "Emb Tenant", db_session)
     cl.openai_api_key = "sk-test"
     db_session.commit()
     db_session.refresh(cl)

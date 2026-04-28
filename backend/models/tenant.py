@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, Column, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
@@ -19,7 +19,6 @@ class Tenant(Base):
         default=uuid.uuid4,
     )
     name = Column(String(255), nullable=False)
-    api_key = Column(String(35), unique=True, nullable=False, index=True)
     public_id = Column(
         String(21),
         unique=True,
@@ -78,6 +77,55 @@ class Tenant(Base):
         back_populates="tenant",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    api_keys = relationship(
+        "TenantApiKey",
+        back_populates="tenant",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+# Status values for TenantApiKey.status. Kept as plain strings (no Enum) to
+# match existing patterns in this module.
+TENANT_API_KEY_STATUS_ACTIVE = "active"
+TENANT_API_KEY_STATUS_REVOKING = "revoking"
+TENANT_API_KEY_STATUS_REVOKED = "revoked"
+
+TENANT_API_KEY_REASONS = ("leaked", "scheduled", "compromise", "other")
+
+
+class TenantApiKey(Base):
+    __tablename__ = "tenant_api_keys"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # SHA-256 of the plaintext ck_… key. 64 hex chars.
+    key_hash = Column(String(64), unique=True, nullable=False, index=True)
+    # Last 4 chars of the plaintext key, displayed in the UI to identify a
+    # rotated key without revealing its full value.
+    key_hint = Column(String(8), nullable=False)
+    status = Column(String(16), nullable=False, default=TENANT_API_KEY_STATUS_ACTIVE)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_reason = Column(String(32), nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    created_by_user_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    tenant = relationship("Tenant", back_populates="api_keys")
+
+    __table_args__ = (
+        Index("ix_tenant_api_keys_tenant_status", "tenant_id", "status"),
     )
 
 

@@ -27,13 +27,12 @@ def _create_user(db_session, email: str = "user@example.com") -> User:
 
 
 def _create_client(db_session, user: User, name: str = "Test Tenant") -> Tenant:
-    tenant = Tenant(
-        name=name,
-        api_key=f"ck_{uuid.uuid4().hex[:32]}",
-        settings={"language": "en"},
-    )
+    from backend.tenants.api_keys_service import create_initial_api_key
+
+    tenant = Tenant(name=name, settings={"language": "en"})
     db_session.add(tenant)
     db_session.flush()
+    create_initial_api_key(tenant.id, db_session, created_by_user_id=user.id)
     user.tenant_id = tenant.id
     db_session.commit()
     db_session.refresh(tenant)
@@ -108,13 +107,20 @@ def test_user_duplicate_email_constraint(db_session) -> None:
 
 
 def test_client_creation_with_api_key(db_session) -> None:
-    """Tenant API key: ck_ prefix + 32 hex chars = 35 total."""
+    """Tenant gets a primary widget API key on creation; key_hint is the
+    last 4 chars of the plaintext (which is sha256-hashed in storage)."""
+    from backend.tenants.api_keys_service import get_primary_active_key
+
     user = _create_user(db_session)
     tenant = _create_client(db_session, user)
     assert tenant.id is not None
-    assert isinstance(tenant.api_key, str)
-    assert tenant.api_key.startswith("ck_")
-    assert len(tenant.api_key) == 35
+    primary = get_primary_active_key(tenant.id, db_session)
+    assert primary is not None
+    assert primary.status == "active"
+    assert isinstance(primary.key_hash, str)
+    assert len(primary.key_hash) == 64
+    assert isinstance(primary.key_hint, str)
+    assert len(primary.key_hint) == 4
 
 
 def test_client_user_relationship(db_session) -> None:

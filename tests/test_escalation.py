@@ -272,7 +272,7 @@ def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    cl = Tenant(name="Clarify Tenant", api_key="clarify-key")
+    cl = Tenant(name="Clarify Tenant")
     db_session.add(cl)
     db_session.commit()
     db_session.refresh(cl)

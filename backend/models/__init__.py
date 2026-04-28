@@ -34,7 +34,7 @@ from backend.models.gap import (
 )
 from backend.models.knowledge import Document, Embedding, QuickAnswer, UrlSource, UrlSourceRun
 from backend.models.pii import PiiEvent
-from backend.models.tenant import Bot, Tenant
+from backend.models.tenant import Bot, Tenant, TenantApiKey
 from backend.models.tenant_profile import LogAnalysisState, TenantFaq, TenantProfile
 
 __all__ = [
@@ -76,6 +76,7 @@ __all__ = [
     "SourceSchedule",
     "SourceStatus",
     "Tenant",
+    "TenantApiKey",
     "TenantFaq",
     "TenantProfile",
     "Tester",

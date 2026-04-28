@@ -37,7 +37,7 @@ def _lang_to_script(lang: str) -> str:
     return "other"
 
 
-def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> None:
+def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> bool:
     rows = (
         db.query(Document.language, func.count().label("cnt"))
         .filter(Document.tenant_id == tenant.id)
@@ -46,7 +46,7 @@ def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> None:
     )
     total_documents = sum(r.cnt for r in rows)
     if total_documents == 0:
-        return
+        return False
 
     language_distribution: dict[str, int] = {}
     null_count = 0
@@ -93,6 +93,7 @@ def _emit_snapshot_for_tenant(tenant: Tenant, db: Session) -> None:
             "tenant_age_days": tenant_age_days,
         },
     )
+    return True
 
 
 def run_kb_language_snapshot_for_all_tenants(db: Session) -> int:
@@ -104,22 +105,22 @@ def run_kb_language_snapshot_for_all_tenants(db: Session) -> int:
     count = 0
     for tenant in tenants:
         try:
-            _emit_snapshot_for_tenant(tenant, db)
-            count += 1
+            if _emit_snapshot_for_tenant(tenant, db):
+                count += 1
         except Exception:
             logger.exception("kb_language_snapshot failed for tenant %s", tenant.id)
     return count
 
 
 def _should_run_today() -> bool:
-    today = date.today()
+    today = datetime.now(UTC).date()
     with _last_run_lock:
         return _last_run_date != today
 
 
 def _mark_run_today() -> None:
     global _last_run_date
-    today = date.today()
+    today = datetime.now(UTC).date()
     with _last_run_lock:
         _last_run_date = today
 

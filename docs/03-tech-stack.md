@@ -31,8 +31,9 @@
   - User access tokens include `typ=chat9_user`; internal **Eval QA** uses a separate secret `EVAL_JWT_SECRET` and `typ=eval_tester` on `/eval/*` only (`backend/eval/`, `backend/core/jwt_kinds.py`)
   
 - **LLM Integration:** OpenAI API (via client's own API key)
-  - gpt-4o-mini for chat (fast + cheap)
-  - Optional second gpt-4o-mini call per chat turn for answer validation (FI-034): groundedness check; failures do not block the user-facing reply
+  - `gpt-5-mini` for grounded chat answers
+  - `gpt-4o-mini` defaults for lightweight classifiers: human-request guard (`HUMAN_REQUEST_MODEL`), relevance guard (`RELEVANCE_GUARD_MODEL`), and answer validation (`VALIDATION_MODEL`)
+  - Optional second `gpt-4o-mini` call per chat turn for answer validation (FI-034): groundedness check; failures trigger a safe fallback instead of returning an unverified answer
   - **PII redaction / privacy hardening (FI-043 + follow-up hardening):** before embedding search, chat completion, and validation completion, the user question is passed through regex redaction (`backend/chat/pii.py`); placeholders such as `[EMAIL]`, `[PHONE]`, `[API_KEY]`, `[CARD]`, `[PASSWORD]`, `[ID_DOC]`, `[IP]`, `[URL_TOKEN]` are sent to OpenAI; the original text is stored encrypted in `messages.content_original_encrypted`, redacted text is stored in `messages.content_redacted`, and legacy `messages.content` now mirrors the redacted-safe version
   - text-embedding-3-small for vectors (1536-dim)
   - Each client brings their own key — no platform markup
@@ -171,7 +172,8 @@
 │                OpenAI API (External)                      │
 │                                                           │
 │  - text-embedding-3-small (for vectors)                 │
-│  - gpt-4o-mini (for chat)                               │
+│  - gpt-5-mini (for chat answers)                        │
+│  - gpt-4o-mini (for guard/validation classifiers)       │
 │  - Called with each client's own API key                │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
@@ -220,7 +222,7 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 7. Build grounded prompt from the selected chunks
    ↓
 8. OpenAI API: Chat completion  [client's key]
-   gpt-4o-mini
+   gpt-5-mini
    ↓
 9. Optional: second gpt-4o-mini call for validation (FI-034) using same redacted question
    ↓

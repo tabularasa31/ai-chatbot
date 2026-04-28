@@ -28,6 +28,16 @@ Required env:
 
 Useful optional env:
 
+- `NEXT_PUBLIC_POSTHOG_KEY` / `NEXT_PUBLIC_POSTHOG_HOST` — product analytics, when enabled.
+
+Backend model selection is configured in the API service, not in the frontend:
+
+- `HUMAN_REQUEST_MODEL` — human-request guard classifier, default `gpt-4o-mini`
+- `RELEVANCE_GUARD_MODEL` — relevance guard classifier, default `gpt-4o-mini`
+- `VALIDATION_MODEL` — answer validation classifier, default `gpt-4o-mini`
+- `CHAT_MODEL` — main answer generation model, default `gpt-5-mini`
+
+For rollback, set the specific backend env var to `gpt-4.1-mini`.
 
 ## Scripts
 

@@ -34,7 +34,7 @@
 - **Document upload** — PDF, Markdown, Swagger/OpenAPI (JSON/YAML), Word (DOCX/DOC), plain text (TXT)
 - **URL knowledge sources** — add a documentation website URL, crawl up to 50 same-domain pages, refresh on demand
 - **Structured OpenAPI ingestion** — operation-aware indexing for Swagger/OpenAPI files and structured URL sources instead of treating specs as raw text
-- **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-4o-mini`
+- **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-5-mini` for answers, with lightweight `gpt-4o-mini` guard/validation classifiers
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine candidate acquisition + BM25 (`rank-bm25`) + RRF + reranking; SQLite/tests: Python cosine candidate acquisition followed by the same downstream lexical/ranking orchestration
 - **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
 - **Controlled clarification** — chat/widget replies can return `answer`, `clarification`, or `partial_with_clarification` with structured clarification payloads
@@ -314,7 +314,7 @@ Gap Analyzer is the operator-facing backlog for documentation gaps and repeated 
 |-------|-----------|---------|
 | Backend | FastAPI + Python 3.11 | Railway |
 | Database | PostgreSQL 15 + pgvector | Railway |
-| AI | OpenAI text-embedding-3-small + gpt-4o-mini | OpenAI API |
+| AI | OpenAI `text-embedding-3-small`, `gpt-5-mini`, lightweight `gpt-4o-mini` guards | OpenAI API |
 | Frontend | Next.js 14 + TailwindCSS | Vercel |
 | Widget | Vanilla loader + Next.js `/widget` (iframe) | Vercel + Railway (`/embed.js`) |
 | Email | Brevo HTTP API | Brevo |

@@ -492,6 +492,9 @@ Parallel guard pool (3 threads, ~2 s budget):
   ├─ injection_check   — semantic + pattern detector
   ├─ relevance_check   — vector similarity pre-filter (threshold 0.22)
   └─ capability_check  — LLM classifier: is user asking what the bot can do?
+Lightweight LLM classifiers default to `gpt-4o-mini`: explicit human-request detection uses
+`HUMAN_REQUEST_MODEL`, relevance classification uses `RELEVANCE_GUARD_MODEL`, and answer
+validation uses `VALIDATION_MODEL`.
   ↓
 Guard decisions (in priority order):
   1. injection detected          → guard_reject / injection

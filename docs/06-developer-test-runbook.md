@@ -2,6 +2,8 @@
 
 Use these command groups for fast local checks and CI job partitioning.
 
+For **production regression evals** (latency / answer-quality comparisons after metric-claiming PRs), see [post-merge-eval-runbook.md](./post-merge-eval-runbook.md). This file covers pytest groups; the post-merge runbook covers behavioural evals against the deployed bot.
+
 ## P0 Smoke (critical regressions)
 
 ```bash

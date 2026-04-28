@@ -23,7 +23,7 @@ def test_guard_models_roll_back_with_explicit_env_names(
     assert settings.answer_validation_model == "gpt-4.1-mini"
 
 
-def test_human_request_model_env_does_not_override_scoped_guard_models(
+def test_legacy_answer_validation_model_env_is_intentionally_ignored(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("HUMAN_REQUEST_MODEL", "gpt-4.1-mini")
@@ -33,4 +33,5 @@ def test_human_request_model_env_does_not_override_scoped_guard_models(
 
     assert settings.human_request_model == "gpt-4.1-mini"
     assert settings.relevance_guard_model == "gpt-4o-mini"
+    # Breaking change by design: rollback must use VALIDATION_MODEL.
     assert settings.answer_validation_model == "gpt-4o-mini"

@@ -106,6 +106,57 @@ def test_upload_markdown_success(tenant: TestClient, db_session: Session) -> Non
     assert data["status"] == "ready"
 
 
+def test_upload_markdown_persists_detected_language(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """Document.language must be populated at parse time for cross-lingual retrieval."""
+    token = register_and_verify_user(tenant, db_session, email="lang-en@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Lang Tenant"},
+    )
+    md_content = (
+        b"# Onboarding Guide\n\n"
+        b"This document explains how customers can reset their password and enable "
+        b"two-factor authentication. The verification code is sent via email."
+    )
+    response = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("guide.md", md_content, "text/markdown")},
+    )
+    assert response.status_code == 201
+    doc = db_session.query(Document).filter(Document.filename == "guide.md").first()
+    assert doc is not None
+    assert doc.language == "en"
+
+
+def test_upload_russian_markdown_persists_language(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="lang-ru@example.com")
+    tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Lang RU Tenant"},
+    )
+    md_content = (
+        "# Инструкция\n\n"
+        "Этот документ описывает, как клиенты могут сбросить пароль и включить "
+        "двухфакторную аутентификацию. Код подтверждения приходит по электронной почте."
+    ).encode("utf-8")
+    response = tenant.post(
+        "/documents",
+        headers={"Authorization": f"Bearer {token}"},
+        files={"file": ("guide-ru.md", md_content, "text/markdown")},
+    )
+    assert response.status_code == 201
+    doc = db_session.query(Document).filter(Document.filename == "guide-ru.md").first()
+    assert doc is not None
+    assert doc.language == "ru"
+
+
 def test_upload_swagger_success(tenant: TestClient, db_session: Session) -> None:
     """Upload valid OpenAPI JSON, status=ready."""
     token = register_and_verify_user(tenant, db_session, email="swagger@example.com")

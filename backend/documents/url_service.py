@@ -28,6 +28,7 @@ from backend.documents.http_client import (
     PREFLIGHT_TIMEOUT_SECONDS,
     FetchContext,
 )
+from backend.documents.language_detection import detect_document_language
 from backend.documents.parsers import (
     OpenAPIChunk,
     build_openapi_ingestion_payload_from_spec,
@@ -379,6 +380,7 @@ def _upsert_page_document(
     doc.source_url = page.url
     doc.file_type = DocumentType.url
     doc.parsed_text = page.text
+    doc.language = detect_document_language(page.text)
     doc.status = DocumentStatus.embedding
     db.flush()
 
@@ -400,6 +402,7 @@ def _upsert_page_document(
                     "content_hash": chunk["content_hash"],
                     "page_content_hash": content_hash,
                     "raw_text": chunk["raw_text"],
+                    **({"language": doc.language} if doc.language else {}),
                 },
             )
         )
@@ -462,6 +465,7 @@ def _upsert_structured_document(
     doc.source_url = url
     doc.file_type = DocumentType.swagger
     doc.parsed_text = parsed_text
+    doc.language = detect_document_language(parsed_text)
     doc.status = DocumentStatus.embedding
     db.flush()
 
@@ -499,6 +503,7 @@ def _upsert_structured_document(
                         "has_examples": chunk.get("has_examples"),
                         "spec_version": chunk.get("spec_version"),
                         "page_content_hash": content_hash,
+                        **({"language": doc.language} if doc.language else {}),
                     },
                 )
             )

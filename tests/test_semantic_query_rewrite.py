@@ -274,81 +274,166 @@ class TestSemanticRewriteDeduplication:
 # ---------------------------------------------------------------------------
 
 class TestDetectTenantKbScript:
-    """detect_tenant_kb_script() samples chunks and returns the dominant script."""
+    """detect_tenant_kb_script() reads Document.language stored at parse time."""
 
-    def test_returns_cyrillic_for_russian_chunks(self):
-        from unittest.mock import MagicMock, patch
-        import uuid
-        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
-
-        tenant_id = uuid.uuid4()
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
-
-        # Column-only query returns Row tuples, not full ORM objects
-        russian_chunks = [
-            ("Сайт не открывается после подключения к CDN.",),
-            ("Проверьте NS-пропагацию и статус SSL-сертификата.",),
-            ("A-запись домена должна указывать на IP-адреса CDN.",),
-        ]
-        mock_db = MagicMock()
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
-            russian_chunks
-        )
-
-        result = detect_tenant_kb_script(tenant_id, mock_db)
-        assert result == "cyrillic"
-
-    def test_returns_latin_for_english_chunks(self):
+    @staticmethod
+    def _mock_db_with_languages(languages):
+        """Build a MagicMock db whose Document.language query returns ``languages``."""
         from unittest.mock import MagicMock
-        import uuid
-        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
 
-        tenant_id = uuid.uuid4()
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
-
-        english_chunks = [
-            ("Check your DNS A-record and NS propagation status.",),
-            ("SSL certificate must be valid before traffic flows through CDN.",),
-        ]
+        rows = [(lang,) for lang in languages]
         mock_db = MagicMock()
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = (
-            english_chunks
+        # Path used by _kb_bucket_counts_from_languages:
+        # db.query(Document.language).filter(...).filter(...).all()
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = rows
+        return mock_db
+
+    def _clear_caches(self, tenant_id):
+        from backend.search.service import (
+            _TENANT_KB_SCRIPT_CACHE,
+            _TENANT_KB_SCRIPTS_CACHE,
         )
 
-        result = detect_tenant_kb_script(tenant_id, mock_db)
-        assert result == "latin"
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+        _TENANT_KB_SCRIPTS_CACHE.pop(str(tenant_id), None)
+
+    def test_returns_cyrillic_for_russian_documents(self):
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["ru", "ru", "ru"])
+
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+
+    def test_returns_latin_for_english_documents(self):
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["en", "en"])
+
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+
+    def test_dominant_wins_for_mixed_kb(self):
+        """Dominant bucket is returned even when KB has multiple scripts."""
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["en", "en", "en", "ru"])
+
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
 
     def test_returns_none_for_empty_kb(self):
         from unittest.mock import MagicMock
         import uuid
-        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+        from backend.search.service import detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+        self._clear_caches(tenant_id)
 
         mock_db = MagicMock()
+        # No documents with language set, no chunks indexed either.
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
         mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = []
 
-        result = detect_tenant_kb_script(tenant_id, mock_db)
-        assert result is None
+        assert detect_tenant_kb_script(tenant_id, mock_db) is None
 
-    def test_uses_cache_on_second_call(self):
+    def test_falls_back_to_chunk_sampling_when_no_language_set(self):
+        """Legacy KBs (Document.language all NULL) fall back to chunk sampling."""
         from unittest.mock import MagicMock
         import uuid
-        from backend.search.service import detect_tenant_kb_script, _TENANT_KB_SCRIPT_CACHE
+        from backend.search.service import detect_tenant_kb_script
 
         tenant_id = uuid.uuid4()
-        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+        self._clear_caches(tenant_id)
 
-        chunks = [("Проверьте DNS.",)]
         mock_db = MagicMock()
-        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = chunks
+        # Language path returns no rows → fallback kicks in
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
+        # Chunk-sampling path returns Russian text
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = [
+            ("Сайт не открывается после подключения к CDN.",),
+            ("Проверьте NS-пропагацию.",),
+        ]
+
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+
+    def test_uses_cache_on_second_call(self):
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["ru"])
 
         detect_tenant_kb_script(tenant_id, mock_db)
         detect_tenant_kb_script(tenant_id, mock_db)
 
         # DB should be queried only once — second call hits cache
         assert mock_db.query.call_count == 1
+
+
+class TestDetectTenantKbScripts:
+    """detect_tenant_kb_scripts() returns the full set of buckets in the KB."""
+
+    @staticmethod
+    def _mock_db_with_languages(languages):
+        from unittest.mock import MagicMock
+
+        rows = [(lang,) for lang in languages]
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = rows
+        return mock_db
+
+    def _clear_caches(self, tenant_id):
+        from backend.search.service import (
+            _TENANT_KB_SCRIPT_CACHE,
+            _TENANT_KB_SCRIPTS_CACHE,
+        )
+
+        _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+        _TENANT_KB_SCRIPTS_CACHE.pop(str(tenant_id), None)
+
+    def test_mixed_kb_returns_both_buckets(self):
+        """EN+RU KB → {cyrillic, latin}, so cross-lingual rewrite reaches both."""
+        import uuid
+        from backend.search.service import detect_tenant_kb_scripts
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["en", "ru", "en"])
+
+        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset(
+            {"cyrillic", "latin"}
+        )
+
+    def test_single_language_returns_single_bucket(self):
+        import uuid
+        from backend.search.service import detect_tenant_kb_scripts
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = self._mock_db_with_languages(["en", "es", "fr"])
+
+        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset({"latin"})
+
+    def test_empty_kb_returns_empty_set(self):
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_scripts
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = []
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = []
+
+        assert detect_tenant_kb_scripts(tenant_id, mock_db) == frozenset()
 
 
 # ---------------------------------------------------------------------------

@@ -68,7 +68,7 @@ from backend.search.service import (
     RetrievalReliability,
     default_retrieval_reliability,
     detect_query_script_bucket,
-    detect_tenant_kb_script,
+    detect_tenant_kb_scripts,
     semantic_query_rewrite_for_kb,
 )
 
@@ -745,11 +745,13 @@ def run_chat_pipeline(
     _rewrite_future = None
     _rewritten_variant: str | None = None
 
-    # Detect KB language once (cheap cached DB read) so we can submit a
-    # cross-lingual rewrite when the query and KB are in different scripts.
-    _kb_script = detect_tenant_kb_script(tenant_id, db)
+    # Detect KB languages once (cheap cached DB read) so we can submit a
+    # cross-lingual rewrite for every KB script the query does not natively
+    # cover. For mixed EN+RU KBs this means an EN query gets a RU variant
+    # (and vice versa) so both halves of the corpus are reachable.
+    _kb_scripts = detect_tenant_kb_scripts(tenant_id, db)
     _query_script = detect_query_script_bucket(question)
-    _cross_lingual_future = None
+    _cross_lingual_futures: list = []
 
     _rel_future = _GUARD_POOL.submit(
         _svc.check_relevance_with_profile,
@@ -770,18 +772,22 @@ def run_chat_pipeline(
         timeout=settings.semantic_query_rewrite_timeout_sec,
         bot_id=retry_bot_id,
     )
-    # Cross-lingual variant: when the query script and KB script differ, generate
-    # an additional rewrite in the KB's language so the embedding model can match
-    # same-language chunks more reliably.  This is language-agnostic — it adapts
-    # to whatever language the KB is in (detected from actual indexed chunks).
-    if _kb_script and _kb_script != _query_script:
-        _cross_lingual_future = _GUARD_POOL.submit(
-            semantic_query_rewrite_for_kb,
-            question,
-            kb_script=_kb_script,
-            api_key=api_key,
-            timeout=settings.semantic_query_rewrite_timeout_sec,
-            bot_id=retry_bot_id,
+    # Cross-lingual variants: for every KB script the query does not natively
+    # cover, generate a rewrite in that script so embedding/lexical matching
+    # can reach same-language chunks. Mixed-language KBs (e.g. EN+RU) need
+    # one rewrite per non-query script — the dominant-only logic this
+    # replaces was missing the minority script entirely.
+    _target_kb_scripts = [s for s in _kb_scripts if s != _query_script]
+    for _target_script in _target_kb_scripts:
+        _cross_lingual_futures.append(
+            _GUARD_POOL.submit(
+                semantic_query_rewrite_for_kb,
+                question,
+                kb_script=_target_script,
+                api_key=api_key,
+                timeout=settings.semantic_query_rewrite_timeout_sec,
+                bot_id=retry_bot_id,
+            )
         )
     _inj_start = perf_counter()
     _inj_span = (
@@ -808,8 +814,8 @@ def run_chat_pipeline(
         _rel_future.cancel()
         if _rewrite_future:
             _rewrite_future.cancel()
-        if _cross_lingual_future:
-            _cross_lingual_future.cancel()
+        for _cl_future in _cross_lingual_futures:
+            _cl_future.cancel()
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
@@ -850,18 +856,19 @@ def run_chat_pipeline(
         except Exception:
             _rewritten_variant = None
 
-    # Collect cross-lingual variant (KB-language rewrite for cross-script queries).
-    if _cross_lingual_future is not None:
+    # Collect cross-lingual variants — one per KB script the query does not
+    # natively cover. Each is added to query_variants for fan-out retrieval.
+    for _cl_future in _cross_lingual_futures:
         try:
-            _cross_lingual_variant = _cross_lingual_future.result(
+            _cross_lingual_variant = _cl_future.result(
                 timeout=settings.semantic_query_rewrite_timeout_sec
             )
-            if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
-                v.casefold() for v in query_variants
-            }:
-                query_variants = [*query_variants, _cross_lingual_variant]
         except Exception:
-            pass
+            continue
+        if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
+            v.casefold() for v in query_variants
+        }:
+            query_variants = [*query_variants, _cross_lingual_variant]
 
     if trace is not None:
         _embed_span = trace.span(

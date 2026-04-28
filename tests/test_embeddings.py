@@ -155,6 +155,15 @@ def test_create_embeddings_success(
         }
         assert m["filename"] == "emb.md"
         assert m["file_type"] == "markdown"
+        # Document.language is detected at parse time; embeddings inherit it
+        # so retrieval can identify mixed-language KBs without re-sampling.
+        # Lorem ipsum filler classifies as a Latin-script language (en/pt/it)
+        # — the precise code depends on the langdetect snapshot, but the
+        # bucket is what cross-lingual retrieval cares about.
+        from backend.search.service import LATIN_LANGUAGE_PREFIXES
+
+        assert m.get("language") is not None
+        assert m["language"].lower().startswith(LATIN_LANGUAGE_PREFIXES)
 
 
 def test_create_embeddings_document_not_found(

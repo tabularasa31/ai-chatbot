@@ -1185,34 +1185,67 @@ def semantic_query_rewrite(
 
 # ── Cross-lingual retrieval helpers ──────────────────────────────────────────
 
-# module-level cache: str(tenant_id) -> (script_bucket | None, monotonic_ts)
+# module-level caches: str(tenant_id) -> (value, monotonic_ts)
 _TENANT_KB_SCRIPT_CACHE: dict[str, tuple[str | None, float]] = {}
+_TENANT_KB_SCRIPTS_CACHE: dict[str, tuple[frozenset[str], float]] = {}
 _TENANT_KB_SCRIPT_CACHE_TTL = 300.0  # 5 minutes
 _KB_SCRIPT_SAMPLE_SIZE = 20
 
 _SCRIPT_TO_LANGUAGE_NAME: dict[str, str] = {
-    # NOTE: script bucket ≠ language — Cyrillic covers Russian, Ukrainian, Bulgarian,
-    # etc.; Latin covers English, Spanish, French, etc.  This map is a pragmatic
-    # approximation until per-document language metadata is stored at parse time.
+    # Bucket-level approximation used when the rewrite needs to target a
+    # whole script family. Per-document Document.language gives the precise
+    # ISO code; this map is the coarse fallback used by the cross-lingual
+    # rewrite prompt.
     "cyrillic": "Russian",
     "latin": "English",
 }
 
 
-def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
-    """Return the predominant script bucket of a tenant's indexed chunks.
+def _language_to_script_bucket(language: str | None) -> str | None:
+    """Map an ISO language code to a coarse script bucket (or None)."""
+    if not language:
+        return None
+    lower = language.strip().lower()
+    if lower.startswith(CYRILLIC_LANGUAGE_PREFIXES):
+        return "cyrillic"
+    if lower.startswith(LATIN_LANGUAGE_PREFIXES):
+        return "latin"
+    return None
 
-    Samples up to 20 embeddings to detect whether the knowledge base is
-    primarily Cyrillic, Latin, or mixed.  Result is cached per tenant to avoid
-    a DB round-trip on every chat turn.  Returns None when no chunks exist or
-    the distribution is ambiguous ("other" bucket dominates).
+
+def _kb_bucket_counts_from_languages(
+    tenant_id: uuid.UUID, db: Session
+) -> dict[str, int] | None:
+    """Count documents by script bucket using ``Document.language``.
+
+    Returns ``None`` when no rows have a non-null language — callers can then
+    fall back to chunk sampling for backward compatibility with KBs indexed
+    before parse-time language detection landed.
     """
-    key = str(tenant_id)
-    now = time.monotonic()
-    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
-    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
-        return cached[0]
+    try:
+        rows: list[tuple[str | None]] = (
+            db.query(Document.language)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Document.language.isnot(None))
+            .all()
+        )
+    except Exception:
+        return None
+    if not rows:
+        return None
+    counts: dict[str, int] = {}
+    for (lang,) in rows:
+        bucket = _language_to_script_bucket(lang)
+        if bucket is None:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return counts
 
+
+def _kb_bucket_counts_from_chunk_sample(
+    tenant_id: uuid.UUID, db: Session
+) -> dict[str, int] | None:
+    """Legacy fallback: sample chunk text when no Document.language is set."""
     try:
         sample: list[tuple[str]] = (
             db.query(Embedding.chunk_text)
@@ -1223,13 +1256,81 @@ def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
         )
     except Exception:
         return None
-
-    result: str | None = None
-    if sample:
-        counts: dict[str, int] = {}
-        for (chunk_text,) in sample:
-            bucket = detect_query_script_bucket(chunk_text or "")
+    if not sample:
+        return None
+    counts: dict[str, int] = {}
+    for (chunk_text,) in sample:
+        bucket = detect_query_script_bucket(chunk_text or "")
+        if bucket in ("cyrillic", "latin"):
             counts[bucket] = counts.get(bucket, 0) + 1
+    return counts
+
+
+def _tenant_has_unlabeled_documents(
+    tenant_id: uuid.UUID, db: Session
+) -> bool:
+    """True when at least one document for this tenant has language IS NULL.
+
+    Used to decide whether labeled-only counts can be trusted: a partially
+    labeled KB (legacy unlabeled rows + a few new uploads with language set)
+    must still consider the unlabeled half, otherwise a single new EN doc
+    on top of 100 legacy RU docs misclassifies the KB as Latin-only.
+    """
+    try:
+        return (
+            db.query(Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Document.language.is_(None))
+            .limit(1)
+            .first()
+            is not None
+        )
+    except Exception:
+        return False
+
+
+def _resolve_kb_bucket_counts(
+    tenant_id: uuid.UUID, db: Session
+) -> dict[str, int]:
+    """Return per-bucket document counts, preferring stored Document.language.
+
+    When the KB is partially labeled (some documents still NULL after the
+    add_documents_language_v1 migration), augment the labeled counts with a
+    chunk sample so unlabeled legacy documents are not silently dropped.
+    """
+    labeled = _kb_bucket_counts_from_languages(tenant_id, db)
+    if labeled is None:
+        # Pure legacy KB — no documents have language stored.
+        return _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    if not _tenant_has_unlabeled_documents(tenant_id, db):
+        # Fully labeled — labeled counts are authoritative.
+        return labeled
+    # Partial labeling — merge with chunk sample so unlabeled docs still
+    # contribute to bucket detection.
+    sampled = _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    merged = dict(labeled)
+    for bucket, count in sampled.items():
+        merged[bucket] = merged.get(bucket, 0) + count
+    return merged
+
+
+def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
+    """Return the predominant script bucket of a tenant's KB.
+
+    Backed by ``Document.language`` written at parse time; falls back to chunk
+    sampling for KBs that pre-date parse-time detection. Cached per tenant to
+    avoid a DB round-trip on every chat turn. Returns None when no documents
+    map to a known script bucket.
+    """
+    key = str(tenant_id)
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
+
+    counts = _resolve_kb_bucket_counts(tenant_id, db)
+    result: str | None = None
+    if counts:
         dominant = max(counts, key=counts.__getitem__)
         if dominant in ("cyrillic", "latin"):
             result = dominant
@@ -1238,9 +1339,32 @@ def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
     return result
 
 
+def detect_tenant_kb_scripts(
+    tenant_id: uuid.UUID, db: Session
+) -> frozenset[str]:
+    """Return every script bucket present in the tenant's KB.
+
+    Mirrors :func:`detect_tenant_kb_script` but returns the full set so
+    callers can issue cross-lingual rewrites for *each* KB language a query
+    does not natively cover (mixed EN+RU KBs in particular).
+    """
+    key = str(tenant_id)
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPTS_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
+
+    counts = _resolve_kb_bucket_counts(tenant_id, db)
+    result = frozenset(b for b in counts if b in ("cyrillic", "latin"))
+    _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
+    return result
+
+
 def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
-    """Drop the cached KB script for this tenant (call after document upload/delete)."""
-    _TENANT_KB_SCRIPT_CACHE.pop(str(tenant_id), None)
+    """Drop the cached KB scripts for this tenant (call after document upload/delete)."""
+    key = str(tenant_id)
+    _TENANT_KB_SCRIPT_CACHE.pop(key, None)
+    _TENANT_KB_SCRIPTS_CACHE.pop(key, None)
 
 
 def semantic_query_rewrite_for_kb(

@@ -56,6 +56,7 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
+from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 
@@ -414,6 +415,23 @@ def _upsert_page_document(
         document_id=doc.id,
         api_key=api_key,
     )
+    try:
+        capture_event(
+            "document_indexed",
+            distinct_id=str(source.tenant_id),
+            tenant_id=str(source.tenant_id),
+            properties={
+                "document_id": str(doc.id),
+                "file_type": "url",
+                "source_kind": "url_crawl",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+                "chunks_created": len(page.chunks),
+            },
+        )
+    except Exception:
+        pass
     return doc, len(page.chunks)
 
 
@@ -515,6 +533,23 @@ def _upsert_structured_document(
             document_id=doc.id,
             api_key=api_key,
         )
+        try:
+            capture_event(
+                "document_indexed",
+                distinct_id=str(source.tenant_id),
+                tenant_id=str(source.tenant_id),
+                properties={
+                    "document_id": str(doc.id),
+                    "file_type": "swagger",
+                    "source_kind": "openapi",
+                    "language": doc.language,
+                    "language_detected": doc.language is not None,
+                    "parsed_text_chars": len(doc.parsed_text or ""),
+                    "chunks_created": len(rendered_chunks),
+                },
+            )
+        except Exception:
+            pass
         return doc, len(rendered_chunks)
     except (APIError, SQLAlchemyError, ValueError) as exc:
         logger.warning("Structured source embedding failed", extra={"url": url, "error": str(exc)})

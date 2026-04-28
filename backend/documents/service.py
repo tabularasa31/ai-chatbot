@@ -23,6 +23,7 @@ from backend.documents.parsers import (
 )
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
+from backend.observability.metrics import capture_event
 
 _HEALTH_WARNING_TYPES = frozenset(
     {
@@ -472,6 +473,22 @@ def upload_document(
         doc.status = DocumentStatus.error
     db.commit()
     db.refresh(doc)
+    try:
+        capture_event(
+            "document_indexed",
+            distinct_id=str(tenant_id),
+            tenant_id=str(tenant_id),
+            properties={
+                "document_id": str(doc.id),
+                "file_type": doc.file_type.value,
+                "source_kind": "upload",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+            },
+        )
+    except Exception:
+        pass
     return doc
 
 

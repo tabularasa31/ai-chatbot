@@ -279,6 +279,13 @@ class ChatPipelineResult:
     # language_context is always populated by run_chat_pipeline; None only for
     # callers that construct ChatPipelineResult directly without this field.
     language_context: ResolvedLanguageContext | None = None
+    # cross-lingual retrieval telemetry (populated only on the RAG path)
+    query_script: str | None = None
+    kb_scripts: list[str] | None = None
+    cross_lingual_triggered: bool = False
+    cross_lingual_variants_count: int = 0
+    query_kb_language_match: str | None = None
+    retrieval_used_cross_lingual_variant: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +785,14 @@ def run_chat_pipeline(
     # one rewrite per non-query script — the dominant-only logic this
     # replaces was missing the minority script entirely.
     _target_kb_scripts = [s for s in _kb_scripts if s != _query_script]
+    _cross_lingual_triggered = len(_target_kb_scripts) > 0
+    _cross_lingual_variants_added = 0
+    if not _kb_scripts or _query_script == "other":
+        _query_kb_language_match = "unknown"
+    elif _query_script in _kb_scripts:
+        _query_kb_language_match = "native"
+    else:
+        _query_kb_language_match = "mismatch"
     for _target_script in _target_kb_scripts:
         _cross_lingual_futures.append(
             _GUARD_POOL.submit(
@@ -869,6 +884,7 @@ def run_chat_pipeline(
             v.casefold() for v in query_variants
         }:
             query_variants = [*query_variants, _cross_lingual_variant]
+            _cross_lingual_variants_added += 1
 
     if trace is not None:
         _embed_span = trace.span(
@@ -1258,6 +1274,16 @@ def run_chat_pipeline(
         llm_ms=_llm_ms,
         faq_match=faq_match,
         language_context=language_context,
+        query_script=_query_script,
+        kb_scripts=list(_kb_scripts),
+        cross_lingual_triggered=_cross_lingual_triggered,
+        cross_lingual_variants_count=_cross_lingual_variants_added,
+        query_kb_language_match=_query_kb_language_match,
+        retrieval_used_cross_lingual_variant=(
+            _cross_lingual_triggered
+            and _cross_lingual_variants_added > 0
+            and bool(retrieval.chunk_texts)
+        ),
     )
 
 
@@ -2043,6 +2069,12 @@ class RagHandler(PipelineHandler):
                 latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
                 retrieval_ms=result.retrieval_ms,
                 llm_ms=result.llm_ms,
+                query_script=result.query_script,
+                kb_scripts=result.kb_scripts,
+                cross_lingual_triggered=result.cross_lingual_triggered,
+                cross_lingual_variants_count=result.cross_lingual_variants_count,
+                query_kb_language_match=result.query_kb_language_match,
+                retrieval_used_cross_lingual_variant=result.retrieval_used_cross_lingual_variant,
             )
             return ChatTurnOutcome(
                 text=result.final_answer,
@@ -2280,6 +2312,12 @@ class RagHandler(PipelineHandler):
             best_confidence_score=retrieval.best_confidence_score,
             decision=_decision,
             escalation_trigger=esc_trigger.value if esc_trigger else None,
+            query_script=result.query_script,
+            kb_scripts=result.kb_scripts,
+            cross_lingual_triggered=result.cross_lingual_triggered,
+            cross_lingual_variants_count=result.cross_lingual_variants_count,
+            query_kb_language_match=result.query_kb_language_match,
+            retrieval_used_cross_lingual_variant=result.retrieval_used_cross_lingual_variant,
         )
         return ChatTurnOutcome(
             text=answer,

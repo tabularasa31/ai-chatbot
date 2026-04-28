@@ -87,6 +87,12 @@ def _emit_chat_turn_event(
     best_confidence_score: float | None = None,
     decision: Decision | None = None,
     escalation_trigger: str | None = None,
+    query_script: str | None = None,
+    kb_scripts: list[str] | None = None,
+    cross_lingual_triggered: bool = False,
+    cross_lingual_variants_count: int = 0,
+    query_kb_language_match: str | None = None,
+    retrieval_used_cross_lingual_variant: bool = False,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -104,6 +110,12 @@ def _emit_chat_turn_event(
             "reliability_score": reliability_score,
             "best_confidence_score": best_confidence_score,
             "escalation_trigger": escalation_trigger,
+            "query_script": query_script,
+            "kb_scripts": kb_scripts,
+            "cross_lingual_triggered": cross_lingual_triggered,
+            "cross_lingual_variants_count": cross_lingual_variants_count,
+            "query_kb_language_match": query_kb_language_match,
+            "retrieval_used_cross_lingual_variant": retrieval_used_cross_lingual_variant,
         }
         if decision is not None:
             props["decision"] = decision.kind.value

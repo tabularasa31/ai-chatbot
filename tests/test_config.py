@@ -10,11 +10,11 @@ def test_guard_models_default_to_lightweight_models() -> None:
     assert settings.answer_validation_model == "gpt-4o-mini"
 
 
-def test_guard_models_can_roll_back_with_legacy_env_names(
+def test_guard_models_roll_back_with_explicit_env_names(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("GUARDS_MODEL", "gpt-4.1-mini")
-    monkeypatch.setenv("ANSWER_VALIDATION_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("RELEVANCE_GUARD_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("VALIDATION_MODEL", "gpt-4.1-mini")
 
     settings = Settings()
 
@@ -22,15 +22,14 @@ def test_guard_models_can_roll_back_with_legacy_env_names(
     assert settings.answer_validation_model == "gpt-4.1-mini"
 
 
-def test_guard_models_prefer_new_env_names(
+def test_legacy_guard_model_env_does_not_override_scoped_guard_models(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("GUARDS_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("ANSWER_VALIDATION_MODEL", "gpt-4.1-mini")
-    monkeypatch.setenv("RELEVANCE_GUARD_MODEL", "gpt-test-relevance")
-    monkeypatch.setenv("VALIDATION_MODEL", "gpt-test-validation")
 
     settings = Settings()
 
-    assert settings.relevance_guard_model == "gpt-test-relevance"
-    assert settings.answer_validation_model == "gpt-test-validation"
+    assert settings.guards_model == "gpt-4.1-mini"
+    assert settings.relevance_guard_model == "gpt-4o-mini"
+    assert settings.answer_validation_model == "gpt-4o-mini"

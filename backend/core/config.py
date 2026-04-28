@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     )
     relevance_guard_model: str = Field(
         "gpt-4o-mini",
-        validation_alias=AliasChoices("RELEVANCE_GUARD_MODEL", "GUARDS_MODEL"),
+        alias="RELEVANCE_GUARD_MODEL",
         description="OpenAI model for relevance guard classification. Set to gpt-4.1-mini to roll back.",
     )
     extraction_model: str = Field(
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     )
     answer_validation_model: str = Field(
         "gpt-4o-mini",
-        validation_alias=AliasChoices("VALIDATION_MODEL", "ANSWER_VALIDATION_MODEL"),
+        alias="VALIDATION_MODEL",
         description="OpenAI model for answer grounding validation. Set to gpt-4.1-mini to roll back.",
     )
     answer_validation_max_completion_tokens: int = Field(

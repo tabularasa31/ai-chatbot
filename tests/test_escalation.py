@@ -117,6 +117,25 @@ def test_detect_human_request_russian() -> None:
         assert detect_human_request("хочу поговорить с человеком", "sk-test") is True
 
 
+def test_detect_human_request_uses_guards_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = '{"human_request": true}'
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = response
+
+    monkeypatch.setattr(
+        "backend.escalation.service.get_openai_client",
+        lambda _api_key: mock_client,
+    )
+    monkeypatch.setattr("backend.escalation.service.settings.guards_model", "gpt-test-human-guard")
+
+    assert detect_human_request("please connect me to an operator now", "sk-test") is True
+    assert mock_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-human-guard"
+
+
 def test_compute_priority_t3_enterprise() -> None:
     p = compute_priority(
         EscalationTrigger.user_request,

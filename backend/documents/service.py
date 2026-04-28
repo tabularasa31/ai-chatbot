@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY, MAX_FILE_SIZE
 from backend.documents.language_detection import detect_document_language
+from backend.observability.metrics import capture_event
 from backend.documents.parsers import (
     parse_docx,
     parse_markdown,
@@ -472,6 +473,22 @@ def upload_document(
         doc.status = DocumentStatus.error
     db.commit()
     db.refresh(doc)
+    try:
+        capture_event(
+            "document_indexed",
+            distinct_id=str(tenant_id),
+            tenant_id=str(tenant_id),
+            properties={
+                "document_id": str(doc.id),
+                "file_type": doc.file_type.value,
+                "source_kind": "upload",
+                "language": doc.language,
+                "language_detected": doc.language is not None,
+                "parsed_text_chars": len(doc.parsed_text or ""),
+            },
+        )
+    except Exception:
+        pass
     return doc
 
 

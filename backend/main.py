@@ -78,7 +78,14 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
             "ip_hash": hash_ip_for_logs(get_remote_address(request)),
         },
     )
-    return _rate_limit_exceeded_handler(request, exc)
+    response = _rate_limit_exceeded_handler(request, exc)
+    if "retry-after" not in (k.lower() for k in response.headers.keys()):
+        try:
+            retry_after = int(getattr(exc, "limit", None).limit.get_expiry()) if getattr(exc, "limit", None) else 60
+        except Exception:
+            retry_after = 60
+        response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)

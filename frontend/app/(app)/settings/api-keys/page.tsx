@@ -75,13 +75,6 @@ export default function ApiKeysPage() {
     useState<RotateTenantApiKeyResponse | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [copiedNew, setCopiedNew] = useState(false);
-  // Force re-render once a minute so the "X minutes left" labels on
-  // revoking keys actually count down without a manual reload.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((n) => n + 1), 60_000);
-    return () => clearInterval(id);
-  }, []);
 
   const load = useCallback(async () => {
     try {

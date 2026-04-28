@@ -246,3 +246,45 @@ def test_relevance_checker_timeout_bounded_by_executor_shutdown(
     assert elapsed < 0.3
     assert relevant is True
     assert reason == "timeout"
+
+
+def test_relevance_checker_uses_relevance_guard_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid.uuid4()
+    profile = TenantProfile(
+        tenant_id=tenant_id,
+        product_name="Product",
+        topics=["ModA"],
+        glossary=[],
+        aliases=[],
+        support_email=None,
+        support_urls=[],
+        escalation_policy=None,
+        updated_at=datetime.now(timezone.utc),
+    )
+    mock_openai = Mock()
+    mock_openai.chat.completions.create.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))]
+    )
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_openai_client",
+        lambda _key, **_kw: mock_openai,
+    )
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.settings.relevance_guard_model",
+        "gpt-test-relevance",
+    )
+
+    from backend.guards.relevance_checker import check_relevance_with_profile
+
+    relevant, reason, _profile = check_relevance_with_profile(
+        tenant_id=tenant_id,
+        user_question="how do I configure the integration here",
+        profile=profile,
+        api_key="sk-test",
+    )
+
+    assert relevant is True
+    assert reason == "ok"
+    assert mock_openai.chat.completions.create.call_args.kwargs["model"] == "gpt-test-relevance"

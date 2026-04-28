@@ -187,7 +187,7 @@ def check_relevance_with_profile(
         response = call_openai_with_retry(
             "guard_relevance_check",
             lambda: openai_client.chat.completions.create(
-                model=settings.guards_model,
+                model=settings.relevance_guard_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

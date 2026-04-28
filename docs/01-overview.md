@@ -58,9 +58,10 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 2. Question is embedded
 3. Hybrid retrieval finds relevant chunks (pgvector candidate acquisition + BM25/RRF/reranking)
 4. Retrieval reliability is recorded with overlap / contradiction evidence
-5. Top chunks + question sent to OpenAI `gpt-4o-mini`
-6. Optional validation pass checks whether the answer is grounded in the retrieved context
-7. Answer appears in chat and low-confidence cases can fall back or escalate
+5. Guard classifiers use lightweight OpenAI `gpt-4o-mini` defaults for human-request and relevance checks
+6. Top chunks + question sent to OpenAI `gpt-5-mini`
+7. Optional `gpt-4o-mini` validation pass checks whether the answer is grounded in the retrieved context
+8. Answer appears in chat and low-confidence cases can fall back or escalate
 
 ### 6. Feedback & Improvement
 - Client sees all conversations in dashboard
@@ -104,7 +105,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 
 - **Backend:** FastAPI (Python 3.11) + PostgreSQL + pgvector
 - **Frontend:** Next.js 14 (React/TypeScript) + TailwindCSS
-- **LLM:** OpenAI `gpt-4o-mini` + `text-embedding-3-small` (via client's own API key)
+- **LLM:** OpenAI `gpt-5-mini` for answers, `gpt-4o-mini` for lightweight guard/validation classifiers, and `text-embedding-3-small` for embeddings (via client's own API key)
 - **Email:** Brevo HTTP API
 - **Deployment:** Railway (backend) + Vercel (frontend)
 - **Security:** Multi-tenant isolation by `client_id` on every query
@@ -118,7 +119,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ✅ Multi-tenant client management (API keys)  
 ✅ Document upload (PDF, Markdown, Swagger/OpenAPI)  
 ✅ URL knowledge sources with refresh and per-page deletion
-✅ RAG-powered chat API (gpt-4o-mini)  
+✅ RAG-powered chat API (`gpt-5-mini` answers + lightweight `gpt-4o-mini` guard/validation classifiers)
 ✅ Hybrid retrieval with pgvector on PostgreSQL and SQLite test-path parity for downstream BM25/RRF/reranking orchestration  
 ✅ Retrieval reliability signals and contradiction policy
 ✅ Zero-config embeddable widget (iframe, no CORS issues)

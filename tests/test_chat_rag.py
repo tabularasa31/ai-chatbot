@@ -310,6 +310,21 @@ def test_validate_answer_prompt_allows_single_clarifying_question(
     assert "section-path labels" in prompt
 
 
+def test_validate_answer_uses_validation_model(
+    mock_openai_client: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "answer_validation_model", "gpt-test-validation")
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content='{"is_valid": true, "confidence": 0.95, "reason": "grounded"}'))
+    ]
+
+    result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
+
+    assert result["is_valid"] is True
+    assert mock_openai_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-validation"
+
+
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     """With chunks, calls OpenAI and returns answer + tokens."""
     mock_openai_client.chat.completions.create.return_value.choices = [

@@ -1349,6 +1349,7 @@ def embed_query(
             model=settings.embedding_model,
             input=query,
         ),
+        call_type="embedding",
     )
     return response.data[0].embedding
 
@@ -1369,6 +1370,7 @@ def embed_queries(
             model=settings.embedding_model,
             input=queries,
         ),
+        call_type="embedding",
     )
     return [item.embedding for item in response.data]
 

@@ -24,7 +24,8 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
@@ -919,7 +920,13 @@ def run_chat_pipeline(
         base_variant_vectors = _base_embed_future.result(
             timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS
         )
-    except (APITimeoutError, APIConnectionError, RateLimitError):
+    except (
+        APITimeoutError,
+        APIConnectionError,
+        RateLimitError,
+        FutureTimeoutError,
+        CancelledError,
+    ):
         logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
         base_variant_vectors = []
 

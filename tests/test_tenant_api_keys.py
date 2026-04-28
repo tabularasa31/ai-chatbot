@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -276,6 +277,46 @@ def test_rotate_rate_limited_per_tenant(
         set_owner_jwt_rate_limit_key_override(None)
 
 
+def test_retry_after_uses_remaining_rate_limit_window(monkeypatch) -> None:
+    from backend import main as app_main
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
+    )
+
+    class FakeStorageLimiter:
+        @staticmethod
+        def get_window_stats(limit, *args):
+            assert limit == "limit"
+            assert args == ("key", "scope")
+            return (125.2, 0)
+
+    monkeypatch.setattr(app_main.limiter, "_limiter", FakeStorageLimiter())
+    monkeypatch.setattr(app_main.time, "time", lambda: 100.0)
+
+    assert app_main._retry_after_seconds(request) == 26
+
+
+def test_retry_after_falls_back_when_window_stats_unavailable(monkeypatch) -> None:
+    from backend import main as app_main
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
+    )
+
+    class BrokenStorageLimiter:
+        @staticmethod
+        def get_window_stats(*_args):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(app_main.limiter, "_limiter", BrokenStorageLimiter())
+
+    assert (
+        app_main._retry_after_seconds(request)
+        == app_main.RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
+    )
+
+
 def test_revoke_rate_limited_per_tenant(
     tenant: TestClient, db_session: Session
 ) -> None:
@@ -325,5 +366,3 @@ def test_rotate_requires_owner_role(
         json={"reason": "scheduled"},
     )
     assert resp.status_code == 403
-
-

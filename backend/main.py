@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 logger = logging.getLogger(__name__)
+RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS = 60
 
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
@@ -79,13 +81,22 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
         },
     )
     response = _rate_limit_exceeded_handler(request, exc)
-    if "retry-after" not in (k.lower() for k in response.headers.keys()):
-        try:
-            retry_after = int(getattr(exc, "limit", None).limit.get_expiry()) if getattr(exc, "limit", None) else 60
-        except Exception:
-            retry_after = 60
+    if response.headers.get("Retry-After") is None:
+        retry_after = _retry_after_seconds(request)
         response.headers["Retry-After"] = str(retry_after)
     return response
+
+
+def _retry_after_seconds(request: Request) -> int:
+    current_limit = getattr(request.state, "view_rate_limit", None)
+    if current_limit is None:
+        return RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
+    try:
+        limit, args = current_limit
+        reset_at, _remaining = limiter.limiter.get_window_stats(limit, *args)
+    except Exception:
+        return RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
+    return max(1, int(reset_at - time.time()) + 1)
 
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)

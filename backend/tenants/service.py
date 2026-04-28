@@ -132,12 +132,14 @@ def get_tenant_by_id(
 
 
 def get_tenant_by_api_key(api_key: str, db: Session) -> Tenant | None:
-    """Get tenant by widget API key. Lookup goes through tenant_api_keys
-    by hash; revoked / expired keys return None."""
+    """Resolve a tenant by a plaintext widget API key.
+
+    Lookup goes through tenant_api_keys by hash; revoked or expired keys
+    return ``None``. Used by /widget endpoints and the X-API-Key header
+    on /chat.
+    """
     result = find_active_tenant_by_plain_key(api_key, db)
-    if result is None:
-        return None
-    return result[0]
+    return None if result is None else result[0]
 
 
 def get_primary_api_key_hint(tenant_id: uuid.UUID, db: Session) -> str | None:

@@ -205,30 +205,6 @@ def test_delete_client_wrong_user(tenant: TestClient, db_session: Session) -> No
     assert response.status_code == 404
 
 
-def test_validate_api_key_valid(tenant: TestClient, db_session: Session) -> None:
-    """Valid api_key → returns tenant_id and name."""
-    token = register_and_verify_user(tenant, db_session, email="val@example.com")
-    create_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Validate Tenant"},
-    )
-    api_key = create_resp.json()["api_key"]
-    tenant_id = create_resp.json()["id"]
-
-    response = tenant.get(f"/tenants/validate/{api_key}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["tenant_id"] == str(tenant_id)
-    assert data["name"] == "Validate Tenant"
-
-
-def test_validate_api_key_invalid(tenant: TestClient) -> None:
-    """Wrong key → 404."""
-    response = tenant.get("/tenants/validate/invalid-key-12345")
-    assert response.status_code == 404
-
-
 def test_api_key_is_ck_prefixed(tenant: TestClient, db_session: Session) -> None:
     """Verify api_key is ck_-prefixed, 35 chars total."""
     token = register_and_verify_user(tenant, db_session, email="len@example.com")

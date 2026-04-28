@@ -3,12 +3,11 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
-from backend.core.limiter import limiter
 from backend.models import User
 from backend.observability.metrics import capture_event, group_identify
 from backend.tenants.api_keys_service import (
@@ -33,7 +32,6 @@ from backend.tenants.schemas import (
     UpdatePrivacyConfigRequest,
     UpdateSupportSettingsRequest,
     UpdateTenantRequest,
-    ValidateApiKeyResponse,
 )
 from backend.tenants.service import (
     create_tenant,
@@ -43,7 +41,6 @@ from backend.tenants.service import (
     get_primary_api_key_hint,
     get_redaction_config_for_user,
     get_support_settings_for_user,
-    get_tenant_by_api_key,
     get_tenant_by_id,
     get_tenant_by_user,
     rotate_kyc_secret,
@@ -327,25 +324,6 @@ def update_my_client(
             ) from e
         raise
     return _tenant_to_response(tenant, db)
-
-
-@tenants_router.get("/validate/{api_key}", response_model=ValidateApiKeyResponse, include_in_schema=False)
-@limiter.limit("20/minute")
-def validate_api_key(
-    request: Request,
-    api_key: str,
-    db: Annotated[Session, Depends(get_db)],
-) -> ValidateApiKeyResponse:
-    """
-    Validate API key (PUBLIC — no JWT needed).
-
-    Used by chat/widget to validate API key.
-    Returns 404 if invalid API key.
-    """
-    tenant = get_tenant_by_api_key(api_key, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Invalid API key")
-    return ValidateApiKeyResponse(tenant_id=tenant.id, name=tenant.name)
 
 
 @tenants_router.get("/{tenant_id}", response_model=TenantResponse, include_in_schema=False)

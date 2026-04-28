@@ -103,13 +103,6 @@ class TenantListResponse(BaseModel):
     clients: list[TenantResponse]
 
 
-class ValidateApiKeyResponse(BaseModel):
-    """Response for API key validation (public endpoint)."""
-
-    tenant_id: uuid.UUID
-    name: str
-
-
 class KycSecretGeneratedResponse(BaseModel):
     """One-time plaintext signing secret after generate or rotate."""
 

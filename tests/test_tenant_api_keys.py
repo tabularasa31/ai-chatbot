@@ -249,11 +249,3 @@ def test_rotate_requires_owner_role(
     assert resp.status_code == 403
 
 
-def test_validate_endpoint_uses_hashed_lookup(
-    tenant: TestClient, db_session: Session
-) -> None:
-    _, plain = _create_tenant(tenant, db_session, "rot-validate@example.com")
-    resp = tenant.get(f"/tenants/validate/{plain}")
-    assert resp.status_code == 200
-    bad = tenant.get(f"/tenants/validate/{plain[:-1]}x")
-    assert bad.status_code == 404

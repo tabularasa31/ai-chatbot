@@ -42,7 +42,7 @@ Railway auto-deploys on merge to `main` via `Procfile` release step. Confirm:
 ```bash
 git fetch origin main
 git log --oneline origin/main -3   # confirm merge commit on top
-curl -s https://ai-chatbot-production-6531.up.railway.app/health
+curl -s https://api.getchat9.live/health
 # {"status":"ok"} — deploy is up
 ```
 

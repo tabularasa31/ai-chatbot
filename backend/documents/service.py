@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY, MAX_FILE_SIZE
 from backend.documents.language_detection import detect_document_language
-from backend.observability.metrics import capture_event
 from backend.documents.parsers import (
     parse_docx,
     parse_markdown,
@@ -24,6 +23,7 @@ from backend.documents.parsers import (
 )
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
 from backend.models import Document, DocumentStatus, DocumentType
+from backend.observability.metrics import capture_event
 
 _HEALTH_WARNING_TYPES = frozenset(
     {

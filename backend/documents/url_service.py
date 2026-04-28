@@ -44,7 +44,6 @@ from backend.documents.quick_answers import (
 from backend.documents.sitemap import DISCOVERY_ESTIMATE_CAP, MAX_DISCOVERY_DEPTH
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
-from backend.observability.metrics import capture_event
 from backend.models import (
     Document,
     DocumentStatus,
@@ -57,6 +56,7 @@ from backend.models import (
     UrlSource,
     UrlSourceRun,
 )
+from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
 

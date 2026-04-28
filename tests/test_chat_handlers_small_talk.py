@@ -73,7 +73,9 @@ def _make_persisted_chat(db: Session, tenant: Tenant) -> Chat:
 def test_can_handle_returns_true_for_single_word(db_session: Session) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="hi")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
 
     assert SmallTalkHandler().can_handle(ctx) is True
 
@@ -92,7 +94,9 @@ def test_can_handle_returns_false_for_empty_input(db_session: Session) -> None:
     """Empty input is GreetingHandler's domain, not small-talk's."""
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text=""
+    )
 
     assert SmallTalkHandler().can_handle(ctx) is False
 
@@ -102,17 +106,23 @@ def test_can_handle_returns_false_when_chat_ended(db_session: Session) -> None:
     chat = _make_persisted_chat(db_session, tenant)
     chat.ended_at = datetime.now(UTC)
     db_session.flush()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="hi")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
 
     assert SmallTalkHandler().can_handle(ctx) is False
 
 
-def test_can_handle_returns_false_when_escalation_followup_pending(db_session: Session) -> None:
+def test_can_handle_returns_false_when_escalation_followup_pending(
+    db_session: Session,
+) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     chat.escalation_followup_pending = True
     db_session.flush()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="yes")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="yes"
+    )
 
     assert SmallTalkHandler().can_handle(ctx) is False
 
@@ -123,7 +133,9 @@ def test_can_handle_returns_false_when_awaiting_ticket_id(db_session: Session) -
     # Set in-memory only — the FK to escalation_tickets isn't relevant for the
     # gate logic, which only checks the value's truthiness.
     chat.escalation_awaiting_ticket_id = uuid.uuid4()
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="ok")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="ok"
+    )
 
     assert SmallTalkHandler().can_handle(ctx) is False
 
@@ -141,7 +153,8 @@ def test_can_handle_returns_false_for_structural_injection(
         detected = True
 
     monkeypatch.setattr(
-        "backend.chat.handlers.small_talk.detect_injection_structural", lambda *_: _Hit()
+        "backend.chat.handlers.small_talk.detect_injection_structural",
+        lambda *_: _Hit(),
     )
     assert SmallTalkHandler().can_handle(ctx) is False
 
@@ -159,13 +172,18 @@ def test_handle_persists_both_user_and_assistant_messages(
 
     def fake_generate(**kwargs: Any) -> LocalizationResult:
         captured_kwargs.update(kwargs)
-        return LocalizationResult(text="Hi there, I am the Acme assistant.", tokens_used=8)
+        return LocalizationResult(
+            text="Hi there, I am the Acme assistant.", tokens_used=8
+        )
 
     monkeypatch.setattr(
-        "backend.chat.handlers.greeting.generate_greeting_in_language_result", fake_generate
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        fake_generate,
     )
 
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="hi")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
     outcome = SmallTalkHandler().handle(ctx)
 
     assert outcome.text == "Hi there, I am the Acme assistant."

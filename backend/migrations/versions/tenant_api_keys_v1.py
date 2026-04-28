@@ -82,6 +82,15 @@ def upgrade() -> None:
                     "ON tenant_api_keys (tenant_id, status)"
                 )
             )
+            # Partial unique index — at most one ACTIVE row per tenant.
+            # Belt-and-braces against rotation races (double-clicked button,
+            # retried POST) that could otherwise leave two ACTIVE keys.
+            op.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_api_keys_one_active "
+                    "ON tenant_api_keys (tenant_id) WHERE status = 'active'"
+                )
+            )
         else:
             op.execute(
                 text(
@@ -122,6 +131,13 @@ def upgrade() -> None:
                     "ON tenant_api_keys (tenant_id, status)"
                 )
             )
+            # Partial unique index — SQLite supports the syntax too.
+            op.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_api_keys_one_active "
+                    "ON tenant_api_keys (tenant_id) WHERE status = 'active'"
+                )
+            )
 
     # 2. Backfill from legacy tenants.api_key column (if still present).
     if _has_column(insp, "tenants", "api_key"):
@@ -158,7 +174,28 @@ def upgrade() -> None:
                 },
             )
 
-        # 3. Drop the legacy column.
+        # 3. Drop the legacy column — but only after confirming every
+        # tenant that had a non-null api_key now has at least one row in
+        # tenant_api_keys. Defensive against a partial backfill failure
+        # being followed by a rerun that would otherwise drop the source
+        # column without ever finishing the migration.
+        unmigrated = bind.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM tenants t
+                WHERE t.api_key IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM tenant_api_keys k WHERE k.tenant_id = t.id
+                  )
+                """
+            )
+        ).scalar()
+        if unmigrated and unmigrated > 0:
+            raise RuntimeError(
+                f"tenant_api_keys backfill incomplete: {unmigrated} tenants "
+                "still have a legacy api_key but no hashed row. Refusing to "
+                "drop tenants.api_key. Inspect logs and rerun."
+            )
         if dialect == "postgresql":
             op.execute(text("ALTER TABLE tenants DROP COLUMN api_key"))
         else:

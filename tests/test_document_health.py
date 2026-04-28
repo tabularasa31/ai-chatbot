@@ -5,8 +5,19 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.documents.service import _compute_health_score, _normalize_warnings, run_document_health_check
-from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding, User
+from backend.documents.service import (
+    _compute_health_score,
+    _normalize_warnings,
+    run_document_health_check,
+)
+from backend.models import (
+    Tenant,
+    Document,
+    DocumentStatus,
+    DocumentType,
+    Embedding,
+    User,
+)
 from tests.conftest import register_and_verify_user
 
 
@@ -72,7 +83,9 @@ def test_normalize_warnings_filters_invalid() -> None:
     assert out[0]["type"] == "poor_structure"
 
 
-def test_get_document_health_404_when_null(tenant: TestClient, db_session: Session) -> None:
+def test_get_document_health_404_when_null(
+    tenant: TestClient, db_session: Session
+) -> None:
     token = register_and_verify_user(tenant, db_session, email="health404@example.com")
     tenant.post(
         "/tenants",
@@ -95,7 +108,9 @@ def test_get_document_health_404_when_null(tenant: TestClient, db_session: Sessi
     assert "not yet available" in r.json()["detail"].lower()
 
 
-def test_document_health_ownership_enforced(tenant: TestClient, db_session: Session) -> None:
+def test_document_health_ownership_enforced(
+    tenant: TestClient, db_session: Session
+) -> None:
     token_a = register_and_verify_user(tenant, db_session, email="owner_a@example.com")
     tenant.post(
         "/tenants",
@@ -141,7 +156,9 @@ def test_run_document_health_check_flags_short_document(db_session: Session) -> 
     assert [warning["type"] for warning in result["warnings"]] == ["empty_or_too_short"]
 
 
-def test_run_document_health_check_uses_parsed_text_not_embedding_chunks(db_session: Session) -> None:
+def test_run_document_health_check_uses_parsed_text_not_embedding_chunks(
+    db_session: Session,
+) -> None:
     structured_text = "\n".join(
         [
             "# TurboFlare",
@@ -192,7 +209,8 @@ def test_run_document_health_check_flags_poor_structure(db_session: Session) -> 
         db_session,
         email="poor-structure@example.com",
         filename="long.md",
-        parsed_text="# Big Guide\n\n" + ("One long section without subheadings. " * 140),
+        parsed_text="# Big Guide\n\n"
+        + ("One long section without subheadings. " * 140),
     )
 
     result = run_document_health_check(doc.id, db_session)
@@ -200,7 +218,9 @@ def test_run_document_health_check_flags_poor_structure(db_session: Session) -> 
     assert "poor_structure" in [warning["type"] for warning in result["warnings"]]
 
 
-def test_run_document_health_check_flags_incomplete_section(db_session: Session) -> None:
+def test_run_document_health_check_flags_incomplete_section(
+    db_session: Session,
+) -> None:
     doc = _create_ready_document(
         db_session,
         email="incomplete@example.com",
@@ -213,7 +233,9 @@ def test_run_document_health_check_flags_incomplete_section(db_session: Session)
     assert "incomplete_section" in [warning["type"] for warning in result["warnings"]]
 
 
-def test_run_document_health_check_allows_nested_subsections(db_session: Session) -> None:
+def test_run_document_health_check_allows_nested_subsections(
+    db_session: Session,
+) -> None:
     doc = _create_ready_document(
         db_session,
         email="nested-sections@example.com",
@@ -252,11 +274,17 @@ def test_run_document_health_check_flags_parse_issue(db_session: Session) -> Non
 
     result = run_document_health_check(doc.id, db_session)
 
-    assert "parse_or_extraction_issue" in [warning["type"] for warning in result["warnings"]]
+    assert "parse_or_extraction_issue" in [
+        warning["type"] for warning in result["warnings"]
+    ]
 
 
-def test_run_document_health_check_flags_low_information_density(db_session: Session) -> None:
-    repetitive_line = "Status page overview and status page overview for every status page visitor."
+def test_run_document_health_check_flags_low_information_density(
+    db_session: Session,
+) -> None:
+    repetitive_line = (
+        "Status page overview and status page overview for every status page visitor."
+    )
     doc = _create_ready_document(
         db_session,
         email="density@example.com",
@@ -266,10 +294,14 @@ def test_run_document_health_check_flags_low_information_density(db_session: Ses
 
     result = run_document_health_check(doc.id, db_session)
 
-    assert "low_information_density" in [warning["type"] for warning in result["warnings"]]
+    assert "low_information_density" in [
+        warning["type"] for warning in result["warnings"]
+    ]
 
 
-def test_get_health_after_run_via_api_without_openai_key(tenant: TestClient, db_session: Session) -> None:
+def test_get_health_after_run_via_api_without_openai_key(
+    tenant: TestClient, db_session: Session
+) -> None:
     token = register_and_verify_user(tenant, db_session, email="apihealth@example.com")
     tenant.post(
         "/tenants",

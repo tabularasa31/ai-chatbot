@@ -37,6 +37,7 @@ from backend.models import (
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture()
 def client_row(db_session):
     user = User(
@@ -48,7 +49,8 @@ def client_row(db_session):
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Test Tenant",public_id="test-public-id",
+        name="Test Tenant",
+        public_id="test-public-id",
     )
     db_session.add(tenant)
     db_session.commit()
@@ -88,6 +90,7 @@ def _make_message(
 
 # ── test_clustering_batch_only ────────────────────────────────────────────────
 
+
 def test_clustering_batch_only(db_session, client_row, chat_session):
     """Clustering must only use messages within the current batch.
 
@@ -123,6 +126,7 @@ def test_clustering_batch_only(db_session, client_row, chat_session):
 
 # ── test_watermark_delayed_insert ─────────────────────────────────────────────
 
+
 def test_watermark_delayed_insert(db_session, client_row, chat_session):
     """Messages created within the last 30 s must not appear in the batch."""
     from backend.jobs.analyze_chat_logs import _load_messages
@@ -131,14 +135,20 @@ def test_watermark_delayed_insert(db_session, client_row, chat_session):
 
     # Message 45 s ago — should be included
     old_msg = _make_message(
-        db_session, chat_session, MessageRole.user, "Old message",
+        db_session,
+        chat_session,
+        MessageRole.user,
+        "Old message",
         created_at=now - timedelta(seconds=45),
     )
     db_session.commit()
 
     # Message 15 s ago — within 30 s guard, must NOT be included
     recent_msg = _make_message(
-        db_session, chat_session, MessageRole.user, "Recent message",
+        db_session,
+        chat_session,
+        MessageRole.user,
+        "Recent message",
         created_at=now - timedelta(seconds=15),
     )
     db_session.commit()
@@ -151,6 +161,7 @@ def test_watermark_delayed_insert(db_session, client_row, chat_session):
 
 
 # ── test_max_faq_per_run ──────────────────────────────────────────────────────
+
 
 def test_max_faq_per_run():
     """25 clusters → only MAX_FAQ_PER_RUN=20 candidates, largest first."""
@@ -185,6 +196,7 @@ def test_max_faq_per_run():
 
 # ── test_answer_is_next_message ───────────────────────────────────────────────
 
+
 def test_answer_is_next_message(db_session, client_row, chat_session):
     """Answer must be the next assistant message after the specific user message."""
     from backend.jobs.analyze_chat_logs import _get_answer_for_message
@@ -192,28 +204,36 @@ def test_answer_is_next_message(db_session, client_row, chat_session):
     now = datetime.now(timezone.utc)
 
     user_msg = _make_message(
-        db_session, chat_session, MessageRole.user, "What is the refund policy?",
+        db_session,
+        chat_session,
+        MessageRole.user,
+        "What is the refund policy?",
         created_at=now - timedelta(seconds=30),
     )
     # This should be selected (immediately after user message)
     correct_answer = _make_message(
-        db_session, chat_session, MessageRole.assistant, "Refunds are processed in 7 days.",
+        db_session,
+        chat_session,
+        MessageRole.assistant,
+        "Refunds are processed in 7 days.",
         created_at=now - timedelta(seconds=20),
     )
     # A later assistant message — should NOT be selected
     _make_message(
-        db_session, chat_session, MessageRole.assistant, "Is there anything else?",
+        db_session,
+        chat_session,
+        MessageRole.assistant,
+        "Is there anything else?",
         created_at=now - timedelta(seconds=10),
     )
     db_session.commit()
 
-    answer_text, _ = _get_answer_for_message(
-        db_session, user_msg.id, chat_session.id
-    )
+    answer_text, _ = _get_answer_for_message(db_session, user_msg.id, chat_session.id)
     assert answer_text == correct_answer.content
 
 
 # ── test_thumbs_down_skip ─────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_thumbs_down_skip(db_session, client_row, chat_session):
@@ -228,11 +248,17 @@ async def test_thumbs_down_skip(db_session, client_row, chat_session):
     user_msgs = []
     for i in range(3):
         user_msg = _make_message(
-            db_session, chat_session, MessageRole.user, f"Bad question {i}",
+            db_session,
+            chat_session,
+            MessageRole.user,
+            f"Bad question {i}",
             created_at=now - timedelta(seconds=60 + i),
         )
         _make_message(
-            db_session, chat_session, MessageRole.assistant, f"Bad answer {i}",
+            db_session,
+            chat_session,
+            MessageRole.assistant,
+            f"Bad answer {i}",
             created_at=now - timedelta(seconds=50 + i),
             feedback=MessageFeedback.down,
         )
@@ -247,11 +273,14 @@ async def test_thumbs_down_skip(db_session, client_row, chat_session):
         )
 
     # All-thumbs-down → no FAQ candidate should be created
-    faq_count_before = db_session.query(TenantFaq).filter_by(tenant_id=client_row.id).count()
+    faq_count_before = (
+        db_session.query(TenantFaq).filter_by(tenant_id=client_row.id).count()
+    )
     assert faq_count_before == 0
 
 
 # ── test_embedding_throttle ───────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_embedding_throttle(db_session, client_row):
@@ -280,11 +309,15 @@ async def test_embedding_throttle(db_session, client_row):
     async def mock_sleep(sec):
         sleep_calls.append(sec)
 
-    with patch("backend.jobs.analyze_chat_logs.get_openai_client", return_value=mock_openai), \
-         patch("backend.jobs.analyze_chat_logs._get_cached_embeddings", return_value={}), \
-         patch("backend.jobs.analyze_chat_logs._save_embeddings"), \
-         patch("backend.jobs.analyze_chat_logs._touch_embeddings"), \
-         patch("asyncio.sleep", side_effect=mock_sleep):
+    with (
+        patch(
+            "backend.jobs.analyze_chat_logs.get_openai_client", return_value=mock_openai
+        ),
+        patch("backend.jobs.analyze_chat_logs._get_cached_embeddings", return_value={}),
+        patch("backend.jobs.analyze_chat_logs._save_embeddings"),
+        patch("backend.jobs.analyze_chat_logs._touch_embeddings"),
+        patch("asyncio.sleep", side_effect=mock_sleep),
+    ):
         await _generate_embeddings(messages, "sk-test", db_session, client_row.id)
 
     # 250 messages / 100 per batch = 3 batches → 2 intermediate sleeps
@@ -292,6 +325,7 @@ async def test_embedding_throttle(db_session, client_row):
 
 
 # ── test_job_timeout ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_job_timeout(db_session, client_row):
@@ -334,9 +368,14 @@ async def test_job_timeout(db_session, client_row):
 
 # ── test_faq_entry_has_explainability_fields ──────────────────────────────────
 
+
 def test_faq_entry_has_explainability_fields(db_session, client_row, chat_session):
     """FAQEntry must contain cluster_size and source_message_ids (up to 10 IDs)."""
-    from backend.jobs.analyze_chat_logs import MessageRow, _create_faq_candidate, ClusterMember
+    from backend.jobs.analyze_chat_logs import (
+        MessageRow,
+        _create_faq_candidate,
+        ClusterMember,
+    )
 
     now = datetime.now(timezone.utc)
     cluster = [
@@ -361,8 +400,12 @@ def test_faq_entry_has_explainability_fields(db_session, client_row, chat_sessio
         data=[MagicMock(embedding=[0.1] * 1536)]
     )
 
-    with patch("backend.jobs.analyze_chat_logs.get_openai_client", return_value=mock_openai), \
-        patch("backend.jobs.analyze_chat_logs._find_existing_faq", return_value=None):
+    with (
+        patch(
+            "backend.jobs.analyze_chat_logs.get_openai_client", return_value=mock_openai
+        ),
+        patch("backend.jobs.analyze_chat_logs._find_existing_faq", return_value=None),
+    ):
         created = _create_faq_candidate(
             db_session, client_row.id, representative, best_member, cluster, "sk-test"
         )
@@ -377,6 +420,7 @@ def test_faq_entry_has_explainability_fields(db_session, client_row, chat_sessio
 
 
 # ── test_analysis_version_resets_watermark ────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_analysis_version_resets_watermark(db_session, client_row):
@@ -397,8 +441,10 @@ async def test_analysis_version_resets_watermark(db_session, client_row):
     old_watermark = state.last_run_started_at
 
     # Mock the job to avoid full run
-    with patch("backend.jobs.analyze_chat_logs._load_messages", return_value=[]), \
-         patch("backend.jobs.analyze_chat_logs._finalize_job"):
+    with (
+        patch("backend.jobs.analyze_chat_logs._load_messages", return_value=[]),
+        patch("backend.jobs.analyze_chat_logs._finalize_job"),
+    ):
         await run_job(
             tenant_id=client_row.id,
             api_key="sk-test",
@@ -417,6 +463,7 @@ async def test_analysis_version_resets_watermark(db_session, client_row):
 
 
 # ── test_is_running_released_on_failure ───────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_is_running_released_on_failure(db_session, client_row):
@@ -441,7 +488,9 @@ async def test_is_running_released_on_failure(db_session, client_row):
         )
 
     db_session.expire_all()
-    state = db_session.query(LogAnalysisState).filter_by(tenant_id=client_row.id).first()
+    state = (
+        db_session.query(LogAnalysisState).filter_by(tenant_id=client_row.id).first()
+    )
     assert state is not None
     assert state.is_running is False, "is_running must be FALSE after job failure"
     assert state.last_run_status == "failed"

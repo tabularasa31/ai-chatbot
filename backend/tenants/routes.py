@@ -220,7 +220,7 @@ def revoke_api_key_route(
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
     assert_owner(current_user, tenant.id)
-    row = revoke_api_key(tenant.id, key_id, db, reason="compromise")
+    row = revoke_api_key(tenant.id, key_id, db, reason="manual")
     try:
         capture_event(
             "tenant.api_key.revoked",

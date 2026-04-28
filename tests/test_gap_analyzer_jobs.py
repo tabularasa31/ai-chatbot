@@ -102,12 +102,16 @@ def _wait_for(predicate, timeout: float = 1.0) -> bool:
 # Job lifecycle & repository
 # ---------------------------------------------------------------------------
 
+
 def test_job_lease_refresh_extends_expiration(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     _, tenant_id = _create_client_and_token(
-        tenant, db_session, email="gap-jobs-lease@example.com", name="Gap Jobs Lease Tenant"
+        tenant,
+        db_session,
+        email="gap-jobs-lease@example.com",
+        name="Gap Jobs Lease Tenant",
     )
     job = GapAnalyzerJob(
         tenant_id=tenant_id,
@@ -137,7 +141,10 @@ def test_fail_job_truncates_error_to_tail(
     db_session: Session,
 ) -> None:
     _, tenant_id = _create_client_and_token(
-        tenant, db_session, email="gap-jobs-error@example.com", name="Gap Jobs Error Tenant"
+        tenant,
+        db_session,
+        email="gap-jobs-error@example.com",
+        name="Gap Jobs Error Tenant",
     )
     job = GapAnalyzerJob(
         tenant_id=tenant_id,
@@ -153,7 +160,9 @@ def test_fail_job_truncates_error_to_tail(
 
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     error_message = "head\n" + ("middle\n" * 1000) + "ValueError: final failure"
-    repository.fail_gap_job(job_id=job.id, tenant_id=tenant_id, error_message=error_message)
+    repository.fail_gap_job(
+        job_id=job.id, tenant_id=tenant_id, error_message=error_message
+    )
     db_session.commit()
     db_session.refresh(job)
 
@@ -168,13 +177,23 @@ def test_complete_job_ignores_other_tenant(
     db_session: Session,
 ) -> None:
     _, tenant_a = _create_client_and_token(
-        tenant, db_session, email="gap-jobs-complete-a@example.com", name="Gap Jobs Complete A"
+        tenant,
+        db_session,
+        email="gap-jobs-complete-a@example.com",
+        name="Gap Jobs Complete A",
     )
     _, tenant_b = _create_client_and_token(
-        tenant, db_session, email="gap-jobs-complete-b@example.com", name="Gap Jobs Complete B"
+        tenant,
+        db_session,
+        email="gap-jobs-complete-b@example.com",
+        name="Gap Jobs Complete B",
     )
-    job_a = GapAnalyzerJob(tenant_id=tenant_a, job_kind="mode_a", status="in_progress", trigger="manual")
-    job_b = GapAnalyzerJob(tenant_id=tenant_b, job_kind="mode_b", status="in_progress", trigger="manual")
+    job_a = GapAnalyzerJob(
+        tenant_id=tenant_a, job_kind="mode_a", status="in_progress", trigger="manual"
+    )
+    job_b = GapAnalyzerJob(
+        tenant_id=tenant_b, job_kind="mode_b", status="in_progress", trigger="manual"
+    )
     db_session.add_all([job_a, job_b])
     db_session.commit()
     db_session.refresh(job_a)
@@ -203,10 +222,16 @@ def test_fail_job_ignores_other_tenant(
         tenant, db_session, email="gap-jobs-fail-b@example.com", name="Gap Jobs Fail B"
     )
     job_a = GapAnalyzerJob(
-        tenant_id=tenant_a, job_kind="mode_a", status="in_progress", trigger="manual",
-        attempt_count=1, max_attempts=1,
+        tenant_id=tenant_a,
+        job_kind="mode_a",
+        status="in_progress",
+        trigger="manual",
+        attempt_count=1,
+        max_attempts=1,
     )
-    job_b = GapAnalyzerJob(tenant_id=tenant_b, job_kind="mode_b", status="in_progress", trigger="manual")
+    job_b = GapAnalyzerJob(
+        tenant_id=tenant_b, job_kind="mode_b", status="in_progress", trigger="manual"
+    )
     db_session.add_all([job_a, job_b])
     db_session.commit()
     db_session.refresh(job_a)
@@ -230,32 +255,54 @@ def test_fail_job_ignores_other_tenant(
 # BM25 search
 # ---------------------------------------------------------------------------
 
+
 def test_bm25_returns_exact_title_and_body_matches(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
     _, tenant_id = _create_client_and_token(
-        tenant, db_session, email="gap-bm25-stream@example.com", name="Gap BM25 Stream Tenant"
+        tenant,
+        db_session,
+        email="gap-bm25-stream@example.com",
+        name="Gap BM25 Stream Tenant",
     )
     title_document = Document(
-        tenant_id=tenant_id, filename="Invoice Exports",
-        file_type=DocumentType.markdown, status=DocumentStatus.ready,
+        tenant_id=tenant_id,
+        filename="Invoice Exports",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
     )
     body_document = Document(
-        tenant_id=tenant_id, filename="guide.md",
-        file_type=DocumentType.markdown, status=DocumentStatus.ready,
+        tenant_id=tenant_id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
     )
     filler_document = Document(
-        tenant_id=tenant_id, filename="faq.md",
-        file_type=DocumentType.markdown, status=DocumentStatus.ready,
+        tenant_id=tenant_id,
+        filename="faq.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
     )
     db_session.add_all([title_document, body_document, filler_document])
     db_session.flush()
     db_session.add_all(
         [
-            Embedding(document_id=title_document.id, chunk_text="overview only", vector=[0.1] * 1536),
-            Embedding(document_id=body_document.id, chunk_text="invoice exports and billing workflows", vector=[0.1] * 1536),
-            Embedding(document_id=filler_document.id, chunk_text="account profile settings and notifications", vector=[0.1] * 1536),
+            Embedding(
+                document_id=title_document.id,
+                chunk_text="overview only",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=body_document.id,
+                chunk_text="invoice exports and billing workflows",
+                vector=[0.1] * 1536,
+            ),
+            Embedding(
+                document_id=filler_document.id,
+                chunk_text="account profile settings and notifications",
+                vector=[0.1] * 1536,
+            ),
         ]
     )
     db_session.commit()
@@ -281,15 +328,26 @@ def test_bm25_handles_single_term_queries(
     db_session: Session,
 ) -> None:
     _, tenant_id = _create_client_and_token(
-        tenant, db_session, email="gap-bm25-single@example.com", name="Gap BM25 Single Tenant"
+        tenant,
+        db_session,
+        email="gap-bm25-single@example.com",
+        name="Gap BM25 Single Tenant",
     )
     document = Document(
-        tenant_id=tenant_id, filename="guide.md",
-        file_type=DocumentType.markdown, status=DocumentStatus.ready,
+        tenant_id=tenant_id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
     )
     db_session.add(document)
     db_session.flush()
-    db_session.add(Embedding(document_id=document.id, chunk_text="billing exports workflow", vector=[0.1] * 1536))
+    db_session.add(
+        Embedding(
+            document_id=document.id,
+            chunk_text="billing exports workflow",
+            vector=[0.1] * 1536,
+        )
+    )
     db_session.commit()
 
     match = SqlAlchemyGapAnalyzerRepository(db_session).bm25_match_for_tenant(
@@ -338,12 +396,20 @@ def test_bm25_cache_reuses_corpus_until_invalidated(
     db_session.add(client_record)
     db_session.flush()
     document = Document(
-        tenant_id=client_record.id, filename="guide.md",
-        file_type=DocumentType.markdown, status=DocumentStatus.ready,
+        tenant_id=client_record.id,
+        filename="guide.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
     )
     db_session.add(document)
     db_session.flush()
-    db_session.add(Embedding(document_id=document.id, chunk_text="billing exports workflow", vector=[0.1] * 1536))
+    db_session.add(
+        Embedding(
+            document_id=document.id,
+            chunk_text="billing exports workflow",
+            vector=[0.1] * 1536,
+        )
+    )
     db_session.commit()
 
     invalidate_bm25_cache_for_tenant(client_record.id)
@@ -382,6 +448,7 @@ def test_bm25_cache_reuses_corpus_until_invalidated(
 # Job runner
 # ---------------------------------------------------------------------------
 
+
 def test_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> None:
     import backend.gap_analyzer.jobs as gap_jobs_module
 
@@ -406,7 +473,9 @@ def test_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> No
 
     start_gap_analyzer_job_runner()
 
-    assert done.wait(1.0), "runner should perform a second drain pass after restart is requested"
+    assert done.wait(1.0), (
+        "runner should perform a second drain pass after restart is requested"
+    )
     for _ in range(50):
         if not gap_jobs_module._job_runner_state.active:
             break
@@ -418,6 +487,7 @@ def test_job_runner_restarts_when_enqueue_races_with_shutdown(monkeypatch) -> No
 # Graceful shutdown
 # ---------------------------------------------------------------------------
 
+
 def test_shutdown_stops_idle_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     import backend.gap_analyzer.jobs as gap_jobs
 
@@ -428,7 +498,9 @@ def test_shutdown_stops_idle_runner(monkeypatch: pytest.MonkeyPatch) -> None:
         gap_jobs._shutdown_event.wait(1.0)
         return 0
 
-    monkeypatch.setattr(gap_jobs, "run_pending_gap_analyzer_jobs_best_effort", _idle_run_pending)
+    monkeypatch.setattr(
+        gap_jobs, "run_pending_gap_analyzer_jobs_best_effort", _idle_run_pending
+    )
 
     start_gap_analyzer_job_runner()
 
@@ -446,7 +518,9 @@ def test_shutdown_releases_in_progress_job(
 ) -> None:
     tenant_id = _create_tenant_direct(db_session)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    repository.enqueue_gap_job(tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual")
+    repository.enqueue_gap_job(
+        tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual"
+    )
     db_session.commit()
 
     running = threading.Event()
@@ -468,7 +542,11 @@ def test_shutdown_releases_in_progress_job(
     request_graceful_shutdown(timeout_seconds=0.2)
 
     db_session.expire_all()
-    job = db_session.query(GapAnalyzerJob).filter(GapAnalyzerJob.tenant_id == tenant_id).one()
+    job = (
+        db_session.query(GapAnalyzerJob)
+        .filter(GapAnalyzerJob.tenant_id == tenant_id)
+        .one()
+    )
     assert job.status == GapJobStatus.retry
     assert job.lease_expires_at is None
     assert job.available_at is not None
@@ -495,7 +573,9 @@ def test_shutdown_when_job_finishes_before_timeout(
     finished = threading.Event()
     tenant_id = _create_tenant_direct(db_session)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    repository.enqueue_gap_job(tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual")
+    repository.enqueue_gap_job(
+        tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual"
+    )
     db_session.commit()
 
     released_calls: list[tuple[uuid.UUID, uuid.UUID]] = []
@@ -508,15 +588,23 @@ def test_shutdown_when_job_finishes_before_timeout(
         time.sleep(0.1)
         finished.set()
 
-    monkeypatch.setattr("backend.gap_analyzer.jobs._release_job_for_shutdown", _release_spy)
-    monkeypatch.setattr("backend.gap_analyzer.jobs.GapAnalyzerOrchestrator.run_mode_a", _fast_run_mode_a)
+    monkeypatch.setattr(
+        "backend.gap_analyzer.jobs._release_job_for_shutdown", _release_spy
+    )
+    monkeypatch.setattr(
+        "backend.gap_analyzer.jobs.GapAnalyzerOrchestrator.run_mode_a", _fast_run_mode_a
+    )
 
     start_gap_analyzer_job_runner()
     assert finished.wait(1.0)
     request_graceful_shutdown(timeout_seconds=2.0)
 
     db_session.expire_all()
-    job = db_session.query(GapAnalyzerJob).filter(GapAnalyzerJob.tenant_id == tenant_id).one()
+    job = (
+        db_session.query(GapAnalyzerJob)
+        .filter(GapAnalyzerJob.tenant_id == tenant_id)
+        .one()
+    )
     assert job.status == GapJobStatus.completed
     assert job.lease_expires_at is None
     assert released_calls == []
@@ -553,7 +641,9 @@ def test_heartbeat_stops_on_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(gap_jobs, "_GAP_JOB_HEARTBEAT_SECONDS", 0.01)
     monkeypatch.setattr(gap_jobs.core_db, "SessionLocal", lambda: _FakeSession())
-    monkeypatch.setattr(gap_jobs, "SqlAlchemyGapAnalyzerRepository", lambda db: _FakeRepository())
+    monkeypatch.setattr(
+        gap_jobs, "SqlAlchemyGapAnalyzerRepository", lambda db: _FakeRepository()
+    )
 
     heartbeat = threading.Thread(
         target=_refresh_gap_job_lease_until_stopped,
@@ -578,7 +668,9 @@ def test_new_claim_blocked_after_shutdown(
     tenant_id = _create_tenant_direct(db_session)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
     for _ in range(5):
-        repository.enqueue_gap_job(tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual")
+        repository.enqueue_gap_job(
+            tenant_id=tenant_id, job_kind=GapJobKind.mode_a, trigger="manual"
+        )
     db_session.commit()
 
     request_graceful_shutdown(timeout_seconds=0.1)

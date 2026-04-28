@@ -92,7 +92,7 @@ TENANT_API_KEY_STATUS_ACTIVE = "active"
 TENANT_API_KEY_STATUS_REVOKING = "revoking"
 TENANT_API_KEY_STATUS_REVOKED = "revoked"
 
-TENANT_API_KEY_REASONS = ("leaked", "scheduled", "compromise", "other")
+TENANT_API_KEY_REASONS = ("leaked", "scheduled", "compromise", "manual", "other")
 
 
 class TenantApiKey(Base):
@@ -126,6 +126,16 @@ class TenantApiKey(Base):
 
     __table_args__ = (
         Index("ix_tenant_api_keys_tenant_status", "tenant_id", "status"),
+        # Partial unique index enforcing at most one ACTIVE row per tenant.
+        # The actual DDL is created in the alembic migration; this annotation
+        # keeps the constraint visible to anyone reading the model.
+        Index(
+            "uq_tenant_api_keys_one_active",
+            "tenant_id",
+            unique=True,
+            postgresql_where=(status == TENANT_API_KEY_STATUS_ACTIVE),
+            sqlite_where=(status == TENANT_API_KEY_STATUS_ACTIVE),
+        ),
     )
 
 

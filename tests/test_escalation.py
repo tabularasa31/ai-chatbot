@@ -81,10 +81,16 @@ def _mock_llm_human_request(result: bool):
         def __enter__(self):
             self._stack = ExitStack()
             self._stack.enter_context(
-                patch("backend.escalation.service.get_openai_client", return_value=MagicMock())
+                patch(
+                    "backend.escalation.service.get_openai_client",
+                    return_value=MagicMock(),
+                )
             )
             self._stack.enter_context(
-                patch("backend.escalation.service.call_openai_with_retry", return_value=response)
+                patch(
+                    "backend.escalation.service.call_openai_with_retry",
+                    return_value=response,
+                )
             )
             return self
 
@@ -96,9 +102,14 @@ def _mock_llm_human_request(result: bool):
 
 def test_detect_human_request_english() -> None:
     with _mock_llm_human_request(True):
-        assert detect_human_request("I need to talk to a human please", "sk-test") is True
+        assert (
+            detect_human_request("I need to talk to a human please", "sk-test") is True
+        )
     with _mock_llm_human_request(True):
-        assert detect_human_request("connect me to support, this is useless", "sk-test") is True
+        assert (
+            detect_human_request("connect me to support, this is useless", "sk-test")
+            is True
+        )
 
 
 def test_detect_human_request_russian() -> None:
@@ -121,7 +132,9 @@ def test_compute_priority_t3_default() -> None:
 
 
 def test_parse_contact_email() -> None:
-    assert parse_contact_email("reach me at user@example.com thanks") == "user@example.com"
+    assert (
+        parse_contact_email("reach me at user@example.com thanks") == "user@example.com"
+    )
     assert parse_contact_email("no email here") is None
 
 
@@ -163,7 +176,9 @@ def test_generate_ticket_number_concurrent_reads_return_same(
     on its own. The retry loop in create_escalation_ticket is responsible for
     handling the resulting IntegrityError.
     """
-    token = register_and_verify_user(tenant, db_session, email="esc-concurrent@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="esc-concurrent@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -243,7 +258,9 @@ def test_create_escalation_ticket_raises_after_max_retries(
     db_session: Session,
 ) -> None:
     """After 3 failed commit attempts create_escalation_ticket re-raises IntegrityError."""
-    token = register_and_verify_user(tenant, db_session, email="esc-maxretry@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="esc-maxretry@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -268,7 +285,9 @@ def test_create_escalation_ticket_raises_after_max_retries(
 def test_escalation_clarify_flags_roundtrip(db_session: Session) -> None:
     from backend.core.security import hash_password
 
-    user = User(email="clarify@example.com", password_hash=hash_password("SecurePass1!"))
+    user = User(
+        email="clarify@example.com", password_hash=hash_password("SecurePass1!")
+    )
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -293,7 +312,9 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="apply-email@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="apply-email@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -352,7 +373,9 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="apply-email-rollback@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="apply-email-rollback@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -393,7 +416,9 @@ def test_apply_collected_contact_email_rolls_back_when_user_session_sync_fails(
         side_effect=RuntimeError("sync failed"),
     ):
         with pytest.raises(RuntimeError, match="sync failed"):
-            apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
+            apply_collected_contact_email(
+                ticket.id, chat.id, "user@example.com", db_session
+            )
 
     db_session.rollback()
     db_session.refresh(ticket)
@@ -483,7 +508,9 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="manual-missing@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-missing@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -493,7 +520,9 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     tenant_id = uuid.UUID(cl_resp.json()["id"])
     set_client_openai_key(tenant, token)
 
-    chat = Chat(tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={"email": None})
+    chat = Chat(
+        tenant_id=tenant_id, session_id=uuid.uuid4(), user_context={"email": None}
+    )
     db_session.add(chat)
     db_session.commit()
     db_session.refresh(chat)
@@ -515,7 +544,11 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     assert chat.escalation_awaiting_ticket_id is not None
     assert chat.escalation_followup_pending is False
 
-    ticket = db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).first()
+    ticket = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .first()
+    )
     assert ticket is not None
     assert ticket.trigger == EscalationTrigger.user_request
     messages = db_session.query(Message).filter(Message.chat_id == chat.id).all()
@@ -527,7 +560,9 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="manual-known@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="manual-known@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -560,7 +595,11 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
     db_session.refresh(chat)
     assert chat.escalation_awaiting_ticket_id is None
     assert chat.escalation_followup_pending is True
-    ticket = db_session.query(EscalationTicket).filter(EscalationTicket.chat_id == chat.id).first()
+    ticket = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.chat_id == chat.id)
+        .first()
+    )
     assert ticket is not None
     assert ticket.trigger == EscalationTrigger.answer_rejected
 
@@ -600,7 +639,9 @@ def test_escalation_api_can_include_original_question(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="esc-api-orig@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="esc-api-orig@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -615,7 +656,9 @@ def test_escalation_api_can_include_original_question(
         EscalationTrigger.user_request,
         db_session,
     )
-    user = db_session.query(User).filter(User.email == "esc-api-orig@example.com").first()
+    user = (
+        db_session.query(User).filter(User.email == "esc-api-orig@example.com").first()
+    )
     assert user is not None
     user.is_admin = True
     db_session.add(user)
@@ -635,7 +678,9 @@ def test_escalation_api_include_original_requires_admin(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    token = register_and_verify_user(tenant, db_session, email="esc-api-no-admin@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="esc-api-no-admin@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -708,7 +753,9 @@ def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missin
 ) -> None:
     from backend.core.crypto import encrypt_value
 
-    token = register_and_verify_user(tenant, db_session, email="esc-delete-empty@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="esc-delete-empty@example.com"
+    )
     cl_resp = tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -730,7 +777,11 @@ def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missin
     db_session.add(ticket)
     db_session.commit()
 
-    user = db_session.query(User).filter(User.email == "esc-delete-empty@example.com").first()
+    user = (
+        db_session.query(User)
+        .filter(User.email == "esc-delete-empty@example.com")
+        .first()
+    )
     assert user is not None
     user.is_admin = True
     db_session.add(user)

@@ -30,7 +30,11 @@ from backend.models.tenant import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_GRACE_HOURS = 24
-RotationReason = Literal["leaked", "scheduled", "compromise", "other"]
+# Suppress repeated last_used_at writes within this window — one write
+# per minute per key is plenty for the dashboard's "last used" column
+# and avoids row-level write contention on a chatty widget.
+LAST_USED_WRITE_THROTTLE = dt.timedelta(seconds=60)
+RotationReason = Literal["leaked", "scheduled", "compromise", "manual", "other"]
 
 
 def hash_api_key(plain: str) -> str:
@@ -82,14 +86,30 @@ def create_initial_api_key(
 def list_api_keys(tenant_id: uuid.UUID, db: Session) -> list[TenantApiKey]:
     """Return all keys for a tenant, newest first.
 
-    Includes already-revoked keys so the audit trail is visible in the UI.
+    Side-effect: lazily flips any REVOKING rows whose grace window has
+    elapsed to REVOKED so the dashboard shows the correct terminal state
+    instead of a permanent "expired" pseudo-status. The widget rejected
+    these keys already; this just keeps the audit table tidy.
     """
-    return (
+    rows = (
         db.query(TenantApiKey)
         .filter(TenantApiKey.tenant_id == tenant_id)
         .order_by(TenantApiKey.created_at.desc())
         .all()
     )
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    dirty = False
+    for r in rows:
+        if r.status != TENANT_API_KEY_STATUS_REVOKING:
+            continue
+        exp = r.expires_at
+        if exp is not None and exp <= now:
+            r.status = TENANT_API_KEY_STATUS_REVOKED
+            r.revoked_at = exp
+            dirty = True
+    if dirty:
+        db.commit()
+    return rows
 
 
 def find_active_tenant_by_plain_key(
@@ -117,7 +137,9 @@ def find_active_tenant_by_plain_key(
     tenant = db.query(Tenant).filter(Tenant.id == row.tenant_id).first()
     if not tenant:
         return None
-    row.last_used_at = now.replace(tzinfo=None)
+    last = _aware_utc(row.last_used_at)
+    if last is None or now - last >= LAST_USED_WRITE_THROTTLE:
+        row.last_used_at = now.replace(tzinfo=None)
     return tenant, row
 
 
@@ -127,7 +149,6 @@ def rotate_api_key(
     *,
     reason: RotationReason,
     revoke_old_immediately: bool = False,
-    grace_hours: int = DEFAULT_GRACE_HOURS,
     actor_user_id: uuid.UUID | None = None,
 ) -> tuple[TenantApiKey, str]:
     """Issue a new ACTIVE key and put existing ACTIVE keys into REVOKING.
@@ -142,7 +163,7 @@ def rotate_api_key(
     expires_at = (
         None
         if revoke_old_immediately
-        else now + dt.timedelta(hours=max(1, grace_hours))
+        else now + dt.timedelta(hours=DEFAULT_GRACE_HOURS)
     )
 
     existing_active = (
@@ -194,7 +215,7 @@ def rotate_api_key(
             "new_key_id": str(new_row.id),
             "reason": reason,
             "revoke_old_immediately": revoke_old_immediately,
-            "grace_hours": 0 if revoke_old_immediately else grace_hours,
+            "grace_hours": 0 if revoke_old_immediately else DEFAULT_GRACE_HOURS,
         },
     )
     return new_row, plain
@@ -205,7 +226,7 @@ def revoke_api_key(
     key_id: uuid.UUID,
     db: Session,
     *,
-    reason: RotationReason = "compromise",
+    reason: RotationReason = "manual",
 ) -> TenantApiKey:
     """Immediately mark a single key as REVOKED.
 
@@ -223,22 +244,35 @@ def revoke_api_key(
     if row.status == TENANT_API_KEY_STATUS_REVOKED:
         return row
 
-    other_usable = (
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    # Refuse only when revoking would leave the tenant with no key the
+    # widget would accept — counting both ACTIVE rows and REVOKING rows
+    # whose grace window has not yet elapsed.
+    other_rows = (
         db.query(TenantApiKey)
         .filter(
             TenantApiKey.tenant_id == tenant_id,
             TenantApiKey.id != key_id,
-            TenantApiKey.status == TENANT_API_KEY_STATUS_ACTIVE,
+            TenantApiKey.status.in_(
+                (TENANT_API_KEY_STATUS_ACTIVE, TENANT_API_KEY_STATUS_REVOKING)
+            ),
         )
-        .count()
+        .all()
+    )
+    other_usable = sum(
+        1
+        for r in other_rows
+        if r.status == TENANT_API_KEY_STATUS_ACTIVE
+        or (r.expires_at is not None and r.expires_at > now)
     )
     if other_usable == 0:
         raise HTTPException(
             status_code=409,
-            detail="Cannot revoke the only active key; rotate first.",
+            detail=(
+                "Cannot revoke the last usable key; rotate first to issue "
+                "a replacement."
+            ),
         )
-
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     row.status = TENANT_API_KEY_STATUS_REVOKED
     row.revoked_at = now
     row.revoked_reason = reason

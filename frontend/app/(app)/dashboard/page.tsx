@@ -90,7 +90,7 @@ function DashboardContent() {
         </p>
         <div className="flex items-center gap-2 flex-wrap">
           <code className="flex-1 min-w-0 px-3 py-2 bg-slate-100 rounded-lg text-sm text-slate-800 break-all font-mono">
-            {client?.api_key_hint ? `ck_••••••••••••••••••••••••••••${client.api_key_hint}` : "—"}
+            {client?.api_key_hint ? `ck_…${client.api_key_hint}` : "—"}
           </code>
           <Link
             href="/settings/api-keys"

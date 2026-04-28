@@ -12,7 +12,14 @@ from backend.documents.quick_answers import (
     _extract_support_email,
     _extract_trial_info,
 )
-from backend.models import Tenant, QuickAnswer, SourceSchedule, SourceStatus, UrlSource, User
+from backend.models import (
+    Tenant,
+    QuickAnswer,
+    SourceSchedule,
+    SourceStatus,
+    UrlSource,
+    User,
+)
 from scripts.cleanup_quick_answers import run_cleanup
 
 
@@ -37,7 +44,8 @@ def _create_quick_answer(
     db_session.flush()
 
     tenant = Tenant(
-                name=f"Tenant {suffix}",)
+        name=f"Tenant {suffix}",
+    )
     db_session.add(tenant)
     db_session.flush()
 
@@ -73,7 +81,9 @@ def _create_quick_answer(
 def test_mailto_support_email_accepted() -> None:
     html = '<a href="mailto:support@acme.com">Contact support</a>'
 
-    candidate = _extract_support_email(_soup(html), "Contact support", "https://acme.com/contact")
+    candidate = _extract_support_email(
+        _soup(html), "Contact support", "https://acme.com/contact"
+    )
 
     assert candidate is not None
     assert candidate.value == "support@acme.com"
@@ -92,7 +102,9 @@ def test_mailto_blocklisted_email_rejected() -> None:
 def test_mailto_no_reply_rejected() -> None:
     html = '<a href="mailto:no-reply@acme.com">Do not reply</a>'
 
-    candidate = _extract_support_email(_soup(html), "Do not reply", "https://acme.com/contact")
+    candidate = _extract_support_email(
+        _soup(html), "Do not reply", "https://acme.com/contact"
+    )
 
     assert candidate is None
 
@@ -117,7 +129,9 @@ def test_email_malformed_double_dot_rejected() -> None:
 def test_regex_fallback_skips_blocklisted() -> None:
     blocked = "legal" + "@acme.com"
 
-    candidate = _extract_support_email(_soup(f"<p>{blocked}</p>"), blocked, "https://acme.com/legal")
+    candidate = _extract_support_email(
+        _soup(f"<p>{blocked}</p>"), blocked, "https://acme.com/legal"
+    )
 
     assert candidate is None
 
@@ -125,7 +139,9 @@ def test_regex_fallback_skips_blocklisted() -> None:
 def test_regex_fallback_accepts_plain_support_email() -> None:
     text = "Write us at hello@acme.com"
 
-    candidate = _extract_support_email(_soup(f"<p>{text}</p>"), text, "https://acme.com/contact")
+    candidate = _extract_support_email(
+        _soup(f"<p>{text}</p>"), text, "https://acme.com/contact"
+    )
 
     assert candidate is not None
     assert candidate.value == "hello@acme.com"
@@ -138,7 +154,9 @@ def test_mailto_multiple_picks_best_score() -> None:
     <a href="mailto:support@acme.com">Contact support</a>
     """
 
-    candidate = _extract_support_email(_soup(html), "Contact support", "https://acme.com/contact")
+    candidate = _extract_support_email(
+        _soup(html), "Contact support", "https://acme.com/contact"
+    )
 
     assert candidate is not None
     assert candidate.value == "support@acme.com"
@@ -176,7 +194,9 @@ def test_trial_rejects_999_days() -> None:
 
 
 def test_trial_accepts_30_day() -> None:
-    candidate = _extract_trial_info("30-day free trial available", "https://acme.com/pricing")
+    candidate = _extract_trial_info(
+        "30-day free trial available", "https://acme.com/pricing"
+    )
 
     assert candidate is not None
     assert candidate.value == "30-day free trial available"
@@ -192,7 +212,9 @@ def test_trial_picks_first_matching_sentence() -> None:
 
 
 def test_trial_returns_none_when_no_match() -> None:
-    candidate = _extract_trial_info("Plans are billed annually.", "https://acme.com/pricing")
+    candidate = _extract_trial_info(
+        "Plans are billed annually.", "https://acme.com/pricing"
+    )
 
     assert candidate is None
 
@@ -225,7 +247,7 @@ def test_documentation_url_prefers_same_host() -> None:
 
 
 def test_quick_answer_quality_score_drops_removed_method() -> None:
-    removed_method = "root" "_fallback"
+    removed_method = "root_fallback"
     source = inspect.getsource(_quick_answer_quality_score)
 
     assert removed_method not in source

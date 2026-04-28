@@ -363,6 +363,58 @@ class TestDetectTenantKbScript:
 
         assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
 
+    def test_partial_labeling_augments_labeled_with_chunk_sample(self):
+        """Partial labeling must not blind us to unlabeled legacy documents.
+
+        Regression: a single new EN doc on top of 100 legacy RU docs (all
+        with language=NULL) used to misclassify the KB as Latin-only,
+        making the cyrillic half unreachable for cross-lingual rewrite.
+        """
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+
+        mock_db = MagicMock()
+        # One labeled English document.
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [
+            ("en",),
+        ]
+        # _tenant_has_unlabeled_documents → at least one row with NULL.
+        mock_db.query.return_value.filter.return_value.filter.return_value.limit.return_value.first.return_value = MagicMock()
+        # Chunk sampling sees the legacy Russian content.
+        mock_db.query.return_value.join.return_value.filter.return_value.limit.return_value.all.return_value = [
+            ("Сайт не открывается после подключения к CDN.",),
+            ("Проверьте NS-пропагацию.",),
+            ("A-запись домена должна указывать на IP-адреса CDN.",),
+        ]
+
+        # Russian sample dominates → KB is classified as cyrillic, not latin.
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "cyrillic"
+
+    def test_full_labeling_skips_chunk_sampling(self):
+        """When every document has language set, sampling is not invoked."""
+        from unittest.mock import MagicMock
+        import uuid
+        from backend.search.service import detect_tenant_kb_script
+
+        tenant_id = uuid.uuid4()
+        self._clear_caches(tenant_id)
+
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.filter.return_value.all.return_value = [
+            ("en",),
+            ("en",),
+        ]
+        # No unlabeled rows → sampling must be skipped.
+        mock_db.query.return_value.filter.return_value.filter.return_value.limit.return_value.first.return_value = None
+
+        assert detect_tenant_kb_script(tenant_id, mock_db) == "latin"
+        # join() is the entry point for chunk sampling; assert it never runs.
+        mock_db.query.return_value.join.assert_not_called()
+
     def test_uses_cache_on_second_call(self):
         import uuid
         from backend.search.service import detect_tenant_kb_script
@@ -372,10 +424,11 @@ class TestDetectTenantKbScript:
         mock_db = self._mock_db_with_languages(["ru"])
 
         detect_tenant_kb_script(tenant_id, mock_db)
+        calls_after_first = mock_db.query.call_count
         detect_tenant_kb_script(tenant_id, mock_db)
 
-        # DB should be queried only once — second call hits cache
-        assert mock_db.query.call_count == 1
+        # Second call must hit the cache and issue no further queries.
+        assert mock_db.query.call_count == calls_after_first
 
 
 class TestDetectTenantKbScripts:

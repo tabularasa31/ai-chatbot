@@ -68,7 +68,6 @@ from backend.search.service import (
     RetrievalReliability,
     default_retrieval_reliability,
     detect_query_script_bucket,
-    detect_tenant_kb_script,
     detect_tenant_kb_scripts,
     semantic_query_rewrite_for_kb,
 )
@@ -751,7 +750,6 @@ def run_chat_pipeline(
     # cover. For mixed EN+RU KBs this means an EN query gets a RU variant
     # (and vice versa) so both halves of the corpus are reachable.
     _kb_scripts = detect_tenant_kb_scripts(tenant_id, db)
-    _kb_script = detect_tenant_kb_script(tenant_id, db)
     _query_script = detect_query_script_bucket(question)
     _cross_lingual_futures: list = []
 

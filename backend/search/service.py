@@ -1266,14 +1266,52 @@ def _kb_bucket_counts_from_chunk_sample(
     return counts
 
 
+def _tenant_has_unlabeled_documents(
+    tenant_id: uuid.UUID, db: Session
+) -> bool:
+    """True when at least one document for this tenant has language IS NULL.
+
+    Used to decide whether labeled-only counts can be trusted: a partially
+    labeled KB (legacy unlabeled rows + a few new uploads with language set)
+    must still consider the unlabeled half, otherwise a single new EN doc
+    on top of 100 legacy RU docs misclassifies the KB as Latin-only.
+    """
+    try:
+        return (
+            db.query(Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Document.language.is_(None))
+            .limit(1)
+            .first()
+            is not None
+        )
+    except Exception:
+        return False
+
+
 def _resolve_kb_bucket_counts(
     tenant_id: uuid.UUID, db: Session
 ) -> dict[str, int]:
-    """Return per-bucket document counts, preferring stored Document.language."""
-    counts = _kb_bucket_counts_from_languages(tenant_id, db)
-    if counts is not None:
-        return counts
-    return _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    """Return per-bucket document counts, preferring stored Document.language.
+
+    When the KB is partially labeled (some documents still NULL after the
+    add_documents_language_v1 migration), augment the labeled counts with a
+    chunk sample so unlabeled legacy documents are not silently dropped.
+    """
+    labeled = _kb_bucket_counts_from_languages(tenant_id, db)
+    if labeled is None:
+        # Pure legacy KB — no documents have language stored.
+        return _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    if not _tenant_has_unlabeled_documents(tenant_id, db):
+        # Fully labeled — labeled counts are authoritative.
+        return labeled
+    # Partial labeling — merge with chunk sample so unlabeled docs still
+    # contribute to bucket detection.
+    sampled = _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    merged = dict(labeled)
+    for bucket, count in sampled.items():
+        merged[bucket] = merged.get(bucket, 0) + count
+    return merged
 
 
 def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:

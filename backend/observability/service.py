@@ -114,6 +114,7 @@ class TraceHandle(ABC):
         tags: list[str] | None = None,
         level: str | None = None,
         status_message: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         raise NotImplementedError
 
@@ -183,6 +184,7 @@ class _NoOpTrace(TraceHandle):
         tags: list[str] | None = None,
         level: str | None = None,
         status_message: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         return None
 
@@ -291,6 +293,7 @@ class _LangfuseTrace(TraceHandle):
         tags: list[str] | None = None,
         level: str | None = None,
         status_message: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {}
         if output is not None:
@@ -304,6 +307,8 @@ class _LangfuseTrace(TraceHandle):
             payload["level"] = level
         if status_message is not None:
             payload["status_message"] = status_message
+        if user_id is not None:
+            payload["user_id"] = user_id
         _safe_invoke(self.trace_obj.update, **payload)
 
     @property
@@ -432,6 +437,7 @@ class _DeferredTrace(TraceHandle):
         tags: list[str] | None = None,
         level: str | None = None,
         status_message: str | None = None,
+        user_id: str | None = None,
     ) -> None:
         if self._materialized is not None:
             self._materialized.update(
@@ -440,6 +446,7 @@ class _DeferredTrace(TraceHandle):
                 tags=tags,
                 level=level,
                 status_message=status_message,
+                user_id=user_id,
             )
             return
         self._record(
@@ -451,6 +458,7 @@ class _DeferredTrace(TraceHandle):
                     "tags": tags,
                     "level": level,
                     "status_message": status_message,
+                    "user_id": user_id,
                 },
             }
         )

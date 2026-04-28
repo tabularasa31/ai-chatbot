@@ -118,7 +118,7 @@ def test_embedding_once(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -177,7 +177,7 @@ def test_faq_context_in_prompt(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -260,7 +260,7 @@ def test_langfuse_faq_match_span(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -353,7 +353,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -421,7 +421,7 @@ def test_faq_direct_skips_retrieval_and_generation(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )
@@ -489,7 +489,7 @@ def test_guard_error_degrades_to_context(
 
     monkeypatch.setattr(
         "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key: SimpleNamespace(
+        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
         ),
     )

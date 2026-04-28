@@ -12,8 +12,10 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from time import perf_counter
 
 from backend.core.config import settings
+from backend.observability import TraceHandle
 from backend.search.service import cosine_similarity, embed_queries, embed_query
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,7 @@ def detect_injection(
     *,
     tenant_id: str,
     api_key: str,
+    trace: TraceHandle | None = None,
 ) -> InjectionDetectionResult:
     """Two-level injection detection.
 
@@ -201,16 +204,38 @@ def detect_injection(
     Level 2 (semantic) is gated by INJECTION_SEMANTIC_ENABLED.
     """
     # Level 1: structural (~0 ms)
+    _l1_start = perf_counter()
     result = detect_injection_structural(text)
+    _l1_ms = round((perf_counter() - _l1_start) * 1000, 2)
+    if trace is not None:
+        _l1_span = trace.span(
+            name="injection_l1",
+            input={"question_preview": text[:80]},
+        )
+        _l1_span.end(
+            output={"detected": result.detected, "pattern": result.pattern},
+            metadata={"duration_ms": _l1_ms, "method": "structural"},
+        )
     if result.detected:
         _log_detection(tenant_id, result)
         return result
 
     # Level 2: semantic (~50-100 ms)
     if settings.injection_semantic_enabled:
+        _l2_start = perf_counter()
         result = detect_injection_semantic(
             text, result.normalized_input, api_key=api_key,
         )
+        _l2_ms = round((perf_counter() - _l2_start) * 1000, 2)
+        if trace is not None:
+            _l2_span = trace.span(
+                name="injection_l2",
+                input={"question_preview": text[:80]},
+            )
+            _l2_span.end(
+                output={"detected": result.detected, "score": result.score},
+                metadata={"duration_ms": _l2_ms, "method": "semantic"},
+            )
         if result.detected:
             _log_detection(tenant_id, result)
             return result

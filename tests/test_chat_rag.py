@@ -325,9 +325,68 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["model"] == settings.chat_model
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
+    assert "prompt_cache_key" not in call_kwargs
     # gpt-5-mini is a reasoning model — temperature is omitted, larger token budget used
     assert "temperature" not in call_kwargs
     assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens_reasoning
+
+
+def test_generate_answer_sets_prompt_cache_key_when_metrics_ids_exist(
+    mock_openai_client: Mock,
+) -> None:
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
+
+    generate_answer(
+        "What?",
+        ["chunk1"],
+        api_key="sk-test",
+        metrics_tenant_id="ck_test",
+        metrics_bot_id="bot_test",
+    )
+
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["prompt_cache_key"] == "chat9:bot_test:rag:v1"
+
+
+def test_generate_answer_emits_cached_tokens_to_posthog(
+    mock_openai_client: Mock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_events: list[dict[str, object]] = []
+
+    def fake_capture(event: str, **kwargs: object) -> None:
+        captured_events.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="The answer is 42"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(
+        total_tokens=120,
+        prompt_tokens=100,
+        completion_tokens=20,
+        prompt_tokens_details=Mock(cached_tokens=64),
+    )
+
+    generate_answer(
+        "What?",
+        ["chunk1"],
+        api_key="sk-test",
+        metrics_tenant_id="ck_test",
+        metrics_bot_id="bot_test",
+    )
+
+    events = [event for event in captured_events if event["event"] == "$ai_generation"]
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$ai_cached_tokens"] == 64
+    assert props["prompt_cache_cached_tokens"] == 64
+    assert props["prompt_cache_hit"] is True
+    assert props["prompt_cache_key_set"] is True
+    assert isinstance(props["prompt_cache_prefix_tokens_estimate"], int)
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:
@@ -358,6 +417,9 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
 
     generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
 
+    assert isinstance(trace.generation_input, dict)
+    prefix_estimate = trace.generation_input.pop("prompt_cache_prefix_tokens_estimate")
+    assert isinstance(prefix_estimate, int)
     assert trace.generation_input == {
         "question_preview": "What?",
         "context_chunk_count": 1,
@@ -405,12 +467,17 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
+    assert isinstance(trace.generation_metadata, dict)
+    prefix_estimate = trace.generation_metadata.pop("prompt_cache_prefix_tokens_estimate")
+    assert isinstance(prefix_estimate, int)
     assert trace.generation_metadata == {
         # gpt-5-mini is a reasoning model — temperature omitted, larger token budget
         "max_completion_tokens": settings.chat_response_max_tokens_reasoning,
         "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,
+        "prompt_cache_key_set": False,
+        "prompt_cache_prefix_meets_minimum": False,
         "captures_full_prompt": True,
         "finish_reason_expected": "stop_or_length",
         "system_prompt": system_prompt,

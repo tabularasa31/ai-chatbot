@@ -253,9 +253,11 @@ def test_faq_context_in_prompt(
     messages = generation_kwargs["input"]
     assert isinstance(messages, list)
     system_prompt = messages[0]["content"]
-    assert "VERIFIED FAQ CANDIDATES" in system_prompt
-    assert "Q: How to reset password?" in system_prompt
-    assert "A: Use the reset link." in system_prompt
+    user_message = messages[1]["content"]
+    assert "VERIFIED FAQ CANDIDATES" not in system_prompt
+    assert "VERIFIED FAQ CANDIDATES" in user_message
+    assert "Q: How to reset password?" in user_message
+    assert "A: Use the reset link." in user_message
 
 
 def test_langfuse_faq_match_span(
@@ -614,10 +616,13 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
 
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["messages"][0]["role"] == "system"
+    assert call_kwargs["messages"][1]["role"] == "user"
     system_prompt = call_kwargs["messages"][0]["content"]
-    assert "VERIFIED FAQ CANDIDATES" in system_prompt
-    assert "Q: How to reset password?" in system_prompt
-    assert "A: Use the reset link from login page." in system_prompt
+    user_message = call_kwargs["messages"][1]["content"]
+    assert "VERIFIED FAQ CANDIDATES" not in system_prompt
+    assert "VERIFIED FAQ CANDIDATES" in user_message
+    assert "Q: How to reset password?" in user_message
+    assert "A: Use the reset link from login page." in user_message
 
 
 # ---------------------------------------------------------------------------
@@ -720,4 +725,3 @@ class TestStripThoughtTags:
         result = self._strip(text)
         assert result == "Hello!"
         assert "<thought>" not in result
-

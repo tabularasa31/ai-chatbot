@@ -542,6 +542,43 @@ def _assemble_chat_messages(
     return messages
 
 
+def _prompt_cache_key(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+) -> str | None:
+    """Stable routing hint for OpenAI prompt caching."""
+    if bot_public_id:
+        return f"chat9:{bot_public_id}:rag:v1"
+    if tenant_public_id:
+        return f"chat9:{tenant_public_id}:rag:v1"
+    return None
+
+
+def _estimate_prompt_tokens(text: str) -> int:
+    """Cheap local estimate used only for cache-readiness telemetry."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return 0
+    return max(1, (len(stripped) + 3) // 4)
+
+
+def _usage_cached_tokens(usage: Any) -> int:
+    """Extract OpenAI prompt cache hit tokens from SDK objects or dicts."""
+    if usage is None:
+        return 0
+    details: Any
+    if isinstance(usage, dict):
+        details = usage.get("prompt_tokens_details")
+    else:
+        details = getattr(usage, "prompt_tokens_details", None)
+    if details is None:
+        return 0
+    if isinstance(details, dict):
+        return _safe_int(details.get("cached_tokens"))
+    return _safe_int(getattr(details, "cached_tokens", 0))
+
+
 def _build_prior_messages_for_llm(
     chat: Chat | None,
     *,
@@ -1437,26 +1474,27 @@ def build_rag_prompt(
         system_rules = f"{system_rules}\n{client_guard}"
 
     system_rules = f"{system_rules}\n{disclosure_block}\n"
+    dynamic_context_sections: list[str] = []
     if faq_context_items:
         faq_block = "\n".join(
             [f"Q: {item.question}\nA: {item.answer}" for item in faq_context_items]
         )
-        system_rules += f"""
+        dynamic_context_sections.append(f"""
 VERIFIED FAQ CANDIDATES
 Use these as high-priority tenant hints if they are relevant to the user question.
 Do not treat them as exclusive truth when retrieved documents provide more specific or newer evidence.
 
 {faq_block}
-"""
+""")
     if quick_answer_items:
         quick_answers_block = "\n".join(f"- {item}" for item in quick_answer_items)
-        system_rules += f"""
+        dynamic_context_sections.append(f"""
 STRUCTURED QUICK ANSWERS
 Treat these as canonical tenant facts when they are relevant to the user question.
 Use them directly for links, contact details, pricing/status URLs, and other short factual answers.
 
 {quick_answers_block}
-"""
+""")
     if low_context:
         system_rules = (
             f"{system_rules}\n"
@@ -1477,20 +1515,18 @@ Use them directly for links, contact details, pricing/status URLs, and other sho
         "nouns, URLs, and code identifiers as-is."
     )
 
-    if not context_chunks:
-        return (
-            f"{system_rules}\n\n"
-            "Context:\n(none)\n\n"
-            f"{language_reminder}\n\n"
-            f"Question: {question}\n\n"
-            "Answer:"
-        )
+    context_block = "(none)" if not context_chunks else "\n\n---\n\n".join(context_chunks)
+    dynamic_context = "\n\n".join(section.strip() for section in dynamic_context_sections)
     if settings.enable_cot_reasoning:
         system_rules = f"{system_rules}\n\n{COT_REASONING_BLOCK}"
-    context_block = "\n\n---\n\n".join(context_chunks)
+    context_and_hints = (
+        f"{context_block}\n\n{dynamic_context}"
+        if dynamic_context
+        else context_block
+    )
     return (
         f"{system_rules}\n\n"
-        f"Context:\n{context_block}\n\n"
+        f"Context:\n{context_and_hints}\n\n"
         f"{language_reminder}\n\n"
         f"Question: {question}\n\n"
         "Answer:"
@@ -1606,6 +1642,11 @@ def generate_answer(
         user_message=user_message,
         prior_messages=prior_messages,
     )
+    prompt_cache_key = _prompt_cache_key(
+        tenant_public_id=metrics_tenant_id,
+        bot_public_id=metrics_bot_id,
+    )
+    prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _temperature: float | None = None if _reasoning else 0.2
@@ -1624,6 +1665,7 @@ def generate_answer(
                 "question_preview": truncate_text(question),
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
+                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
             }
         generation = trace.generation(
             name="llm-generation",
@@ -1635,6 +1677,9 @@ def generate_answer(
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
+                "prompt_cache_key_set": prompt_cache_key is not None,
+                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
+                "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
                 "captures_full_prompt": settings.observability_capture_full_prompts,
                 "finish_reason_expected": "stop_or_length",
                 "system_prompt": (
@@ -1649,6 +1694,7 @@ def generate_answer(
     try:
         prompt_tokens_raw = 0
         completion_tokens_raw = 0
+        cached_tokens_raw = 0
         finish_reason: str | None = None
         actual_model: str = settings.chat_model
         _thought_truncated: bool = False
@@ -1658,6 +1704,7 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
+                    **({"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}),
                     **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
@@ -1675,6 +1722,7 @@ def generate_answer(
                     total_tokens = chunk.usage.total_tokens or 0
                     prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
                     completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
+                    cached_tokens_raw = _usage_cached_tokens(chunk.usage)
                 if not chunk.choices:
                     continue
                 choice = chunk.choices[0]
@@ -1694,6 +1742,7 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
+                    **({"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}),
                     **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=_max_completion_tokens,
                 ),
@@ -1707,6 +1756,7 @@ def generate_answer(
             if response.usage:
                 prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
                 completion_tokens_raw = getattr(response.usage, "completion_tokens", 0) or 0
+                cached_tokens_raw = _usage_cached_tokens(response.usage)
             if response.choices:
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
         log_llm_tokens(
@@ -1717,6 +1767,7 @@ def generate_answer(
         )
         _input_tokens = _safe_int(prompt_tokens_raw)
         _output_tokens = _safe_int(completion_tokens_raw)
+        _cached_tokens = _safe_int(cached_tokens_raw)
         _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
         _duration_s = perf_counter() - started_at
         if generation is not None:
@@ -1740,6 +1791,8 @@ def generate_answer(
                     "cost_usd": _cost_usd,
                     "cost_rate_usd_per_1m": _cost_rates,
                     "duration_ms": round(_duration_s * 1000, 2),
+                    "prompt_cache_cached_tokens": _cached_tokens,
+                    "prompt_cache_hit": _cached_tokens > 0,
                 },
             )
         if metrics_tenant_id is not None or metrics_bot_id is not None:
@@ -1750,6 +1803,9 @@ def generate_answer(
                 model=actual_model,
                 input_tokens=_input_tokens,
                 output_tokens=_output_tokens,
+                cached_tokens=_cached_tokens,
+                prompt_cache_key_set=prompt_cache_key is not None,
+                prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",

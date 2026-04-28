@@ -179,6 +179,8 @@ def _emit_ai_generation_event(
     latency_s: float,
     operation: str,
     http_status: int = 200,
+    cached_tokens: int = 0,
+    prompt_cache_prefix_tokens_estimate: int | None = None,
 ) -> None:
     """Emit a PostHog $ai_generation event for LLM Observability cost tracking."""
     if tenant_public_id is None and bot_public_id is None:
@@ -194,10 +196,18 @@ def _emit_ai_generation_event(
                 "$ai_model": model,
                 "$ai_input_tokens": input_tokens,
                 "$ai_output_tokens": output_tokens,
+                "$ai_cached_tokens": cached_tokens,
                 "$ai_total_cost_usd": cost_usd,
                 "$ai_latency": latency_s,
                 "$ai_http_status": http_status,
                 "operation": operation,
+                "prompt_cache_cached_tokens": cached_tokens,
+                "prompt_cache_hit": cached_tokens > 0,
+                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
+                "prompt_cache_prefix_meets_minimum": (
+                    prompt_cache_prefix_tokens_estimate is not None
+                    and prompt_cache_prefix_tokens_estimate >= 1024
+                ),
             },
         )
     except Exception:

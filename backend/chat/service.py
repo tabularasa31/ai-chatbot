@@ -547,6 +547,7 @@ def process_chat_message(
             "escalation_language": language_context.escalation_language,
             "escalation_language_source": language_context.escalation_language_source,
         },
+        user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
     )
 
     if not question_text and not is_new_session:

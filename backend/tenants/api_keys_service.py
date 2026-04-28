@@ -1,0 +1,324 @@
+"""Service layer for rotating and revoking widget API keys.
+
+The widget client authenticates with a plaintext ``ck_…`` key. The
+plaintext is never stored — only its SHA-256 hash plus the last 4 chars
+(``key_hint``) for UI identification. Each tenant may hold one ACTIVE
+key plus, briefly, one REVOKING key during a grace window so the
+embedded widget keeps working while the customer rolls out the new key.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import logging
+import uuid
+from typing import Literal
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from backend.core.utils import generate_api_key
+from backend.models import Tenant, TenantApiKey, User
+from backend.models.tenant import (
+    TENANT_API_KEY_REASONS,
+    TENANT_API_KEY_STATUS_ACTIVE,
+    TENANT_API_KEY_STATUS_REVOKED,
+    TENANT_API_KEY_STATUS_REVOKING,
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_GRACE_HOURS = 24
+# Suppress repeated last_used_at writes within this window — one write
+# per minute per key is plenty for the dashboard's "last used" column
+# and avoids row-level write contention on a chatty widget.
+LAST_USED_WRITE_THROTTLE = dt.timedelta(seconds=60)
+RotationReason = Literal["leaked", "scheduled", "compromise", "manual", "other"]
+
+
+def hash_api_key(plain: str) -> str:
+    """Stable SHA-256 hex digest used both for storage and lookup."""
+    return hashlib.sha256(plain.encode("utf-8")).hexdigest()
+
+
+def _aware_utc(d: dt.datetime | None) -> dt.datetime | None:
+    if d is None:
+        return None
+    if d.tzinfo is None:
+        return d.replace(tzinfo=dt.UTC)
+    return d.astimezone(dt.UTC)
+
+
+def _create_key_row(
+    tenant_id: uuid.UUID,
+    db: Session,
+    *,
+    created_by_user_id: uuid.UUID | None = None,
+) -> tuple[TenantApiKey, str]:
+    """Generate a fresh ck_ key, persist its hash, return (row, plaintext)."""
+    plain = generate_api_key()
+    row = TenantApiKey(
+        tenant_id=tenant_id,
+        key_hash=hash_api_key(plain),
+        key_hint=plain[-4:],
+        status=TENANT_API_KEY_STATUS_ACTIVE,
+        created_by_user_id=created_by_user_id,
+    )
+    db.add(row)
+    return row, plain
+
+
+def create_initial_api_key(
+    tenant_id: uuid.UUID,
+    db: Session,
+    *,
+    created_by_user_id: uuid.UUID | None = None,
+) -> str:
+    """Insert the first ACTIVE key for a freshly-created tenant.
+
+    Caller is responsible for committing the surrounding transaction.
+    """
+    _, plain = _create_key_row(tenant_id, db, created_by_user_id=created_by_user_id)
+    return plain
+
+
+def list_api_keys(tenant_id: uuid.UUID, db: Session) -> list[TenantApiKey]:
+    """Return all keys for a tenant, newest first.
+
+    Side-effect: lazily flips any REVOKING rows whose grace window has
+    elapsed to REVOKED so the dashboard shows the correct terminal state
+    instead of a permanent "expired" pseudo-status. The widget rejected
+    these keys already; this just keeps the audit table tidy.
+    """
+    rows = (
+        db.query(TenantApiKey)
+        .filter(TenantApiKey.tenant_id == tenant_id)
+        .order_by(TenantApiKey.created_at.desc())
+        .all()
+    )
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    dirty = False
+    for r in rows:
+        if r.status != TENANT_API_KEY_STATUS_REVOKING:
+            continue
+        exp = r.expires_at
+        if exp is not None and exp <= now:
+            r.status = TENANT_API_KEY_STATUS_REVOKED
+            r.revoked_at = exp
+            dirty = True
+    if dirty:
+        db.commit()
+    return rows
+
+
+def find_active_tenant_by_plain_key(
+    plain: str, db: Session
+) -> tuple[Tenant, TenantApiKey] | None:
+    """Look up a tenant by a plaintext widget key.
+
+    Returns ``None`` if no matching key exists, the key is fully revoked,
+    or its grace window has expired. Touches ``last_used_at`` on a hit
+    but does not commit — the caller's request transaction will flush it.
+    """
+    if not plain:
+        return None
+    digest = hash_api_key(plain.strip())
+    row = db.query(TenantApiKey).filter(TenantApiKey.key_hash == digest).first()
+    if not row:
+        return None
+    now = dt.datetime.now(dt.UTC)
+    if row.status == TENANT_API_KEY_STATUS_REVOKED:
+        return None
+    if row.status == TENANT_API_KEY_STATUS_REVOKING:
+        exp = _aware_utc(row.expires_at)
+        if exp is None or exp <= now:
+            return None
+    tenant = db.query(Tenant).filter(Tenant.id == row.tenant_id).first()
+    if not tenant:
+        return None
+    last = _aware_utc(row.last_used_at)
+    if last is None or now - last >= LAST_USED_WRITE_THROTTLE:
+        row.last_used_at = now.replace(tzinfo=None)
+    return tenant, row
+
+
+def rotate_api_key(
+    tenant_id: uuid.UUID,
+    db: Session,
+    *,
+    reason: RotationReason,
+    revoke_old_immediately: bool = False,
+    actor_user_id: uuid.UUID | None = None,
+) -> tuple[TenantApiKey, str]:
+    """Issue a new ACTIVE key and put existing ACTIVE keys into REVOKING.
+
+    Returns ``(new_row, plaintext)``. Plaintext must be surfaced to the
+    caller exactly once.
+    """
+    if reason not in TENANT_API_KEY_REASONS:
+        raise HTTPException(status_code=400, detail="Invalid rotation reason")
+
+    # Serialize concurrent rotations for the same tenant. The partial
+    # unique index uq_tenant_api_keys_one_active is a safety net — without
+    # this lock, two simultaneous rotates would both pass the read,
+    # transition the same active key to REVOKING, and then the second
+    # INSERT would crash with IntegrityError instead of cleanly waiting.
+    # On SQLite (tests) FOR UPDATE is a silent no-op; correctness still
+    # holds because SQLite serializes writers at the file level.
+    db.query(Tenant).filter(Tenant.id == tenant_id).with_for_update().first()
+
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    expires_at = (
+        None
+        if revoke_old_immediately
+        else now + dt.timedelta(hours=DEFAULT_GRACE_HOURS)
+    )
+
+    existing_active = (
+        db.query(TenantApiKey)
+        .filter(
+            TenantApiKey.tenant_id == tenant_id,
+            TenantApiKey.status == TENANT_API_KEY_STATUS_ACTIVE,
+        )
+        .all()
+    )
+    for row in existing_active:
+        if revoke_old_immediately:
+            row.status = TENANT_API_KEY_STATUS_REVOKED
+            row.revoked_at = now
+            row.revoked_reason = reason
+            row.expires_at = now
+        else:
+            row.status = TENANT_API_KEY_STATUS_REVOKING
+            row.revoked_reason = reason
+            row.expires_at = expires_at
+
+    # Also collapse any lingering REVOKING rows when an immediate revoke is
+    # requested — explicit kill-switch should leave nothing usable.
+    if revoke_old_immediately:
+        revoking_rows = (
+            db.query(TenantApiKey)
+            .filter(
+                TenantApiKey.tenant_id == tenant_id,
+                TenantApiKey.status == TENANT_API_KEY_STATUS_REVOKING,
+            )
+            .all()
+        )
+        for row in revoking_rows:
+            row.status = TENANT_API_KEY_STATUS_REVOKED
+            row.revoked_at = now
+            row.expires_at = now
+
+    new_row, plain = _create_key_row(
+        tenant_id, db, created_by_user_id=actor_user_id
+    )
+    db.flush()
+    db.commit()
+    db.refresh(new_row)
+
+    logger.info(
+        "tenant_api_key_rotated",
+        extra={
+            "tenant_id": str(tenant_id),
+            "new_key_id": str(new_row.id),
+            "reason": reason,
+            "revoke_old_immediately": revoke_old_immediately,
+            "grace_hours": 0 if revoke_old_immediately else DEFAULT_GRACE_HOURS,
+        },
+    )
+    return new_row, plain
+
+
+def revoke_api_key(
+    tenant_id: uuid.UUID,
+    key_id: uuid.UUID,
+    db: Session,
+    *,
+    reason: RotationReason = "manual",
+) -> TenantApiKey:
+    """Immediately mark a single key as REVOKED.
+
+    Refuses to revoke the last remaining usable key — the tenant would
+    lose all widget access with no replacement. The caller should
+    rotate first in that scenario.
+    """
+    row = (
+        db.query(TenantApiKey)
+        .filter(TenantApiKey.id == key_id, TenantApiKey.tenant_id == tenant_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="API key not found")
+    if row.status == TENANT_API_KEY_STATUS_REVOKED:
+        return row
+
+    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    # Refuse only when revoking would leave the tenant with no key the
+    # widget would accept — counting both ACTIVE rows and REVOKING rows
+    # whose grace window has not yet elapsed.
+    other_rows = (
+        db.query(TenantApiKey)
+        .filter(
+            TenantApiKey.tenant_id == tenant_id,
+            TenantApiKey.id != key_id,
+            TenantApiKey.status.in_(
+                (TENANT_API_KEY_STATUS_ACTIVE, TENANT_API_KEY_STATUS_REVOKING)
+            ),
+        )
+        .all()
+    )
+    other_usable = sum(
+        1
+        for r in other_rows
+        if r.status == TENANT_API_KEY_STATUS_ACTIVE
+        or (r.expires_at is not None and r.expires_at > now)
+    )
+    if other_usable == 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot revoke the last usable key; rotate first to issue "
+                "a replacement."
+            ),
+        )
+    row.status = TENANT_API_KEY_STATUS_REVOKED
+    row.revoked_at = now
+    row.revoked_reason = reason
+    row.expires_at = now
+    db.commit()
+    db.refresh(row)
+
+    logger.info(
+        "tenant_api_key_revoked",
+        extra={
+            "tenant_id": str(tenant_id),
+            "key_id": str(key_id),
+            "reason": reason,
+        },
+    )
+    return row
+
+
+def get_primary_active_key(
+    tenant_id: uuid.UUID, db: Session
+) -> TenantApiKey | None:
+    """Return the newest ACTIVE key for a tenant, or ``None`` if there is
+    no usable key (should not happen for a healthy tenant)."""
+    return (
+        db.query(TenantApiKey)
+        .filter(
+            TenantApiKey.tenant_id == tenant_id,
+            TenantApiKey.status == TENANT_API_KEY_STATUS_ACTIVE,
+        )
+        .order_by(TenantApiKey.created_at.desc())
+        .first()
+    )
+
+
+def assert_owner(user: User, tenant_id: uuid.UUID) -> None:
+    """Owner-only guard for destructive key operations."""
+    if user.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    if getattr(user, "role", None) != "owner":
+        raise HTTPException(status_code=403, detail="Owner role required")

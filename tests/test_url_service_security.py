@@ -435,7 +435,7 @@ def test_upsert_page_document_skips_reembedding_when_hash_matches(
     )
     db_session.add(user)
     db_session.flush()
-    tenant = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -512,7 +512,7 @@ def test_upsert_page_document_runs_extraction_when_unchanged_if_env_set(
     )
     db_session.add(user)
     db_session.flush()
-    tenant = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -584,7 +584,7 @@ def test_crawl_url_source_marks_run_error_when_failures_exceed_threshold(
     )
     session.add(user)
     session.flush()
-    tenant = create_tenant(user.id, "Tenant", session)
+    tenant, _ = create_tenant(user.id, "Tenant", session)
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -642,7 +642,7 @@ def test_crawl_url_source_persists_quick_answers(
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
-    tenant = create_tenant(user.id, "Quick Answers Tenant", db_session)
+    tenant, _ = create_tenant(user.id, "Quick Answers Tenant", db_session)
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -731,7 +731,7 @@ def test_upsert_structured_document_skips_reembedding_when_hash_matches(
     )
     db_session.add(user)
     db_session.flush()
-    tenant = create_tenant(user.id, "Tenant", db_session)
+    tenant, _ = create_tenant(user.id, "Tenant", db_session)
 
     source = UrlSource(
         tenant_id=tenant.id,
@@ -844,7 +844,7 @@ def test_crawl_url_source_marks_error_for_invalid_structured_openapi_payload(
     )
     session.add(user)
     session.flush()
-    tenant = create_tenant(user.id, "Tenant", session)
+    tenant, _ = create_tenant(user.id, "Tenant", session)
 
     source = UrlSource(
         tenant_id=tenant.id,

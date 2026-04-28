@@ -26,8 +26,7 @@ def _create_client(db_session: Session) -> uuid.UUID:
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Retry Tenant",
-        api_key=uuid.uuid4().hex[:32],
+        name="Retry Tenant",
     )
     db_session.add(tenant)
     db_session.commit()
@@ -68,7 +67,9 @@ def test_transient_failure_retries_with_backoff(
     tenant_id = _create_client(db_session)
     job = _create_job(db_session, tenant_id=tenant_id, attempt_count=1, max_attempts=3)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    monkeypatch.setattr("backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(
+        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0
+    )
 
     before = datetime.now(UTC)
     repository.fail_gap_job(
@@ -84,7 +85,9 @@ def test_transient_failure_retries_with_backoff(
     assert job.status == "retry"
     min_expected = before.timestamp() + 30.0
     max_expected = after.timestamp() + 30.0
-    assert min_expected <= job.available_at.replace(tzinfo=UTC).timestamp() <= max_expected
+    assert (
+        min_expected <= job.available_at.replace(tzinfo=UTC).timestamp() <= max_expected
+    )
 
 
 def test_permanent_failure_goes_straight_to_failed(db_session: Session) -> None:
@@ -112,7 +115,9 @@ def test_rate_limit_honors_retry_after(
     tenant_id = _create_client(db_session)
     job = _create_job(db_session, tenant_id=tenant_id, attempt_count=1, max_attempts=3)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    monkeypatch.setattr("backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 6.0)
+    monkeypatch.setattr(
+        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 6.0
+    )
 
     before = datetime.now(UTC)
     repository.fail_gap_job(
@@ -136,7 +141,9 @@ def test_rate_limit_falls_back_to_backoff_when_no_hint(
     tenant_id = _create_client(db_session)
     job = _create_job(db_session, tenant_id=tenant_id, attempt_count=2, max_attempts=3)
     repository = SqlAlchemyGapAnalyzerRepository(db_session)
-    monkeypatch.setattr("backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(
+        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0
+    )
 
     before = datetime.now(UTC)
     repository.fail_gap_job(
@@ -159,7 +166,9 @@ def test_transient_attempts_extend_to_five(db_session: Session) -> None:
     statuses: list[str] = []
 
     for attempt in range(1, 6):
-        job = _create_job(db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=3)
+        job = _create_job(
+            db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=3
+        )
         repository.fail_gap_job(
             job_id=job.id,
             tenant_id=tenant_id,
@@ -180,7 +189,9 @@ def test_unknown_error_capped_at_three_attempts(db_session: Session) -> None:
     statuses: list[str] = []
 
     for attempt in range(1, 4):
-        job = _create_job(db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=5)
+        job = _create_job(
+            db_session, tenant_id=tenant_id, attempt_count=attempt, max_attempts=5
+        )
         repository.fail_gap_job(
             job_id=job.id,
             tenant_id=tenant_id,
@@ -195,7 +206,9 @@ def test_unknown_error_capped_at_three_attempts(db_session: Session) -> None:
 
 
 def test_retry_delays_monotonic(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0)
+    monkeypatch.setattr(
+        "backend.gap_analyzer._repo.job_retry.random.uniform", lambda a, b: 0.0
+    )
 
     delays = [
         retry_delay_for_kind(
@@ -234,7 +247,9 @@ def test_final_failure_logs_warn_with_context(
 
 def test_migration_gap_jobs_retry_v1_applies(db_session: Session) -> None:
     server_default = db_session.execute(
-        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='gap_analyzer_jobs'")
+        text(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='gap_analyzer_jobs'"
+        )
     ).scalar_one()
 
     assert server_default is not None

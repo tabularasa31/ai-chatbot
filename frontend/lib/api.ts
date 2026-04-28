@@ -64,7 +64,7 @@ export type ChatDebugResponse = {
 export type TenantResponse = {
   id: string;
   name: string;
-  api_key: string;
+  api_key_hint: string | null;
   public_id: string;
   has_openai_key: boolean;
   created_at: string;
@@ -74,6 +74,27 @@ export type TenantResponse = {
 export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
+};
+
+export type CreateTenantResponse = TenantResponse & {
+  api_key: string;
+};
+
+export type TenantApiKeyResponse = {
+  id: string;
+  key_hint: string;
+  status: "active" | "revoking" | "revoked";
+  created_at: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  revoked_reason: string | null;
+  last_used_at: string | null;
+};
+
+export type RotateTenantApiKeyResponse = {
+  api_key: string;
+  key: TenantApiKeyResponse;
+  message: string;
 };
 
 export type KycStatusResponse = {
@@ -530,7 +551,7 @@ export const api = {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
-      return data as TenantResponse;
+      return data as CreateTenantResponse;
     },
     async getMe() {
       const res = await apiFetch(`${BASE_URL}/tenants/me`);
@@ -547,6 +568,35 @@ export const api = {
       const responseData = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
       return responseData as TenantResponse;
+    },
+  },
+  apiKeys: {
+    async list(): Promise<{ items: TenantApiKeyResponse[] }> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to list API keys"));
+      return data as { items: TenantApiKeyResponse[] };
+    },
+    async rotate(args: {
+      reason: "leaked" | "scheduled" | "compromise" | "other";
+      revoke_old_immediately: boolean;
+    }): Promise<RotateTenantApiKeyResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys/rotate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate API key"));
+      return data as RotateTenantApiKeyResponse;
+    },
+    async revoke(keyId: string): Promise<TenantApiKeyResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/api-keys/${keyId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to revoke API key"));
+      return data as TenantApiKeyResponse;
     },
   },
   kyc: {

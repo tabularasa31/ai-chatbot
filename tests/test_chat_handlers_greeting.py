@@ -60,7 +60,7 @@ def _make_handler_context(
 
 
 def _make_persisted_tenant(db: Session, *, name: str = "Acme") -> Tenant:
-    tenant = Tenant(name=name, api_key="k" * 32)
+    tenant = Tenant(name=name)
     db.add(tenant)
     db.flush()
     return tenant
@@ -84,7 +84,9 @@ def test_can_handle_returns_true_for_empty_new_session(db_session: Session) -> N
 def test_can_handle_returns_false_when_session_not_new(db_session: Session) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, is_new_session=False)
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, is_new_session=False
+    )
 
     assert GreetingHandler().can_handle(ctx) is False
 
@@ -92,7 +94,9 @@ def test_can_handle_returns_false_when_session_not_new(db_session: Session) -> N
 def test_can_handle_returns_false_when_question_present(db_session: Session) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat, question_text="hi")
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
 
     assert GreetingHandler().can_handle(ctx) is False
 
@@ -110,7 +114,8 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
         return LocalizationResult(text="Hello, I am the Acme assistant.", tokens_used=7)
 
     monkeypatch.setattr(
-        "backend.chat.handlers.greeting.generate_greeting_in_language_result", fake_generate
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        fake_generate,
     )
 
     ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
@@ -129,11 +134,15 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
     assert roles == [MessageRole.assistant]
 
 
-def test_resolve_product_name_falls_back_to_default_when_tenant_missing(db_session: Session) -> None:
+def test_resolve_product_name_falls_back_to_default_when_tenant_missing(
+    db_session: Session,
+) -> None:
     assert _resolve_product_name(tenant=None, db=db_session) == "this product"
 
 
-def test_resolve_product_name_uses_tenant_name_when_no_profile(db_session: Session) -> None:
+def test_resolve_product_name_uses_tenant_name_when_no_profile(
+    db_session: Session,
+) -> None:
     tenant = _make_persisted_tenant(db_session, name="My Co")
     assert _resolve_product_name(tenant=tenant, db=db_session) == "My Co"
 

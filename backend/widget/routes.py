@@ -41,7 +41,10 @@ from backend.models import (
     Tenant,
     UserContext,
 )
-from backend.tenants.service import get_kyc_decrypted_keys_for_validation
+from backend.tenants.service import (
+    get_kyc_decrypted_keys_for_validation,
+    get_tenant_by_api_key,
+)
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_bot_and_tenant_for_widget_chat,
@@ -122,11 +125,7 @@ def widget_session_init(
     """
     Start a widget session. Optional signed identity_token enables identified mode.
     """
-    tenant = (
-        db.query(Tenant)
-        .filter(Tenant.api_key == body.api_key.strip())
-        .first()
-    )
+    tenant = get_tenant_by_api_key(body.api_key, db)
     if not tenant or not tenant.is_active:
         logger.info(
             "widget_session_init_rejected",

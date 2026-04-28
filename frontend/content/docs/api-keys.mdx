@@ -1,0 +1,58 @@
+---
+title: Rotating your API key
+description: How to rotate your widget API key without breaking the embedded chat on your site.
+---
+
+Your widget uses a `ck_…` API key to talk to Chat9. If that key is ever
+exposed (committed to a public repo, sent over email, captured in a
+screenshot), you should rotate it. Rotation gives you a new key
+immediately while keeping the old one valid for a 24-hour grace window
+— enough time to update the embed snippet on your site without the
+widget breaking for users mid-session.
+
+## When to rotate
+
+- **Routine hygiene** — once or twice a year, even when nothing's wrong.
+- **Possibly leaked** — the key may have shown up somewhere it shouldn't have.
+- **Confirmed compromise** — you know the key is in someone else's hands.
+
+## How to rotate
+
+1. Open **Settings → API keys** in the dashboard.
+2. Click **Rotate key**.
+3. Pick a reason. If you have evidence the key is being abused right
+   now, also tick **Revoke old key immediately** — this skips the grace
+   window and the old key starts returning 401 within seconds.
+4. Copy the new key from the green confirmation panel. **You will not
+   see the plaintext again** — only the last 4 characters of any key
+   are shown after this.
+5. Update your embed snippet (or any other place the key is used) with
+   the new value.
+
+## What the grace window does
+
+After a rotation, the previous key enters the `revoking` state with a
+24-hour expiry. During that window:
+
+- Both the new key and the old key authenticate successfully.
+- The new key is the one returned in your dashboard as the active key.
+- After 24 hours, the old key flips to `revoked` and starts returning
+  401 on every widget request.
+
+You can also revoke any non-active key on demand from the API keys
+page. Chat9 will refuse to revoke the only remaining usable key — you
+have to rotate first.
+
+## Identifying a key in the dashboard
+
+The API keys list shows each key by its last 4 characters
+(`ck_••••abcd`) plus its status, when it was created, when it was last
+used, and — for revoking keys — how much time is left in the grace
+window. The plaintext value is never shown a second time.
+
+## What's not stored
+
+Chat9 only stores a SHA-256 hash of every API key, plus the last 4
+characters for identification. Even with full database access, your
+plaintext key cannot be recovered — only verified against an incoming
+request.

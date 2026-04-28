@@ -65,7 +65,7 @@ def test_ensure_client_for_user_returns_existing_on_conflict(
     db_session.commit()
     db_session.refresh(user)
 
-    existing_client = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
+    existing_client, _ = clients_service.create_tenant(user.id, "Existing Tenant", db_session)
     lookup_calls = 0
 
     def fake_create_client(user_id, name, db):
@@ -112,7 +112,8 @@ def test_get_my_client_success(tenant: TestClient, db_session: Session) -> None:
     data = response.json()
     assert data["id"] == tenant_id
     assert data["name"] == "My Tenant"
-    assert "api_key" in data
+    assert data.get("api_key_hint") and len(data["api_key_hint"]) == 4
+    assert "api_key" not in data
 
 
 def test_get_my_client_not_found(tenant: TestClient, db_session: Session) -> None:
@@ -201,30 +202,6 @@ def test_delete_client_wrong_user(tenant: TestClient, db_session: Session) -> No
         f"/tenants/{tenant_id}",
         headers={"Authorization": f"Bearer {token_b}"},
     )
-    assert response.status_code == 404
-
-
-def test_validate_api_key_valid(tenant: TestClient, db_session: Session) -> None:
-    """Valid api_key → returns tenant_id and name."""
-    token = register_and_verify_user(tenant, db_session, email="val@example.com")
-    create_resp = tenant.post(
-        "/tenants",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"name": "Validate Tenant"},
-    )
-    api_key = create_resp.json()["api_key"]
-    tenant_id = create_resp.json()["id"]
-
-    response = tenant.get(f"/tenants/validate/{api_key}")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["tenant_id"] == str(tenant_id)
-    assert data["name"] == "Validate Tenant"
-
-
-def test_validate_api_key_invalid(tenant: TestClient) -> None:
-    """Wrong key → 404."""
-    response = tenant.get("/tenants/validate/invalid-key-12345")
     assert response.status_code == 404
 
 

@@ -21,6 +21,7 @@ from backend.models import Tenant, TenantProfile, User
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture()
 def client_with_profile(db_session):
     user = User(
@@ -32,8 +33,7 @@ def client_with_profile(db_session):
     db_session.add(user)
     db_session.flush()
     tenant = Tenant(
-                name="Alias Tenant",
-        api_key="test-key",
+        name="Alias Tenant",
         public_id="alias-pub-id",
     )
     db_session.add(tenant)
@@ -49,6 +49,7 @@ def client_with_profile(db_session):
 
 
 # ── test_alias_pre_filter_size ────────────────────────────────────────────────
+
 
 def test_alias_pre_filter_size():
     """Cluster with fewer than ALIAS_MIN_CLUSTER_SIZE questions must return False."""
@@ -70,6 +71,7 @@ def test_alias_pre_filter_size():
 
 
 # ── test_alias_pre_filter_diversity ──────────────────────────────────────────
+
 
 def test_alias_pre_filter_diversity():
     """Cluster with low lexical diversity (repetitive questions) must return False."""
@@ -111,6 +113,7 @@ def test_alias_pre_filter_passes():
 
 
 # ── test_llm_semaphore ────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_llm_semaphore():
@@ -177,6 +180,7 @@ async def test_llm_semaphore():
 
 # ── test_alias_confidence_increments ─────────────────────────────────────────
 
+
 def test_alias_confidence_increments(db_session, client_with_profile):
     """Repeat appearance of alias must increase confidence (0.7→0.8→0.9, max 0.9)."""
     from backend.jobs.alias_extractor import (
@@ -221,6 +225,7 @@ def test_alias_confidence_increments(db_session, client_with_profile):
 
 # ── test_no_duplicate_alias ───────────────────────────────────────────────────
 
+
 def test_no_duplicate_alias(db_session, client_with_profile):
     """Same alias phrase must not create a duplicate entry."""
     from backend.jobs.alias_extractor import AliasEntry, _merge_aliases_into_profile
@@ -237,6 +242,7 @@ def test_no_duplicate_alias(db_session, client_with_profile):
 
 
 # ── test_extract_and_merge_aliases_integration ────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_extract_and_merge_aliases_integration(db_session, client_with_profile):
@@ -267,8 +273,12 @@ async def test_extract_and_merge_aliases_integration(db_session, client_with_pro
         ]
     ]
 
-    with patch("backend.jobs.alias_extractor.get_openai_client", return_value=mock_openai), \
-         patch("backend.jobs.alias_extractor.should_extract_aliases", return_value=True):
+    with (
+        patch(
+            "backend.jobs.alias_extractor.get_openai_client", return_value=mock_openai
+        ),
+        patch("backend.jobs.alias_extractor.should_extract_aliases", return_value=True),
+    ):
         count = await extract_and_merge_aliases(
             db=db_session,
             tenant_id=tenant.id,

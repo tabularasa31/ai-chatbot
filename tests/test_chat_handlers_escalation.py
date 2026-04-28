@@ -34,7 +34,7 @@ def _make_language_context() -> ResolvedLanguageContext:
 
 
 def _make_persisted_tenant(db: Session, *, name: str = "Acme") -> Tenant:
-    tenant = Tenant(name=name, api_key="k" * 32)
+    tenant = Tenant(name=name)
     db.add(tenant)
     db.flush()
     return tenant
@@ -124,7 +124,8 @@ def test_can_handle_returns_true_for_explicit_request_when_no_state_set(
         db=db_session, tenant=tenant, chat=chat, question_text="i need a human"
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.escalation.detect_human_request", lambda *_args, **_kw: True
+        "backend.chat.handlers.escalation.detect_human_request",
+        lambda *_args, **_kw: True,
     )
     assert EscalationStateMachine().can_handle(ctx) is True
 

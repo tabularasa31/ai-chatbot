@@ -56,7 +56,7 @@ def _create_faq_tenant(db_session: Session, *, email: str) -> uuid.UUID:
     )
     db_session.add(user)
     db_session.flush()
-    tenant = Tenant(name="FAQ Tenant", api_key="k" * 32)
+    tenant = Tenant(name="FAQ Tenant")
     db_session.add(tenant)
     db_session.commit()
     db_session.refresh(tenant)
@@ -124,20 +124,28 @@ def test_insert_new_faq_candidates_skips_low_confidence_and_duplicates(
 
 
 def test_get_privacy_defaults(tenant: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(tenant, db_session, email="privacy-default@example.com")
+    token = register_and_verify_user(
+        tenant, db_session, email="privacy-default@example.com"
+    )
     tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Privacy Tenant"},
     )
 
-    resp = tenant.get("/tenants/me/privacy", headers={"Authorization": f"Bearer {token}"})
+    resp = tenant.get(
+        "/tenants/me/privacy", headers={"Authorization": f"Bearer {token}"}
+    )
     assert resp.status_code == 200
     assert sorted(resp.json()["optional_entity_types"]) == ["ID_DOC", "IP", "URL_TOKEN"]
 
 
-def test_put_privacy_updates_optional_entity_types(tenant: TestClient, db_session: Session) -> None:
-    token = register_and_verify_user(tenant, db_session, email="privacy-update@example.com")
+def test_put_privacy_updates_optional_entity_types(
+    tenant: TestClient, db_session: Session
+) -> None:
+    token = register_and_verify_user(
+        tenant, db_session, email="privacy-update@example.com"
+    )
     tenant.post(
         "/tenants",
         headers={"Authorization": f"Bearer {token}"},
@@ -152,7 +160,9 @@ def test_put_privacy_updates_optional_entity_types(tenant: TestClient, db_sessio
     assert resp.status_code == 200
     assert resp.json()["optional_entity_types"] == ["IP"]
 
-    resp2 = tenant.get("/tenants/me/privacy", headers={"Authorization": f"Bearer {token}"})
+    resp2 = tenant.get(
+        "/tenants/me/privacy", headers={"Authorization": f"Bearer {token}"}
+    )
     assert resp2.status_code == 200
     assert resp2.json()["optional_entity_types"] == ["IP"]
 
@@ -161,7 +171,9 @@ def test_put_privacy_updates_optional_entity_types(tenant: TestClient, db_sessio
 # Alembic migration file checks
 # ---------------------------------------------------------------------------
 
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "backend" / "migrations" / "versions"
+_MIGRATIONS_DIR = (
+    Path(__file__).resolve().parents[1] / "backend" / "migrations" / "versions"
+)
 _MAX_REVISION_LEN = 32
 
 
@@ -207,7 +219,11 @@ def test_signup_sets_verification_token(
 ) -> None:
     calls: list[tuple[str, str, str]] = []
 
-    monkeypatch.setattr(auth_routes, "send_email", lambda to, subject, body: calls.append((to, subject, body)))
+    monkeypatch.setattr(
+        auth_routes,
+        "send_email",
+        lambda to, subject, body: calls.append((to, subject, body)),
+    )
 
     response = tenant.post(
         "/auth/register",
@@ -254,7 +270,9 @@ def test_verify_email_success(tenant: TestClient, db_session: Session) -> None:
 
 
 def test_verify_email_invalid_token(tenant: TestClient) -> None:
-    response = tenant.post("/auth/verify-email", json={"token": "nonexistent-token-12345"})
+    response = tenant.post(
+        "/auth/verify-email", json={"token": "nonexistent-token-12345"}
+    )
     assert response.status_code == 400
     detail = response.json()["detail"].lower()
     assert "invalid" in detail or "expired" in detail

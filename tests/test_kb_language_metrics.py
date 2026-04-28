@@ -25,10 +25,10 @@ from backend.models.base import _utcnow
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_tenant(db: Session) -> Tenant:
     t = Tenant(
         name="test-tenant",
-        api_key=f"key-{uuid.uuid4().hex[:12]}",
         public_id=f"pub_{uuid.uuid4().hex[:16]}",
         openai_api_key="sk-test",
         is_active=True,
@@ -41,7 +41,9 @@ def _make_tenant(db: Session) -> Tenant:
     return t
 
 
-def _make_document(db: Session, tenant: Tenant, language: str | None = "en") -> Document:
+def _make_document(
+    db: Session, tenant: Tenant, language: str | None = "en"
+) -> Document:
     doc = Document(
         tenant_id=tenant.id,
         filename="test.md",
@@ -59,6 +61,7 @@ def _make_document(db: Session, tenant: Tenant, language: str | None = "en") -> 
 # ---------------------------------------------------------------------------
 # document_indexed — upload path
 # ---------------------------------------------------------------------------
+
 
 def test_upload_document_emits_document_indexed(db_session: Session, monkeypatch):
     tenant = _make_tenant(db_session)
@@ -104,7 +107,9 @@ def test_upload_document_emits_document_indexed(db_session: Session, monkeypatch
     assert "parsed_text_chars" in props
 
 
-def test_upload_document_emits_language_detected_false_when_null(db_session: Session, monkeypatch):
+def test_upload_document_emits_language_detected_false_when_null(
+    db_session: Session, monkeypatch
+):
     tenant = _make_tenant(db_session)
 
     events: list[dict] = []
@@ -147,6 +152,7 @@ def test_upload_document_emits_language_detected_false_when_null(db_session: Ses
 # tenant_kb_language_snapshot
 # ---------------------------------------------------------------------------
 
+
 def test_snapshot_emits_for_tenant_with_documents(db_session: Session, monkeypatch):
     tenant = _make_tenant(db_session)
     _make_document(db_session, tenant, language="en")
@@ -163,7 +169,9 @@ def test_snapshot_emits_for_tenant_with_documents(db_session: Session, monkeypat
         fake_capture,
     )
 
-    from backend.jobs.kb_language_snapshot import run_kb_language_snapshot_for_all_tenants
+    from backend.jobs.kb_language_snapshot import (
+        run_kb_language_snapshot_for_all_tenants,
+    )
 
     count = run_kb_language_snapshot_for_all_tenants(db_session)
     assert count >= 1
@@ -195,7 +203,9 @@ def test_snapshot_skips_tenant_with_no_documents(db_session: Session, monkeypatc
         fake_capture,
     )
 
-    from backend.jobs.kb_language_snapshot import run_kb_language_snapshot_for_all_tenants
+    from backend.jobs.kb_language_snapshot import (
+        run_kb_language_snapshot_for_all_tenants,
+    )
 
     run_kb_language_snapshot_for_all_tenants(db_session)
 
@@ -218,7 +228,9 @@ def test_snapshot_monolingual_tenant(db_session: Session, monkeypatch):
         fake_capture,
     )
 
-    from backend.jobs.kb_language_snapshot import run_kb_language_snapshot_for_all_tenants
+    from backend.jobs.kb_language_snapshot import (
+        run_kb_language_snapshot_for_all_tenants,
+    )
 
     run_kb_language_snapshot_for_all_tenants(db_session)
 
@@ -233,6 +245,7 @@ def test_snapshot_monolingual_tenant(db_session: Session, monkeypatch):
 # ---------------------------------------------------------------------------
 # cross-lingual properties in _emit_chat_turn_event
 # ---------------------------------------------------------------------------
+
 
 def test_emit_chat_turn_event_includes_cross_lingual_props(monkeypatch):
     captured: list[dict] = []

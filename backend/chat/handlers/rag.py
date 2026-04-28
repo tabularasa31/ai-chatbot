@@ -24,7 +24,8 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
@@ -760,6 +761,13 @@ def run_chat_pipeline(
     _query_script = detect_query_script_bucket(question)
     _cross_lingual_futures: list = []
 
+    # Base query variants are deterministic and cheap to compute, so embedding
+    # of them is dispatched to the guard pool concurrently with the relevance
+    # guard (saves ~100-300 ms on p50). Rewrite + cross-lingual variants
+    # — which depend on LLM calls — are embedded in a second batch once they
+    # arrive.
+    _base_query_variants = _svc.expand_query(question)
+
     _rel_future = _GUARD_POOL.submit(
         _svc.check_relevance_with_profile,
         tenant_id=tenant_id,
@@ -767,6 +775,13 @@ def run_chat_pipeline(
         profile=_guard_profile,
         api_key=api_key,
         trace=trace,
+    )
+    _embed_start = perf_counter()
+    _base_embed_future = _GUARD_POOL.submit(
+        _svc.embed_queries,
+        _base_query_variants,
+        api_key=api_key,
+        timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
     )
     # Semantic query rewrite runs in the same guard pool (3rd worker).
     # Guards take 1-2 s; the rewrite typically finishes within that window
@@ -817,6 +832,7 @@ def run_chat_pipeline(
 
     if injection_result.detected:
         _rel_future.cancel()
+        _base_embed_future.cancel()
         if _rewrite_future:
             _rewrite_future.cancel()
         for _cl_future in _cross_lingual_futures:
@@ -845,7 +861,11 @@ def run_chat_pipeline(
         )
 
     # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
-    query_variants = _svc.expand_query(question)
+    # Base variants were embedded in parallel with the relevance guard (above);
+    # rewrite + cross-lingual variants — which depend on LLM calls — go in a
+    # second embedding batch.
+    query_variants = list(_base_query_variants)
+    extra_variants: list[str] = []
 
     # Collect semantic rewrite result — guard checks ran concurrently so
     # the rewrite is usually already finished by now (zero extra wait).
@@ -858,7 +878,7 @@ def run_chat_pipeline(
             if _rewritten_variant and _rewritten_variant.casefold() not in {
                 v.casefold() for v in query_variants
             }:
-                query_variants = [*query_variants, _rewritten_variant]
+                extra_variants.append(_rewritten_variant)
         except Exception:
             _rewritten_variant = None
     if trace is not None:
@@ -881,34 +901,63 @@ def run_chat_pipeline(
         except Exception:
             continue
         if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
-            v.casefold() for v in query_variants
+            v.casefold() for v in (*query_variants, *extra_variants)
         }:
-            query_variants = [*query_variants, _cross_lingual_variant]
+            extra_variants.append(_cross_lingual_variant)
             _cross_lingual_variants_added += 1
 
     if trace is not None:
         _embed_span = trace.span(
             name="query-embedding",
             input={
-                "query_variants": query_variants,
-                "query_variant_count": len(query_variants),
-                "variant_mode": "multi" if len(query_variants) > 1 else "single",
+                "query_variants": [*query_variants, *extra_variants],
+                "query_variant_count": len(query_variants) + len(extra_variants),
+                "variant_mode": "multi" if (len(query_variants) + len(extra_variants)) > 1 else "single",
                 "upstream_precomputed": True,
             },
         )
-    _embed_start = perf_counter()
     try:
-        variant_vectors = _svc.embed_queries(query_variants, api_key=api_key, timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS)
-    except (APITimeoutError, APIConnectionError, RateLimitError):
+        base_variant_vectors = _base_embed_future.result(
+            timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS
+        )
+    except (
+        APITimeoutError,
+        APIConnectionError,
+        RateLimitError,
+        FutureTimeoutError,
+        CancelledError,
+    ):
         logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
-        variant_vectors = []
+        base_variant_vectors = []
+
+    embed_api_request_count = 1 if base_variant_vectors else 0
+    extra_variant_vectors: list[list[float]] = []
+    if extra_variants and base_variant_vectors:
+        try:
+            extra_variant_vectors = _svc.embed_queries(
+                extra_variants,
+                api_key=api_key,
+                timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+            )
+            embed_api_request_count += 1
+        except (APITimeoutError, APIConnectionError, RateLimitError):
+            logger.warning("run_chat_pipeline_embed_extras_failed", exc_info=True)
+            extra_variant_vectors = []
+
+    if extra_variant_vectors and len(extra_variant_vectors) == len(extra_variants):
+        query_variants = [*query_variants, *extra_variants]
+        variant_vectors = [*base_variant_vectors, *extra_variant_vectors]
+    else:
+        # Extra-batch embedding failed → fall back to base variants only.
+        variant_vectors = base_variant_vectors
+
     if trace is not None:
         _embed_span.end(
             output={
                 "embedded_query_count": len(variant_vectors),
                 "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
-                "embedding_api_request_count": 1,
-                "extra_embedding_api_requests": 0,
+                "embedding_api_request_count": embed_api_request_count,
+                "extra_embedding_api_requests": max(embed_api_request_count - 1, 0),
                 "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
                 "upstream_precomputed": True,
             }
@@ -1087,7 +1136,7 @@ def run_chat_pipeline(
             trace=trace,
             precomputed_query_variants=query_variants,
             precomputed_variant_vectors=variant_vectors,
-            precomputed_embedding_api_request_count=1,
+            precomputed_embedding_api_request_count=embed_api_request_count,
             rewritten_variant=_rewritten_variant,
         )
 

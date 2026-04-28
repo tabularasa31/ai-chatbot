@@ -180,6 +180,46 @@ def test_distinct_id_falls_back_to_system_when_no_identifiers(captured_events):
     assert exhausted[0]["bot_id"] is None
 
 
+def test_attempt_event_includes_call_type_default(captured_events):
+    """openai_retry.attempt includes call_type='chat_completion' by default."""
+    call_openai_with_retry("chat_generate", lambda: "ok", tenant_id="tnt_test")
+
+    attempts = _named(captured_events, "openai_retry.attempt")
+    assert len(attempts) == 1
+    assert attempts[0]["properties"]["call_type"] == "chat_completion"
+
+
+def test_attempt_event_includes_call_type_embedding(captured_events):
+    """openai_retry.attempt includes call_type='embedding' when explicitly passed."""
+    call_openai_with_retry(
+        "search_embed_query",
+        lambda: "ok",
+        tenant_id="tnt_test",
+        call_type="embedding",
+    )
+
+    attempts = _named(captured_events, "openai_retry.attempt")
+    assert len(attempts) == 1
+    assert attempts[0]["properties"]["call_type"] == "embedding"
+
+
+def test_exhausted_event_includes_call_type(captured_events):
+    """openai_retry.exhausted includes call_type property."""
+    with pytest.raises(InternalServerError):
+        call_openai_with_retry(
+            "search_embed_query",
+            lambda: (_ for _ in ()).throw(
+                InternalServerError("boom", response=_response(500), body=None)
+            ),
+            tenant_id="tnt_test",
+            call_type="embedding",
+        )
+
+    exhausted = _named(captured_events, "openai_retry.exhausted")
+    assert len(exhausted) == 1
+    assert exhausted[0]["properties"]["call_type"] == "embedding"
+
+
 def test_capture_event_failure_does_not_break_retry(monkeypatch):
     monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
 

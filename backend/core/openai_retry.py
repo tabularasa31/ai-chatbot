@@ -33,6 +33,7 @@ def call_openai_with_retry(
     tenant_id: str | None = None,
     bot_id: str | None = None,
     endpoint: str | None = None,
+    call_type: str = "chat_completion",
 ) -> T:
     started = time.monotonic()
     max_attempts = settings.openai_user_retry_max_attempts
@@ -46,6 +47,7 @@ def call_openai_with_retry(
             elapsed=time.monotonic() - started,
             tenant_id=tenant_id,
             bot_id=bot_id,
+            call_type=call_type,
         )
         try:
             return fn()
@@ -72,6 +74,7 @@ def call_openai_with_retry(
                     bot_id=bot_id,
                     exc=exc,
                     endpoint=endpoint,
+                    call_type=call_type,
                 )
                 raise
             if attempt >= max_attempts or remaining <= 0:
@@ -86,6 +89,7 @@ def call_openai_with_retry(
                     bot_id=bot_id,
                     exc=exc,
                     endpoint=endpoint,
+                    call_type=call_type,
                 )
                 raise
 
@@ -106,6 +110,7 @@ def call_openai_with_retry(
                     bot_id=bot_id,
                     exc=exc,
                     endpoint=endpoint,
+                    call_type=call_type,
                 )
                 raise
 
@@ -129,6 +134,7 @@ def call_openai_with_retry(
                 classified=classified,
                 tenant_id=tenant_id,
                 bot_id=bot_id,
+                call_type=call_type,
             )
             time.sleep(delay)
             last_exc = exc
@@ -188,6 +194,7 @@ def _emit_call_attempt(
     elapsed: float,
     tenant_id: str | None,
     bot_id: str | None,
+    call_type: str,
 ) -> None:
     """Fired once per API call attempt (before fn() executes)."""
     try:
@@ -200,6 +207,7 @@ def _emit_call_attempt(
                 "operation": operation,
                 "attempt": attempt,
                 "elapsed_ms": int(elapsed * 1000),
+                "call_type": call_type,
             },
             groups={"tenant": tenant_id} if tenant_id else None,
         )
@@ -217,6 +225,7 @@ def _emit_retry_scheduled(
     classified: ClassifiedError,
     tenant_id: str | None,
     bot_id: str | None,
+    call_type: str,
 ) -> None:
     """Fired when a retry sleep is scheduled (attempt failed, will try again)."""
     try:
@@ -233,6 +242,7 @@ def _emit_retry_scheduled(
                 "delay_ms": int(delay_seconds * 1000),
                 "elapsed_ms": int(elapsed * 1000),
                 "remaining_budget_ms": max(int(remaining * 1000), 0),
+                "call_type": call_type,
             },
             groups={"tenant": tenant_id} if tenant_id else None,
         )
@@ -251,6 +261,7 @@ def _emit_retry_exhausted(
     bot_id: str | None,
     exc: Exception | None = None,
     endpoint: str | None = None,
+    call_type: str,
 ) -> None:
     try:
         capture_event(
@@ -268,6 +279,7 @@ def _emit_retry_exhausted(
                 "status_code": classified.status_code,
                 "elapsed_ms": int(elapsed * 1000),
                 "reason": reason,
+                "call_type": call_type,
             },
             groups={"tenant": tenant_id} if tenant_id else None,
         )

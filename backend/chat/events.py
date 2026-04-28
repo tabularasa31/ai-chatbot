@@ -180,7 +180,6 @@ def _emit_ai_generation_event(
     operation: str,
     http_status: int = 200,
     cached_tokens: int = 0,
-    prompt_cache_key_set: bool = False,
     prompt_cache_prefix_tokens_estimate: int | None = None,
 ) -> None:
     """Emit a PostHog $ai_generation event for LLM Observability cost tracking."""
@@ -204,7 +203,6 @@ def _emit_ai_generation_event(
                 "operation": operation,
                 "prompt_cache_cached_tokens": cached_tokens,
                 "prompt_cache_hit": cached_tokens > 0,
-                "prompt_cache_key_set": prompt_cache_key_set,
                 "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
                 "prompt_cache_prefix_meets_minimum": (
                     prompt_cache_prefix_tokens_estimate is not None

@@ -542,19 +542,6 @@ def _assemble_chat_messages(
     return messages
 
 
-def _prompt_cache_key(
-    *,
-    tenant_public_id: str | None,
-    bot_public_id: str | None,
-) -> str | None:
-    """Stable routing hint for OpenAI prompt caching."""
-    if bot_public_id:
-        return f"chat9:{bot_public_id}:rag:v1"
-    if tenant_public_id:
-        return f"chat9:{tenant_public_id}:rag:v1"
-    return None
-
-
 def _estimate_prompt_tokens(text: str) -> int:
     """Cheap local estimate used only for cache-readiness telemetry."""
     stripped = (text or "").strip()
@@ -1642,10 +1629,6 @@ def generate_answer(
         user_message=user_message,
         prior_messages=prior_messages,
     )
-    prompt_cache_key = _prompt_cache_key(
-        tenant_public_id=metrics_tenant_id,
-        bot_public_id=metrics_bot_id,
-    )
     prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
@@ -1677,7 +1660,6 @@ def generate_answer(
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
                 "quick_answer_count": len(quick_answer_items or []),
-                "prompt_cache_key_set": prompt_cache_key is not None,
                 "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
                 "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
                 "captures_full_prompt": settings.observability_capture_full_prompts,
@@ -1704,7 +1686,6 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}),
                     **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
@@ -1742,7 +1723,6 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({"prompt_cache_key": prompt_cache_key} if prompt_cache_key else {}),
                     **({} if _reasoning else {"temperature": 0.2}),
                     max_completion_tokens=_max_completion_tokens,
                 ),
@@ -1804,7 +1784,6 @@ def generate_answer(
                 input_tokens=_input_tokens,
                 output_tokens=_output_tokens,
                 cached_tokens=_cached_tokens,
-                prompt_cache_key_set=prompt_cache_key is not None,
                 prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,

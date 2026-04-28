@@ -331,26 +331,6 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens_reasoning
 
 
-def test_generate_answer_sets_prompt_cache_key_when_metrics_ids_exist(
-    mock_openai_client: Mock,
-) -> None:
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content="The answer is 42"))
-    ]
-    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
-
-    generate_answer(
-        "What?",
-        ["chunk1"],
-        api_key="sk-test",
-        metrics_tenant_id="ck_test",
-        metrics_bot_id="bot_test",
-    )
-
-    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
-    assert call_kwargs["prompt_cache_key"] == "chat9:bot_test:rag:v1"
-
-
 def test_generate_answer_emits_cached_tokens_to_posthog(
     mock_openai_client: Mock,
     monkeypatch: pytest.MonkeyPatch,
@@ -385,7 +365,6 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     assert props["$ai_cached_tokens"] == 64
     assert props["prompt_cache_cached_tokens"] == 64
     assert props["prompt_cache_hit"] is True
-    assert props["prompt_cache_key_set"] is True
     assert isinstance(props["prompt_cache_prefix_tokens_estimate"], int)
 
 
@@ -476,7 +455,6 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,
-        "prompt_cache_key_set": False,
         "prompt_cache_prefix_meets_minimum": False,
         "captures_full_prompt": True,
         "finish_reason_expected": "stop_or_length",

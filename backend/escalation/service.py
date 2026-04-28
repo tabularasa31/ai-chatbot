@@ -145,7 +145,7 @@ def detect_human_request(message: str, api_key: str) -> bool:
         response = call_openai_with_retry(
             "detect_human_request",
             lambda: client.chat.completions.create(
-                model=settings.guards_model,
+                model=settings.human_request_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message},

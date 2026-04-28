@@ -48,9 +48,9 @@ class Settings(BaseSettings):
         alias="CHAT_MODEL",
         description="OpenAI model for main chat response generation.",
     )
-    guards_model: str = Field(
+    human_request_model: str = Field(
         "gpt-4o-mini",
-        alias="GUARDS_MODEL",
+        alias="HUMAN_REQUEST_MODEL",
         description="OpenAI model for human-request guard classification. Set to gpt-4.1-mini to roll back.",
     )
     relevance_guard_model: str = Field(

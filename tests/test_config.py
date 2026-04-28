@@ -6,7 +6,7 @@ from backend.core.config import Settings
 def test_guard_models_default_to_lightweight_models() -> None:
     settings = Settings()
 
-    assert settings.guards_model == "gpt-4o-mini"
+    assert settings.human_request_model == "gpt-4o-mini"
     assert settings.relevance_guard_model == "gpt-4o-mini"
     assert settings.answer_validation_model == "gpt-4o-mini"
 
@@ -23,14 +23,14 @@ def test_guard_models_roll_back_with_explicit_env_names(
     assert settings.answer_validation_model == "gpt-4.1-mini"
 
 
-def test_general_guard_model_env_does_not_override_scoped_guard_models(
+def test_human_request_model_env_does_not_override_scoped_guard_models(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("GUARDS_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("HUMAN_REQUEST_MODEL", "gpt-4.1-mini")
     monkeypatch.setenv("ANSWER_VALIDATION_MODEL", "gpt-4.1-mini")
 
     settings = Settings()
 
-    assert settings.guards_model == "gpt-4.1-mini"
+    assert settings.human_request_model == "gpt-4.1-mini"
     assert settings.relevance_guard_model == "gpt-4o-mini"
     assert settings.answer_validation_model == "gpt-4o-mini"

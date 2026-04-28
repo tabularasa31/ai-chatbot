@@ -159,6 +159,15 @@ def rotate_api_key(
     if reason not in TENANT_API_KEY_REASONS:
         raise HTTPException(status_code=400, detail="Invalid rotation reason")
 
+    # Serialize concurrent rotations for the same tenant. The partial
+    # unique index uq_tenant_api_keys_one_active is a safety net — without
+    # this lock, two simultaneous rotates would both pass the read,
+    # transition the same active key to REVOKING, and then the second
+    # INSERT would crash with IntegrityError instead of cleanly waiting.
+    # On SQLite (tests) FOR UPDATE is a silent no-op; correctness still
+    # holds because SQLite serializes writers at the file level.
+    db.query(Tenant).filter(Tenant.id == tenant_id).with_for_update().first()
+
     now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
     expires_at = (
         None

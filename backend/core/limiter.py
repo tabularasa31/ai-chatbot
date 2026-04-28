@@ -15,6 +15,10 @@ from backend.core.config import settings
 # When set (by tests only), `/widget/chat` rate limiting uses this identity instead of IP.
 _widget_public_rate_limit_key_override: Callable[[Request], str] | None = None
 
+# When set (by tests only), owner-JWT rate limiting uses this identity instead of
+# decoding the bearer token. Allows tests to assert 429 without minting real JWTs.
+_owner_jwt_rate_limit_key_override: Callable[[Request], str] | None = None
+
 
 def _widget_rate_limit_ip(request: Request) -> str:
     if _widget_public_rate_limit_key_override is not None:
@@ -60,6 +64,36 @@ def widget_init_rate_limit_key(request: Request) -> str:
     return _widget_rate_limit_ip(request)
 
 
+def owner_jwt_rate_limit_key(request: Request) -> str:
+    """
+    Rate-limit identity for owner-protected tenant endpoints (api-key rotate/revoke).
+
+    Keys on the JWT subject (user.id) so a stolen token is throttled regardless of
+    source IP. User → tenant is 1:1, so this is equivalent to per-tenant limiting.
+    Falls back to remote address when no JWT is present so unauthenticated floods
+    still get throttled (the route itself returns 401).
+    """
+    if _owner_jwt_rate_limit_key_override is not None:
+        return _owner_jwt_rate_limit_key_override(request)
+    if settings.environment == "test":
+        return str(uuid.uuid4())
+
+    from backend.core.security import decode_access_token
+
+    raw_token: str | None = None
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth and auth.lower().startswith("bearer "):
+        raw_token = auth.split(" ", 1)[1].strip()
+    if not raw_token:
+        raw_token = request.cookies.get("chat9_token")
+
+    if raw_token:
+        user_id = decode_access_token(raw_token)
+        if user_id:
+            return f"owner:{user_id}"
+    return f"ip:{get_remote_address(request)}"
+
+
 def hash_ip_for_logs(ip: str | None) -> str:
     value = (ip or "unknown").encode("utf-8")
     return hashlib.sha256(value).hexdigest()[:8]
@@ -71,6 +105,14 @@ def set_widget_public_rate_limit_key_override(
     """Tests: set to e.g. ``lambda r: 'fixed'`` to assert 429; pass ``None`` to restore."""
     global _widget_public_rate_limit_key_override
     _widget_public_rate_limit_key_override = fn
+
+
+def set_owner_jwt_rate_limit_key_override(
+    fn: Callable[[Request], str] | None,
+) -> None:
+    """Tests: pin owner-JWT rate-limit identity (e.g. by header). Pass ``None`` to restore."""
+    global _owner_jwt_rate_limit_key_override
+    _owner_jwt_rate_limit_key_override = fn
 
 
 limiter = Limiter(key_func=_key_func)

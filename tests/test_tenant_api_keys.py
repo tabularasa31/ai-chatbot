@@ -13,6 +13,8 @@ Covers the contract documented in [Security] API key rotation:
 from __future__ import annotations
 
 import datetime as dt
+import uuid
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -231,6 +233,123 @@ def test_lookup_uses_hash_not_plaintext(
     assert not_found is None
 
 
+def test_rotate_rate_limited_per_tenant(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """11th rotation in an hour returns 429 with Retry-After (per-tenant)."""
+    from backend.core.limiter import set_owner_jwt_rate_limit_key_override
+
+    token, _ = _create_tenant(tenant, db_session, "rot-rl@example.com")
+    from backend.models import User
+    user = db_session.query(User).filter(User.email == "rot-rl@example.com").first()
+    user.role = "owner"
+    db_session.commit()
+
+    set_owner_jwt_rate_limit_key_override(lambda r: r.headers.get("x-test-owner", "fixed-A"))
+    try:
+        for i in range(10):
+            resp = tenant.post(
+                "/tenants/me/api-keys/rotate",
+                headers={"Authorization": f"Bearer {token}", "x-test-owner": "fixed-A"},
+                json={"reason": "scheduled"},
+            )
+            assert resp.status_code == 201, (i, resp.json())
+        resp = tenant.post(
+            "/tenants/me/api-keys/rotate",
+            headers={"Authorization": f"Bearer {token}", "x-test-owner": "fixed-A"},
+            json={"reason": "scheduled"},
+        )
+        assert resp.status_code == 429
+        assert "retry-after" in {k.lower() for k in resp.headers.keys()}
+
+        # Different tenant identity → not throttled.
+        token2, _ = _create_tenant(tenant, db_session, "rot-rl2@example.com")
+        u2 = db_session.query(User).filter(User.email == "rot-rl2@example.com").first()
+        u2.role = "owner"
+        db_session.commit()
+        resp = tenant.post(
+            "/tenants/me/api-keys/rotate",
+            headers={"Authorization": f"Bearer {token2}", "x-test-owner": "fixed-B"},
+            json={"reason": "scheduled"},
+        )
+        assert resp.status_code == 201, resp.json()
+    finally:
+        set_owner_jwt_rate_limit_key_override(None)
+
+
+def test_retry_after_uses_remaining_rate_limit_window(monkeypatch) -> None:
+    from backend import main as app_main
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
+    )
+
+    class FakeStorageLimiter:
+        @staticmethod
+        def get_window_stats(limit, *args):
+            assert limit == "limit"
+            assert args == ("key", "scope")
+            return (125.2, 0)
+
+    monkeypatch.setattr(app_main.limiter, "_limiter", FakeStorageLimiter())
+    monkeypatch.setattr(app_main.time, "time", lambda: 100.0)
+
+    assert app_main._retry_after_seconds(request) == 26
+
+
+def test_retry_after_falls_back_when_window_stats_unavailable(monkeypatch) -> None:
+    from backend import main as app_main
+
+    request = SimpleNamespace(
+        state=SimpleNamespace(view_rate_limit=("limit", ["key", "scope"]))
+    )
+
+    class BrokenStorageLimiter:
+        @staticmethod
+        def get_window_stats(*_args):
+            raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(app_main.limiter, "_limiter", BrokenStorageLimiter())
+
+    assert (
+        app_main._retry_after_seconds(request)
+        == app_main.RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS
+    )
+
+
+def test_revoke_rate_limited_per_tenant(
+    tenant: TestClient, db_session: Session
+) -> None:
+    """21st revoke in an hour returns 429."""
+    from backend.core.limiter import set_owner_jwt_rate_limit_key_override
+
+    token, _ = _create_tenant(tenant, db_session, "rev-rl@example.com")
+    from backend.models import User
+    user = db_session.query(User).filter(User.email == "rev-rl@example.com").first()
+    user.role = "owner"
+    db_session.commit()
+
+    set_owner_jwt_rate_limit_key_override(lambda r: r.headers.get("x-test-owner", "fixed-D"))
+    try:
+        # Hammer DELETE on a non-existent key — slowapi counts before route logic,
+        # so 404s still consume quota.
+        bogus = uuid.uuid4()
+        for i in range(20):
+            resp = tenant.delete(
+                f"/tenants/me/api-keys/{bogus}",
+                headers={"Authorization": f"Bearer {token}", "x-test-owner": "fixed-D"},
+            )
+            # 404 (key not found) is fine — we're testing the limiter, not the route.
+            assert resp.status_code in (200, 404, 409), (i, resp.status_code)
+        resp = tenant.delete(
+            f"/tenants/me/api-keys/{bogus}",
+            headers={"Authorization": f"Bearer {token}", "x-test-owner": "fixed-D"},
+        )
+        assert resp.status_code == 429
+    finally:
+        set_owner_jwt_rate_limit_key_override(None)
+
+
 def test_rotate_requires_owner_role(
     tenant: TestClient, db_session: Session
 ) -> None:
@@ -247,5 +366,3 @@ def test_rotate_requires_owner_role(
         json={"reason": "scheduled"},
     )
     assert resp.status_code == 403
-
-

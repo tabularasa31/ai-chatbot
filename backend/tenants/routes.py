@@ -3,11 +3,12 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
 from backend.core.db import get_db
+from backend.core.limiter import limiter, owner_jwt_rate_limit_key
 from backend.models import User
 from backend.observability.metrics import capture_event, group_identify
 from backend.tenants.api_keys_service import (
@@ -166,7 +167,9 @@ def list_api_keys_route(
     response_model=RotateTenantApiKeyResponse,
     status_code=201,
 )
+@limiter.limit("10/hour", key_func=owner_jwt_rate_limit_key)
 def rotate_api_key_route(
+    request: Request,
     body: RotateTenantApiKeyRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -206,7 +209,9 @@ def rotate_api_key_route(
     "/me/api-keys/{key_id}",
     response_model=TenantApiKeyResponse,
 )
+@limiter.limit("20/hour", key_func=owner_jwt_rate_limit_key)
 def revoke_api_key_route(
+    request: Request,
     key_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],

@@ -268,6 +268,12 @@ def _full_transcript_from_chat(
 
 _KYC_IDENTITY_KEYS = {"email", "name", "plan_tier", "user_id", "audience_tag", "locale", "browser_locale"}
 
+# Width of the indent used to wrap multi-line transcript turns under the
+# "  user: " / "  assistant: " label so subsequent lines stay aligned with the
+# message text. Matches the longest label ("assistant"); shorter labels get a
+# slight visual offset which is acceptable here.
+_TRANSCRIPT_WRAP_INDENT = " " * 13
+
 
 def _format_extra_kyc(user_context: dict[str, Any] | None) -> list[str]:
     """All non-identity keys from ``user_context`` rendered as ``key: value`` lines.
@@ -332,9 +338,7 @@ def _build_escalation_email_body(
             lines.append(f"  Chat ID:   {chat_id_str}")
     lines.append("")
 
-    chat: Chat | None = None
-    if ticket.chat_id:
-        chat = db.query(Chat).filter(Chat.id == ticket.chat_id).first()
+    chat: Chat | None = ticket.chat if ticket.chat_id else None
     user_ctx: dict[str, Any] = {}
     if chat and isinstance(chat.user_context, dict):
         user_ctx = chat.user_context
@@ -396,9 +400,8 @@ def _build_escalation_email_body(
         lines.append(sep)
         lines.append("CONVERSATION (last 5 turns, PII redacted)")
         for role, content in transcript:
-            label = "user" if role == "user" else "assistant"
-            indented = content.replace("\n", "\n             ")
-            lines.append(f"  {label}: {indented}")
+            indented = content.replace("\n", "\n" + _TRANSCRIPT_WRAP_INDENT)
+            lines.append(f"  {role}: {indented}")
         lines.append("")
     elif ticket.conversation_summary:
         lines.append(sep)
@@ -434,7 +437,13 @@ def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Sess
         f"[Chat9 · {ticket.priority.value.upper()}] {ticket.ticket_number}"
         f" — {question_preview}"
     )
-    reply_to = ticket.user_email or None
+    reply_to = ticket.user_email if _is_valid_email(ticket.user_email) else None
+    if ticket.user_email and not reply_to:
+        logger.warning(
+            "escalation_reply_to_skipped_invalid_email tenant_id=%s ticket=%s",
+            tenant.id,
+            ticket.ticket_number,
+        )
     try:
         send_email(recipient, subject, body, reply_to=reply_to)
     except Exception as e:
@@ -539,6 +548,22 @@ def create_escalation_ticket(
 _EMAIL_RE = re.compile(
     r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
 )
+
+
+def _is_valid_email(value: str | None) -> bool:
+    """Strict full-match check used to gate values handed to the email provider.
+
+    ``ticket.user_email`` may originate from widget-supplied user_context and is
+    not guaranteed to be syntactically valid. Passing a malformed value as
+    Reply-To causes Brevo to reject the entire send, suppressing the support
+    notification — so we drop the header silently when validation fails.
+    """
+    if not value:
+        return False
+    candidate = value.strip()
+    if not candidate or len(candidate) > 320:
+        return False
+    return _EMAIL_RE.fullmatch(candidate) is not None
 
 
 def parse_contact_email(message: str) -> str | None:

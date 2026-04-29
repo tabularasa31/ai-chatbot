@@ -701,6 +701,37 @@ def test_notify_email_body_anonymous_user_warns_and_no_reply_to(
     assert "user has NOT provided contact details" in body
 
 
+def test_notify_email_skips_reply_to_for_malformed_user_email(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="malformed-owner@example.com"
+    )
+
+    # Widget could supply garbage in user_context.email which lands on the
+    # ticket. Reply-To must be omitted so Brevo doesn't reject the send.
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0202",
+        primary_question="needs help",
+        primary_question_redacted="needs help",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+        user_email="not an email",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    assert send_email_mock.call_args.kwargs.get("reply_to") is None
+
+
 def test_notify_email_body_omits_user_note_section_when_absent(
     tenant: TestClient,
     db_session: Session,

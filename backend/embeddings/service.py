@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from typing import TypedDict
@@ -18,7 +19,10 @@ from backend.documents.parsers import (
 )
 from backend.gap_analyzer.jobs import run_mode_a_for_tenant_when_queue_empty_best_effort
 from backend.gap_analyzer.repository import invalidate_bm25_cache_for_tenant
+from backend.knowledge.entity_extractor import extract_entities_from_passage
 from backend.models import Document, DocumentStatus, DocumentType, Embedding
+
+logger = logging.getLogger(__name__)
 
 # Optimal chunking parameters per document type.
 # Tune these values here when re-evaluating retrieval quality.
@@ -224,6 +228,81 @@ def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
     return rendered_chunks
 
 
+def _populate_entities_for_embeddings(
+    *,
+    embeddings: list[Embedding],
+    api_key: str,
+    tenant_id: str | None,
+    db: Session,
+) -> None:
+    """Populate ``Embedding.entities`` via per-chunk NER (best-effort).
+
+    Iterates over the just-saved embeddings, calls
+    ``extract_entities_from_passage`` for each chunk, and writes the
+    returned list into ``entities``. Per-chunk failures degrade to ``[]``
+    inside ``extract_entities_from_passage`` itself, so this loop never
+    raises — at worst we get a row with ``entities=[]`` (the same as a
+    legacy row) and the entity-overlap channel gets no signal for that
+    chunk. Embeddings are already committed before this runs, so an
+    abort here is non-destructive.
+
+    **Commit policy:** one commit per chunk. NER is the slow part
+    (~1-2s/chunk via gpt-4.1-mini), and holding a single transaction
+    open across all chunks would lock the connection for ~150s on a
+    100-chunk megadoc — connection pool hogging + dirty-row liveness
+    issues. Per-chunk commits trade N round-trips for short-lived
+    transactions; the round-trip cost (~milliseconds each) is dwarfed
+    by NER latency, so the trade is free. As a side benefit, partial
+    progress survives a crash mid-loop: chunks already processed keep
+    their entities, the rest stay at the server-default empty list and
+    can be backfilled by a re-index.
+    """
+    updated = 0
+    failed_commits = 0
+    for emb in embeddings:
+        try:
+            ents = extract_entities_from_passage(
+                emb.chunk_text or "",
+                api_key,
+                tenant_id=tenant_id,
+            )
+        except Exception:
+            # Defense in depth: extract_entities_from_passage is documented
+            # to swallow its own exceptions, but a broken caller / monkeypatch
+            # in tests could still leak. Never let one bad chunk corrupt the
+            # whole document's ingest.
+            logger.warning(
+                "entity_extraction_unexpected_error",
+                extra={"embedding_id": str(emb.id)},
+            )
+            ents = []
+        emb.entities = ents
+        try:
+            db.commit()
+        except Exception:
+            # One failed commit shouldn't kill the rest of the document.
+            # Roll back this chunk's update and keep going — the row stays
+            # at the server-default empty list, which is the same as legacy
+            # rows and safe for the Step 5 ``?|`` predicate.
+            logger.warning(
+                "entity_extraction_commit_failed",
+                extra={"embedding_id": str(emb.id)},
+            )
+            db.rollback()
+            failed_commits += 1
+            continue
+        if ents:
+            updated += 1
+    logger.info(
+        "entity_extraction_populated",
+        extra={
+            "chunks": len(embeddings),
+            "non_empty": updated,
+            "failed_commits": failed_commits,
+        },
+    )
+
+
 def create_embeddings_for_document(
     document_id: uuid.UUID,
     db: Session,
@@ -314,6 +393,24 @@ def create_embeddings_for_document(
     db.commit()
     for emb in embeddings:
         db.refresh(emb)
+
+    # Step 4 of entity-aware retrieval epic: populate the per-chunk entity
+    # index. Best-effort and post-commit — embeddings are already durable
+    # by this point, so a NER outage cannot block ingest. Each call is
+    # bounded by the OpenAI client read timeout (no hot-path wall clock,
+    # we are in a background worker). Failures collapse to ``[]`` inside
+    # ``extract_entities_from_passage`` and are logged there.
+    #
+    # Sequential by design for V1: parallelism would speed up megadocs
+    # (100+ chunks) ~10x but adds a thread pool we don't need yet — the
+    # bottleneck for typical 5-30 chunk docs is the embedding API call,
+    # not NER. Revisit if onboarding latency becomes user-visible.
+    _populate_entities_for_embeddings(
+        embeddings=embeddings,
+        api_key=api_key,
+        tenant_id=str(doc.tenant_id) if doc.tenant_id else None,
+        db=db,
+    )
     try:
         from backend.documents.service import run_document_health_check
 

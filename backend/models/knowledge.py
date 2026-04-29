@@ -247,6 +247,15 @@ class Embedding(Base):
     # имя атрибута не может быть `metadata` (зарезервировано в SQLAlchemy),
     # поэтому оставляем имя столбца "metadata", но меняем имя Python-атрибута
     metadata_json = Column("metadata", JSON, nullable=False, default=dict)
+    # Named entities extracted from chunk_text by backend.knowledge.entity_extractor
+    # (HippoRAG-style NER). Step 5 of the entity-aware retrieval epic uses this
+    # list as the third RRF channel: "give me chunks whose entities overlap with
+    # the entities of the user's query." JSONB on PostgreSQL with a GIN index
+    # (see migration embeddings_entities_v1) so the ``?|`` lookup is O(log N).
+    # NOT NULL with empty-list default so legacy rows + NER-skip cases (empty
+    # query, missing key, NER error) write a deterministic empty list instead
+    # of NULL, keeping the retriever's "any-of-array" predicate trivially safe.
+    entities = Column(JSON, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

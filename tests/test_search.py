@@ -3360,3 +3360,178 @@ def test_normalize_scored_results_empty_list_returns_empty() -> None:
     from backend.search.service import _normalize_scored_results
 
     assert _normalize_scored_results([]) == []
+
+
+# ── Parallel NER (Step 5+ latency fix) ──────────────────────────────────────
+
+
+def test_entity_ner_runs_concurrently_with_vector_and_bm25(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session
+) -> None:
+    """NER must run in parallel with vector + BM25, not sequentially.
+
+    Ground truth from the prod eval (see ClickUp 86exe5pjx): sequential
+    NER added ~+8s p50 to chat-turn latency. Parallelization should hide
+    NER behind the existing vector + BM25 budget — total stage latency
+    should approximate max(NER, vector+bm25), not their sum.
+
+    Test uses sleep-based mocks: NER takes 0.3s, vector search takes
+    0.3s. Sequential would be ~0.6s; parallel should land near 0.3s.
+    Threshold of 0.5s gives margin for thread spin-up / scheduling
+    jitter while still failing if NER is back to sequential.
+    """
+    import time as _time
+
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="parallel_ner@example.com")
+    tenant_id = _create_client(db_session, user, name="Parallel NER").id
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="x.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="x",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="hello world chunk",
+            vector=None,
+            metadata_json={"chunk_index": 0, "vector": [1.0, 0.0, 0.0]},
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
+    )
+
+    # Make the vector candidate build "slow" so NER has time to run in parallel.
+    real_build = __import__(
+        "backend.search.service", fromlist=["_build_vector_candidate_set"]
+    )._build_vector_candidate_set
+
+    def slow_vector_build(*args, **kwargs):
+        _time.sleep(0.3)
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "backend.search.service._build_vector_candidate_set", slow_vector_build
+    )
+
+    def slow_ner(query, _api_key, *, tenant_id=None, bot_id=None):  # noqa: ARG001
+        _time.sleep(0.3)
+        return ["hello"]
+
+    monkeypatch.setattr(
+        "backend.search.service.extract_entities_from_query", slow_ner
+    )
+
+    started = _time.perf_counter()
+    search_similar_chunks_detailed(
+        tenant_id=tenant_id,
+        query="hello world",
+        top_k=3,
+        db=db_session,
+        api_key="sk-test",
+    )
+    elapsed = _time.perf_counter() - started
+
+    # Sequential would take ~0.6s. Parallel should be ~0.3s (plus a bit
+    # of overhead for the rest of the pipeline). Anything <0.5s confirms
+    # NER and vector built ran concurrently.
+    assert elapsed < 0.5, (
+        f"Stage took {elapsed:.3f}s — looks sequential. "
+        f"Expected <0.5s when NER (0.3s) overlaps vector (0.3s)."
+    )
+
+
+def test_entity_ner_future_cancelled_on_empty_vector_path(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session
+) -> None:
+    """Empty vector candidates → NER future is cancelled, executor shut down.
+
+    Otherwise a NER call that's still in-flight at early-return time
+    keeps a thread + an OpenAI request alive for nothing.
+    """
+    from backend.models import Document, DocumentStatus, DocumentType, Embedding
+    from backend.search.service import search_similar_chunks_detailed
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="empty_path_ner@example.com")
+    tenant_id = _create_client(db_session, user, name="Empty NER").id
+    # Document with no embeddings → vector_candidates is empty → early return.
+    doc = Document(
+        tenant_id=tenant_id,
+        filename="empty.md",
+        file_type=DocumentType.markdown,
+        status=DocumentStatus.ready,
+        parsed_text="empty",
+    )
+    db_session.add(doc)
+    db_session.commit()
+    db_session.refresh(doc)
+    db_session.add(
+        Embedding(
+            document_id=doc.id,
+            chunk_text="text that won't match the query script",
+            vector=None,
+            metadata_json={"chunk_index": 0, "vector": [0.0, 0.0, 0.0]},
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
+    )
+
+    ner_completed = {"value": False}
+
+    def long_running_ner(query, _api_key, *, tenant_id=None, bot_id=None):  # noqa: ARG001
+        # Should be cancelled before this returns. Sleep long enough that
+        # if cleanup is broken, the test would take 5s instead of fast.
+        import time as _time
+
+        _time.sleep(5.0)
+        ner_completed["value"] = True
+        return ["should_not_arrive"]
+
+    monkeypatch.setattr(
+        "backend.search.service.extract_entities_from_query", long_running_ner
+    )
+
+    # Force vector candidates to be empty by blanking the candidate set.
+    monkeypatch.setattr(
+        "backend.search.service._build_vector_candidate_set",
+        lambda *args, **kwargs: type(  # noqa: SLF001
+            "EmptySet",
+            (),
+            {"candidates": [], "call_count": 1, "duration_ms": 0.0},
+        )(),
+    )
+
+    import time as _time
+
+    started = _time.perf_counter()
+    search_similar_chunks_detailed(
+        tenant_id=tenant_id,
+        query="anything",
+        top_k=3,
+        db=db_session,
+        api_key="sk-test",
+    )
+    elapsed = _time.perf_counter() - started
+
+    # Should return fast — the long-running NER must be abandoned.
+    assert elapsed < 1.0, (
+        f"Empty-vector early-return took {elapsed:.3f}s — NER cleanup "
+        f"likely missing, the 5s sleep is being awaited."
+    )

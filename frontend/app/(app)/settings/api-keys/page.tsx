@@ -176,8 +176,8 @@ export default function ApiKeysPage() {
               const remaining = relativeRemaining(k.expires_at);
               return (
                 <div key={k.id} className="py-3 flex items-center gap-3 flex-wrap">
-                  <code className="px-2 py-1 bg-slate-100 rounded text-sm font-mono">
-                    ck_••••{k.key_hint}
+                  <code className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-sm font-mono">
+                    ck_…{k.key_hint}
                   </code>
                   <StatusBadge status={k.status} />
                   {k.status === "revoking" && remaining && (
@@ -219,7 +219,7 @@ export default function ApiKeysPage() {
             snippet with this value.
           </p>
           <div className="flex items-center gap-2 flex-wrap">
-            <code className="flex-1 min-w-0 px-3 py-2 bg-white border border-emerald-200 rounded-lg text-sm font-mono break-all">
+            <code className="flex-1 min-w-0 px-3 py-2 bg-white text-slate-900 border border-emerald-200 rounded-lg text-sm font-mono break-all select-all">
               {rotationResult.api_key}
             </code>
             <button

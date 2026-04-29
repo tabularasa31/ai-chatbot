@@ -2673,7 +2673,7 @@ def _run_candidate_stage(
         try:
             capture_event(
                 "entity_overlap.channel_used",
-                distinct_id=str(tenant_id) or "system",
+                distinct_id=str(tenant_id) if tenant_id else "system",
                 tenant_id=str(tenant_id) if tenant_id else None,
                 properties={
                     "query_entity_count": len(query_entities),

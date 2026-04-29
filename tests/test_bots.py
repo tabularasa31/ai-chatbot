@@ -7,7 +7,6 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from backend.models import Bot, Tenant
 from tests.conftest import register_and_verify_user
 
 
@@ -32,6 +31,8 @@ def test_list_bots_returns_default_bot(tenant: TestClient, db_session: Session) 
     data = resp.json()
     assert len(data["items"]) == 1
     assert data["items"][0]["name"] == "Bot Test Tenant"
+    assert data["items"][0]["link_safety_enabled"] is False
+    assert data["items"][0]["allowed_domains"] == []
 
 
 def test_create_and_get_bot(tenant: TestClient, db_session: Session) -> None:
@@ -75,6 +76,33 @@ def test_update_bot(tenant: TestClient, db_session: Session) -> None:
     updated = patch_resp.json()
     assert updated["name"] == "New Name"
     assert updated["is_active"] is False
+
+
+def test_update_bot_link_safety_normalizes_allowed_domains(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token, _ = _auth(tenant, db_session, "link-safety-bot@example.com")
+
+    bot_id = tenant.get("/bots", headers={"Authorization": f"Bearer {token}"}).json()["items"][0]["id"]
+
+    patch_resp = tenant.patch(
+        f"/bots/{bot_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "link_safety_enabled": True,
+            "allowed_domains": [
+                "https://Example.com/docs",
+                "*.help.example.com",
+                "example.com",
+                "invalid",
+            ],
+        },
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    assert updated["link_safety_enabled"] is True
+    assert updated["allowed_domains"] == ["example.com", "help.example.com"]
 
 
 def test_delete_bot_blocked_when_last(tenant: TestClient, db_session: Session) -> None:
@@ -127,7 +155,7 @@ def test_deactivate_last_active_bot_blocked(tenant: TestClient, db_session: Sess
 
 def test_deactivate_bot_allowed_when_another_active(tenant: TestClient, db_session: Session) -> None:
     token, _ = _auth(tenant, db_session, "deact-ok@example.com")
-    extra_id = tenant.post(
+    tenant.post(
         "/bots",
         headers={"Authorization": f"Bearer {token}"},
         json={"name": "Second Bot"},

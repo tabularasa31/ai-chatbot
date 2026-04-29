@@ -76,7 +76,14 @@ def create_bot(
     db: Annotated[Session, Depends(get_db)],
 ) -> BotResponse:
     tenant_id: uuid.UUID = current_user.tenant_id  # type: ignore[assignment]
-    bot = bots_service.create_bot(tenant_id, body.name, db, agent_instructions=body.agent_instructions)
+    bot = bots_service.create_bot(
+        tenant_id,
+        body.name,
+        db,
+        agent_instructions=body.agent_instructions,
+        link_safety_enabled=body.link_safety_enabled,
+        allowed_domains=body.allowed_domains,
+    )
 
     tenant = db.get(Tenant, tenant_id)
     try:

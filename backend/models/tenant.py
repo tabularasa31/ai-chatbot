@@ -159,6 +159,8 @@ class Bot(Base):
     )
     is_active = Column(Boolean, nullable=False, default=True)
     disclosure_config = Column(JSON, nullable=True, default=None)
+    link_safety_enabled = Column(Boolean, nullable=False, default=False)
+    allowed_domains = Column(JSON, nullable=True, default=list)
     agent_instructions = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)

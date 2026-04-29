@@ -188,6 +188,32 @@ def test_widget_chat_success(
     assert data.get("chat_ended") is False
 
 
+def test_widget_config_returns_link_safety_settings(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="widget-config@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Config Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+    bot = db_session.query(Bot).filter(Bot.public_id == bot_public_id).one()
+    bot.link_safety_enabled = True
+    bot.allowed_domains = ["example.com"]
+    db_session.commit()
+
+    r = tenant.get(f"/widget/config?bot_id={bot_public_id}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["link_safety_enabled"] is True
+    assert data["allowed_domains"] == ["example.com"]
+    assert data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
+
+
 def test_widget_chat_empty_message_returns_422(
     tenant: TestClient,
     db_session: Session,

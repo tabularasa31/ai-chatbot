@@ -35,6 +35,8 @@ Conventions:
 
 from __future__ import annotations
 
+import json
+
 _NER_PASSAGE_SYSTEM = (
     "You extract named entities from a passage of text.\n"
     "Return a JSON object with key 'named_entities' whose value is a list of strings.\n"
@@ -131,16 +133,22 @@ _TRIPLE_EXTRACTION_SYSTEM = (
 _TRIPLE_USER_TEMPLATE = (
     "Extract triples from the passage into a JSON object with the single "
     "key 'triples', conditioned on the provided named entities.\n"
-    "Passage:\n"
-    "```\n"
+    "Passage (JSON-encoded string):\n"
     "{passage}\n"
-    "```\n"
     "Named entities:\n"
     "{named_entities}"
 )
 
+
+def _encode_passage(passage: str) -> str:
+    # JSON-encode the passage so it cannot collide with delimiters or be
+    # interpreted as instructions — markdown code fences and other special
+    # characters inside ``passage`` are escaped into a single string literal.
+    return json.dumps(passage, ensure_ascii=False)
+
+
 _TRIPLE_ONE_SHOT_INPUT = _TRIPLE_USER_TEMPLATE.format(
-    passage=_NER_PASSAGE_SAAS_INPUT,
+    passage=_encode_passage(_NER_PASSAGE_SAAS_INPUT),
     named_entities=_NER_PASSAGE_SAAS_OUTPUT,
 )
 
@@ -166,7 +174,7 @@ def build_triple_extraction_messages(
     ``build_ner_passage_messages``).
     """
     user_content = _TRIPLE_USER_TEMPLATE.format(
-        passage=passage, named_entities=named_entities_json
+        passage=_encode_passage(passage), named_entities=named_entities_json
     )
     return [
         {"role": "system", "content": _TRIPLE_EXTRACTION_SYSTEM},

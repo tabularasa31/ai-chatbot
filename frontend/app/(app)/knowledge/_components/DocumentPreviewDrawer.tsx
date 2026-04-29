@@ -70,6 +70,12 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
   const [search, setSearch] = useState("");
   const [copied, setCopied] = useState(false);
   const refetchRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks the documentId for which we've already issued the one-shot
+  // processing-state refetch, to keep the retry strictly single-shot.
+  const refetchedForIdRef = useRef<string | null>(null);
+  // Tracks the latest requested documentId so we can drop stale responses
+  // when the user quickly switches documents or closes the drawer.
+  const activeIdRef = useRef<string | null>(null);
 
   const isOpen = documentId !== null;
 
@@ -78,12 +84,16 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
     setError(null);
     try {
       const data = await api.documents.getById(id);
+      if (activeIdRef.current !== id) return;
       setDoc(data);
     } catch (err) {
+      if (activeIdRef.current !== id) return;
       setError(err instanceof Error ? err.message : "Failed to load document");
       setDoc(null);
     } finally {
-      setLoading(false);
+      if (activeIdRef.current === id) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -93,11 +103,17 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
       clearTimeout(refetchRef.current);
       refetchRef.current = null;
     }
+    activeIdRef.current = documentId;
     if (!documentId) {
+      refetchedForIdRef.current = null;
       setDoc(null);
       setError(null);
       setSearch("");
       return;
+    }
+    // New document selected — allow exactly one processing-state refetch for it.
+    if (refetchedForIdRef.current !== documentId) {
+      refetchedForIdRef.current = null;
     }
     void load(documentId);
   }, [documentId, load]);
@@ -106,6 +122,8 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
   useEffect(() => {
     if (!documentId || !doc) return;
     if (doc.parsed_text || !isProcessingStatus(doc.status)) return;
+    if (refetchedForIdRef.current === documentId) return;
+    refetchedForIdRef.current = documentId;
     refetchRef.current = setTimeout(() => {
       void load(documentId);
     }, REFETCH_DELAY_MS);

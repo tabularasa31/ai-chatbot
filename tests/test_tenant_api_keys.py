@@ -3,11 +3,15 @@
 Covers the contract documented in [Security] API key rotation:
   * one ACTIVE key per tenant on creation
   * rotate puts the old key into REVOKING with a grace window
-  * widget continues to authenticate with the old key during grace
-  * widget rejects the old key after the grace window
+  * API continues to authenticate with the old key during grace
+  * API rejects the old key after the grace window
   * immediate revoke kills a key with no grace
   * cannot revoke the only remaining usable key
   * lookups go through key_hash, not plaintext
+
+Key validity is probed via POST /chat with X-API-Key header:
+  * valid key (no OpenAI configured) → 400
+  * unknown / revoked key → 401
 """
 
 from __future__ import annotations
@@ -52,21 +56,27 @@ def test_create_tenant_returns_plaintext_once_and_stores_hash(
     assert rows[0].status == "active"
 
 
-def test_widget_init_works_with_initial_key(
+def _probe_key(client: TestClient, key: str) -> int:
+    """POST /chat with X-API-Key; returns status code.
+    400 = key accepted (no OpenAI configured), 401 = key rejected.
+    """
+    return client.post(
+        "/chat",
+        json={"question": "test"},
+        headers={"X-API-Key": key},
+    ).status_code
+
+
+def test_api_key_works_with_initial_key(
     tenant: TestClient, db_session: Session
 ) -> None:
     _, plain = _create_tenant(tenant, db_session, "rot-widget@example.com")
-    resp = tenant.post("/widget/session/init", json={"api_key": plain})
-    # 200 on success, 404 if key not found, 403 if inactive — must be 200 here.
-    assert resp.status_code == 200, resp.json()
+    # 400 = key accepted but OpenAI not configured (expected in tests)
+    assert _probe_key(tenant, plain) == 400
 
 
-def test_widget_rejects_unknown_key(tenant: TestClient) -> None:
-    resp = tenant.post(
-        "/widget/session/init",
-        json={"api_key": "ck_deadbeef" + "0" * 24},
-    )
-    assert resp.status_code == 404
+def test_api_key_rejects_unknown_key(tenant: TestClient) -> None:
+    assert _probe_key(tenant, "ck_deadbeef" + "0" * 24) == 401
 
 
 def test_rotate_grace_old_key_still_works_then_expires(
@@ -90,10 +100,8 @@ def test_rotate_grace_old_key_still_works_then_expires(
     assert new_plain.startswith("ck_")
 
     # Both keys must work during the grace window.
-    r_old = tenant.post("/widget/session/init", json={"api_key": old})
-    r_new = tenant.post("/widget/session/init", json={"api_key": new_plain})
-    assert r_old.status_code == 200
-    assert r_new.status_code == 200
+    assert _probe_key(tenant, old) == 400
+    assert _probe_key(tenant, new_plain) == 400
 
     # Force-expire the old key by rewinding its expires_at into the past.
     old_row = (
@@ -108,8 +116,7 @@ def test_rotate_grace_old_key_still_works_then_expires(
     )
     db_session.commit()
 
-    r_old_after = tenant.post("/widget/session/init", json={"api_key": old})
-    assert r_old_after.status_code == 404
+    assert _probe_key(tenant, old) == 401
 
 
 def test_rotate_with_immediate_revoke_kills_old_key_now(
@@ -131,10 +138,8 @@ def test_rotate_with_immediate_revoke_kills_old_key_now(
     assert rot.status_code == 201
     new_plain = rot.json()["api_key"]
 
-    r_old = tenant.post("/widget/session/init", json={"api_key": old})
-    assert r_old.status_code == 404
-    r_new = tenant.post("/widget/session/init", json={"api_key": new_plain})
-    assert r_new.status_code == 200
+    assert _probe_key(tenant, old) == 401
+    assert _probe_key(tenant, new_plain) == 400
 
     old_row = (
         db_session.query(TenantApiKey)
@@ -174,8 +179,7 @@ def test_revoke_endpoint_kills_specified_key(
     assert resp.status_code == 200
     assert resp.json()["status"] == "revoked"
 
-    r_old = tenant.post("/widget/session/init", json={"api_key": old})
-    assert r_old.status_code == 404
+    assert _probe_key(tenant, old) == 401
 
 
 def test_cannot_revoke_only_active_key(

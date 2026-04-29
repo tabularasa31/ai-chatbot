@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
+from backend.knowledge.entity_extractor import extract_entities_from_query
 from backend.models import Document, Embedding, Tenant
 from backend.observability import TraceHandle
 from backend.observability.formatters import (
@@ -1604,6 +1605,99 @@ def bm25_search_chunks(
     return _bm25_score_candidates(embeddings, query, top_k)
 
 
+def entity_overlap_search(
+    tenant_id: uuid.UUID,
+    query_entities: list[str],
+    top_k: int,
+    db: Session,
+) -> list[tuple[Embedding, float]]:
+    """Retrieve chunks whose ``entities`` overlap with the query's NER list.
+
+    Step 5 of the entity-aware retrieval epic (ClickUp 86exe5pjx). The
+    third RRF channel: dense and BM25 already cover semantic and lexical
+    similarity; this channel surfaces chunks that name-match specific
+    products / plans / error codes / endpoints — precisely the shapes
+    the other two channels under-rank (dense smooths over rare tokens,
+    BM25 is noisy on short codes).
+
+    The per-chunk entity index (PR #540) is populated at ingest from
+    ``extract_entities_from_passage``. The query-side NER comes from
+    ``extract_entities_from_query`` (PR #537). Both use the SAME prompt
+    family so surface forms are likely to align.
+
+    Score = number of overlapping entities (cardinality of intersection).
+    Comparison is case-sensitive on the surface form preserved by the
+    NER prompts. Results are ordered by score desc; ties broken by
+    ``created_at`` desc and ``id`` desc to match the BM25 ordering, so
+    RRF's tie-break across channels is stable.
+
+    PostgreSQL path: ``WHERE entities ?| array[...]`` against the GIN
+    index (``ix_embeddings_entities_gin``, ``jsonb_ops``) prefilters
+    candidates server-side. SQLite (tests) doesn't support ``?|``; we
+    fall through to a Python filter over all tenant chunks. Both paths
+    score the SAME way in Python after the candidate set is in memory.
+
+    An empty ``query_entities`` short-circuits to ``[]`` — no DB hit.
+    """
+    if not query_entities:
+        return []
+    if not tenant_id:
+        return []
+
+    db_url = str(db.bind.url if db.bind else "")
+    is_sqlite = "sqlite" in db_url
+
+    if is_sqlite:
+        # JSON column on SQLite: no GIN, no ?| operator. Walk all chunks
+        # for the tenant and intersect in Python. Acceptable in tests
+        # because the corpus is tiny; never hit in production.
+        candidates = (
+            db.query(Embedding)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+            .all()
+        )
+    else:
+        # PG path: ?| (any-of-array) uses ix_embeddings_entities_gin
+        # (jsonb_ops). Returns only rows with at least one overlapping
+        # entity, so the in-memory scoring loop below scales with hits,
+        # not the full table.
+        from sqlalchemy import text  # local import — only PG path uses this.
+
+        candidates = (
+            db.query(Embedding)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(text("embeddings.entities ?| :entity_list").bindparams(
+                entity_list=list(query_entities),
+            ))
+            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+            .all()
+        )
+
+    query_set = set(query_entities)
+    scored: list[tuple[Embedding, float]] = []
+    for emb in candidates:
+        chunk_entities = emb.entities or []
+        if not isinstance(chunk_entities, list):
+            # Defensive: if a row got non-list JSON somehow, skip it
+            # rather than crashing the retriever.
+            continue
+        overlap = len(query_set.intersection(chunk_entities))
+        if overlap == 0:
+            # On SQLite the prefilter doesn't run, so we may have rows
+            # with zero overlap; drop them here.
+            continue
+        scored.append((emb, float(overlap)))
+
+    # Score desc; tiebreak preserved from SQL order_by (created_at desc,
+    # id desc) because Python sort is stable and we already iterate in
+    # that order.
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[:top_k]
+
+
 def _bm25_prefilter_tokens(query: str) -> list[str]:
     """Unique, lowercase word tokens used for the bm25_search_chunks prefilter.
 
@@ -1866,8 +1960,20 @@ def reciprocal_rank_fusion(
     bm25_results: list[tuple[Embedding, float]],
     k: int = 60,
     top_k: int = 5,
+    *,
+    entity_results: list[tuple[Embedding, float]] | None = None,
 ) -> list[tuple[Embedding, float]]:
-    """Combine vector and BM25 results using Reciprocal Rank Fusion."""
+    """Combine vector + BM25 (+ optional entity-overlap) results using RRF.
+
+    Each input list contributes 1/(k+rank+1) per position. The score for
+    a given chunk is the sum of contributions across whichever channels
+    surfaced it. ``entity_results`` is keyword-only because three
+    same-typed positional ranked lists are easy to mix up at call sites;
+    keeping it named makes the third-channel intent obvious. ``None``
+    (the default) means "skip the entity channel entirely" — when
+    ``settings.entity_overlap_enabled`` is off the caller passes None
+    and we degrade to the two-channel formula with zero added cost.
+    """
     scores: dict[uuid.UUID, float] = {}
     id_to_emb: dict[uuid.UUID, Embedding] = {}
 
@@ -1878,6 +1984,11 @@ def reciprocal_rank_fusion(
     for rank, (emb, _) in enumerate(bm25_results):
         scores[emb.id] = scores.get(emb.id, 0) + 1 / (k + rank + 1)
         id_to_emb[emb.id] = emb
+
+    if entity_results:
+        for rank, (emb, _) in enumerate(entity_results):
+            scores[emb.id] = scores.get(emb.id, 0) + 1 / (k + rank + 1)
+            id_to_emb[emb.id] = emb
 
     sorted_ids = sorted(
         scores.keys(),
@@ -2344,6 +2455,7 @@ def _run_candidate_stage(
     top_k: int,
     db: Session,
     trace: TraceHandle | None,
+    api_key: str | None = None,
 ) -> _CandidateStageResult:
     q = query_stage
     db_url = str(db.bind.url if db.bind else "")
@@ -2484,11 +2596,60 @@ def _run_candidate_stage(
         )
 
     vector_for_rrf = vector_candidates[:rrf_candidate_pool]
+
+    # Step 5: optional entity-overlap channel. When the flag is off
+    # (default), this is a single boolean check — zero added latency.
+    # When on, NER on the query has its own wall-clock timeout +
+    # empty-list fallback inside extract_entities_from_query, so a
+    # slow / broken NER cannot stall this hot path. An empty NER
+    # output (control queries, NER timeout) collapses entity_results
+    # to []; reciprocal_rank_fusion then reduces to today's two-channel
+    # behavior automatically.
+    entity_results: list[tuple[Embedding, float]] = []
+    query_entities: list[str] = []
+    entity_duration_ms = 0.0
+    if settings.entity_overlap_enabled and api_key:
+        entity_started_at = perf_counter()
+        query_entities = extract_entities_from_query(
+            query,
+            api_key,
+            tenant_id=str(tenant_id),
+        )
+        if query_entities:
+            entity_results = entity_overlap_search(
+                tenant_id=tenant_id,
+                query_entities=query_entities,
+                top_k=rrf_candidate_pool,
+                db=db,
+            )
+        entity_duration_ms = round((perf_counter() - entity_started_at) * 1000, 2)
+        if trace is not None:
+            trace.span(
+                name="entity-overlap-search",
+                input={
+                    "query": query,
+                    "tenant_id": str(tenant_id),
+                    "top_k": rrf_candidate_pool,
+                    "query_entities": query_entities,
+                },
+            ).end(
+                output={
+                    "chunks": format_embedding_results(
+                        entity_results,
+                        score_name="entity_overlap_score",
+                    ),
+                    "duration_ms": entity_duration_ms,
+                    "query_entity_count": len(query_entities),
+                    "candidate_count": len(entity_results),
+                }
+            )
+
     rrf_started_at = perf_counter()
     fused_results = reciprocal_rank_fusion(
         vector_for_rrf,
         bm25_bundle.results,
         top_k=rrf_candidate_pool,
+        entity_results=entity_results or None,
     )
     rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
     if trace is not None:
@@ -2754,6 +2915,7 @@ def search_similar_chunks_detailed(
         top_k=top_k,
         db=db,
         trace=trace,
+        api_key=api_key,
     )
     if not c.vector_candidates:
         return _build_empty_result_bundle(

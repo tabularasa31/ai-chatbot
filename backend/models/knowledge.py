@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
@@ -255,7 +256,18 @@ class Embedding(Base):
     # NOT NULL with empty-list default so legacy rows + NER-skip cases (empty
     # query, missing key, NER error) write a deterministic empty list instead
     # of NULL, keeping the retriever's "any-of-array" predicate trivially safe.
-    entities = Column(JSON, nullable=False, default=list, server_default="[]")
+    # JSON on SQLite (tests), JSONB on PostgreSQL (production). The
+    # variant annotation makes ``Base.metadata.create_all()`` produce
+    # the right column type per dialect — without it, eval/test fixtures
+    # would create a JSON column on PG and the Step 5 ``?|`` predicate
+    # would fail with "operator does not exist: json ?| text[]".
+    # Alembic migration ``embeddings_entities_v1`` uses the same split.
+    entities = Column(
+        JSON().with_variant(JSONB(astext_type=Text()), "postgresql"),
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

@@ -80,6 +80,17 @@ class Settings(BaseSettings):
         gt=0,
         description="Hard wall-clock timeout for the per-request NER call in the chat hot path.",
     )
+    entity_overlap_enabled: bool = Field(
+        False,
+        alias="ENTITY_OVERLAP_ENABLED",
+        description=(
+            "When true, hybrid retrieval adds an entity-overlap channel "
+            "(third RRF list) using the per-chunk entity index populated at "
+            "ingest. NER on the query has its own timeout + empty-list "
+            "fallback inside extract_entities_from_query, so a slow or "
+            "broken NER cannot stall the chat hot path even with the flag on."
+        ),
+    )
     escalation_model: str = Field(
         "gpt-4.1-mini",
         alias="ESCALATION_MODEL",

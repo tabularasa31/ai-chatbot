@@ -190,6 +190,10 @@ def indexed_corpus(pg_db_session: Session) -> dict:
         doc_uuid[doc_id] = doc.id
 
     # One Embedding per Chunk. Synthetic embeddings come from embed_text.
+    # ``entities`` ships from the dataset's ground-truth so the
+    # entity-overlap eval (Step 5) can exercise the third channel
+    # without depending on a real NER model — the harness measures
+    # *retriever* quality given good NER, not NER quality itself.
     chunk_id_to_uuid: dict[str, uuid.UUID] = {}
     for chunk in ds.CHUNKS:
         emb = Embedding(
@@ -197,6 +201,7 @@ def indexed_corpus(pg_db_session: Session) -> dict:
             chunk_text=chunk.text,
             vector=embed_text(chunk.text),
             metadata_json={"chunk_id": chunk.chunk_id},
+            entities=list(chunk.entities),
         )
         pg_db_session.add(emb)
         pg_db_session.flush()
@@ -208,3 +213,9 @@ def indexed_corpus(pg_db_session: Session) -> dict:
         "chunk_id_to_uuid": chunk_id_to_uuid,
         "uuid_to_chunk_id": {v: k for k, v in chunk_id_to_uuid.items()},
     }
+
+
+@pytest.fixture()
+def query_entities_lookup() -> dict[str, list[str]]:
+    """Ground-truth query → entities mapping for stubbing NER on queries."""
+    return {q.text: list(q.query_entities) for q in ds.QUERIES}

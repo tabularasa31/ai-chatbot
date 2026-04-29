@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DocumentListItem, UrlSource, UrlSourceDetail } from "@/lib/api";
 import {
@@ -13,6 +13,7 @@ import {
 } from "./shared";
 import { HealthCell, SourceHealthCell } from "./HealthPanel";
 import { UrlSourcesSection } from "./UrlSourcesSection";
+import { DocumentPreviewDrawer } from "./DocumentPreviewDrawer";
 
 export interface DocumentsSectionProps {
   activeTab: "documents" | "profile" | "faq";
@@ -117,6 +118,7 @@ export function DocumentsSection({
   onRecheckHealth,
   onToggleDetail,
 }: DocumentsSectionProps) {
+  const [previewDocumentId, setPreviewDocumentId] = useState<string | null>(null);
   const rows = useMemo(() => {
     const text = filter.trim().toLowerCase();
     const mixed: MixedRow[] = [
@@ -281,7 +283,16 @@ export function DocumentsSection({
                   const isEmbedding = doc.status === "processing" || doc.status === "embedding";
                   return (
                     <tr key={doc.id} className="transition-colors hover:bg-slate-50/60">
-                      <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">{doc.filename}</td>
+                      <td className="max-w-[280px] px-5 py-3.5 text-sm font-medium text-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewDocumentId(doc.id)}
+                          className="truncate text-left text-slate-800 hover:text-violet-700 hover:underline"
+                          title="View extracted text"
+                        >
+                          {doc.filename}
+                        </button>
+                      </td>
                       <td className="px-4 py-3.5"><TypeBadge type="file" /></td>
                       <td className="px-4 py-3.5"><StatusBadge status={doc.status} /></td>
                       <td className="px-4 py-3.5 text-xs text-slate-500">
@@ -389,6 +400,7 @@ export function DocumentsSection({
                         onSaveEdit={onSaveEdit}
                         onDeletePage={onDeleteSourcePage}
                         deletingPageId={deletingPageId}
+                        onPreviewPage={setPreviewDocumentId}
                       />
                     )}
                   </Fragment>
@@ -398,6 +410,10 @@ export function DocumentsSection({
           </tbody>
         </table>
       </div>
+      <DocumentPreviewDrawer
+        documentId={previewDocumentId}
+        onClose={() => setPreviewDocumentId(null)}
+      />
     </div>
   );
 }

@@ -35,7 +35,7 @@ class DocumentListResponse(BaseModel):
 
 
 class DocumentDetailResponse(BaseModel):
-    """Document detail with parsed_text preview (first 500 chars)."""
+    """Document detail with full parsed_text for preview drawer."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,9 +43,11 @@ class DocumentDetailResponse(BaseModel):
     filename: str
     file_type: str
     status: str
+    source_url: str | None = None
     created_at: datetime
     updated_at: datetime
     parsed_text: str | None
+    parsed_text_length: int | None = None
     health_status: dict[str, Any] | None = None
 
 

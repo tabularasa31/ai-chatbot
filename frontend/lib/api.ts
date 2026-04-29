@@ -205,6 +205,19 @@ export type DocumentListItem = {
   health_status?: DocumentHealthStatus | null;
 };
 
+export type DocumentDetail = {
+  id: string;
+  filename: string;
+  file_type: string;
+  status: string;
+  source_url: string | null;
+  parsed_text: string | null;
+  parsed_text_length: number | null;
+  created_at: string;
+  updated_at: string;
+  health_status?: DocumentHealthStatus | null;
+};
+
 export type UrlSourceRun = {
   id: string;
   status: string;
@@ -742,19 +755,11 @@ export const api = {
         throw new Error(getErrorMessage(data, "Failed to delete source page"));
       }
     },
-    async getById(id: string) {
+    async getById(id: string): Promise<DocumentDetail> {
       const res = await apiFetch(`${BASE_URL}/documents/${id}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get document"));
-      return data as {
-        id: string;
-        filename: string;
-        file_type: string;
-        status: string;
-        created_at: string;
-        updated_at: string;
-        health_status?: DocumentHealthStatus | null;
-      };
+      return data as DocumentDetail;
     },
     async delete(id: string) {
       const res = await apiFetch(`${BASE_URL}/documents/${id}`, { method: "DELETE" });

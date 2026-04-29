@@ -2467,6 +2467,32 @@ def _run_query_stage(
     )
 
 
+def _tenant_has_embeddings(tenant_id: uuid.UUID, db: Session) -> bool:
+    """Cheap existence check: does the tenant have any indexed chunk?
+
+    Used to gate the NER submission for the entity-overlap channel —
+    tenants with zero embeddings will hit the empty-vector early-return
+    downstream, so spending an OpenAI NER call for them is pure waste.
+
+    Implemented as a ``LIMIT 1`` against the same ``embeddings`` table
+    the vector search uses; with the existing ``ix_embeddings_document_id``
+    index this is ~1-2ms even on multi-million-row deploys. Returns
+    False on any DB error (defensive — a transient failure here must
+    not block retrieval).
+    """
+    try:
+        return (
+            db.query(Embedding.id)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .limit(1)
+            .first()
+        ) is not None
+    except Exception:
+        logger.warning("tenant_has_embeddings_check_failed", exc_info=True)
+        return False
+
+
 def _cleanup_ner_executor(
     executor: ThreadPoolExecutor | None,
     future: Future[list[str]] | None,
@@ -2529,9 +2555,20 @@ def _run_candidate_stage(
     # which on prod traffic is typically zero (retrieval is the slower
     # branch). NER's internal wall-clock timeout still bounds the work,
     # so a slow OpenAI call cannot stall this hot path.
+    #
+    # Gating: only submit NER when the tenant has any indexed embeddings.
+    # Otherwise vector_candidates will be empty downstream, the entity
+    # channel won't run, and a submitted NER would just waste an OpenAI
+    # call (the future cancel cannot kill an already-running thread —
+    # ``cancel_futures=True`` in shutdown only stops queued ones).
+    # The pre-check is one ``LIMIT 1`` against the same table the vector
+    # search hits, ~1-2ms with the document_id index. Cheap insurance
+    # against paying for NER on freshly-onboarded / empty-FAQ tenants.
     ner_executor: ThreadPoolExecutor | None = None
     ner_future: Future[list[str]] | None = None
-    if settings.entity_overlap_enabled and api_key:
+    if settings.entity_overlap_enabled and api_key and _tenant_has_embeddings(
+        tenant_id, db
+    ):
         ner_executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="entity_overlap_ner",

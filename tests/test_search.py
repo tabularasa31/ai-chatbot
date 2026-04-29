@@ -697,6 +697,12 @@ def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
             (latin_diverse, 0.7),
         ],
     )
+    # FakeDB doesn't implement .query(); pretend the tenant has embeddings
+    # so the entity-overlap channel proceeds in this trace-contract test.
+    monkeypatch.setattr(
+        "backend.search.service._tenant_has_embeddings",
+        lambda *args, **kwargs: True,
+    )
 
     trace = FakeTrace()
     bundle = search_similar_chunks_detailed(
@@ -3450,6 +3456,53 @@ def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     assert elapsed < 0.5, (
         f"Stage took {elapsed:.3f}s — looks sequential. "
         f"Expected <0.5s when NER (0.3s) overlaps vector (0.3s)."
+    )
+
+
+def test_entity_ner_skipped_for_tenant_with_no_embeddings(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session
+) -> None:
+    """Tenants with zero indexed chunks must not pay for a NER call.
+
+    Codex P1 fix on PR #544: ``future.cancel()`` cannot stop a thread
+    that already started running. Submitting NER unconditionally and
+    then "cancelling" on the empty-vector early-return still pays for
+    the OpenAI call. Pre-check via _tenant_has_embeddings gates the
+    submission so freshly-onboarded / empty-FAQ tenants pay zero.
+    """
+    from backend.search.service import search_similar_chunks_detailed
+    from tests.test_models import _create_client, _create_user
+
+    user = _create_user(db_session, email="no_emb@example.com")
+    tenant_id = _create_client(db_session, user, name="No Embeddings").id
+    # No documents, no embeddings — tenant exists but has nothing indexed.
+
+    monkeypatch.setattr(
+        "backend.search.service.embed_queries",
+        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
+    )
+
+    ner_calls: list[str] = []
+
+    def tracking_ner(query, _api_key, *, tenant_id=None, bot_id=None):  # noqa: ARG001
+        ner_calls.append(query)
+        return ["should_not_be_called"]
+
+    monkeypatch.setattr(
+        "backend.search.service.extract_entities_from_query", tracking_ner
+    )
+
+    search_similar_chunks_detailed(
+        tenant_id=tenant_id,
+        query="anything goes here",
+        top_k=3,
+        db=db_session,
+        api_key="sk-test",
+    )
+
+    assert ner_calls == [], (
+        f"NER must not be called for tenants with no embeddings; "
+        f"got {len(ner_calls)} call(s): {ner_calls}"
     )
 
 

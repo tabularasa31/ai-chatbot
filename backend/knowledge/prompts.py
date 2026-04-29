@@ -42,8 +42,8 @@ _NER_PASSAGE_ONE_SHOT_INPUT = (
 )
 
 _NER_PASSAGE_ONE_SHOT_OUTPUT = (
-    '{"named_entities": ["Тариф Pro", "Битрикс24", "5 990 ₽", "Slack", '
-    '"Telegram", "Google Workspace", "1 марта 2024"]}'
+    '{"named_entities": ["Тариф Pro", "Битрикс24", "5 990 ₽ в месяц", "Slack", '
+    '"Telegram", "Google Workspace", "1 марта 2024 года"]}'
 )
 
 
@@ -99,12 +99,13 @@ _TRIPLE_EXTRACTION_SYSTEM = (
 )
 
 _TRIPLE_USER_TEMPLATE = (
-    "Convert the passage into a JSON object with keys 'named_entities' "
-    "(given) and 'triples' (to extract).\n"
+    "Extract triples from the passage into a JSON object with the single "
+    "key 'triples', conditioned on the provided named entities.\n"
     "Passage:\n"
     "```\n"
     "{passage}\n"
     "```\n"
+    "Named entities:\n"
     "{named_entities}"
 )
 
@@ -120,7 +121,7 @@ _TRIPLE_ONE_SHOT_OUTPUT = (
     '["Тариф Pro", "включает интеграцию с", "Slack"], '
     '["Тариф Pro", "включает интеграцию с", "Telegram"], '
     '["Тариф Pro", "включает интеграцию с", "Google Workspace"], '
-    '["Тариф Pro", "запущен", "1 марта 2024"]'
+    '["Тариф Pro", "запущен", "1 марта 2024 года"]'
     "]}"
 )
 

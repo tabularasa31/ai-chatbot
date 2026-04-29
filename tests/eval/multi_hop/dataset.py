@@ -444,11 +444,16 @@ QUERIES: tuple[Query, ...] = (
         ("billing-payment-methods",),
     ),
     Query(
+        # Intentionally NO query_entities here. The control_no_entities
+        # bucket is the regression guard for "empty NER falls back to
+        # two-channel RRF cleanly" — assigning entities to even one
+        # case contaminates that signal. Real NER would extract
+        # "two-factor authentication" from this query, but for the eval
+        # we model this case as the baseline-NER-empty path.
         "ctl-2fa",
         "control_no_entities",
         "How do I turn on two-factor authentication?",
         ("account-2fa",),
-        query_entities=("two-factor authentication",),
     ),
     Query(
         "ctl-export-data",

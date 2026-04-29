@@ -11,7 +11,9 @@ from time import perf_counter
 from typing import Literal
 
 from rank_bm25 import BM25Okapi
-from sqlalchemy import func, or_
+from sqlalchemy import Text as SAText
+from sqlalchemy import cast, func, or_
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
@@ -45,6 +47,12 @@ BM25_PREFILTER_CANDIDATE_LIMIT = 1000
 # Cap on unique query tokens used to build the prefilter OR-clause. Prevents
 # pathological queries from generating SQL with hundreds of LIKE branches.
 BM25_PREFILTER_MAX_QUERY_TOKENS = 32
+# Cap for entity_overlap_search() PG candidate pull. Mirrors BM25's prefilter
+# cap — a popular entity (e.g. "Pro plan" on a tenant with 10k chunks) could
+# otherwise pull every row into memory before the Python intersection scoring
+# step. The downstream RRF only consumes top RRF_CANDIDATE_POOL_MULTIPLIER *
+# top_k anyway, so any cap >> that pool is safe.
+ENTITY_SEARCH_CANDIDATE_LIMIT = 1000
 RRF_CANDIDATE_POOL_MULTIPLIER = 4
 RERANK_LEXICAL_WEIGHT = 0.35
 RERANK_VECTOR_WEIGHT = 0.25
@@ -1663,16 +1671,26 @@ def entity_overlap_search(
         # (jsonb_ops). Returns only rows with at least one overlapping
         # entity, so the in-memory scoring loop below scales with hits,
         # not the full table.
-        from sqlalchemy import text  # local import — only PG path uses this.
-
+        #
+        # ``Embedding.entities.op("?|")(...)`` goes through SQLAlchemy's
+        # column expression API instead of a raw text() fragment with
+        # the table name baked in — survives table aliases and refactors
+        # without breakage. The right-hand side must be cast to
+        # ``ARRAY(text)`` explicitly: otherwise SQLAlchemy infers the
+        # JSONB column on the left and JSON-encodes the Python list
+        # (``'["a","b"]'``), which Postgres rejects with "malformed
+        # array literal" — the ``?|`` operator wants a real text[] array.
         candidates = (
             db.query(Embedding)
             .join(Document, Embedding.document_id == Document.id)
             .filter(Document.tenant_id == tenant_id)
-            .filter(text("embeddings.entities ?| :entity_list").bindparams(
-                entity_list=list(query_entities),
-            ))
+            .filter(
+                Embedding.entities.op("?|")(
+                    cast(list(query_entities), ARRAY(SAText()))
+                )
+            )
             .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+            .limit(ENTITY_SEARCH_CANDIDATE_LIMIT)
             .all()
         )
 

@@ -24,11 +24,11 @@ for i in {1..30}; do
   sleep 1
 done
 
-# 3) сначала обычные тесты (без pgvector)
+# 3) сначала обычные тесты (без pgvector / без multi-hop eval)
 echo "== Running backend unit/integration tests (SQLite) =="
-pytest -vv tests/ --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing --cov-report=xml
+pytest -vv tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing --cov-report=xml
 
-# 4) потом pgvector-тесты с реальными кредами (которые у вас проходят)
+# 4) потом pgvector-тесты + multi-hop retrieval eval (нужен Docker Postgres)
 echo "== Running pgvector integration tests (Docker Postgres) =="
-PG_USER="${PG_USER}" PG_PASSWORD="${PG_PASSWORD}" PG_DBNAME="${PG_DBNAME}" pytest -vv -m pgvector tests/pgvector_tests/ \
+PG_USER="${PG_USER}" PG_PASSWORD="${PG_PASSWORD}" PG_DBNAME="${PG_DBNAME}" pytest -vv -m pgvector tests/pgvector_tests/ tests/eval/multi_hop/ \
   --cov=backend --cov-append --cov-report=term-missing --cov-report=xml

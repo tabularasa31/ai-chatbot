@@ -43,6 +43,7 @@ jobs:
               - 'backend/contact_sessions/**'
               - 'alembic/**'
               - 'tests/pgvector_tests/**'
+              - 'tests/eval/multi_hop/**'
 
   backend:
     name: Backend (pytest + ruff)
@@ -81,7 +82,7 @@ jobs:
         run: make lint-deprecated
 
       - name: Run tests (SQLite)
-        run: pytest tests/ -q --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
+        run: pytest tests/ -q --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing
 
   backend-pgvector:
     name: Backend pgvector (pg integration tests)
@@ -133,7 +134,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run pgvector tests (PostgreSQL)
-        run: pytest tests/pgvector_tests/ -m pgvector -q
+        run: pytest tests/pgvector_tests/ tests/eval/multi_hop/ -m pgvector -q
 
   frontend:
     name: Frontend (eslint + build)

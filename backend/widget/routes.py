@@ -247,7 +247,7 @@ def widget_session_init(
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail="Bot configuration is incomplete.",
         ) from e
 
     session_id = uuid.uuid4()
@@ -631,7 +631,7 @@ def widget_escalate(
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail="Bot configuration is incomplete.",
         ) from e
     try:
         sid = uuid.UUID(session_id)

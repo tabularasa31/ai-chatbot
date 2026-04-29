@@ -46,7 +46,6 @@
   function buildWidgetUrl() {
     var query = "botId=" + encodeURIComponent(botId);
     if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
-    if (identityToken) query += "&identityToken=" + encodeURIComponent(identityToken);
     return widgetBase + "/widget?" + query;
   }
 
@@ -56,6 +55,14 @@
     f.id = "chat9-widget-iframe";
     f.style.cssText = "width:100%;height:100%;border:none;display:block;";
     f.allow = "microphone; camera";
+    if (identityToken) {
+      f.addEventListener("load", function () {
+        f.contentWindow.postMessage(
+          { type: "chat9:identity", identityToken: identityToken },
+          widgetBase
+        );
+      });
+    }
     return f;
   }
 

@@ -63,6 +63,23 @@ class Settings(BaseSettings):
         alias="EXTRACTION_MODEL",
         description="OpenAI model for knowledge extraction, gap analysis, and alias extraction.",
     )
+    ner_model: str = Field(
+        "gpt-4.1-mini",
+        alias="NER_MODEL",
+        description="OpenAI model for entity extraction (HippoRAG-style NER) over queries and FAQ chunks.",
+    )
+    ner_max_completion_tokens: int = Field(
+        300,
+        alias="NER_MAX_COMPLETION_TOKENS",
+        ge=1,
+        description="Token cap for NER responses; entities are short, so a small budget is enough.",
+    )
+    ner_query_timeout_seconds: float = Field(
+        2.0,
+        alias="NER_QUERY_TIMEOUT_SECONDS",
+        gt=0,
+        description="Hard wall-clock timeout for the per-request NER call in the chat hot path.",
+    )
     escalation_model: str = Field(
         "gpt-4.1-mini",
         alias="ESCALATION_MODEL",

@@ -49,14 +49,14 @@ class Settings(BaseSettings):
         description="OpenAI model for main chat response generation.",
     )
     human_request_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="HUMAN_REQUEST_MODEL",
-        description="OpenAI model for human-request guard classification. Set to gpt-4.1-mini to roll back.",
+        description="OpenAI model for human-request guard classification.",
     )
     relevance_guard_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="RELEVANCE_GUARD_MODEL",
-        description="OpenAI model for relevance guard classification. Set to gpt-4.1-mini to roll back.",
+        description="OpenAI model for relevance guard classification.",
     )
     extraction_model: str = Field(
         "gpt-4.1-mini",
@@ -86,9 +86,9 @@ class Settings(BaseSettings):
         description="Sliding window length (seconds) for the escalation rate alert.",
     )
     answer_validation_model: str = Field(
-        "gpt-4o-mini",
+        "gpt-4.1-mini",
         alias="VALIDATION_MODEL",
-        description="OpenAI model for answer grounding validation. Set to gpt-4.1-mini to roll back.",
+        description="OpenAI model for answer grounding validation.",
     )
     answer_validation_max_completion_tokens: int = Field(
         150,

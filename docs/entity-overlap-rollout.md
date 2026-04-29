@@ -39,19 +39,116 @@ When `false`, `_run_candidate_stage` skips the entity NER and entity-overlap sea
 
 ### Dashboard
 
-[**Entity-overlap retrieval channel**](https://eu.posthog.com/project/162137/dashboard/651556) — pre-built PostHog dashboard with seven tiles wired against `entity_overlap.channel_used`:
+[**Entity-overlap retrieval channel**](https://eu.posthog.com/project/162137/dashboard/651556) — pre-built PostHog dashboard with seven tiles wired against the `entity_overlap.channel_used` event. Starts empty and fills in as soon as a deploy starts receiving traffic.
 
-| Tile | What it answers |
-|---|---|
-| Channel uses — total (30d) | Did the channel run at all? Drops to ~0 when the kill switch is flipped. |
-| Channel uses over time | Is volume steady? Step changes usually map to deploys or onboarding events. |
-| Adoption — queries with extracted entities | What fraction of queries actually engage the channel (`had_query_entities=true`)? |
-| NER + entity-search latency (median / p95) | Is p95 staying under the `NER_QUERY_TIMEOUT_SECONDS` budget? |
-| Candidate count distribution | Is the chunk-side index returning useful matches, or mostly zeros? |
-| Channel uses by tenant | Which tenants generate signal — useful when per-tenant rollout lands. |
-| Avg query entities per turn | Has NER quality regressed (sudden drop)? |
+Each tile below: **what it shows**, **what "healthy" looks like**, **what to do when it drifts**.
 
-The dashboard starts empty and fills in as soon as the demo deploy receives traffic.
+---
+
+#### 1. Channel uses — total (30d)
+*Bold number, last 30 days.*
+
+**Shows:** total count of `entity_overlap.channel_used` events, i.e. how many chat turns ran through the entity channel in the window.
+
+**Healthy:** roughly equal to the chat-turn volume in the same period (every successful chat retrieval should fire one event when the flag is on). A non-trivial number means the channel is actually executing.
+
+**Drift signals:**
+- **Number = 0** → either no traffic, the kill switch was flipped (`ENTITY_OVERLAP_ENABLED=false`), or the deploy hasn't picked up the flag yet. Cross-check with chat-turn volume on the main observability dashboard.
+- **Number ≪ chat turns** → most chats are skipping the channel. Most likely cause: `api_key` was None at retrieval time (no per-tenant OpenAI key). Check `client.openai_api_key` decryption errors in logs.
+
+---
+
+#### 2. Channel uses over time
+*Daily line chart, last 30 days.*
+
+**Shows:** day-over-day volume of channel invocations.
+
+**Healthy:** smooth curve that tracks chat-turn volume. Weekday/weekend patterns inherit from chat traffic.
+
+**Drift signals:**
+- **Cliff edges** → a deploy. Cross-reference with the deploy log; if the deploy is unrelated to entity-overlap, dig into recent commits to `backend/search/service.py` or `backend/knowledge/`.
+- **Sudden jumps** → usually a new tenant onboarded with a large FAQ. Check the per-tenant tile to confirm.
+- **Slow downward trend** → tenants disabling the feature one by one (only relevant once per-tenant override lands). Or tenants with expired OpenAI keys.
+
+---
+
+#### 3. Adoption — queries with extracted entities
+*Stacked bar by `had_query_entities`, daily.*
+
+**Shows:** how often NER on the user query actually returns at least one entity. False = NER returned `[]` and the entity channel contributes zero votes that turn (RRF reduces to dense + BM25). True = NER produced something and the channel is contributing.
+
+**Healthy:** True share around **60–80%**. Real-world FAQ queries often have at least one product/code/endpoint name to anchor on. The control category in our eval is exactly the True ≈ 0% case — generic "how do I get started" queries — and we expect those to be a minority in production.
+
+**Drift signals:**
+- **True < 30% sustained** → NER is missing entities the dataset says exist. Check:
+  1. NER prompt is intact (`backend/knowledge/prompts.py` not edited recently?)
+  2. Model setting (`NER_MODEL`) wasn't switched to something weaker
+  3. Query distribution itself shifted toward generic queries (which is real-world signal, not a bug — but should match your hypothesis)
+- **True near 100%** → almost certainly NER hallucinating entities. Spot-check via Langfuse traces (see "Langfuse trace span" below).
+
+---
+
+#### 4. NER + entity-search latency (median / p95)
+*Two-series line chart, daily, in milliseconds.*
+
+**Shows:** wall-clock for `extract_entities_from_query` + `entity_overlap_search` combined per chat turn.
+
+**Healthy:**
+- median ≈ **400–800 ms** (one `gpt-4.1-mini` call + one indexed PG query)
+- p95 ≈ **1200–1700 ms** (well under the 2000 ms `NER_QUERY_TIMEOUT_SECONDS` budget)
+
+**Drift signals:**
+- **p95 ≥ NER_QUERY_TIMEOUT_SECONDS (2000 ms) repeatedly** → the wall-clock guard is firing. Each timeout = one chat turn that paid the latency budget for nothing (returned `[]`). Two fixes:
+  - Bump `NER_QUERY_TIMEOUT_SECONDS` if you can afford the p95 chat latency increase
+  - Drop to a smaller NER model (or eventually a local model) — see runbook tunables
+- **median climbs steadily** → OpenAI degradation or cold-cache effects on a large tenant. Check OpenAI status, then the GIN index health (`SELECT pg_size_pretty(pg_relation_size('ix_embeddings_entities_gin'))`).
+- **median spikes on deploy** → cold caches; should self-resolve in <10 minutes.
+
+---
+
+#### 5. Candidate count distribution
+*Stacked bar by `candidate_count` value, daily.*
+
+**Shows:** for queries where NER produced entities, how many chunks the entity index returned. Bucketed by candidate_count (0, 1, 2, 3, 4, 5+).
+
+**Healthy:** mode around **2–5 candidates**. The per-channel cap is `ENTITY_SEARCH_CANDIDATE_LIMIT = 1000` — we should never see all queries piling at the cap.
+
+**Drift signals:**
+- **High share of `candidate_count = 0`** → query NER extracted entities, but none of them appear in any chunk's entity list. Three causes, in order of likelihood:
+  1. **Surface-form mismatch** — query NER says `"Pro"`, chunks have `"Pro plan"`. Either side could be normalized; today we don't normalize on either. If this is dominant, consider lowercase / canonicalization on both sides.
+  2. **Chunk-side NER missed entities at indexing time** — re-index the affected tenant's documents. The entity column gets rebuilt on every re-embed.
+  3. **Tenant has a very small / very generic FAQ** — entity channel just isn't useful for them. Per-tenant disable when that lands.
+- **Always near 1000** → very popular entities in the query. Check the cap is still right; consider a smaller `ENTITY_SEARCH_CANDIDATE_LIMIT` if RRF below it doesn't actually consume that many.
+
+---
+
+#### 6. Channel uses by tenant
+*Table, last 30 days, top 25 tenants.*
+
+**Shows:** per-tenant volume of channel uses. Most useful once per-tenant override exists (currently the channel is global, so this is mostly an FYI distribution).
+
+**Healthy:** distribution mirrors chat-turn volume per tenant (a tenant with 10× more chats should have ~10× more entity-overlap events).
+
+**Drift signals:**
+- **One tenant has 0 events but non-zero chat traffic** → that tenant's `client.openai_api_key` is missing or undecryptable. Check `decrypt_value` errors in logs filtered by tenant id.
+- **Hot-tenant outlier with disproportionate volume** → could be a runaway loop or a chat-bomb. Cross-check chat-turn volume; if entity uses ≫ chat turns, retrieval is being called multiple times per turn (likely a regression in the chat handler).
+- **Once per-tenant override lands:** use this tile to verify rollout — pilot tenant's count should jump when their flag flips on.
+
+---
+
+#### 7. Avg query entities per turn
+*Line chart of `avg(query_entity_count)`, daily.*
+
+**Shows:** mean entities NER pulls from a user question. Our multi-hop eval averages ~1.5 entities/query across the 30-case dataset; production is usually a touch lower because real users ask more open-ended questions.
+
+**Healthy:** **0.8–1.8**.
+
+**Drift signals:**
+- **Sudden drop to ~0** → almost certainly the NER prompt or model regressed. Cross-check:
+  1. Recent commits to `backend/knowledge/prompts.py`
+  2. Recent commits / env-var changes to `NER_MODEL`
+  3. Spot-check 2–3 chat traces in Langfuse — does the `entity-overlap-search` span's `query_entities` field have the entities you'd expect?
+- **Climb above ~3.0** → NER is hallucinating broad terms as entities. Tightening the prompt's "Skip generic words" instruction or a one-shot update is the fix. Don't tune to specific tenants; this is a model-level concern.
 
 ### PostHog event
 

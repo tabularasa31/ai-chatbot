@@ -405,7 +405,7 @@ def get_document_detail_route(
     db: Annotated[Session, Depends(get_db)],
 ) -> DocumentDetailResponse:
     """
-    Get single document with parsed_text preview (protected JWT).
+    Get single document with full parsed_text for preview (protected JWT).
     404 if not found or not owner.
     """
     tenant = get_tenant_by_user(current_user.id, db)
@@ -413,18 +413,17 @@ def get_document_detail_route(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     doc = get_document(document_id, tenant.id, db)
-    preview = None
-    if doc.parsed_text:
-        preview = doc.parsed_text[:500] + ("..." if len(doc.parsed_text) > 500 else "")
 
     return DocumentDetailResponse(
         id=doc.id,
         filename=doc.filename,
         file_type=doc.file_type.value,
         status=doc.status.value,
+        source_url=doc.source_url,
         created_at=doc.created_at,
         updated_at=doc.updated_at,
-        parsed_text=preview,
+        parsed_text=doc.parsed_text,
+        parsed_text_length=len(doc.parsed_text) if doc.parsed_text else None,
         health_status=doc.health_status,
     )
 

@@ -28,6 +28,7 @@ export interface UrlSourcesSectionProps {
   onSaveEdit: () => Promise<void>;
   onDeletePage: (sourceId: string, docId: string) => Promise<void>;
   deletingPageId: string | null;
+  onPreviewPage: (docId: string) => void;
 }
 
 export function UrlSourcesSection({
@@ -46,6 +47,7 @@ export function UrlSourcesSection({
   onSaveEdit,
   onDeletePage,
   deletingPageId,
+  onPreviewPage,
 }: UrlSourcesSectionProps) {
   return (
     <tr className="bg-slate-50/60">
@@ -196,7 +198,14 @@ export function UrlSourcesSection({
                       <div key={page.id} className="rounded-lg border border-slate-200 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <div className="text-sm font-medium text-slate-700">{page.title}</div>
+                            <button
+                              type="button"
+                              onClick={() => onPreviewPage(page.id)}
+                              className="block w-full truncate text-left text-sm font-medium text-slate-700 hover:text-violet-700 hover:underline"
+                              title="View extracted text"
+                            >
+                              {page.title}
+                            </button>
                             <div className="mt-1 break-all text-xs text-slate-400">{page.url}</div>
                           </div>
                           <button

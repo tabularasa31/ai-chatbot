@@ -8,6 +8,7 @@ function WidgetContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
+  const identityToken = searchParams.get("identityToken") || null;
 
   if (!botId) {
     return (
@@ -24,7 +25,7 @@ function WidgetContent() {
 
   return (
     <div className="flex h-screen w-full font-['Inter']">
-      <ChatWidget botId={botId} locale={locale} />
+      <ChatWidget botId={botId} locale={locale} identityToken={identityToken} />
     </div>
   );
 }

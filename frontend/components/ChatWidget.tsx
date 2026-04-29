@@ -46,8 +46,6 @@ interface ChatWidgetProps {
   compact?: boolean;
   /** When provided, session init is called first to enable identified mode. */
   identityToken?: string | null;
-  /** Required alongside identityToken for session init. */
-  apiKey?: string | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
   /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
@@ -269,7 +267,6 @@ export function ChatWidget({
   locale,
   compact = false,
   identityToken,
-  apiKey,
   renderBelowAssistant,
   isOpen = true,
 }: ChatWidgetProps) {
@@ -359,11 +356,11 @@ export function ChatWidget({
 
     const stored = readStoredSession(botId, userId);
 
-    if (identityToken && apiKey && !stored) {
+    if (identityToken && !stored) {
       fetch("/api/widget-session/init", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: apiKey, identity_token: identityToken }),
+        body: JSON.stringify({ bot_id: botId, identity_token: identityToken }),
       })
         .then((r) => r.json())
         .then((data: { session_id?: string }) => {
@@ -380,7 +377,7 @@ export function ChatWidget({
       setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, identityToken, apiKey]);
+  }, [botId, identityToken]);
 
   useEffect(() => {
     let cancelled = false;

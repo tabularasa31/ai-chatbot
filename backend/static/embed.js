@@ -37,9 +37,16 @@
     (typeof navigator !== "undefined" && (navigator.language || navigator.userLanguage)) ||
     null;
 
+  var identityToken =
+    (typeof window !== "undefined" &&
+      window.Chat9Config &&
+      window.Chat9Config.identityToken) ||
+    null;
+
   function buildWidgetUrl() {
     var query = "botId=" + encodeURIComponent(botId);
     if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
+    if (identityToken) query += "&identityToken=" + encodeURIComponent(identityToken);
     return widgetBase + "/widget?" + query;
   }
 

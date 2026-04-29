@@ -16,7 +16,18 @@ from backend.core.security import (
     validate_kyc_token_detail,
 )
 from backend.models import Chat, ContactSession
-from tests.conftest import register_and_verify_user
+from tests.conftest import register_and_verify_user, set_client_openai_key
+
+
+def _create_bot(client: TestClient, token: str) -> str:
+    """Create a default bot for the current user's tenant; return bot public_id."""
+    resp = client.post(
+        "/bots",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "KYC Test Bot"},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["public_id"]
 
 
 def test_generate_kyc_token_validate_returns_user_context() -> None:
@@ -114,8 +125,9 @@ def test_widget_session_init_identified_and_anonymous(
         json={"name": "Widget KYC Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
     client_uuid = uuid.UUID(cr.json()["id"])
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
 
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
@@ -130,7 +142,7 @@ def test_widget_session_init_identified_and_anonymous(
     )
     init_ok = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert init_ok.status_code == 200
     data_ok = init_ok.json()
@@ -155,7 +167,7 @@ def test_widget_session_init_identified_and_anonymous(
 
     init_anon = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key},
+        json={"bot_id": bot_public_id},
     )
     assert init_anon.status_code == 200
     assert init_anon.json()["mode"] == "anonymous"
@@ -174,7 +186,7 @@ def test_widget_session_init_identified_and_anonymous(
     b64, sig = bad_token.split(".", 1)
     init_bad = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": f"{b64[:-2]}xx.{sig}"},
+        json={"bot_id": bot_public_id, "identity_token": f"{b64[:-2]}xx.{sig}"},
     )
     assert init_bad.status_code == 200
     assert init_bad.json()["mode"] == "anonymous"
@@ -194,7 +206,9 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
         json={"name": "Fallback Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -211,7 +225,7 @@ def test_widget_session_init_invalid_token_falls_back_anonymous_logs(
     with caplog.at_level(logging.INFO, logger="backend.widget.routes"):
         r = tenant.post(
             "/widget/session/init",
-            json={"api_key": api_key, "identity_token": tampered},
+            json={"bot_id": bot_public_id, "identity_token": tampered},
         )
     assert r.status_code == 200
     assert r.json()["mode"] == "anonymous"
@@ -229,7 +243,9 @@ def test_widget_session_init_creates_new_identified_session_and_patches_context(
         json={"name": "Resume Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -246,7 +262,7 @@ def test_widget_session_init_creates_new_identified_session_and_patches_context(
     )
     r1 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": first_token, "locale": "en-US"},
+        json={"bot_id": bot_public_id, "identity_token": first_token, "locale": "en-US"},
     )
     assert r1.status_code == 200
     first_sid = uuid.UUID(r1.json()["session_id"])
@@ -261,7 +277,7 @@ def test_widget_session_init_creates_new_identified_session_and_patches_context(
     )
     r2 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": second_token, "locale": "de-DE"},
+        json={"bot_id": bot_public_id, "identity_token": second_token, "locale": "de-DE"},
     )
     assert r2.status_code == 200
     second_sid = uuid.UUID(r2.json()["session_id"])
@@ -302,7 +318,9 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
         json={"name": "Closed Resume Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -316,7 +334,7 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
     )
     r1 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r1.status_code == 200
     first_sid = uuid.UUID(r1.json()["session_id"])
@@ -328,7 +346,7 @@ def test_widget_session_init_closed_identified_chat_gets_new_session(
 
     r2 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r2.status_code == 200
     second_sid = uuid.UUID(r2.json()["session_id"])
@@ -355,7 +373,9 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
         json={"name": "Expired Resume Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
         headers={"Authorization": f"Bearer {token}"},
@@ -369,7 +389,7 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
     )
     r1 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r1.status_code == 200
     first_sid = uuid.UUID(r1.json()["session_id"])
@@ -381,7 +401,7 @@ def test_widget_session_init_expired_identified_chat_gets_new_session(
 
     r2 = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r2.status_code == 200
     assert uuid.UUID(r2.json()["session_id"]) != first_sid
@@ -407,8 +427,9 @@ def test_widget_session_init_ignores_existing_identified_sessions(
         json={"name": "Latest Resume Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
     client_uuid = uuid.UUID(cr.json()["id"])
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
 
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
@@ -444,7 +465,7 @@ def test_widget_session_init_ignores_existing_identified_sessions(
     )
     r = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r.status_code == 200
     fresh_sid = uuid.UUID(r.json()["session_id"])
@@ -462,8 +483,9 @@ def test_widget_session_init_does_not_reuse_open_or_closed_sessions(
         json={"name": "Open Over Closed Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
     client_uuid = uuid.UUID(cr.json()["id"])
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
 
     sk_resp = tenant.post(
         "/tenants/me/kyc/secret",
@@ -500,7 +522,7 @@ def test_widget_session_init_does_not_reuse_open_or_closed_sessions(
     )
     r = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": id_token},
+        json={"bot_id": bot_public_id, "identity_token": id_token},
     )
     assert r.status_code == 200
     fresh_sid = uuid.UUID(r.json()["session_id"])
@@ -518,7 +540,8 @@ def test_kyc_rotate_returns_new_secret(
         json={"name": "Rotate Co"},
     )
     assert cr.status_code == 201
-    api_key = cr.json()["api_key"]
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
 
     r1 = tenant.post("/tenants/me/kyc/secret", headers={"Authorization": f"Bearer {token}"})
     assert r1.status_code == 200
@@ -542,7 +565,7 @@ def test_kyc_rotate_returns_new_secret(
 
     overlap = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": tok_old},
+        json={"bot_id": bot_public_id, "identity_token": tok_old},
     )
     assert overlap.status_code == 200
     assert overlap.json()["mode"] == "identified"

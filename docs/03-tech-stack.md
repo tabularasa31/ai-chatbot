@@ -134,7 +134,7 @@
 │                    FastAPI Backend                       │
 │                  (Railway deployment)                    │
 │                                                           │
-│  POST /widget/session/init (api_key, optional identity)  │
+│  POST /widget/session/init (bot_id, optional identity)   │
 │  POST /widget/chat (public bot ID) or POST /chat (X-API-Key) │
 │    ↓                                                      │
 │    1. Resolve tenant → tenant_id + openai_api_key        │

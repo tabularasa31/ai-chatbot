@@ -6,11 +6,13 @@ Chat9 supports optional widget-side user identification for tenants that want to
 
 In the codebase this feature is called **KYC** or **identified widget sessions**. It is implemented in:
 
-- `backend/routes/widget.py`
+- `backend/widget/routes.py` (`widget_session_init`, `_resolve_widget_identity`)
 - `backend/core/security.py` (`validate_kyc_token_detail`, `generate_kyc_token`)
+- `backend/auth/routes.py` (`/auth/me/widget-token` — server-issued token for the dashboard's own dogfood widget)
+- `backend/tenants/widget_chat_gate.py` (single source of truth for bot/tenant resolution)
 - `backend/models.py` (`ContactSession`, `Chat.user_context`)
 
-This document describes the real production flow as of April 21, 2026.
+This document describes the real production flow as of April 29, 2026.
 
 ## High-level flow
 
@@ -70,17 +72,41 @@ The standard `embed.js` supports KYC via `window.Chat9Config.identityToken`:
 ```html
 <script>
   window.Chat9Config = {
+    widgetUrl: "https://getchat9.live",
     identityToken: "{{ server_generated_token_or_null }}"
   };
 </script>
 <script src="https://.../embed.js" data-bot-id="YOUR_BOT_ID"></script>
 ```
 
-- If `identityToken` is a non-empty string, `embed.js` passes it to the widget iframe via URL param.
-- The iframe calls `POST /widget/session/init` with `bot_id` + `identity_token`.
-- If `identityToken` is `null` or absent, the widget runs in anonymous mode.
+The token is delivered to the widget iframe via a deterministic two-step
+`postMessage` handshake — never via the URL (which would leak signed tokens
+into browser history, server access logs and `Referer` headers):
 
-This allows a single embed snippet to handle both anonymous visitors and logged-in users on the same page — the server-side template controls the value.
+1. `embed.js` creates the iframe, stamping `?parentOrigin=<page origin>` so
+   the iframe knows where to send messages back.
+2. Inside the iframe, `frontend/app/widget/page.tsx` mounts, registers a
+   `message` listener, then posts `{type: "chat9:ready"}` to `window.parent`
+   with the explicit `parentOrigin` as `targetOrigin`.
+3. `embed.js` receives `chat9:ready`, removes its listener (no leak across
+   re-init / HMR cycles), and posts back either:
+   - `{type: "chat9:identity", identityToken: "<...>"}` if a token was
+     configured, **only** to the known `widgetBase` origin — never `*`; or
+   - `{type: "chat9:no-identity"}` if no token was configured — explicit
+     anonymous signal so the widget proceeds without waiting.
+4. The widget reads the message, sets state, and only then mounts
+   `ChatWidget`. If the token was provided it calls `POST /widget/session/init`
+   with `bot_id` + `identity_token`.
+
+If the page is opened directly in a tab (`window.parent === window`, no
+embedding iframe), the widget skips the handshake and resolves to anonymous
+synchronously.
+
+This contract is **internal between `embed.js` and the widget** — customers
+never see it. Their integration is just: set `window.Chat9Config.identityToken`
+to a server-rendered token (or `null` for anonymous visitors) and load
+`embed.js`. A single embed snippet handles both anonymous and identified
+visitors on the same page.
 
 ## Token format
 
@@ -281,6 +307,43 @@ This means identified sessions produce richer escalation tickets than anonymous 
 Reference:
 
 - `backend/escalation/service.py`
+
+## Cross-tenant KYC (Chat9 dogfood support widget)
+
+The KYC secret lives in `tenants.kyc_secret_key` **per tenant** (encrypted
+at rest, decrypted via `get_kyc_decrypted_keys_for_validation`). For a
+single-tenant flow — a customer embeds *their own* bot on *their own*
+site — the same tenant signs and validates the token, so a single
+`generate_kyc_token(payload, secret)` on their server is enough.
+
+The dashboard's own embedded support widget is a **cross-tenant** flow:
+
+- A user from tenant **A** (an ACME-tenant employee) is logged into the
+  Chat9 dashboard.
+- The dashboard's bottom-right support FAB targets the Chat9 support bot,
+  which is owned by tenant **B** (Chat9 itself, configured via
+  `NEXT_PUBLIC_CHAT9_BOT_ID`).
+- The token must be signed with **B's** secret because `widget_session_init`
+  resolves the validating tenant from the `bot_id`, not from the caller.
+
+This is handled by `GET /auth/me/widget-token?bot_id=<chat9_bot_public_id>`:
+
+- The endpoint resolves the bot's owner via `get_bot_and_tenant_for_widget_session`
+  (`NOT_FOUND` / `INACTIVE` only — no `NO_OPENAI` gate, since session/init
+  doesn't need to call the LLM).
+- It then signs the payload with **that owner's** `kyc_secret_key`.
+- The same secret will validate it on `/widget/session/init` — symmetry
+  restored, identified mode unlocked.
+
+Backward compatibility: when `bot_id` is omitted, the legacy "sign with the
+caller's own tenant" path still works — that is the right behavior for any
+custom server-rendered integration where the user's tenant *is* the bot
+owner.
+
+For the cross-tenant flow to work on a fresh deploy, the bot-owner tenant
+must have a KYC secret configured (Dashboard → Settings → Widget API →
+Generate secret). Without it, `/auth/me/widget-token` returns 404 with
+`"No identity secret configured."` — same surface as for any other tenant.
 
 ## Secret management
 

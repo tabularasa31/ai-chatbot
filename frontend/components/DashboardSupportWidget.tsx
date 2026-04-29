@@ -32,7 +32,7 @@ export function DashboardSupportWidget() {
   useEffect(() => {
     if (!BOT_ID) return;
 
-    fetch("/api/widget-identity", { credentials: "include" })
+    fetch(`/api/widget-identity?bot_id=${encodeURIComponent(BOT_ID)}`, { credentials: "include" })
       .then((r) => r.json())
       .then((data: { identity_token?: string }) => {
         setIdentityToken(data.identity_token ?? null);

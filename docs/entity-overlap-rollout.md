@@ -37,6 +37,22 @@ When `false`, `_run_candidate_stage` skips the entity NER and entity-overlap sea
 
 ## What to watch in production
 
+### Dashboard
+
+[**Entity-overlap retrieval channel**](https://eu.posthog.com/project/162137/dashboard/651556) — pre-built PostHog dashboard with seven tiles wired against `entity_overlap.channel_used`:
+
+| Tile | What it answers |
+|---|---|
+| Channel uses — total (30d) | Did the channel run at all? Drops to ~0 when the kill switch is flipped. |
+| Channel uses over time | Is volume steady? Step changes usually map to deploys or onboarding events. |
+| Adoption — queries with extracted entities | What fraction of queries actually engage the channel (`had_query_entities=true`)? |
+| NER + entity-search latency (median / p95) | Is p95 staying under the `NER_QUERY_TIMEOUT_SECONDS` budget? |
+| Candidate count distribution | Is the chunk-side index returning useful matches, or mostly zeros? |
+| Channel uses by tenant | Which tenants generate signal — useful when per-tenant rollout lands. |
+| Avg query entities per turn | Has NER quality regressed (sudden drop)? |
+
+The dashboard starts empty and fills in as soon as the demo deploy receives traffic.
+
 ### PostHog event
 
 `entity_overlap.channel_used` fires once per chat turn that runs through the channel. Properties:

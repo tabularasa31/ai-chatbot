@@ -6,6 +6,7 @@ import logging
 import re
 import time
 import uuid
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Literal
@@ -2466,6 +2467,58 @@ def _run_query_stage(
     )
 
 
+def _tenant_has_embeddings(tenant_id: uuid.UUID, db: Session) -> bool:
+    """Cheap existence check: does the tenant have any indexed chunk?
+
+    Used to gate the NER submission for the entity-overlap channel —
+    tenants with zero embeddings will hit the empty-vector early-return
+    downstream, so spending an OpenAI NER call for them is pure waste.
+
+    Implemented as a ``LIMIT 1`` against the same ``embeddings`` table
+    the vector search uses; with the existing ``ix_embeddings_document_id``
+    index this is ~1-2ms even on multi-million-row deploys. Returns
+    False on any DB error (defensive — a transient failure here must
+    not block retrieval).
+    """
+    try:
+        return (
+            db.query(Embedding.id)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .limit(1)
+            .first()
+        ) is not None
+    except Exception:
+        logger.warning("tenant_has_embeddings_check_failed", exc_info=True)
+        return False
+
+
+def _cleanup_ner_executor(
+    executor: ThreadPoolExecutor | None,
+    future: Future[list[str]] | None,
+) -> None:
+    """Cancel a pending NER future and shut down its executor.
+
+    Used both on the main path (after we've consumed the result) and
+    on the early-return path (when vector search produced no candidates
+    so the entity channel will not be invoked anyway). Best-effort —
+    a failure here cannot leak into chat.
+    """
+    if future is not None:
+        try:
+            future.cancel()
+        except Exception:
+            pass
+    if executor is not None:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            # Older Python without cancel_futures — fall back.
+            executor.shutdown(wait=False)
+        except Exception:
+            pass
+
+
 def _run_candidate_stage(
     *,
     tenant_id: uuid.UUID,
@@ -2493,6 +2546,40 @@ def _run_candidate_stage(
         else (bm25_variant_queries[0] if bm25_variant_queries else None)
     )
 
+    # ── Step 5+: kick off NER for the entity-overlap channel concurrently
+    # with vector + BM25 retrieval. Sequential execution would add the full
+    # NER latency (~1-2s) to every chat turn — multi-turn cases multiplied
+    # this into ~+8s p50 in the eval (see ClickUp 86exe5pjx). Parallel
+    # execution overlaps NER with the existing vector + BM25 budget so the
+    # channel's added latency drops to ~max(0, ner_ms - retrieval_ms),
+    # which on prod traffic is typically zero (retrieval is the slower
+    # branch). NER's internal wall-clock timeout still bounds the work,
+    # so a slow OpenAI call cannot stall this hot path.
+    #
+    # Gating: only submit NER when the tenant has any indexed embeddings.
+    # Otherwise vector_candidates will be empty downstream, the entity
+    # channel won't run, and a submitted NER would just waste an OpenAI
+    # call (the future cancel cannot kill an already-running thread —
+    # ``cancel_futures=True`` in shutdown only stops queued ones).
+    # The pre-check is one ``LIMIT 1`` against the same table the vector
+    # search hits, ~1-2ms with the document_id index. Cheap insurance
+    # against paying for NER on freshly-onboarded / empty-FAQ tenants.
+    ner_executor: ThreadPoolExecutor | None = None
+    ner_future: Future[list[str]] | None = None
+    if settings.entity_overlap_enabled and api_key and _tenant_has_embeddings(
+        tenant_id, db
+    ):
+        ner_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="entity_overlap_ner",
+        )
+        ner_future = ner_executor.submit(
+            extract_entities_from_query,
+            query,
+            api_key,
+            tenant_id=str(tenant_id),
+        )
+
     # Build one shared candidate set before lexical stages: engine-specific
     # acquisition, then cross-variant merge/dedup/truncation.
     vector_candidate_set = _build_vector_candidate_set(
@@ -2507,6 +2594,10 @@ def _run_candidate_stage(
     extra_vector_search_calls = max(vector_search_call_count - 1, 0)
 
     if not vector_candidates:
+        # Empty corpus or no vector matches — entity channel won't run
+        # downstream, so cancel the pending NER call to free its thread
+        # and avoid wasting an OpenAI request on an unused result.
+        _cleanup_ner_executor(ner_executor, ner_future)
         if trace is not None:
             trace.span(
                 name="vector-search",
@@ -2616,24 +2707,37 @@ def _run_candidate_stage(
 
     vector_for_rrf = vector_candidates[:rrf_candidate_pool]
 
-    # Step 5: optional entity-overlap channel. When the flag is off
-    # (default), this is a single boolean check — zero added latency.
-    # When on, NER on the query has its own wall-clock timeout +
-    # empty-list fallback inside extract_entities_from_query, so a
-    # slow / broken NER cannot stall this hot path. An empty NER
-    # output (control queries, NER timeout) collapses entity_results
-    # to []; reciprocal_rank_fusion then reduces to today's two-channel
-    # behavior automatically.
+    # ── Step 5+: harvest the parallel NER future and run entity overlap.
+    # The NER call was kicked off at the start of this stage (concurrent
+    # with vector + BM25). Here we just wait for whatever's left of the
+    # NER work and run the cheap DB lookup for entity overlap.
+    #
+    # ``entity_duration_ms`` measures the wait-and-lookup time the
+    # caller actually paid on top of vector + BM25. With healthy NER
+    # latency it's near-zero (NER usually finished while retrieval was
+    # running). The total NER work-time itself is observable via
+    # Langfuse trace + the timing of the future result — callers don't
+    # need it to make rollout decisions.
     entity_results: list[tuple[Embedding, float]] = []
     query_entities: list[str] = []
     entity_duration_ms = 0.0
-    if settings.entity_overlap_enabled and api_key:
-        entity_started_at = perf_counter()
-        query_entities = extract_entities_from_query(
-            query,
-            api_key,
-            tenant_id=str(tenant_id),
-        )
+    if ner_future is not None and ner_executor is not None:
+        wait_started_at = perf_counter()
+        try:
+            # extract_entities_from_query has its own ~2s wall-clock
+            # timeout + empty-list fallback inside _run_with_timeout.
+            # The small margin here is just to let the inner thread
+            # actually return in case the timeout fired right at the
+            # wire — ``cancel_futures=True`` in cleanup handles the
+            # rare case where the inner thread is still draining.
+            query_entities = ner_future.result(
+                timeout=settings.ner_query_timeout_seconds + 0.5
+            )
+        except Exception:
+            logger.warning("ner_future_result_failed", exc_info=True)
+            query_entities = []
+        finally:
+            _cleanup_ner_executor(ner_executor, ner_future)
         if query_entities:
             entity_results = entity_overlap_search(
                 tenant_id=tenant_id,
@@ -2641,7 +2745,7 @@ def _run_candidate_stage(
                 top_k=rrf_candidate_pool,
                 db=db,
             )
-        entity_duration_ms = round((perf_counter() - entity_started_at) * 1000, 2)
+        entity_duration_ms = round((perf_counter() - wait_started_at) * 1000, 2)
         if trace is not None:
             trace.span(
                 name="entity-overlap-search",

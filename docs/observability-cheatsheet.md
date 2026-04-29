@@ -59,6 +59,8 @@ python langfuse_runner.py \
 
 ## PostHog — Chat Health dashboard
 
+**Dashboard**: https://eu.posthog.com/project/162137/dashboard/650852
+
 **Filter**: `tenant_id` top-level filter + cohort split by `plan_tier`.  
 **Default time range**: last 7 days.
 

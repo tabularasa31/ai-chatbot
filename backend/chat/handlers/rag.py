@@ -2160,6 +2160,8 @@ class RagHandler(PipelineHandler):
                 cross_lingual_variants_count=result.cross_lingual_variants_count,
                 query_kb_language_match=result.query_kb_language_match,
                 retrieval_used_cross_lingual_variant=result.retrieval_used_cross_lingual_variant,
+                model=settings.chat_model,
+                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
             )
             return ChatTurnOutcome(
                 text=result.final_answer,
@@ -2296,6 +2298,8 @@ class RagHandler(PipelineHandler):
                     chat_id=str(chat.id),
                     escalation_reason=_decision.escalate_reason or esc_trigger.value,
                     escalation_trigger=esc_trigger.value,
+                    plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+                    priority=ticket.priority if ticket is not None else None,
                 )
                 _emit_chat_session_ended_event(
                     tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
@@ -2404,6 +2408,8 @@ class RagHandler(PipelineHandler):
             cross_lingual_variants_count=result.cross_lingual_variants_count,
             query_kb_language_match=result.query_kb_language_match,
             retrieval_used_cross_lingual_variant=result.retrieval_used_cross_lingual_variant,
+            model=settings.chat_model,
+            plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
         )
         return ChatTurnOutcome(
             text=answer,

@@ -42,22 +42,22 @@ test:
 	./scripts/run-tests-local.sh
 
 test-sqlite:
-	PYTHONPATH=. pytest tests/ --ignore=tests/pgvector_tests --cov=backend --cov-report=term-missing
+	PYTHONPATH=. pytest tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing
 
 test-pgvector: db-up db-ready
-	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -m pgvector tests/pgvector_tests/
+	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -m pgvector tests/pgvector_tests/ tests/eval/multi_hop/
 
 # Coverage snapshot for backend (sqlite path). If you want coverage that includes pgvector too,
 # run pgvector tests with pytest-cov and --cov-append.
 coverage:
-	PYTHONPATH=. pytest --cov=backend --cov-report=term-missing --cov-report=xml
+	PYTHONPATH=. pytest tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=term-missing --cov-report=xml
 
 # Coverage for the full suite (SQLite tests + pgvector tests).
 # Requires Docker Postgres to be up for the pgvector stage.
 coverage-all: db-up db-ready
 	rm -f .coverage coverage.xml
-	PYTHONPATH=. pytest tests/ --ignore=tests/pgvector_tests --cov=backend --cov-report=xml
-	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -m pgvector tests/pgvector_tests/ \
+	PYTHONPATH=. pytest tests/ --ignore=tests/pgvector_tests --ignore=tests/eval/multi_hop --cov=backend --cov-report=xml
+	PG_USER="$(PG_USER)" PG_PASSWORD="$(PG_PASSWORD)" PYTHONPATH=. pytest -m pgvector tests/pgvector_tests/ tests/eval/multi_hop/ \
 	  --cov=backend --cov-append --cov-report=term-missing --cov-report=xml
 
 clean:

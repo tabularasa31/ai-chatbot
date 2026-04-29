@@ -214,6 +214,32 @@ def test_widget_config_returns_link_safety_settings(
     assert data["link_safety_labels"]["body"] == "You are going to {hostname}. Continue?"
 
 
+def test_widget_config_skips_localization_when_link_safety_disabled(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="widget-config-disabled@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Config Disabled Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+
+    localize = Mock(side_effect=AssertionError("localization should not run when link safety is disabled"))
+    monkeypatch.setattr("backend.widget.routes.localize_text_to_language_result", localize)
+
+    r = tenant.get(f"/widget/config?bot_id={bot_public_id}&locale=ru-RU")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["link_safety_enabled"] is False
+    assert data["link_safety_labels"]["title"] == "Open external link?"
+    localize.assert_not_called()
+
+
 def test_widget_chat_empty_message_returns_422(
     tenant: TestClient,
     db_session: Session,

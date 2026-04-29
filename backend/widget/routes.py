@@ -94,58 +94,68 @@ class WidgetConfigResponse(BaseModel):
     link_safety_labels: WidgetLinkSafetyLabels
 
 
+def _default_link_safety_labels() -> WidgetLinkSafetyLabels:
+    return WidgetLinkSafetyLabels(
+        title="Open external link?",
+        body="You are going to {hostname}. Continue?",
+        continue_label="Open",
+        cancel_label="Cancel",
+    )
+
+
 @widget_router.get("/health")
 def widget_health() -> dict[str, str]:
     """Health check for widget endpoints."""
     return {"status": "ok"}
 
 
-def _link_safety_labels(locale: str | None, tenant: Tenant, bot_id: str) -> WidgetLinkSafetyLabels:
+def _link_safety_labels(
+    locale: str | None,
+    *,
+    encrypted_api_key: str | None,
+    tenant_id: str,
+    bot_id: str,
+) -> WidgetLinkSafetyLabels:
     target_language = sanitize_locale(locale)
-    labels = {
-        "title": "Open external link?",
-        "body": "You are going to {hostname}. Continue?",
-        "continue_label": "Open",
-        "cancel_label": "Cancel",
-    }
+    labels = _default_link_safety_labels()
     if not target_language:
-        return WidgetLinkSafetyLabels(**labels)
+        return labels
 
     return WidgetLinkSafetyLabels(
         title=localize_text_to_language_result(
-            canonical_text=labels["title"],
+            canonical_text=labels.title,
             target_language=target_language,
-            api_key=tenant.openai_api_key,
+            api_key=encrypted_api_key,
             fallback_locale=target_language,
             operation="widget_link_safety_localize",
-            tenant_id=str(tenant.id),
+            tenant_id=tenant_id,
             bot_id=bot_id,
         ).text,
         body=localize_text_to_language_result(
-            canonical_text=labels["body"],
+            canonical_text=labels.body,
             target_language=target_language,
-            api_key=tenant.openai_api_key,
+            api_key=encrypted_api_key,
             fallback_locale=target_language,
             operation="widget_link_safety_localize",
-            tenant_id=str(tenant.id),
+            tenant_id=tenant_id,
             bot_id=bot_id,
         ).text,
         continue_label=localize_text_to_language_result(
-            canonical_text=labels["continue_label"],
+            canonical_text=labels.continue_label,
             target_language=target_language,
-            api_key=tenant.openai_api_key,
+            api_key=encrypted_api_key,
             fallback_locale=target_language,
             operation="widget_link_safety_localize",
-            tenant_id=str(tenant.id),
+            tenant_id=tenant_id,
             bot_id=bot_id,
         ).text,
         cancel_label=localize_text_to_language_result(
-            canonical_text=labels["cancel_label"],
+            canonical_text=labels.cancel_label,
             target_language=target_language,
-            api_key=tenant.openai_api_key,
+            api_key=encrypted_api_key,
             fallback_locale=target_language,
             operation="widget_link_safety_localize",
-            tenant_id=str(tenant.id),
+            tenant_id=tenant_id,
             bot_id=bot_id,
         ).text,
     )
@@ -172,10 +182,20 @@ def widget_config(
         ) from e
 
     allowed_domains = bot.allowed_domains if isinstance(bot.allowed_domains, list) else []
+    labels = (
+        _link_safety_labels(
+            locale,
+            encrypted_api_key=tenant.openai_api_key,
+            tenant_id=str(tenant.id),
+            bot_id=bot.public_id,
+        )
+        if bot.link_safety_enabled
+        else _default_link_safety_labels()
+    )
     return WidgetConfigResponse(
         link_safety_enabled=bool(bot.link_safety_enabled),
         allowed_domains=[str(domain) for domain in allowed_domains if str(domain).strip()],
-        link_safety_labels=_link_safety_labels(locale, tenant, bot.public_id),
+        link_safety_labels=labels,
     )
 
 

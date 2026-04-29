@@ -73,12 +73,18 @@ def extract_entities_from_query(
     timeout_seconds = settings.ner_query_timeout_seconds
 
     def _call() -> list[str]:
+        # Bind the transport-layer read timeout to the same budget as the
+        # wall-clock guard. Without this, a slow OpenAI response still pegs
+        # the worker thread + HTTP socket for the default 60s client read
+        # timeout, even though _run_with_timeout has already returned [].
+        # Under sustained traffic that leaks threads and sockets.
         return _run_ner(
             messages=build_ner_query_messages(query),
             encrypted_api_key=encrypted_api_key,
             operation="ner_query",
             tenant_id=tenant_id,
             bot_id=bot_id,
+            client_timeout_seconds=timeout_seconds,
         )
 
     return _run_with_timeout(
@@ -136,10 +142,19 @@ def _run_ner(
     operation: str,
     tenant_id: str | None,
     bot_id: str | None,
+    client_timeout_seconds: float | None = None,
 ) -> list[str]:
-    """Single OpenAI NER call → parsed entity list. Returns [] on any error."""
+    """Single OpenAI NER call → parsed entity list. Returns [] on any error.
+
+    ``client_timeout_seconds`` overrides the OpenAI client's default read
+    timeout. Used by the query path to bound the transport call to the
+    same wall-clock budget enforced by ``_run_with_timeout``. The passage
+    path leaves it ``None`` so the global default applies.
+    """
     try:
-        client = get_openai_client(encrypted_api_key)
+        client = get_openai_client(
+            encrypted_api_key, timeout=client_timeout_seconds
+        )
     except Exception:
         # Permission / decryption / config failure — log and degrade.
         logger.warning("ner_client_init_failed", extra={"operation": operation})

@@ -212,6 +212,50 @@ def test_query_uses_configured_model_and_json_response_format(monkeypatch):
     assert captured["temperature"] == 0
 
 
+def test_query_passes_client_timeout_matching_wall_clock_budget(monkeypatch):
+    """Codex P2 fix: transport-layer timeout must be bound to the wall-clock budget.
+
+    Otherwise a slow OpenAI response leaves the worker thread + HTTP socket
+    pegged for the default 60s client read timeout even after _run_with_timeout
+    returns []. Under sustained traffic that leaks threads/sockets.
+    """
+    monkeypatch.setattr(entity_extractor.settings, "ner_query_timeout_seconds", 1.5)
+    response = _completion({"named_entities": ["Acme"]})
+    captured: dict = {}
+
+    def fake_get_client(_key, *, timeout=None):
+        captured["timeout"] = timeout
+        return MagicMock()
+
+    with patch.object(
+        entity_extractor, "get_openai_client", side_effect=fake_get_client
+    ), patch.object(
+        entity_extractor, "call_openai_with_retry", return_value=response
+    ):
+        extract_entities_from_query("hello?", "key")
+
+    assert captured["timeout"] == pytest.approx(1.5)
+
+
+def test_passage_does_not_constrain_client_timeout():
+    """Indexing-time path keeps the default OpenAI client read timeout."""
+    response = _completion({"named_entities": ["Acme"]})
+    captured: dict = {}
+
+    def fake_get_client(_key, *, timeout=None):
+        captured["timeout"] = timeout
+        return MagicMock()
+
+    with patch.object(
+        entity_extractor, "get_openai_client", side_effect=fake_get_client
+    ), patch.object(
+        entity_extractor, "call_openai_with_retry", return_value=response
+    ):
+        extract_entities_from_passage("ipsum", "key")
+
+    assert captured["timeout"] is None
+
+
 def test_query_timeout_returns_empty(monkeypatch):
     """A slow LLM call must not exceed ner_query_timeout_seconds."""
     monkeypatch.setattr(entity_extractor.settings, "ner_query_timeout_seconds", 0.05)

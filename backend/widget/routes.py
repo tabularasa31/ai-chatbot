@@ -44,7 +44,6 @@ from backend.models import (
 )
 from backend.tenants.service import (
     get_kyc_decrypted_keys_for_validation,
-    get_tenant_by_api_key,
 )
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
@@ -66,7 +65,7 @@ _WIDGET_MESSAGE_MAX_CHARS = settings.widget_message_max_chars
 
 
 class WidgetSessionInitRequest(BaseModel):
-    api_key: str = Field(..., min_length=1)
+    bot_id: str = Field(..., min_length=1)
     identity_token: str | None = None
     locale: str | None = Field(default=None, max_length=64)
 
@@ -238,13 +237,18 @@ def widget_session_init(
     """
     Start a widget session. Optional signed identity_token enables identified mode.
     """
-    tenant = get_tenant_by_api_key(body.api_key, db)
-    if not tenant or not tenant.is_active:
-        logger.info(
-            "widget_session_init_rejected",
-            extra={"reason": "not_found" if not tenant else "inactive"},
-        )
-        raise HTTPException(status_code=404, detail="Invalid API key")
+    try:
+        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, body.bot_id)
+    except WidgetChatTenantGateError as e:
+        logger.info("widget_session_init_rejected", extra={"reason": e.reason})
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Bot not found") from e
+        if e.reason == WidgetChatTenantGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Tenant is not active") from e
+        raise HTTPException(
+            status_code=400,
+            detail="Bot configuration is incomplete.",
+        ) from e
 
     session_id = uuid.uuid4()
     mode: Literal["identified", "anonymous"] = "anonymous"
@@ -627,7 +631,7 @@ def widget_escalate(
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
         raise HTTPException(
             status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+            detail="Bot configuration is incomplete.",
         ) from e
     try:
         sid = uuid.UUID(session_id)

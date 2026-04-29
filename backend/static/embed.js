@@ -37,6 +37,12 @@
     (typeof navigator !== "undefined" && (navigator.language || navigator.userLanguage)) ||
     null;
 
+  var identityToken =
+    (typeof window !== "undefined" &&
+      window.Chat9Config &&
+      window.Chat9Config.identityToken) ||
+    null;
+
   function buildWidgetUrl() {
     var query = "botId=" + encodeURIComponent(botId);
     if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
@@ -49,6 +55,14 @@
     f.id = "chat9-widget-iframe";
     f.style.cssText = "width:100%;height:100%;border:none;display:block;";
     f.allow = "microphone; camera";
+    if (identityToken) {
+      f.addEventListener("load", function () {
+        f.contentWindow.postMessage(
+          { type: "chat9:identity", identityToken: identityToken },
+          widgetBase
+        );
+      });
+    }
     return f;
   }
 

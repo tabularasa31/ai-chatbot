@@ -18,7 +18,7 @@ This document describes the real production flow as of April 21, 2026.
 2. The tenant stores that secret on their own backend.
 3. When they want to identify an end user, their backend creates a short-lived HMAC token.
 4. Their integration calls `POST /widget/session/init` with:
-   - `api_key`
+   - `bot_id` (public bot ID, safe to expose in HTML)
    - optional `identity_token`
    - optional `locale`
 5. Chat9 validates the token.
@@ -38,7 +38,7 @@ Request body:
 
 ```json
 {
-  "api_key": "tenant_private_api_key",
+  "bot_id": "ch_your_bot_public_id",
   "identity_token": "optional-base64-json.hmac-signature",
   "locale": "optional-browser-locale"
 }
@@ -61,13 +61,26 @@ KYC is sent during **session initialization**, not during regular chat turns.
 
 - It does **not** happen automatically just because the user opened the page.
 - It does **not** happen on `POST /widget/chat`.
-- It happens only when the integration explicitly calls `POST /widget/session/init` and includes `identity_token`.
+- It happens when `POST /widget/session/init` is called with an `identity_token`.
 
-Important implementation detail:
+### How the stock `embed.js` handles KYC
 
-- the current stock `embed.js` loader opens the hosted widget UI and passes only the public bot ID and browser locale
-- it does **not** currently inject `api_key` or `identity_token`
-- so KYC today is available for custom or advanced integrations that perform the session bootstrap themselves
+The standard `embed.js` supports KYC via `window.Chat9Config.identityToken`:
+
+```html
+<script>
+  window.Chat9Config = {
+    identityToken: "{{ server_generated_token_or_null }}"
+  };
+</script>
+<script src="https://.../embed.js" data-bot-id="YOUR_BOT_ID"></script>
+```
+
+- If `identityToken` is a non-empty string, `embed.js` passes it to the widget iframe via URL param.
+- The iframe calls `POST /widget/session/init` with `bot_id` + `identity_token`.
+- If `identityToken` is `null` or absent, the widget runs in anonymous mode.
+
+This allows a single embed snippet to handle both anonymous visitors and logged-in users on the same page — the server-side template controls the value.
 
 ## Token format
 
@@ -110,7 +123,7 @@ Reference implementation:
 - `company`
 - `locale`
 
-The server validates `user_id` (non-empty), `exp` (not in the past), and the HMAC signature. Any other fields — including `tenant_id` if you embed it — are passed through into `UserContext` and `chats.user_context` but are **not** verified against the tenant record. The tenant is resolved from the `api_key` in the `POST /widget/session/init` request body, not from the token. Unknown extra fields are ignored by the `UserContext` model (`extra="ignore"`).
+The server validates `user_id` (non-empty), `exp` (not in the past), and the HMAC signature. Any other fields are passed through into `UserContext` and `chats.user_context` but are **not** verified against the tenant record. The tenant is resolved from the `bot_id` in the `POST /widget/session/init` request body, not from the token. Unknown extra fields are ignored by the `UserContext` model (`extra="ignore"`).
 
 ## Field semantics
 
@@ -201,11 +214,10 @@ Internal fields removed before storage:
 - `exp`
 - `iat`
 
-(Any `tenant_id` included in the token stays in `chats.user_context` as opaque metadata; it is not used for authorization.)
 
 For identified users, Chat9 also maintains a `contact_sessions` row with:
 
-- `tenant_id` (resolved from the `api_key`)
+- `tenant_id` (resolved from the `bot_id`)
 - `contact_id` (the payload's `user_id`)
 - best-known identity fields (`email`, `name`, `plan_tier`, `audience_tag`)
 - `session_started_at`
@@ -307,10 +319,18 @@ Behavior:
 }
 ```
 
-(Adding a `tenant_id` field is allowed but ignored by the validator — the tenant is resolved from the `api_key` in the request body.)
+3. Tenant backend signs the payload and returns the token to the frontend (e.g. in the login response or server-rendered via `window.Chat9Config`).
+4. The widget calls `POST /widget/session/init`:
 
-3. Tenant backend signs the payload and sends `POST /widget/session/init`.
-4. Chat9 returns:
+```json
+{
+  "bot_id": "ch_your_bot_public_id",
+  "identity_token": "signed-token",
+  "locale": "en-US"
+}
+```
+
+5. Chat9 resolves the tenant from `bot_id`, validates the token, and returns:
 
 ```json
 {
@@ -319,4 +339,4 @@ Behavior:
 }
 ```
 
-5. The integration uses that `session_id` for subsequent `POST /widget/chat` calls.
+6. The integration uses that `session_id` for subsequent `POST /widget/chat` calls.

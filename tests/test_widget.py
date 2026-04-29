@@ -537,7 +537,6 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     set_client_openai_key(tenant, token)
     body = cl_resp.json()
     client_uuid = uuid.UUID(body["id"])
-    api_key = body["api_key"]
     bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
@@ -553,7 +552,7 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     )
     init_resp = tenant.post(
         "/widget/session/init",
-        json={"api_key": api_key, "identity_token": identity_token},
+        json={"bot_id": bot_public_id, "identity_token": identity_token},
     )
     assert init_resp.status_code == 200
     session_id = init_resp.json()["session_id"]

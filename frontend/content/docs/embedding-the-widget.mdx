@@ -71,7 +71,7 @@ Clarification behavior:
 
 ## Security
 
-The bot `public_id` in the `data-bot-id` attribute identifies which bot to load; it is intended to appear in page HTML. Keep your **API key** (for authenticated dashboard/API use) secret — do not commit it to public repos.
+The bot `public_id` in the `data-bot-id` attribute identifies which bot to load; it is intended to appear in page HTML. Keep your **signing secret** (used to generate identity tokens server-side) and your **API key** (for dashboard/API use) secret — do not expose them in client-side code or commit them to public repos.
 
 ---
 
@@ -84,27 +84,16 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
 ### How it works
 
 1. In **Dashboard → Settings → Widget API**, generate a signing secret.
-2. Store that secret on your server.
-3. Your server generates a short-lived signed `identity_token`.
-4. Your integration calls `POST /widget/session/init` with:
-   - your private `api_key`
-   - optional `identity_token`
-   - optional `locale`
-5. Chat9 validates the token and returns:
-   - `session_id`
-   - `mode` = `identified` or `anonymous`
-6. Reuse that `session_id` in later `POST /widget/chat` requests.
+2. Store that secret on your server — never in client-side code.
+3. Your server generates a short-lived signed `identity_token` for each logged-in user.
+4. Your page sets `window.Chat9Config.identityToken` before the embed script loads. For anonymous visitors, set it to `null`.
+5. The widget calls `POST /widget/session/init` with `bot_id` + `identity_token`.
+6. Chat9 validates the token and returns `session_id` + `mode` (`identified` or `anonymous`).
+7. All subsequent `POST /widget/chat` requests use that `session_id`.
 
-Before the first real user question, Chat9 can use the locale from `session/init` as the language hint for greeting and other deterministic fallback-only turns.
+The token is HMAC-signed. Any tampering is detected. The payload is encoded, not encrypted — do not put passwords, card data, or other secrets inside it.
 
-If the same identified user returns later:
-
-- Chat9 may return the same `session_id` again if the previous identified chat is still open and recent
-- otherwise Chat9 returns a new `session_id`
-
-Important: the current stock `embed.js` snippet does not automatically send `api_key` or `identity_token`. If you need identified sessions today, use a custom integration or custom bootstrap flow around the public widget APIs.
-
-The token is HMAC-signed. Any tampering is detected. The payload is encoded, not encrypted, so do not put passwords, card data, or other secrets inside it.
+If the same identified user returns later, Chat9 may resume the previous chat if it is still open and was active within the last 24 hours.
 
 ### Step 1 — Get a signing secret
 
@@ -112,14 +101,11 @@ Go to **Dashboard → Settings → Widget API** and click **Generate secret**. C
 
 ### Step 2 — Generate a token server-side
 
-Use the same signing approach as Chat9's backend.
-
 ```js
 const crypto = require("crypto");
 
 function makeWidgetIdentityToken({
-  secretHex,
-  botPublicId,
+  secret,
   userId,
   extras = {},
   ttlSeconds = 300,
@@ -127,7 +113,6 @@ function makeWidgetIdentityToken({
   const now = Math.floor(Date.now() / 1000);
   const payload = {
     user_id: userId,
-    tenant_id: botPublicId,
     exp: now + ttlSeconds,
     iat: now,
     ...extras,
@@ -146,7 +131,7 @@ function makeWidgetIdentityToken({
     .replace(/=+$/, "");
 
   const sig = crypto
-    .createHmac("sha256", Buffer.from(secretHex, "utf8"))
+    .createHmac("sha256", Buffer.from(secret, "utf8"))
     .update(b64)
     .digest("hex");
 
@@ -156,7 +141,6 @@ function makeWidgetIdentityToken({
 
 Required payload fields:
 
-- `tenant_id` — your bot's `public_id` (same value as `data-bot-id`)
 - `user_id` — any non-empty string
 - `exp` — expiry time, Unix timestamp in seconds
 - `iat` — issued-at time, Unix timestamp in seconds
@@ -175,7 +159,6 @@ Example payload:
 ```json
 {
   "user_id": "cust_12345",
-  "tenant_id": "ch_demo123",
   "email": "user@example.com",
   "plan_tier": "growth",
   "audience_tag": "b2b",
@@ -185,15 +168,29 @@ Example payload:
 }
 ```
 
-### Step 3 — Initialize the session
+### Step 3 — Pass the token to the embed script
 
-Call Chat9 before sending chat turns:
+In your server-rendered page template, inject the token before the embed script:
+
+```html
+<!-- Server renders the token for logged-in users, null for anonymous -->
+<script>
+  window.Chat9Config = {
+    identityToken: "{{ identity_token_or_null }}"
+  };
+</script>
+<script src="https://YOUR_API_HOST/embed.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+```
+
+The widget automatically calls `POST /widget/session/init` with your `bot_id` and `identity_token`. No private API key is ever sent from the browser.
+
+If you prefer to call `session/init` directly (e.g. from a custom integration without `embed.js`):
 
 ```bash
 curl -X POST "https://YOUR_API_HOST/widget/session/init" \
   -H "Content-Type: application/json" \
   -d '{
-    "api_key": "YOUR_PRIVATE_API_KEY",
+    "bot_id": "YOUR_BOT_PUBLIC_ID",
     "identity_token": "YOUR_SIGNED_TOKEN",
     "locale": "en-US"
   }'
@@ -241,7 +238,6 @@ The reply is a JSON object whose message content lives in a single `text` field 
 
 | Field | Required | Type | Constraints |
 |---|---|---|---|
-| `tenant_id` | yes | string | your bot's `public_id` (same value as `data-bot-id`) |
 | `user_id` | yes | string | non-empty, non-whitespace |
 | `exp` | yes | integer | Unix timestamp in seconds |
 | `iat` | yes | integer | Unix timestamp in seconds |
@@ -304,4 +300,3 @@ Used for richer escalation metadata:
 - Rotate the secret from the Dashboard if it is ever exposed
 - Treat invalid tokens as a fallback to anonymous mode, not as a widget outage
 - Do NOT put passwords, card numbers, or other secrets in the token payload
-- Do NOT assume the stock `embed.js` snippet enables KYC by itself

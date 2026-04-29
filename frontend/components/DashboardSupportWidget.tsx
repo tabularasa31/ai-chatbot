@@ -5,7 +5,6 @@ import { MessageCircle, X } from "lucide-react";
 import { ChatWidget } from "./ChatWidget";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
-const API_KEY = process.env.NEXT_PUBLIC_CHAT9_API_KEY;
 
 const MIN_W = 300;
 const MAX_W = 700;
@@ -31,7 +30,7 @@ export function DashboardSupportWidget() {
   const dragStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   useEffect(() => {
-    if (!BOT_ID || !API_KEY) return;
+    if (!BOT_ID) return;
 
     fetch("/api/widget-identity", { credentials: "include" })
       .then((r) => r.json())
@@ -91,7 +90,7 @@ export function DashboardSupportWidget() {
     setOpen((v) => !v);
   };
 
-  if (!BOT_ID || !API_KEY) return null;
+  if (!BOT_ID) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
@@ -119,7 +118,6 @@ export function DashboardSupportWidget() {
 
           <ChatWidget
             botId={BOT_ID}
-            apiKey={API_KEY}
             identityToken={identityToken}
             isOpen={open}
           />

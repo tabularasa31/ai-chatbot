@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChatWidget } from "@/components/ChatWidget";
 
@@ -8,6 +8,20 @@ function WidgetContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
+  const [identityToken, setIdentityToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    function handleMessage(event: MessageEvent) {
+      if (
+        event.data?.type === "chat9:identity" &&
+        typeof event.data?.identityToken === "string"
+      ) {
+        setIdentityToken(event.data.identityToken);
+      }
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   if (!botId) {
     return (
@@ -24,7 +38,7 @@ function WidgetContent() {
 
   return (
     <div className="flex h-screen w-full font-['Inter']">
-      <ChatWidget botId={botId} locale={locale} />
+      <ChatWidget botId={botId} locale={locale} identityToken={identityToken} />
     </div>
   );
 }

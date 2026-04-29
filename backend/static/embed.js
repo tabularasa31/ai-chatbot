@@ -46,6 +46,11 @@
   function buildWidgetUrl() {
     var query = "botId=" + encodeURIComponent(botId);
     if (browserLocale) query += "&locale=" + encodeURIComponent(browserLocale);
+    // Stamp the embedding page's origin so the widget can postMessage us
+    // back with a specific target instead of a wildcard.
+    if (typeof window !== "undefined" && window.location && window.location.origin) {
+      query += "&parentOrigin=" + encodeURIComponent(window.location.origin);
+    }
     return widgetBase + "/widget?" + query;
   }
 
@@ -55,14 +60,46 @@
     f.id = "chat9-widget-iframe";
     f.style.cssText = "width:100%;height:100%;border:none;display:block;";
     f.allow = "microphone; camera";
-    if (identityToken) {
-      f.addEventListener("load", function () {
+
+    // Handshake: the widget posts {type:"chat9:ready"} after it mounts and
+    // registers its message listener. We respond with the identity token (or
+    // an explicit no-identity sentinel for anonymous embeds) so the widget
+    // never races between an anonymous greeting and a deferred identity.
+    function onReady(event) {
+      if (event.source !== f.contentWindow) return;
+      var data = event.data;
+      if (!data || typeof data !== "object" || data.type !== "chat9:ready") return;
+
+      // Once we've handled the handshake for this iframe, drop the listener.
+      // The iframe never sends a second chat9:ready, so leaving it attached
+      // would just accumulate dead listeners on every re-init / HMR cycle.
+      window.removeEventListener("message", onReady);
+
+      // Refuse to post an identity token without an explicit target origin —
+      // a "*" target on a payload that includes a signed token would broadcast
+      // it to any document the iframe could navigate to. widgetBase is set
+      // from window.Chat9Config.widgetUrl or the script src; if neither is
+      // available, fail loud rather than leak.
+      if (!widgetBase) {
+        console.error(
+          "Chat9: cannot determine widget origin — set window.Chat9Config.widgetUrl. Aborting identity handshake."
+        );
+        return;
+      }
+
+      if (identityToken) {
         f.contentWindow.postMessage(
           { type: "chat9:identity", identityToken: identityToken },
           widgetBase
         );
-      });
+      } else {
+        f.contentWindow.postMessage(
+          { type: "chat9:no-identity" },
+          widgetBase
+        );
+      }
     }
+    window.addEventListener("message", onReady);
     return f;
   }
 

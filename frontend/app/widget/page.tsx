@@ -4,24 +4,63 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChatWidget } from "@/components/ChatWidget";
 
+// undefined = waiting for parent handshake; null = anonymous resolved; string = identified.
+type IdentityState = string | null | undefined;
+
 function WidgetContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
-  const [identityToken, setIdentityToken] = useState<string | null>(null);
+  // embed.js stamps the embedding page's origin into the iframe URL so we can
+  // postMessage back with an explicit target instead of a wildcard.
+  const parentOriginParam = searchParams.get("parentOrigin");
+  const [identityToken, setIdentityToken] = useState<IdentityState>(undefined);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Standalone tab (no embedding iframe) — resolve anonymous immediately.
+    if (window.parent === window) {
+      setIdentityToken(null);
+      return;
+    }
+
+    // Validate parentOrigin: must be a syntactically-correct origin matching
+    // what document.referrer suggests. If anything looks off, fall back to
+    // anonymous rather than postMessage to a wildcard.
+    let parentOrigin: string | null = null;
+    try {
+      if (parentOriginParam) {
+        const u = new URL(parentOriginParam);
+        parentOrigin = `${u.protocol}//${u.host}`;
+      }
+    } catch {
+      parentOrigin = null;
+    }
+    if (!parentOrigin) {
+      setIdentityToken(null);
+      return;
+    }
+
     function handleMessage(event: MessageEvent) {
-      if (
-        event.data?.type === "chat9:identity" &&
-        typeof event.data?.identityToken === "string"
-      ) {
-        setIdentityToken(event.data.identityToken);
+      if (event.source !== window.parent) return;
+      if (event.origin !== parentOrigin) return;
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "chat9:identity" && typeof data.identityToken === "string") {
+        setIdentityToken(data.identityToken);
+      } else if (data.type === "chat9:no-identity") {
+        setIdentityToken(null);
       }
     }
     window.addEventListener("message", handleMessage);
+
+    // Signal to embed.js that the widget is mounted and ready to receive identity.
+    // embed.js responds with chat9:identity (token) or chat9:no-identity (anonymous).
+    window.parent.postMessage({ type: "chat9:ready" }, parentOrigin);
+
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [parentOriginParam]);
 
   if (!botId) {
     return (
@@ -32,6 +71,14 @@ function WidgetContent() {
             Виджет не может стартовать без публичного идентификатора бота.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (identityToken === undefined) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B] font-['Inter']">
+        Loading...
       </div>
     );
   }

@@ -176,6 +176,7 @@ In your server-rendered page template, inject the token before the embed script:
 <!-- Server renders the token for logged-in users, null for anonymous -->
 <script>
   window.Chat9Config = {
+    widgetUrl: "https://getchat9.live",
     identityToken: "{{ identity_token_or_null }}"
   };
 </script>
@@ -183,6 +184,8 @@ In your server-rendered page template, inject the token before the embed script:
 ```
 
 The widget automatically calls `POST /widget/session/init` with your `bot_id` and `identity_token`. No private API key is ever sent from the browser.
+
+The token is delivered to the widget iframe over an internal `postMessage` handshake — never via URL parameters — so signed tokens never appear in browser history, server access logs, or `Referer` headers. You don't need to do anything for this; it's how `embed.js` and the hosted widget talk to each other.
 
 If you prefer to call `session/init` directly (e.g. from a custom integration without `embed.js`):
 

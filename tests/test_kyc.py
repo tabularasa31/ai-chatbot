@@ -569,3 +569,104 @@ def test_kyc_rotate_returns_new_secret(
     )
     assert overlap.status_code == 200
     assert overlap.json()["mode"] == "identified"
+
+
+def test_widget_token_endpoint_signs_with_bot_owner_secret_for_cross_tenant(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Cross-tenant KYC: a user in tenant A asks for a widget identity token to
+    talk to tenant B's bot (e.g. Chat9's own dogfood support chat in the
+    dashboard). The token must be signed with **B's** KYC secret so B's
+    /widget/session/init validation succeeds.
+
+    Without `?bot_id=...` the endpoint falls back to the caller's own tenant —
+    that path also still works for legacy single-tenant flows.
+    """
+    # Tenant B (bot owner — like Chat9 itself in the dogfood setup)
+    bot_owner_token = register_and_verify_user(
+        tenant, db_session, email="bot-owner@example.com"
+    )
+    cr_b = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {bot_owner_token}"},
+        json={"name": "Bot Owner Co"},
+    )
+    assert cr_b.status_code == 201
+    set_client_openai_key(tenant, bot_owner_token)
+    bot_public_id = _create_bot(tenant, bot_owner_token)
+    sk_b = tenant.post(
+        "/tenants/me/kyc/secret",
+        headers={"Authorization": f"Bearer {bot_owner_token}"},
+    )
+    assert sk_b.status_code == 200
+    bot_owner_secret = sk_b.json()["secret_key"]
+
+    # Tenant A (the visiting user — like an ACME-tenant user logging into Chat9)
+    visitor_token = register_and_verify_user(
+        tenant, db_session, email="visitor@example.com"
+    )
+    cr_a = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+        json={"name": "Visitor Co"},
+    )
+    assert cr_a.status_code == 201
+    sk_a = tenant.post(
+        "/tenants/me/kyc/secret",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+    )
+    assert sk_a.status_code == 200
+    visitor_secret = sk_a.json()["secret_key"]
+
+    assert bot_owner_secret != visitor_secret
+
+    # With bot_id: token must be signed by the bot owner's secret.
+    r = tenant.get(
+        f"/auth/me/widget-token?bot_id={bot_public_id}",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+    )
+    assert r.status_code == 200, r.text
+    issued = r.json()["identity_token"]
+
+    assert validate_kyc_token(issued, bot_owner_secret) is not None
+    assert validate_kyc_token(issued, visitor_secret) is None
+
+    # The token must actually unlock identified mode on the bot owner's widget.
+    init_resp = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "identity_token": issued},
+    )
+    assert init_resp.status_code == 200
+    assert init_resp.json()["mode"] == "identified"
+
+    # Without bot_id: legacy fall-through to caller's own tenant.
+    r_legacy = tenant.get(
+        "/auth/me/widget-token",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+    )
+    assert r_legacy.status_code == 200
+    legacy_token = r_legacy.json()["identity_token"]
+    assert validate_kyc_token(legacy_token, visitor_secret) is not None
+    assert validate_kyc_token(legacy_token, bot_owner_secret) is None
+
+
+def test_widget_token_endpoint_unknown_bot_returns_404(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    visitor_token = register_and_verify_user(
+        tenant, db_session, email="visitor-unknown-bot@example.com"
+    )
+    cr = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+        json={"name": "Visitor"},
+    )
+    assert cr.status_code == 201
+
+    r = tenant.get(
+        "/auth/me/widget-token?bot_id=ch_does_not_exist",
+        headers={"Authorization": f"Bearer {visitor_token}"},
+    )
+    assert r.status_code == 404

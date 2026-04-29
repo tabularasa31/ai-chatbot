@@ -787,7 +787,8 @@ If the frontend and API share the same origin, you can omit `Chat9Config`.
 `embed.js` (vanilla JS, served from the API):
 - Reads the bot `public_id` from `data-bot-id` (legacy `?botId=` URL param still supported)
 - Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script's origin, as the **iframe base URL**
-- Injects an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>`
+- Injects an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>&parentOrigin=<page origin>`
+- KYC `identityToken` (when configured via `window.Chat9Config.identityToken`) is **not** put in the iframe URL — it is delivered by a `postMessage` handshake (widget posts `chat9:ready`, `embed.js` replies with `chat9:identity` or `chat9:no-identity`) so signed tokens never leak into browser history, server logs, or `Referer` headers. `parentOrigin` is the explicit `targetOrigin` for that handshake; `widgetBase` is the explicit `targetOrigin` for the identity reply.
 - The iframe renders the full `ChatWidget` React component
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk.

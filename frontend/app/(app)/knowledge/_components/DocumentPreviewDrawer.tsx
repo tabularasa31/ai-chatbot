@@ -171,7 +171,7 @@ export function DocumentPreviewDrawer({ documentId, onClose }: DocumentPreviewDr
   const showEmptyState = doc && !doc.parsed_text && !isProcessingStatus(doc.status);
 
   return (
-    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Document preview">
+    <div className="fixed inset-0 z-[200]" role="dialog" aria-modal="true" aria-label="Document preview">
       <button
         type="button"
         aria-label="Close preview"

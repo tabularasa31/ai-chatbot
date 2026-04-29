@@ -150,8 +150,8 @@ def _emit_chat_turn_event(
             tokens_output=tokens_output,
             model=model,
             lang_match=(
-                query_kb_language_match == "match"
-                if query_kb_language_match is not None
+                query_kb_language_match == "native"
+                if query_kb_language_match in ("native", "mismatch")
                 else None
             ),
             cap_reason=reject_reason if is_reject else (
@@ -161,7 +161,7 @@ def _emit_chat_turn_event(
             decision_branch=(
                 decision.kind.value
                 if decision is not None
-                else ("escalate" if escalated else "direct_answer")
+                else ("escalate" if escalated else strategy or "unknown")
             ),
             plan_tier=plan_tier,
         )

@@ -589,12 +589,13 @@ def set_message_feedback(
             exc_info=True,
         )
 
-    _emit_chat_feedback_event(
-        tenant_public_id=getattr(tenant, "public_id", None),
-        bot_public_id=None,
-        distinct_id=str(current_user.id),
-        feedback="positive" if body.feedback.value == "up" else "negative",
-    )
+    if body.feedback.value in ("up", "down"):
+        _emit_chat_feedback_event(
+            tenant_public_id=getattr(tenant, "public_id", None),
+            bot_public_id=None,
+            distinct_id=str(current_user.id),
+            feedback="positive" if body.feedback.value == "up" else "negative",
+        )
 
     return MessageFeedbackResponse(
         id=message.id,

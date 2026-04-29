@@ -21,4 +21,3 @@ ignore = [
 # Multilingual data (affirmations, regex char classes) intentionally mixes
 # Cyrillic / Latin / typographic characters that trip RUF001/003.
 "chat/followup.py" = ["RUF001", "RUF003"]
-"knowledge/prompts.py" = ["RUF001", "RUF003"]

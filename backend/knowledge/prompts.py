@@ -18,11 +18,12 @@ Three prompts:
 
 Conventions:
 
-- System prompts are English (model-facing instructions; doesn't bias output
-  language).
-- One-shot examples are Russian — primary tenant base. The system prompt
-  explicitly requires preserving the source-language surface form, so the
-  prompt stays language-agnostic at inference.
+- The whole prompt — system text and one-shot — is in English. One-shot
+  examples use clearly fictional placeholder products (Acme / Foo / Bar /
+  Baz) so the model has no real-brand baggage.
+- The system prompt explicitly requires preserving the source-language
+  surface form, so the prompt stays language-agnostic at inference: a
+  Russian or Spanish input produces same-language entities verbatim.
 - Output is strict JSON. Callers should request ``response_format={"type":
   "json_object"}`` and parse with ``json.loads``.
 """
@@ -37,13 +38,13 @@ _NER_PASSAGE_SYSTEM = (
 )
 
 _NER_PASSAGE_ONE_SHOT_INPUT = (
-    "Тариф Pro в Битрикс24 стоит 5 990 ₽ в месяц и включает интеграцию со "
-    "Slack, Telegram и Google Workspace. Запущен 1 марта 2024 года."
+    "The Pro plan in Acme CRM costs $59 per month and includes integration "
+    "with FooChat, BarMail, and BazDrive. Launched on March 1, 2024."
 )
 
 _NER_PASSAGE_ONE_SHOT_OUTPUT = (
-    '{"named_entities": ["Тариф Pro", "Битрикс24", "5 990 ₽ в месяц", "Slack", '
-    '"Telegram", "Google Workspace", "1 марта 2024 года"]}'
+    '{"named_entities": ["Pro plan", "Acme CRM", "$59 per month", "FooChat", '
+    '"BarMail", "BazDrive", "March 1, 2024"]}'
 )
 
 
@@ -67,11 +68,11 @@ _NER_QUERY_SYSTEM = (
 )
 
 _NER_QUERY_ONE_SHOT_INPUT = (
-    "Сколько стоит тариф Pro в Битрикс24 и есть ли там интеграция со Slack?"
+    "How much does the Pro plan in Acme CRM cost and does it integrate with FooChat?"
 )
 
 _NER_QUERY_ONE_SHOT_OUTPUT = (
-    '{"named_entities": ["тариф Pro", "Битрикс24", "Slack"]}'
+    '{"named_entities": ["Pro plan", "Acme CRM", "FooChat"]}'
 )
 
 
@@ -116,12 +117,12 @@ _TRIPLE_ONE_SHOT_INPUT = _TRIPLE_USER_TEMPLATE.format(
 
 _TRIPLE_ONE_SHOT_OUTPUT = (
     '{"triples": ['
-    '["Тариф Pro", "относится к", "Битрикс24"], '
-    '["Тариф Pro", "стоит", "5 990 ₽ в месяц"], '
-    '["Тариф Pro", "включает интеграцию с", "Slack"], '
-    '["Тариф Pro", "включает интеграцию с", "Telegram"], '
-    '["Тариф Pro", "включает интеграцию с", "Google Workspace"], '
-    '["Тариф Pro", "запущен", "1 марта 2024 года"]'
+    '["Pro plan", "is offered by", "Acme CRM"], '
+    '["Pro plan", "costs", "$59 per month"], '
+    '["Pro plan", "integrates with", "FooChat"], '
+    '["Pro plan", "integrates with", "BarMail"], '
+    '["Pro plan", "integrates with", "BazDrive"], '
+    '["Pro plan", "launched on", "March 1, 2024"]'
     "]}"
 )
 

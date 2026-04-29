@@ -312,6 +312,12 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
         "query-embedding",
         "vector-search",
         "bm25-search",
+        # entity-overlap-search appears between bm25-search and rrf-fusion
+        # whenever ENTITY_OVERLAP_ENABLED is on (default since Step 6 of
+        # the entity-aware retrieval epic). NER inside the channel is
+        # mocked at the OpenAI client level by the test fixture, so the
+        # span fires even though no real entities are extracted.
+        "entity-overlap-search",
         "rrf-fusion",
         "reranking",
         "script-boost",
@@ -708,6 +714,9 @@ def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
         "query-embedding",
         "vector-search",
         "bm25-search",
+        # entity-overlap-search lands here when ENTITY_OVERLAP_ENABLED is on
+        # (default since Step 6).
+        "entity-overlap-search",
         "rrf-fusion",
         "reranking",
         "script-boost",

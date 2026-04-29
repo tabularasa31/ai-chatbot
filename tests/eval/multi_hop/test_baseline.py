@@ -82,7 +82,15 @@ def test_multi_hop_baseline(
     pg_db_session: Session,
     indexed_corpus: dict,
     capsys: pytest.CaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Pin the flag off so the baseline numbers stay comparable across
+    # rollouts. The runtime default flipped to True in Step 6 (entity
+    # channel enabled globally) — without this pin the "baseline" test
+    # would silently start measuring the entity-on path instead.
+    monkeypatch.setattr(
+        "backend.core.config.settings.entity_overlap_enabled", False
+    )
     tenant_id = cast(uuid.UUID, indexed_corpus["tenant_id"])
     uuid_to_chunk_id: dict[uuid.UUID, str] = indexed_corpus["uuid_to_chunk_id"]
 

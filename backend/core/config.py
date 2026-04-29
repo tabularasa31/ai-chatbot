@@ -81,14 +81,16 @@ class Settings(BaseSettings):
         description="Hard wall-clock timeout for the per-request NER call in the chat hot path.",
     )
     entity_overlap_enabled: bool = Field(
-        False,
+        True,
         alias="ENTITY_OVERLAP_ENABLED",
         description=(
             "When true, hybrid retrieval adds an entity-overlap channel "
             "(third RRF list) using the per-chunk entity index populated at "
             "ingest. NER on the query has its own timeout + empty-list "
             "fallback inside extract_entities_from_query, so a slow or "
-            "broken NER cannot stall the chat hot path even with the flag on."
+            "broken NER cannot stall the chat hot path even with the flag on. "
+            "Default true — kept as a kill switch (set ENTITY_OVERLAP_ENABLED=false "
+            "to disable globally without a deploy)."
         ),
     )
     escalation_model: str = Field(

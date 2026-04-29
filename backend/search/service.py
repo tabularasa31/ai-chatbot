@@ -27,6 +27,7 @@ from backend.observability.formatters import (
     format_query_embedding_preview,
     truncate_text,
 )
+from backend.observability.metrics import capture_event
 from backend.search.contradiction_adjudication import (
     ContradictionAdjudication,
     ContradictionAdjudicationCandidate,
@@ -2661,6 +2662,29 @@ def _run_candidate_stage(
                     "candidate_count": len(entity_results),
                 }
             )
+
+        # PostHog: per-chat-turn record of how the entity channel
+        # actually behaved. Lets us answer at-scale questions like
+        # "what fraction of queries surface ≥1 entity?", "what's the
+        # p95 NER+lookup latency?", "how often does the channel return
+        # zero candidates?". One event per retrieval; aggregated by
+        # tenant in the dashboard. Best-effort: failure to emit must
+        # never break the chat hot path.
+        try:
+            capture_event(
+                "entity_overlap.channel_used",
+                distinct_id=str(tenant_id) if tenant_id else "system",
+                tenant_id=str(tenant_id) if tenant_id else None,
+                properties={
+                    "query_entity_count": len(query_entities),
+                    "had_query_entities": bool(query_entities),
+                    "candidate_count": len(entity_results),
+                    "duration_ms": entity_duration_ms,
+                },
+                groups={"tenant": str(tenant_id)} if tenant_id else None,
+            )
+        except Exception:
+            logger.warning("Failed to emit entity_overlap.channel_used", exc_info=True)
 
     rrf_started_at = perf_counter()
     fused_results = reciprocal_rank_fusion(

@@ -18,9 +18,14 @@ Three prompts:
 
 Conventions:
 
-- The whole prompt — system text and one-shot — is in English. One-shot
-  examples use clearly fictional placeholder products (Acme / Foo / Bar /
-  Baz) so the model has no real-brand baggage.
+- The whole prompt — system text and one-shots — is in English. One-shots
+  use clearly fictional placeholder products (Acme / Foo / Bar / Baz) so the
+  model has no real-brand baggage.
+- NER prompts are two-shot: a SaaS/pricing example and a technical /
+  developer-tool example (OAuth, endpoints, error codes). chat9 serves both
+  customer-facing FAQs and technical product docs, so we show both shapes.
+- The triple-extraction prompt stays single-shot (SaaS) because it's not yet
+  wired into retrieval; we'll expand if we ever turn on the graph path.
 - The system prompt explicitly requires preserving the source-language
   surface form, so the prompt stays language-agnostic at inference: a
   Russian or Spanish input produces same-language entities verbatim.
@@ -37,14 +42,26 @@ _NER_PASSAGE_SYSTEM = (
     "same surface form. Do not translate or normalize."
 )
 
-_NER_PASSAGE_ONE_SHOT_INPUT = (
+_NER_PASSAGE_SAAS_INPUT = (
     "The Pro plan in Acme CRM costs $59 per month and includes integration "
     "with FooChat, BarMail, and BazDrive. Launched on March 1, 2024."
 )
 
-_NER_PASSAGE_ONE_SHOT_OUTPUT = (
+_NER_PASSAGE_SAAS_OUTPUT = (
     '{"named_entities": ["Pro plan", "Acme CRM", "$59 per month", "FooChat", '
     '"BarMail", "BazDrive", "March 1, 2024"]}'
+)
+
+_NER_PASSAGE_TECH_INPUT = (
+    "To authenticate with the OAuth 2.0 flow, send a POST request to "
+    "/v1/auth/token with client_id and client_secret. A 401 error means "
+    "invalid credentials; a 429 error means you exceeded the rate limit of "
+    "100 requests per minute."
+)
+
+_NER_PASSAGE_TECH_OUTPUT = (
+    '{"named_entities": ["OAuth 2.0", "/v1/auth/token", "client_id", '
+    '"client_secret", "401 error", "429 error", "100 requests per minute"]}'
 )
 
 
@@ -52,8 +69,10 @@ def build_ner_passage_messages(passage: str) -> list[dict[str, str]]:
     """Chat messages for extracting named entities from an FAQ passage."""
     return [
         {"role": "system", "content": _NER_PASSAGE_SYSTEM},
-        {"role": "user", "content": _NER_PASSAGE_ONE_SHOT_INPUT},
-        {"role": "assistant", "content": _NER_PASSAGE_ONE_SHOT_OUTPUT},
+        {"role": "user", "content": _NER_PASSAGE_SAAS_INPUT},
+        {"role": "assistant", "content": _NER_PASSAGE_SAAS_OUTPUT},
+        {"role": "user", "content": _NER_PASSAGE_TECH_INPUT},
+        {"role": "assistant", "content": _NER_PASSAGE_TECH_OUTPUT},
         {"role": "user", "content": passage},
     ]
 
@@ -67,12 +86,20 @@ _NER_QUERY_SYSTEM = (
     "same surface form. Do not translate or normalize."
 )
 
-_NER_QUERY_ONE_SHOT_INPUT = (
+_NER_QUERY_SAAS_INPUT = (
     "How much does the Pro plan in Acme CRM cost and does it integrate with FooChat?"
 )
 
-_NER_QUERY_ONE_SHOT_OUTPUT = (
+_NER_QUERY_SAAS_OUTPUT = (
     '{"named_entities": ["Pro plan", "Acme CRM", "FooChat"]}'
+)
+
+_NER_QUERY_TECH_INPUT = (
+    "What does error 429 mean in the OAuth 2.0 flow when calling /v1/auth/token?"
+)
+
+_NER_QUERY_TECH_OUTPUT = (
+    '{"named_entities": ["error 429", "OAuth 2.0 flow", "/v1/auth/token"]}'
 )
 
 
@@ -80,8 +107,10 @@ def build_ner_query_messages(query: str) -> list[dict[str, str]]:
     """Chat messages for extracting named entities from a user query."""
     return [
         {"role": "system", "content": _NER_QUERY_SYSTEM},
-        {"role": "user", "content": _NER_QUERY_ONE_SHOT_INPUT},
-        {"role": "assistant", "content": _NER_QUERY_ONE_SHOT_OUTPUT},
+        {"role": "user", "content": _NER_QUERY_SAAS_INPUT},
+        {"role": "assistant", "content": _NER_QUERY_SAAS_OUTPUT},
+        {"role": "user", "content": _NER_QUERY_TECH_INPUT},
+        {"role": "assistant", "content": _NER_QUERY_TECH_OUTPUT},
         {"role": "user", "content": query},
     ]
 
@@ -111,8 +140,8 @@ _TRIPLE_USER_TEMPLATE = (
 )
 
 _TRIPLE_ONE_SHOT_INPUT = _TRIPLE_USER_TEMPLATE.format(
-    passage=_NER_PASSAGE_ONE_SHOT_INPUT,
-    named_entities=_NER_PASSAGE_ONE_SHOT_OUTPUT,
+    passage=_NER_PASSAGE_SAAS_INPUT,
+    named_entities=_NER_PASSAGE_SAAS_OUTPUT,
 )
 
 _TRIPLE_ONE_SHOT_OUTPUT = (

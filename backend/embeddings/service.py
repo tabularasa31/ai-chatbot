@@ -245,8 +245,20 @@ def _populate_entities_for_embeddings(
     legacy row) and the entity-overlap channel gets no signal for that
     chunk. Embeddings are already committed before this runs, so an
     abort here is non-destructive.
+
+    **Commit policy:** one commit per chunk. NER is the slow part
+    (~1-2s/chunk via gpt-4.1-mini), and holding a single transaction
+    open across all chunks would lock the connection for ~150s on a
+    100-chunk megadoc — connection pool hogging + dirty-row liveness
+    issues. Per-chunk commits trade N round-trips for short-lived
+    transactions; the round-trip cost (~milliseconds each) is dwarfed
+    by NER latency, so the trade is free. As a side benefit, partial
+    progress survives a crash mid-loop: chunks already processed keep
+    their entities, the rest stay at the server-default empty list and
+    can be backfilled by a re-index.
     """
     updated = 0
+    failed_commits = 0
     for emb in embeddings:
         try:
             ents = extract_entities_from_passage(
@@ -265,20 +277,29 @@ def _populate_entities_for_embeddings(
             )
             ents = []
         emb.entities = ents
+        try:
+            db.commit()
+        except Exception:
+            # One failed commit shouldn't kill the rest of the document.
+            # Roll back this chunk's update and keep going — the row stays
+            # at the server-default empty list, which is the same as legacy
+            # rows and safe for the Step 5 ``?|`` predicate.
+            logger.warning(
+                "entity_extraction_commit_failed",
+                extra={"embedding_id": str(emb.id)},
+            )
+            db.rollback()
+            failed_commits += 1
+            continue
         if ents:
             updated += 1
-    try:
-        db.commit()
-    except Exception:
-        logger.warning(
-            "entity_extraction_commit_failed",
-            extra={"chunks": len(embeddings)},
-        )
-        db.rollback()
-        return
     logger.info(
         "entity_extraction_populated",
-        extra={"chunks": len(embeddings), "non_empty": updated},
+        extra={
+            "chunks": len(embeddings),
+            "non_empty": updated,
+            "failed_commits": failed_commits,
+        },
     )
 
 

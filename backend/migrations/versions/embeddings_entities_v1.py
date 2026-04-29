@@ -23,9 +23,14 @@ Idempotent: skips the column add if it already exists (re-runs after a
 partial rollout don't re-error). Default is ``'[]'::jsonb`` so the
 column is NOT NULL even on legacy rows that pre-date this migration.
 
-GIN index uses ``jsonb_path_ops`` — smaller and faster than the default
-operator class for the ``?|`` containment queries we actually run, at
-the cost of supporting only a subset of operators we don't use here.
+GIN index uses the **default** ``jsonb_ops`` operator class. It is
+larger than ``jsonb_path_ops`` but is the only opclass that supports the
+``?``, ``?&`` and ``?|`` operators — and Step 5's predicate is
+``WHERE entities ?| array[...]`` (any-of-array). With ``jsonb_path_ops``
+that predicate would fall back to a sequential scan even though an
+index exists, defeating the whole point of having one. (See PostgreSQL
+"GIN Indexes" docs: ``jsonb_path_ops`` only supports ``@>``, ``@?``,
+``@@``.)
 
 Per project rules: downgrade is fail-loud. Never run it on prod.
 """
@@ -77,9 +82,10 @@ def upgrade() -> None:
     if bind.dialect.name == "postgresql":
         existing_indexes = {ix["name"] for ix in insp.get_indexes("embeddings")}
         if "ix_embeddings_entities_gin" not in existing_indexes:
+            # Default ``jsonb_ops`` — supports ?, ?&, ?| (Step 5 needs ?|).
             op.execute(
                 "CREATE INDEX IF NOT EXISTS ix_embeddings_entities_gin "
-                "ON embeddings USING gin (entities jsonb_path_ops)"
+                "ON embeddings USING gin (entities)"
             )
 
 

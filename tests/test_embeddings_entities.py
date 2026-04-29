@@ -207,6 +207,57 @@ def test_entities_default_empty_list_on_direct_insert(db_session: Session) -> No
     assert emb.entities == []
 
 
+# ── Per-chunk commit policy (Codex P2 fix) ───────────────────────────────────
+
+
+@patch("backend.embeddings.service.extract_entities_from_passage")
+@patch("backend.embeddings.service.get_openai_client")
+def test_per_chunk_commit_isolates_failures(
+    mock_get_openai: Mock,
+    mock_extract: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A commit failure on chunk N must not corrupt chunks 1..N-1 or N+1..M.
+
+    Holding all NER results in a single transaction would lock the
+    connection for ~150s on a 100-chunk megadoc and revert ALL entity
+    updates on a single failed commit. Per-chunk commits localize the
+    blast radius: bad commit → that chunk stays at server-default [],
+    siblings keep their NER output.
+    """
+    body = b"# Title\n\n" + b"some text. " * 50
+    token, doc_id = _setup_tenant_with_doc(tenant, db_session, email="ent5@example.com", body=body)
+
+    mock_client = Mock()
+    mock_client.embeddings.create.return_value = Mock(
+        data=[Mock(embedding=[0.1] * 1536) for _ in range(50)]
+    )
+    mock_get_openai.return_value = mock_client
+    # Each chunk gets a unique entity list, so we can tell them apart.
+    counter = {"n": 0}
+
+    def per_chunk_entities(*args, **kwargs):  # noqa: ARG001
+        counter["n"] += 1
+        return [f"entity_{counter['n']}"]
+
+    mock_extract.side_effect = per_chunk_entities
+
+    resp = tenant.post(
+        f"/embeddings/documents/{doc_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 202
+
+    rows = _read_embeddings(doc_id)
+    assert len(rows) >= 2
+    # Distinct entities per chunk = each chunk got its own commit.
+    distinct = {tuple(r.entities) for r in rows}
+    assert len(distinct) == len(rows), (
+        f"Expected one distinct entity list per chunk; got {distinct}"
+    )
+
+
 # ── Per-chunk attribution telemetry passthrough ──────────────────────────────
 
 

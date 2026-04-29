@@ -48,6 +48,7 @@ from backend.tenants.service import (
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_bot_and_tenant_for_widget_chat,
+    get_bot_and_tenant_for_widget_session,
 )
 from backend.widget.service import (
     SESSION_CLOSED_CODE,
@@ -238,17 +239,14 @@ def widget_session_init(
     Start a widget session. Optional signed identity_token enables identified mode.
     """
     try:
-        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, body.bot_id)
+        _bot, tenant = get_bot_and_tenant_for_widget_session(db, body.bot_id)
     except WidgetChatTenantGateError as e:
         logger.info("widget_session_init_rejected", extra={"reason": e.reason})
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise HTTPException(status_code=404, detail="Bot not found") from e
         if e.reason == WidgetChatTenantGateError.INACTIVE:
             raise HTTPException(status_code=403, detail="Tenant is not active") from e
-        raise HTTPException(
-            status_code=400,
-            detail="Bot configuration is incomplete.",
-        ) from e
+        raise HTTPException(status_code=400, detail="Bot not available") from e
 
     session_id = uuid.uuid4()
     mode: Literal["identified", "anonymous"] = "anonymous"

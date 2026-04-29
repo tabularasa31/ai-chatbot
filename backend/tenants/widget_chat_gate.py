@@ -62,3 +62,27 @@ def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple
     if not key or not str(key).strip():
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.NO_OPENAI)
     return bot, tenant
+
+
+def get_bot_and_tenant_for_widget_session(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
+    """
+    Same lookup as get_bot_and_tenant_for_widget_chat but does not require an
+    OpenAI key on the tenant. The session/init endpoint must be allowed to mint
+    a session even when the key is not yet configured — the actual chat turn
+    surfaces the NO_OPENAI error.
+
+    Raises:
+        WidgetChatTenantGateError: NOT_FOUND | INACTIVE
+    """
+    result = (
+        db.query(Bot, Tenant)
+        .join(Tenant, Bot.tenant_id == Tenant.id)
+        .filter(Bot.public_id == bot_public_id)
+        .first()
+    )
+    if not result or not result[0].is_active:
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
+    bot, tenant = result
+    if not tenant.is_active:
+        raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
+    return bot, tenant

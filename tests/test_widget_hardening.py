@@ -218,6 +218,31 @@ def test_session_init_404_for_invalid_and_inactive(
     assert response.status_code == 403
 
 
+def test_session_init_succeeds_without_openai_key(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """The init endpoint must mint a session even when the tenant has no OpenAI
+    key configured. The chat turn surfaces NO_OPENAI separately — gating init
+    on it would block the dashboard's own embedded widget on a fresh tenant.
+    """
+    body = _create_widget_client(
+        tenant, db_session,
+        email="widget-hardening-no-openai@example.com",
+        name="Widget Hardening No OpenAI",
+    )
+    client_row = db_session.query(Tenant).filter(Tenant.id == uuid.UUID(body["id"])).first()
+    assert client_row is not None
+    client_row.openai_api_key = None
+    db_session.commit()
+
+    response = tenant.post("/widget/session/init", json={"bot_id": body["bot_public_id"]})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["mode"] == "anonymous"
+    assert "session_id" in payload
+
+
 # ---------------------------------------------------------------------------
 # Trusted host
 # ---------------------------------------------------------------------------

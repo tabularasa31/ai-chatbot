@@ -55,14 +55,28 @@
     f.id = "chat9-widget-iframe";
     f.style.cssText = "width:100%;height:100%;border:none;display:block;";
     f.allow = "microphone; camera";
-    if (identityToken) {
-      f.addEventListener("load", function () {
+
+    // Handshake: the widget posts {type:"chat9:ready"} after it mounts and
+    // registers its message listener. We respond with the identity token (or
+    // an explicit no-identity sentinel for anonymous embeds) so the widget
+    // never races between an anonymous greeting and a deferred identity.
+    function onReady(event) {
+      if (event.source !== f.contentWindow) return;
+      var data = event.data;
+      if (!data || typeof data !== "object" || data.type !== "chat9:ready") return;
+      if (identityToken) {
         f.contentWindow.postMessage(
           { type: "chat9:identity", identityToken: identityToken },
-          widgetBase
+          widgetBase || "*"
         );
-      });
+      } else {
+        f.contentWindow.postMessage(
+          { type: "chat9:no-identity" },
+          widgetBase || "*"
+        );
+      }
     }
+    window.addEventListener("message", onReady);
     return f;
   }
 

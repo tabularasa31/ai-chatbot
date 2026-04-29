@@ -4,22 +4,40 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChatWidget } from "@/components/ChatWidget";
 
+// undefined = waiting for parent handshake; null = anonymous resolved; string = identified.
+type IdentityState = string | null | undefined;
+
 function WidgetContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
-  const [identityToken, setIdentityToken] = useState<string | null>(null);
+  const [identityToken, setIdentityToken] = useState<IdentityState>(undefined);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Standalone tab (no embedding iframe) — resolve anonymous immediately.
+    if (window.parent === window) {
+      setIdentityToken(null);
+      return;
+    }
+
     function handleMessage(event: MessageEvent) {
-      if (
-        event.data?.type === "chat9:identity" &&
-        typeof event.data?.identityToken === "string"
-      ) {
-        setIdentityToken(event.data.identityToken);
+      if (event.source !== window.parent) return;
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "chat9:identity" && typeof data.identityToken === "string") {
+        setIdentityToken(data.identityToken);
+      } else if (data.type === "chat9:no-identity") {
+        setIdentityToken(null);
       }
     }
     window.addEventListener("message", handleMessage);
+
+    // Signal to embed.js that the widget is mounted and ready to receive identity.
+    // embed.js responds with chat9:identity (token) or chat9:no-identity (anonymous).
+    window.parent.postMessage({ type: "chat9:ready" }, "*");
+
     return () => window.removeEventListener("message", handleMessage);
   }, []);
 
@@ -32,6 +50,14 @@ function WidgetContent() {
             Виджет не может стартовать без публичного идентификатора бота.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  if (identityToken === undefined) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B] font-['Inter']">
+        Loading...
       </div>
     );
   }

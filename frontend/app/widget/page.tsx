@@ -11,6 +11,9 @@ function WidgetContent() {
   const searchParams = useSearchParams();
   const botId = searchParams.get("botId");
   const locale = searchParams.get("locale") || (typeof window !== "undefined" ? navigator.language : null);
+  // embed.js stamps the embedding page's origin into the iframe URL so we can
+  // postMessage back with an explicit target instead of a wildcard.
+  const parentOriginParam = searchParams.get("parentOrigin");
   const [identityToken, setIdentityToken] = useState<IdentityState>(undefined);
 
   useEffect(() => {
@@ -22,8 +25,26 @@ function WidgetContent() {
       return;
     }
 
+    // Validate parentOrigin: must be a syntactically-correct origin matching
+    // what document.referrer suggests. If anything looks off, fall back to
+    // anonymous rather than postMessage to a wildcard.
+    let parentOrigin: string | null = null;
+    try {
+      if (parentOriginParam) {
+        const u = new URL(parentOriginParam);
+        parentOrigin = `${u.protocol}//${u.host}`;
+      }
+    } catch {
+      parentOrigin = null;
+    }
+    if (!parentOrigin) {
+      setIdentityToken(null);
+      return;
+    }
+
     function handleMessage(event: MessageEvent) {
       if (event.source !== window.parent) return;
+      if (event.origin !== parentOrigin) return;
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "chat9:identity" && typeof data.identityToken === "string") {
@@ -36,10 +57,10 @@ function WidgetContent() {
 
     // Signal to embed.js that the widget is mounted and ready to receive identity.
     // embed.js responds with chat9:identity (token) or chat9:no-identity (anonymous).
-    window.parent.postMessage({ type: "chat9:ready" }, "*");
+    window.parent.postMessage({ type: "chat9:ready" }, parentOrigin);
 
     return () => window.removeEventListener("message", handleMessage);
-  }, []);
+  }, [parentOriginParam]);
 
   if (!botId) {
     return (

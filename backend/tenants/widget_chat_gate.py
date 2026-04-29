@@ -39,14 +39,8 @@ def get_tenant_eligible_for_widget_chat(db: Session, public_id: str) -> Tenant:
     return tenant
 
 
-def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
-    """
-    Resolve a Bot by its public_id, then verify the owning Tenant is eligible.
-    Used by POST /widget/chat and POST /widget/escalate.
-
-    Raises:
-        WidgetChatTenantGateError: NOT_FOUND | INACTIVE | NO_OPENAI
-    """
+def _resolve_active_bot_and_tenant(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
+    """Lookup + NOT_FOUND/INACTIVE checks shared by every gate flavour."""
     result = (
         db.query(Bot, Tenant)
         .join(Tenant, Bot.tenant_id == Tenant.id)
@@ -58,6 +52,18 @@ def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple
     bot, tenant = result
     if not tenant.is_active:
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
+    return bot, tenant
+
+
+def get_bot_and_tenant_for_widget_chat(db: Session, bot_public_id: str) -> tuple[Bot, Tenant]:
+    """
+    Resolve a Bot by its public_id, then verify the owning Tenant is eligible.
+    Used by POST /widget/chat and POST /widget/escalate.
+
+    Raises:
+        WidgetChatTenantGateError: NOT_FOUND | INACTIVE | NO_OPENAI
+    """
+    bot, tenant = _resolve_active_bot_and_tenant(db, bot_public_id)
     key = tenant.openai_api_key
     if not key or not str(key).strip():
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.NO_OPENAI)
@@ -74,15 +80,4 @@ def get_bot_and_tenant_for_widget_session(db: Session, bot_public_id: str) -> tu
     Raises:
         WidgetChatTenantGateError: NOT_FOUND | INACTIVE
     """
-    result = (
-        db.query(Bot, Tenant)
-        .join(Tenant, Bot.tenant_id == Tenant.id)
-        .filter(Bot.public_id == bot_public_id)
-        .first()
-    )
-    if not result or not result[0].is_active:
-        raise WidgetChatTenantGateError(WidgetChatTenantGateError.NOT_FOUND)
-    bot, tenant = result
-    if not tenant.is_active:
-        raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
-    return bot, tenant
+    return _resolve_active_bot_and_tenant(db, bot_public_id)

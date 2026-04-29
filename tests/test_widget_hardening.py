@@ -146,12 +146,12 @@ def test_session_init_rate_limit_lower(
         for _ in range(10):
             assert tenant.post(
                 "/widget/session/init",
-                json={"api_key": body["api_key"]},
+                json={"bot_id": body["bot_public_id"]},
                 headers={"x-test-ip": "192.0.2.11"},
             ).status_code == 200
         assert tenant.post(
             "/widget/session/init",
-            json={"api_key": body["api_key"]},
+            json={"bot_id": body["bot_public_id"]},
             headers={"x-test-ip": "192.0.2.11"},
         ).status_code == 429
     finally:
@@ -201,7 +201,7 @@ def test_session_init_404_for_invalid_and_inactive(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level("INFO")
-    response = tenant.post("/widget/session/init", json={"api_key": "ch_invalid"})
+    response = tenant.post("/widget/session/init", json={"bot_id": "bot_invalid_000"})
     assert response.status_code == 404
 
     body = _create_widget_client(
@@ -214,8 +214,8 @@ def test_session_init_404_for_invalid_and_inactive(
     client_row.is_active = False
     db_session.commit()
 
-    response = tenant.post("/widget/session/init", json={"api_key": body["api_key"]})
-    assert response.status_code == 404
+    response = tenant.post("/widget/session/init", json={"bot_id": body["bot_public_id"]})
+    assert response.status_code == 403
 
 
 # ---------------------------------------------------------------------------

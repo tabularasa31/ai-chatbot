@@ -424,6 +424,30 @@ def _build_escalation_email_body(
 
 
 def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Session) -> None:
+    """Send the escalation notification to the tenant's support inbox.
+
+    Skipped when the ticket has no usable end-user email: support cannot reply
+    without a contact, so a notification at this point would be a no-op pinging
+    a no-reply mailbox. The ticket itself still exists in the dashboard as a
+    signal (gap analysis, queue review), and the notification is re-attempted
+    later via :func:`apply_collected_contact_email` once the user provides a
+    valid email.
+    """
+    if not _is_valid_email(ticket.user_email):
+        if ticket.user_email:
+            logger.info(
+                "escalation_email_skipped_invalid_user_email tenant_id=%s ticket=%s",
+                tenant.id,
+                ticket.ticket_number,
+            )
+        else:
+            logger.info(
+                "escalation_email_deferred_no_user_email tenant_id=%s ticket=%s",
+                tenant.id,
+                ticket.ticket_number,
+            )
+        return
+
     user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
     support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
     recipient = support_config["l2_email"] or (user.email if user and user.email else None)
@@ -437,15 +461,8 @@ def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Sess
         f"[Chat9 · {ticket.priority.value.upper()}] {ticket.ticket_number}"
         f" — {question_preview}"
     )
-    reply_to = ticket.user_email if _is_valid_email(ticket.user_email) else None
-    if ticket.user_email and not reply_to:
-        logger.warning(
-            "escalation_reply_to_skipped_invalid_email tenant_id=%s ticket=%s",
-            tenant.id,
-            ticket.ticket_number,
-        )
     try:
-        send_email(recipient, subject, body, reply_to=reply_to)
+        send_email(recipient, subject, body, reply_to=ticket.user_email)
     except Exception as e:
         logger.warning("Escalation email failed: %s", e)
 
@@ -583,6 +600,10 @@ def apply_collected_contact_email(
     chat = db.query(Chat).filter(Chat.id == chat_id).first()
     if not ticket or not chat:
         return
+    # Notify the support inbox lazily: ticket creation skips the email when no
+    # contact is known, so the first time we get a valid email is when support
+    # actually has something to act on.
+    notify_late = not _is_valid_email(ticket.user_email) and _is_valid_email(email)
     ticket.user_email = email
     ctx = dict(chat.user_context or {})
     ctx["email"] = email
@@ -597,6 +618,15 @@ def apply_collected_contact_email(
         user_context=ctx,
     )
     db.flush()
+    if notify_late and ticket.tenant is not None:
+        try:
+            _notify_tenant_new_ticket(ticket.tenant, ticket, db)
+        except Exception as e:
+            logger.warning(
+                "deferred escalation email failed (ticket=%s): %s",
+                ticket.ticket_number,
+                e,
+            )
 
 
 def resolve_ticket(

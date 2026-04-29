@@ -381,7 +381,8 @@ def test_apply_collected_contact_email_updates_chat_ticket_and_user_session(
     db_session.add(row)
     db_session.commit()
 
-    apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
+    with patch("backend.escalation.service.send_email"):
+        apply_collected_contact_email(ticket.id, chat.id, "user@example.com", db_session)
 
     db_session.refresh(ticket)
     db_session.refresh(chat)
@@ -482,6 +483,7 @@ def test_notify_tenant_new_ticket_uses_l2_email_when_configured(
         primary_question="need help",
         trigger=EscalationTrigger.user_request,
         status=EscalationStatus.open,
+        user_email="enduser@example.com",
     )
     db_session.add(ticket)
     db_session.commit()
@@ -516,6 +518,7 @@ def test_notify_tenant_new_ticket_falls_back_to_owner_email(
         primary_question="need help",
         trigger=EscalationTrigger.user_request,
         status=EscalationStatus.open,
+        user_email="enduser@example.com",
     )
     db_session.add(ticket)
     db_session.commit()
@@ -668,7 +671,7 @@ def test_notify_email_body_contains_full_context_and_reply_to(
     assert "/escalations/" in body
 
 
-def test_notify_email_body_anonymous_user_warns_and_no_reply_to(
+def test_notify_email_skipped_when_no_user_email(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -676,6 +679,8 @@ def test_notify_email_body_anonymous_user_warns_and_no_reply_to(
         tenant, db_session, owner_email="anon-owner@example.com"
     )
 
+    # Anonymous escalation: support cannot reply, so notification is deferred
+    # until the user provides an email (fired later by apply_collected_contact_email).
     ticket = EscalationTicket(
         tenant_id=cl.id,
         ticket_number="ESC-0200",
@@ -692,16 +697,10 @@ def test_notify_email_body_anonymous_user_warns_and_no_reply_to(
     with patch("backend.escalation.service.send_email") as send_email_mock:
         _notify_tenant_new_ticket(cl, ticket, db_session)
 
-    send_email_mock.assert_called_once()
-    args, kwargs = send_email_mock.call_args
-    body = args[2]
-
-    assert kwargs.get("reply_to") is None
-    assert "(not provided)" in body
-    assert "user has NOT provided contact details" in body
+    send_email_mock.assert_not_called()
 
 
-def test_notify_email_skips_reply_to_for_malformed_user_email(
+def test_notify_email_skipped_when_user_email_is_malformed(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
@@ -709,8 +708,8 @@ def test_notify_email_skips_reply_to_for_malformed_user_email(
         tenant, db_session, owner_email="malformed-owner@example.com"
     )
 
-    # Widget could supply garbage in user_context.email which lands on the
-    # ticket. Reply-To must be omitted so Brevo doesn't reject the send.
+    # Widget-supplied garbage in user_context.email must not produce a notification —
+    # Brevo would reject the send (P1 from Codex review) and support gets nothing.
     ticket = EscalationTicket(
         tenant_id=cl.id,
         ticket_number="ESC-0202",
@@ -728,8 +727,98 @@ def test_notify_email_skips_reply_to_for_malformed_user_email(
     with patch("backend.escalation.service.send_email") as send_email_mock:
         _notify_tenant_new_ticket(cl, ticket, db_session)
 
+    send_email_mock.assert_not_called()
+
+
+def test_apply_collected_contact_email_fires_deferred_notification(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="late-notify-owner@example.com"
+    )
+
+    chat = Chat(
+        tenant_id=cl.id,
+        session_id=uuid.uuid4(),
+        user_context={"user_id": "u-late", "email": None},
+        escalation_followup_pending=False,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0500",
+        primary_question="please connect me to support",
+        primary_question_redacted="please connect me to support",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    chat.escalation_awaiting_ticket_id = ticket.id
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        apply_collected_contact_email(
+            ticket.id, chat.id, "late@example.com", db_session
+        )
+
     send_email_mock.assert_called_once()
-    assert send_email_mock.call_args.kwargs.get("reply_to") is None
+    args, kwargs = send_email_mock.call_args
+    assert kwargs.get("reply_to") == "late@example.com"
+    assert "ESC-0500" in args[1]
+    assert "late@example.com" in args[2]
+
+
+def test_apply_collected_contact_email_does_not_double_notify(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="dedup-owner@example.com"
+    )
+
+    chat = Chat(
+        tenant_id=cl.id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "first@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0501",
+        primary_question="anything",
+        primary_question_redacted="anything",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+        user_email="first@example.com",
+        chat_id=chat.id,
+        session_id=chat.session_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    # Email already known when ticket was created → first notify already fired.
+    # Updating the contact (e.g. user provides a new address) must NOT spam a
+    # second notification, since the support team already got one.
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        apply_collected_contact_email(
+            ticket.id, chat.id, "second@example.com", db_session
+        )
+
+    send_email_mock.assert_not_called()
 
 
 def test_notify_email_body_omits_user_note_section_when_absent(

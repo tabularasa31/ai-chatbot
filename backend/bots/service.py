@@ -11,6 +11,31 @@ from backend.disclosure_config import ALLOWED_LEVELS, public_config_dict
 from backend.models import Bot
 
 
+def _normalize_allowed_domain(value: object) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    text = text.removeprefix("http://").removeprefix("https://")
+    text = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    text = text.split(":", 1)[0].strip().strip(".")
+    if text.startswith("*."):
+        text = text[2:]
+    if not text or " " in text or "." not in text:
+        return None
+    return text
+
+
+def normalize_allowed_domains(values: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        domain = _normalize_allowed_domain(value)
+        if domain and domain not in seen:
+            normalized.append(domain)
+            seen.add(domain)
+    return normalized
+
+
 def get_bots_for_tenant(tenant_id: uuid.UUID, db: Session) -> list[Bot]:
     return db.query(Bot).filter(Bot.tenant_id == tenant_id).order_by(Bot.created_at.asc()).all()
 
@@ -32,11 +57,15 @@ def create_bot(
     db: Session,
     *,
     agent_instructions: str | None = None,
+    link_safety_enabled: bool | None = None,
+    allowed_domains: list[str] | None = None,
 ) -> Bot:
     bot = Bot(
         tenant_id=tenant_id,
         name=name,
         agent_instructions=agent_instructions if agent_instructions is not None else PRESET_SUPPORT_AGENT,
+        link_safety_enabled=bool(link_safety_enabled),
+        allowed_domains=normalize_allowed_domains(allowed_domains),
     )
     db.add(bot)
     db.commit()
@@ -72,6 +101,10 @@ def update_bot(
         bot.is_active = update.is_active  # type: ignore[assignment]
     if "agent_instructions" in fields:
         bot.agent_instructions = update.agent_instructions  # None clears the field
+    if "link_safety_enabled" in fields:
+        bot.link_safety_enabled = bool(update.link_safety_enabled)
+    if "allowed_domains" in fields:
+        bot.allowed_domains = normalize_allowed_domains(update.allowed_domains)
 
     db.commit()
     db.refresh(bot)

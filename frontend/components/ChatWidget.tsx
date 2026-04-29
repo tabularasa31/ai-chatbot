@@ -7,6 +7,7 @@ import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn } from "@/components/ui/utils";
+import { LinkSafetyModal } from "@/components/widget/LinkSafetyModal";
 import {
   appendSystemMarker,
   createTextMessage,
@@ -19,6 +20,24 @@ export type ChatWidgetBelowAssistantContext = {
   messageIndex: number;
   userQuestion: string;
   assistantContent: string;
+};
+
+type WidgetLinkSafetyLabels = {
+  title: string;
+  body: string;
+  continue_label: string;
+  cancel_label: string;
+};
+
+type WidgetConfig = {
+  link_safety_enabled: boolean;
+  allowed_domains: string[];
+  link_safety_labels: WidgetLinkSafetyLabels;
+};
+
+type PendingExternalLink = {
+  url: string;
+  hostname: string;
 };
 
 interface ChatWidgetProps {
@@ -225,6 +244,26 @@ function precedingUserQuestion(messages: ChatWidgetMessage[], assistantIndex: nu
   return "";
 }
 
+function normalizeAllowedDomain(domain: string): string | null {
+  const value = domain
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .split(/[/?#]/, 1)[0]
+    .split(":", 1)[0]
+    .replace(/^\*\./, "")
+    .replace(/\.$/, "");
+  return value && value.includes(".") ? value : null;
+}
+
+function hostnameAllowed(hostname: string, allowedDomains: string[]): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return allowedDomains.some((domain) => {
+    const normalized = normalizeAllowedDomain(domain);
+    return normalized ? host === normalized || host.endsWith(`.${normalized}`) : false;
+  });
+}
+
 export function ChatWidget({
   botId,
   locale,
@@ -243,6 +282,8 @@ export function ChatWidget({
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
+  const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
+  const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Tracks the user_id derived from the current identityToken so other effects can use it.
@@ -251,6 +292,57 @@ export function ChatWidget({
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
   const trimmedInput = input.trim();
   const canSend = Boolean(trimmedInput) && !loading && !chatClosed;
+
+  const linkSafetyLabels = widgetConfig?.link_safety_labels ?? {
+    title: "Open external link?",
+    body: "You are going to {hostname}. Continue?",
+    continue_label: "Open",
+    cancel_label: "Cancel",
+  };
+
+  const maybeOpenLinkSafety = useCallback((rawUrl: string | undefined | null): boolean => {
+    if (!rawUrl || !widgetConfig?.link_safety_enabled) return false;
+    const trimmedUrl = rawUrl.trim();
+    if (
+      !trimmedUrl ||
+      trimmedUrl.startsWith("#") ||
+      trimmedUrl.startsWith("/") ||
+      trimmedUrl.startsWith("mailto:") ||
+      trimmedUrl.startsWith("tel:")
+    ) {
+      return false;
+    }
+
+    try {
+      const url = new URL(trimmedUrl, window.location.href);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+      if (hostnameAllowed(url.hostname, widgetConfig.allowed_domains ?? [])) return false;
+      setPendingExternalLink({ url: url.href, hostname: url.hostname });
+      return true;
+    } catch {
+      return false;
+    }
+  }, [widgetConfig]);
+
+  const markdownComponents = useMemo<Components>(() => ({
+    ...MD_COMPONENTS,
+    a: ({ node: _node, href, onClick, ...props }) => (
+      // eslint-disable-next-line jsx-a11y/anchor-has-content -- content is spread from react-markdown props at runtime
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => {
+          if (maybeOpenLinkSafety(href)) {
+            event.preventDefault();
+            return;
+          }
+          onClick?.(event);
+        }}
+      />
+    ),
+  }), [maybeOpenLinkSafety]);
 
   useEffect(() => {
     const userId = extractUserIdFromIdentityToken(identityToken);
@@ -289,6 +381,28 @@ export function ChatWidget({
       setSessionHydrated(true);
     }
   }, [botId, identityToken, apiKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams({ botId });
+    if (localeParam) params.set("locale", localeParam);
+
+    fetch(`/widget/config?${params}`)
+      .then(async (r) => {
+        if (!r.ok) return null;
+        return r.json() as Promise<WidgetConfig>;
+      })
+      .then((data) => {
+        if (!cancelled) setWidgetConfig(data);
+      })
+      .catch(() => {
+        if (!cancelled) setWidgetConfig(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [botId, localeParam]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;
@@ -626,7 +740,7 @@ export function ChatWidget({
   };
 
   return (
-    <div className="flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
+    <div className="relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
       {/* Header */}
       <div className="bg-nd-base-alt px-6 py-4 flex items-center gap-3 flex-shrink-0">
         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-nd-accent to-violet-500 flex items-center justify-center flex-shrink-0">
@@ -710,7 +824,7 @@ export function ChatWidget({
                             <ReactMarkdown
                               remarkPlugins={[remarkGfm]}
                               rehypePlugins={[rehypeHighlight]}
-                              components={MD_COMPONENTS}
+                              components={markdownComponents}
                             >
                               {msg.text}
                             </ReactMarkdown>
@@ -730,6 +844,11 @@ export function ChatWidget({
                               href={src.url}
                               target="_blank"
                               rel="noopener noreferrer"
+                              onClick={(event) => {
+                                if (maybeOpenLinkSafety(src.url)) {
+                                  event.preventDefault();
+                                }
+                              }}
                               className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors"
                             >
                               {hostname && (
@@ -770,7 +889,7 @@ export function ChatWidget({
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       rehypePlugins={[rehypeHighlight]}
-                      components={MD_COMPONENTS}
+                      components={markdownComponents}
                     >
                       {streamingText}
                     </ReactMarkdown>
@@ -832,6 +951,19 @@ export function ChatWidget({
           </a>
         </div>
       </div>
+
+      {pendingExternalLink ? (
+        <LinkSafetyModal
+          hostname={pendingExternalLink.hostname}
+          labels={linkSafetyLabels}
+          onCancel={() => setPendingExternalLink(null)}
+          onConfirm={() => {
+            const target = pendingExternalLink.url;
+            setPendingExternalLink(null);
+            window.open(target, "_blank", "noopener,noreferrer");
+          }}
+        />
+      ) : null}
     </div>
   );
 }

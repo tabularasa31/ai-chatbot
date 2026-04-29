@@ -16,6 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.rag import _CitationStreamFilter
+from backend.chat.language import localize_text_to_language_result
 from backend.chat.schemas import ChatTurnResponse
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session
@@ -80,10 +81,122 @@ class WidgetChatRequest(BaseModel):
     locale: str | None = Field(default=None, max_length=64)
 
 
+class WidgetLinkSafetyLabels(BaseModel):
+    title: str
+    body: str
+    continue_label: str
+    cancel_label: str
+
+
+class WidgetConfigResponse(BaseModel):
+    link_safety_enabled: bool = False
+    allowed_domains: list[str] = Field(default_factory=list)
+    link_safety_labels: WidgetLinkSafetyLabels
+
+
+def _default_link_safety_labels() -> WidgetLinkSafetyLabels:
+    return WidgetLinkSafetyLabels(
+        title="Open external link?",
+        body="You are going to {hostname}. Continue?",
+        continue_label="Open",
+        cancel_label="Cancel",
+    )
+
+
 @widget_router.get("/health")
 def widget_health() -> dict[str, str]:
     """Health check for widget endpoints."""
     return {"status": "ok"}
+
+
+def _link_safety_labels(
+    locale: str | None,
+    *,
+    encrypted_api_key: str | None,
+    tenant_id: str,
+    bot_id: str,
+) -> WidgetLinkSafetyLabels:
+    target_language = sanitize_locale(locale)
+    labels = _default_link_safety_labels()
+    if not target_language:
+        return labels
+
+    return WidgetLinkSafetyLabels(
+        title=localize_text_to_language_result(
+            canonical_text=labels.title,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_link_safety_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        ).text,
+        body=localize_text_to_language_result(
+            canonical_text=labels.body,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_link_safety_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        ).text,
+        continue_label=localize_text_to_language_result(
+            canonical_text=labels.continue_label,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_link_safety_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        ).text,
+        cancel_label=localize_text_to_language_result(
+            canonical_text=labels.cancel_label,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_link_safety_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        ).text,
+    )
+
+
+@widget_router.get("/config", response_model=WidgetConfigResponse)
+@limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
+def widget_config(
+    request: Request,
+    bot_id: Annotated[str, Query(description="Bot public ID")],
+    locale: Annotated[str | None, Query(description="Browser locale hint (e.g. ru-RU)")] = None,
+    db: Session = Depends(get_db),
+) -> WidgetConfigResponse:
+    try:
+        bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+    except WidgetChatTenantGateError as e:
+        if e.reason == WidgetChatTenantGateError.NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Bot not found") from e
+        if e.reason == WidgetChatTenantGateError.INACTIVE:
+            raise HTTPException(status_code=403, detail="Tenant is not active") from e
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard settings.",
+        ) from e
+
+    allowed_domains = bot.allowed_domains if isinstance(bot.allowed_domains, list) else []
+    labels = (
+        _link_safety_labels(
+            locale,
+            encrypted_api_key=tenant.openai_api_key,
+            tenant_id=str(tenant.id),
+            bot_id=bot.public_id,
+        )
+        if bot.link_safety_enabled
+        else _default_link_safety_labels()
+    )
+    return WidgetConfigResponse(
+        link_safety_enabled=bool(bot.link_safety_enabled),
+        allowed_domains=[str(domain) for domain in allowed_domains if str(domain).strip()],
+        link_safety_labels=labels,
+    )
 
 
 def _resolve_widget_identity(

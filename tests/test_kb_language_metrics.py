@@ -273,8 +273,8 @@ def test_emit_chat_turn_event_includes_cross_lingual_props(monkeypatch):
         retrieval_used_cross_lingual_variant=True,
     )
 
-    assert len(captured) == 1
-    props = captured[0]["properties"]
+    turn_event = next(c for c in captured if c["event"] == "chat.turn")
+    props = turn_event["properties"]
     assert props["query_script"] == "latin"
     assert props["kb_scripts"] == ["latin", "cyrillic"]
     assert props["cross_lingual_triggered"] is True
@@ -303,8 +303,8 @@ def test_emit_chat_turn_event_cross_lingual_defaults_to_false(monkeypatch):
         escalated=False,
     )
 
-    assert len(captured) == 1
-    props = captured[0]["properties"]
+    turn_event = next(c for c in captured if c["event"] == "chat.turn")
+    props = turn_event["properties"]
     assert props["cross_lingual_triggered"] is False
     assert props["retrieval_used_cross_lingual_variant"] is False
     assert props["cross_lingual_variants_count"] == 0

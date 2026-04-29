@@ -93,6 +93,10 @@ def _emit_chat_turn_event(
     cross_lingual_variants_count: int = 0,
     query_kb_language_match: str | None = None,
     retrieval_used_cross_lingual_variant: bool = False,
+    tokens_input: int | None = None,
+    tokens_output: int | None = None,
+    model: str | None = None,
+    plan_tier: str | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -136,8 +140,74 @@ def _emit_chat_turn_event(
             properties=props,
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
+        # Also emit the dashboard-primary event with the enriched property set.
+        _emit_chat_completed_event(
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            chat_id=chat_id,
+            latency_ms=latency_ms,
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            model=model,
+            lang_match=(
+                query_kb_language_match == "native"
+                if query_kb_language_match in ("native", "mismatch")
+                else None
+            ),
+            cap_reason=reject_reason if is_reject else (
+                "low_confidence" if reliability_score == "low" else None
+            ),
+            reliability_score=reliability_score,
+            decision_branch=(
+                decision.kind.value
+                if decision is not None
+                else ("escalate" if escalated else strategy or "unknown")
+            ),
+            plan_tier=plan_tier,
+        )
     except Exception:
         logger.warning("Failed to emit chat.turn event", exc_info=True)
+
+
+def _emit_chat_completed_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    latency_ms: int | None = None,
+    tokens_input: int | None = None,
+    tokens_output: int | None = None,
+    model: str | None = None,
+    lang_match: bool | None = None,
+    cap_reason: str | None = None,
+    reliability_score: str | None = None,
+    decision_branch: str | None = None,
+    plan_tier: str | None = None,
+) -> None:
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "chat_completed",
+            distinct_id=chat_id or _metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "chat_id": chat_id,
+                "latency_ms": latency_ms,
+                "tokens_input": tokens_input,
+                "tokens_output": tokens_output,
+                "model": model,
+                "lang_match": lang_match,
+                "cap_reason": cap_reason,
+                "reliability_score": reliability_score,
+                "decision_branch": decision_branch,
+                "plan_tier": plan_tier,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit chat_completed event", exc_info=True)
 
 
 def _emit_chat_escalated_event(
@@ -147,6 +217,8 @@ def _emit_chat_escalated_event(
     chat_id: str | None,
     escalation_reason: str,
     escalation_trigger: str | None = None,
+    plan_tier: str | None = None,
+    priority: str | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -159,13 +231,45 @@ def _emit_chat_escalated_event(
             properties={
                 "chat_id": chat_id,
                 "reason": escalation_reason,
+                "trigger": escalation_trigger,
                 "escalation_trigger": escalation_trigger,
+                "plan_tier": plan_tier,
+                "priority": priority,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
         _check_escalation_rate(tenant_public_id, bot_public_id)
     except Exception:
         logger.warning("Failed to emit chat_escalated event", exc_info=True)
+
+
+def _emit_chat_feedback_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    distinct_id: str,
+    feedback: str,
+    decision_branch: str | None = None,
+    cap_reason: str | None = None,
+) -> None:
+    """Emit chat_feedback on thumbs-up / thumbs-down from the dashboard."""
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        capture_event(
+            "chat_feedback",
+            distinct_id=distinct_id,
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "feedback": feedback,
+                "decision_branch": decision_branch,
+                "cap_reason": cap_reason,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit chat_feedback event", exc_info=True)
 
 
 def _emit_ai_generation_event(

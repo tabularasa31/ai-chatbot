@@ -2,7 +2,7 @@
 
 When a backend PR claims to improve a measurable metric (latency, accuracy, cost), run this checklist after merge to confirm the win and surface regressions early.
 
-Last validated: PR [#522](https://github.com/tabularasa31/ai-chatbot/pull/522) — parallel embed + relevance guard. ClickUp [86exdt3ft](https://app.clickup.com/t/86exdt3ft).
+Last validated: PR [#522](https://github.com/tabularasa31/ai-chatbot/pull/522) — parallel embed + relevance guard. ClickUp [86exdt3ft](https://app.clickup.com/t/86exdt3ft). **Default dataset is now CHAT9-RU-20** (Chat9 internal docs, 20 cases). RU-54 / EN-98 are deprecated — TurboFlare became a real client.
 
 ---
 
@@ -24,10 +24,11 @@ Skip for: typo fixes, refactors with no behaviour delta, doc-only changes, front
 |------|------------------|
 | Before-merge baseline | Run an eval **before** opening the PR. Save artifacts (json + csv) to `~/Downloads/<dataset>-<date>.{json,csv}`. |
 | Eval scripts | `~/Projects/ai-chatbot-eval-local/scripts/` — kept **outside the repo** (contains tenant API keys in usage examples). Never commit these to the public repo. |
-| Chat9-only variant | `~/Projects/ai-chatbot-eval-local/scripts/eval_chat9_only_ru.py` (skips DocsBot — saves ~10 s/case + judge tokens). |
+| Chat9 docs eval script | `~/Projects/ai-chatbot-eval-local/scripts/eval_chat9_docs_ru.py` — **primary eval script** for CHAT9-RU-20 (Chat9 internal test bot). |
 | Baseline runs | `~/Projects/ai-chatbot-eval-local/baselines/` — historical before-merge runs, also local-only. |
 | Anthropic key (judge) | `~/.zshrc` → `ANTHROPIC_API_KEY` |
-| Chat9 widget API key | Bot config in ClickUp / 1Password — fetch the `ck_…` key for the TurboFlare prod bot before running. |
+| Chat9 test bot API key | `CHAT9_TEST_API_KEY` — widget API key (`ck_…`) for the Chat9 internal test tenant. |
+| Chat9 test bot ID | `CHAT9_TEST_BOT_ID` — `public_id` of the Chat9 internal test bot. |
 
 If no baseline exists for the dataset you want to use: run the eval against the pre-PR commit first (or use the most recent prod run from the eval-results archive).
 
@@ -50,18 +51,20 @@ If you need to be sure the new code is live, hit any endpoint that surfaces a be
 
 ### 2. Run the eval — Chat9 only, sequential
 
-Use the `run_eval.sh` wrapper. It calls `eval_chat9_only_ru.py` sequentially and ingests the result into the local SQLite store in one step:
+Use the `run_eval.sh` wrapper. It calls `eval_chat9_docs_ru.py` sequentially and ingests the result into the local SQLite store in one step:
 
 ```bash
 cd ~/Projects/ai-chatbot-eval-local
-export ANTHROPIC_API_KEY="..."  # from ~/.zshrc
-export CHAT9_API_KEY="..."      # from 1Password / ClickUp bot config
+export ANTHROPIC_API_KEY="..."       # from ~/.zshrc
+export CHAT9_TEST_API_KEY="..."      # widget API key for Chat9 internal test bot
+export CHAT9_TEST_BOT_ID="..."       # public_id of Chat9 internal test bot
 ./run_eval.sh after-PR-<NUM> --pr <NUM>
+# defaults to --dataset CHAT9-RU-20
 ```
 
-**Why sequential** (`--workers 1`): the original head-to-head script ran cases serially per Chat9 instance; running parallel changes server contention and invalidates the latency comparison.
+**Why sequential** (`--workers 1`): running parallel cases changes server contention and invalidates the latency comparison.
 
-Expected runtime: ~12 min for RU-54. Run it in the background; don't burn cache polling for completion.
+Expected runtime: ~4 min for CHAT9-RU-20 (20 cases). Run it in the background; don't burn cache polling for completion.
 
 For the **before-merge baseline**: run the same wrapper *before* opening the PR, with `--label before-PR-<NUM>`. The post-merge run then has something to compare against.
 
@@ -75,11 +78,13 @@ scripts/eval_cli.py diff --before before-PR-<NUM> --after after-PR-<NUM> --markd
 scripts/eval_cli.py diff --before before-PR-<NUM> --after after-PR-<NUM>
 
 # Sanity-check trend across recent runs:
-scripts/eval_cli.py trend --dataset RU-54 --metric latency_p50
+scripts/eval_cli.py trend --dataset CHAT9-RU-20 --metric latency_p50
 
 # When a "new fail" looks suspicious, check if the case has been flaky:
-scripts/eval_cli.py case-history ru_rob_05 --dataset RU-54
+scripts/eval_cli.py case-history ru_on_01 --dataset CHAT9-RU-20
 ```
+
+Note: on a 20-case set, a 1-case swing = 5% — the noise floor is higher than RU-54. Apply Rule 2 conservatively.
 
 The `diff --markdown` output drops directly into a ClickUp comment with the same shape as [86exdt3ft](https://app.clickup.com/t/86exdt3ft) (latency table → category breakdown → verdict shifts → top-10 wins / top-5 regressions).
 
@@ -167,7 +172,8 @@ Sequential run (workers=1).
 ## Appendix B — Known limitations
 
 - **No fixed seed.** Chat completions and the judge are stochastic. ±5% pass-rate variance is normal. To eliminate, set `temperature=0` in both the bot and the judge for eval runs — requires a feature flag we don't currently have.
-- **Single dataset.** RU-54 covers TurboFlare-shaped questions. Results don't generalize to other tenant profiles. For broader changes, run EN-98 too.
+- **Small dataset.** CHAT9-RU-20 has 20 cases; 1 case swing = 5% pass-rate shift. For high-confidence latency/quality claims, expand to CHAT9-RU-50 first (see Appendix C).
+- **RU-54 / EN-98 deprecated.** TurboFlare became a real client — running evals there risks touching live user data. These datasets remain in the store for historical diffs but should not be used for new runs.
 - **Judge model drift.** `claude-haiku-4-5-20251001` is pinned in the script. If you upgrade the judge, baselines become invalid — re-run before-merge baseline.
 - **Cold start spikes.** First case after Railway idle eats ~25–30s vs ~13s steady. Discard the first case from latency stats if you suspect cold start, or run a warmup call before the eval.
 - **No statistical test.** This runbook reports raw deltas, not significance. For high-stakes decisions, run N≥3 before and N≥3 after, then run Welch's t-test on the per-case latencies.
@@ -176,9 +182,11 @@ Sequential run (workers=1).
 
 ## Appendix C — Common eval datasets
 
-| Dataset | File | Size | Language | Tenant |
-|---------|------|-----:|----------|--------|
-| RU-54   | `~/Projects/ai-chatbot-eval-local/scripts/eval_head_to_head_ru.py` → `TEST_CASES_RU` | 54 | RU | TurboFlare |
-| EN-98   | `~/Projects/ai-chatbot-eval-local/scripts/eval_turboflare.py` → `TEST_CASES`         | 98 | EN | TurboFlare |
+| Dataset     | File | Size | Language | Corpus | Status |
+|-------------|------|-----:|----------|--------|--------|
+| CHAT9-RU-20 | `~/Projects/ai-chatbot-eval-local/scripts/eval_chat9_docs_ru.py` → `TEST_CASES_CHAT9_RU` | 20 | RU | Chat9 internal docs (`frontend/content/docs/*.mdx`) | **Active — default** |
+| CHAT9-RU-50 | _planned expansion of CHAT9-RU-20_ | 50 | RU | Same corpus, 6 categories, ~15/10/10/8/5/2 | Pending |
+| RU-54       | `~/Projects/ai-chatbot-eval-local/scripts/eval_head_to_head_ru.py` → `TEST_CASES_RU` | 54 | RU | TurboFlare | **Deprecated** — TurboFlare is now a real client |
+| EN-98       | `~/Projects/ai-chatbot-eval-local/scripts/eval_turboflare.py` → `TEST_CASES`         | 98 | EN | TurboFlare | **Deprecated** — same reason |
 
-To add a new dataset: copy one of the existing scripts, replace the `TEST_CASES` list, keep the judge prompt and field names so the comparison script in step 3 still works.
+To add a new dataset: copy `eval_chat9_docs_ru.py`, replace `TEST_CASES_CHAT9_RU` and `DATASET_NAME`, update the judge system prompt if the tenant domain differs.

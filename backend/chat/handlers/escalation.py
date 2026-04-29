@@ -407,6 +407,8 @@ class EscalationStateMachine(PipelineHandler):
                 chat_id=str(chat.id),
                 escalation_reason="explicit_human_request",
                 escalation_trigger=EscalationTrigger.user_request.value,
+                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+                priority=ticket.priority if ticket is not None else None,
             )
             _svc._emit_chat_session_ended_event(
                 tenant_public_id=getattr(ctx.tenant_row, "public_id", None),

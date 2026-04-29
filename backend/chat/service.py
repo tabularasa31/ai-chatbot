@@ -15,7 +15,9 @@ from backend.chat.decision import (
     Decision,  # noqa: F401  (re-export for type hints in callers)
 )
 from backend.chat.events import (
+    _emit_chat_completed_event,  # noqa: F401  (re-export)
     _emit_chat_escalated_event,  # noqa: F401  (re-export — handlers access via _svc.*)
+    _emit_chat_feedback_event,  # noqa: F401  (re-export)
     _emit_chat_session_ended_event,  # noqa: F401  (re-export)
     _emit_chat_turn_event,  # noqa: F401  (re-export)
 )

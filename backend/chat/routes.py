@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.chat.events import _emit_chat_feedback_event
 from backend.chat.history_service import (
     delete_session_original_content,
     get_chat_history,
@@ -586,6 +587,14 @@ def set_message_feedback(
             message.id,
             body.feedback.value,
             exc_info=True,
+        )
+
+    if body.feedback.value in ("up", "down"):
+        _emit_chat_feedback_event(
+            tenant_public_id=getattr(tenant, "public_id", None),
+            bot_public_id=None,
+            distinct_id=str(current_user.id),
+            feedback="positive" if body.feedback.value == "up" else "negative",
         )
 
     return MessageFeedbackResponse(

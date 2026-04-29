@@ -528,6 +528,209 @@ def test_notify_tenant_new_ticket_falls_back_to_owner_email(
     assert send_email_mock.call_args.args[0] == "owner-only@example.com"
 
 
+def _make_tenant_for_email_test(
+    tenant: TestClient, db_session: Session, *, owner_email: str
+) -> Tenant:
+    token = register_and_verify_user(tenant, db_session, email=owner_email)
+    resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Email Body Tenant"},
+    )
+    assert resp.status_code == 201
+    tenant_id = uuid.UUID(resp.json()["id"])
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+    return cl
+
+
+def test_notify_email_body_contains_full_context_and_reply_to(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="ctx-owner@example.com"
+    )
+
+    chat = Chat(
+        tenant_id=cl.id,
+        session_id=uuid.uuid4(),
+        user_context={
+            "email": "enduser@acme.io",
+            "name": "Ivan Petrov",
+            "plan_tier": "pro",
+            "user_id": "u_18422",
+            "audience_tag": "paying_b2b",
+            "locale": "ru-RU",
+            "browser_locale": "ru-RU",
+            "company": "ACME",
+            "role_in_company": "ops_lead",
+            "metadata": {"source": "widget"},
+        },
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    db_session.add_all([
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="How can I download last month's invoice?",
+        ),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="You can find invoices in Settings → Billing.",
+        ),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="It's empty there.",
+        ),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="Could you confirm the billing email so I can check?",
+        ),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="Yes please",
+        ),
+    ])
+    db_session.commit()
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0102",
+        primary_question="Yes please",
+        primary_question_redacted="Yes please",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="enduser@acme.io",
+        user_name="Ivan Petrov",
+        plan_tier="pro",
+        user_id="u_18422",
+        user_note="I need help with the invoice from March.",
+        best_similarity_score=0.31,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    args, kwargs = send_email_mock.call_args
+    subject = args[1]
+    body = args[2]
+
+    assert kwargs.get("reply_to") == "enduser@acme.io"
+    assert "[Chat9 · HIGH] ESC-0102" in subject
+    assert "Yes please" in subject
+
+    assert "TICKET" in body
+    assert "ESC-0102" in body
+    assert "user_request" in body
+    assert "high" in body
+
+    assert "HOW TO REPLY TO THE USER" in body
+    assert "enduser@acme.io" in body
+    assert "Ivan Petrov" in body
+    assert "ru-RU" in body
+    assert "pro" in body
+    assert "u_18422" in body
+    assert "paying_b2b" in body
+    # Extra KYC keys are surfaced verbatim under "Other:".
+    assert "company: ACME" in body
+    assert "role_in_company: ops_lead" in body
+    assert "metadata:" in body and "widget" in body
+
+    assert "USER'S QUESTION" in body
+    assert "USER'S NOTE" in body
+    assert "I need help with the invoice from March." in body
+
+    assert "CONVERSATION (last 5 turns" in body
+    # Full content (non-truncated) of every recent turn.
+    assert "How can I download last month's invoice?" in body
+    assert "Could you confirm the billing email so I can check?" in body
+
+    # Reference info block sits at the end as small footer.
+    why_idx = body.index("Reference info (for analysts)")
+    convo_idx = body.index("CONVERSATION (last 5 turns")
+    assert why_idx > convo_idx
+    assert "best_match_score: 0.31" in body
+    assert "/escalations/" in body
+
+
+def test_notify_email_body_anonymous_user_warns_and_no_reply_to(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="anon-owner@example.com"
+    )
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0200",
+        primary_question="Need a human",
+        primary_question_redacted="Need a human",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    args, kwargs = send_email_mock.call_args
+    body = args[2]
+
+    assert kwargs.get("reply_to") is None
+    assert "(not provided)" in body
+    assert "user has NOT provided contact details" in body
+
+
+def test_notify_email_body_omits_user_note_section_when_absent(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="no-note-owner@example.com"
+    )
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0201",
+        primary_question="generic question",
+        primary_question_redacted="generic question",
+        trigger=EscalationTrigger.low_similarity,
+        priority=EscalationPriority.medium,
+        status=EscalationStatus.open,
+        user_email="someone@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    body = send_email_mock.call_args.args[2]
+    assert "USER'S NOTE" not in body
+
+
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     tenant: TestClient,
     db_session: Session,

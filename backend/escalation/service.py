@@ -242,6 +242,184 @@ def _conversation_summary_from_chat(chat_id: uuid.UUID, db: Session, max_turns: 
     return "\n".join(lines)
 
 
+def _full_transcript_from_chat(
+    chat_id: uuid.UUID,
+    db: Session,
+    *,
+    max_turns: int = 5,
+) -> list[tuple[str, str]] | None:
+    """Last ``max_turns`` user/assistant pairs as ``(role, content)`` — full text, redacted."""
+    msgs = (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id)
+        .order_by(Message.created_at.desc())
+        .limit(max_turns * 2)
+        .all()
+    )
+    if not msgs:
+        return None
+    msgs = list(reversed(msgs))
+    out: list[tuple[str, str]] = []
+    for m in msgs:
+        role = "user" if m.role == MessageRole.user else "assistant"
+        out.append((role, _safe_message_content(m)))
+    return out
+
+
+_KYC_IDENTITY_KEYS = {"email", "name", "plan_tier", "user_id", "audience_tag", "locale", "browser_locale"}
+
+
+def _format_extra_kyc(user_context: dict[str, Any] | None) -> list[str]:
+    """All non-identity keys from ``user_context`` rendered as ``key: value`` lines.
+
+    Identity keys (email/name/plan_tier/user_id/audience_tag/locale/browser_locale)
+    are surfaced in their own labelled rows; everything else lands here verbatim
+    so the support agent can see arbitrary widget-supplied KYC fields.
+    """
+    if not user_context:
+        return []
+    lines: list[str] = []
+    for key in sorted(user_context.keys()):
+        if key in _KYC_IDENTITY_KEYS:
+            continue
+        value = user_context[key]
+        if value is None or value == "":
+            continue
+        if isinstance(value, (dict, list)):
+            try:
+                rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            except (TypeError, ValueError):
+                rendered = str(value)
+        else:
+            rendered = str(value)
+        lines.append(f"  {key}: {rendered}")
+    return lines
+
+
+def _build_escalation_email_body(
+    tenant: Tenant,
+    ticket: EscalationTicket,
+    db: Session,
+) -> str:
+    """Compose the support-team escalation email body.
+
+    Layout (all English; user content kept in original language):
+      - Header / opening sentence
+      - TICKET metadata
+      - HOW TO REPLY TO THE USER (contact details + KYC)
+      - USER'S QUESTION (full, redacted)
+      - USER'S NOTE (if present)
+      - CONVERSATION (last 5 turns, full content)
+      - WHY THE BOT ESCALATED (reference info, last)
+      - Dashboard link for full audit log
+    """
+    base = settings.FRONTEND_URL.rstrip("/")
+    sep = "─" * 56
+    lines: list[str] = ["New escalation requires a human reply.", ""]
+
+    opened_at = ticket.created_at.strftime("%Y-%m-%d %H:%M UTC") if ticket.created_at else "—"
+    lines.append(sep)
+    lines.append("TICKET")
+    lines.append(f"  Number:    {ticket.ticket_number}")
+    lines.append(f"  Priority:  {ticket.priority.value}")
+    lines.append(f"  Trigger:   {ticket.trigger.value}")
+    lines.append(f"  Opened:    {opened_at}")
+    if ticket.chat_id:
+        chat_id_str = str(ticket.chat_id)
+        if ticket.session_id:
+            lines.append(f"  Chat ID:   {chat_id_str}  (session {ticket.session_id})")
+        else:
+            lines.append(f"  Chat ID:   {chat_id_str}")
+    lines.append("")
+
+    chat: Chat | None = None
+    if ticket.chat_id:
+        chat = db.query(Chat).filter(Chat.id == ticket.chat_id).first()
+    user_ctx: dict[str, Any] = {}
+    if chat and isinstance(chat.user_context, dict):
+        user_ctx = chat.user_context
+
+    lines.append(sep)
+    lines.append("HOW TO REPLY TO THE USER")
+    contact_email = ticket.user_email or user_ctx.get("email")
+    contact_name = ticket.user_name or user_ctx.get("name")
+    locale = user_ctx.get("locale")
+    browser_locale = user_ctx.get("browser_locale")
+    plan = ticket.plan_tier or user_ctx.get("plan_tier")
+    user_id = ticket.user_id or user_ctx.get("user_id")
+    audience = user_ctx.get("audience_tag")
+
+    if contact_email:
+        lines.append(f"  Email:     {contact_email}    ← reply directly to this email")
+    else:
+        lines.append("  Email:     (not provided)")
+    if contact_name:
+        lines.append(f"  Name:      {contact_name}")
+    if locale or browser_locale:
+        if locale and browser_locale and locale != browser_locale:
+            lines.append(f"  Locale:    {locale}  (browser: {browser_locale})")
+        else:
+            lines.append(f"  Locale:    {locale or browser_locale}")
+    if plan:
+        lines.append(f"  Plan:      {plan}")
+    if user_id:
+        lines.append(f"  User ID:   {user_id}")
+    if audience:
+        lines.append(f"  Audience:  {audience}")
+    extra = _format_extra_kyc(user_ctx)
+    if extra:
+        lines.append("  Other:")
+        lines.extend(extra)
+    if not contact_email:
+        lines.append("")
+        lines.append(
+            "  ⚠ The user has NOT provided contact details. Reply via the "
+            "dashboard (link below) — they will see your reply on the next visit."
+        )
+    lines.append("")
+
+    lines.append(sep)
+    lines.append("USER'S QUESTION")
+    lines.append(f"  {_safe_ticket_question(ticket)}")
+    lines.append("")
+
+    if ticket.user_note:
+        lines.append(sep)
+        lines.append("USER'S NOTE")
+        lines.append(f"  {ticket.user_note}")
+        lines.append("")
+
+    transcript: list[tuple[str, str]] | None = None
+    if ticket.chat_id:
+        transcript = _full_transcript_from_chat(ticket.chat_id, db)
+    if transcript:
+        lines.append(sep)
+        lines.append("CONVERSATION (last 5 turns, PII redacted)")
+        for role, content in transcript:
+            label = "user" if role == "user" else "assistant"
+            indented = content.replace("\n", "\n             ")
+            lines.append(f"  {label}: {indented}")
+        lines.append("")
+    elif ticket.conversation_summary:
+        lines.append(sep)
+        lines.append("CONVERSATION (last 5 turns, PII redacted)")
+        for raw_line in ticket.conversation_summary.splitlines():
+            lines.append(f"  {raw_line}")
+        lines.append("")
+
+    lines.append(sep)
+    lines.append("Reference info (for analysts) — not needed to reply:")
+    lines.append(f"  why_escalated: {ticket.trigger.value}")
+    if ticket.best_similarity_score is not None:
+        lines.append(
+            f"  best_match_score: {ticket.best_similarity_score:.2f} (threshold {ESCALATION_THRESHOLD:.2f})"
+        )
+    lines.append("")
+    lines.append(f"For the full audit log: {base}/escalations/{ticket.id}")
+
+    return "\n".join(lines)
+
+
 def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Session) -> None:
     user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
     support_config = public_support_config_dict(tenant.settings if isinstance(tenant.settings, dict) else None)
@@ -249,19 +427,16 @@ def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Sess
     if not recipient:
         logger.warning("No escalation notification email configured for tenant_id=%s", tenant.id)
         return
-    base = settings.FRONTEND_URL.rstrip("/")
-    body = (
-        f"A user question couldn't be answered by your bot.\n\n"
-        f"Ticket: {ticket.ticket_number}\n"
-        f"Question: {_safe_ticket_question(ticket)[:500]}\n"
-        f"Trigger: {ticket.trigger.value}\n"
-        f"Priority: {ticket.priority.value}\n"
-        f"User: {ticket.user_email or 'anonymous'}\n\n"
-        f"View in dashboard: {base}/escalations/{ticket.id}"
+
+    body = _build_escalation_email_body(tenant, ticket, db)
+    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
+    subject = (
+        f"[Chat9 · {ticket.priority.value.upper()}] {ticket.ticket_number}"
+        f" — {question_preview}"
     )
-    subject = f"[Chat9] New support ticket #{ticket.ticket_number} — {_safe_ticket_question(ticket)[:60]}"
+    reply_to = ticket.user_email or None
     try:
-        send_email(recipient, subject, body)
+        send_email(recipient, subject, body, reply_to=reply_to)
     except Exception as e:
         logger.warning("Escalation email failed: %s", e)
 

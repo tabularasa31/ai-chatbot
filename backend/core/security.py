@@ -51,6 +51,8 @@ def decode_access_token(token: str) -> str | None:
         return None
     except jwt.PyJWTError:
         return None
+    if payload.get("typ") != USER_ACCESS_JWT_TYP:
+        return None
     return payload.get("sub")
 
 

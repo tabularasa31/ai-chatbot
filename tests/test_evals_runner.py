@@ -193,6 +193,64 @@ def test_sse_data_parser_skips_non_data_lines() -> None:
     assert _parse_sse_data('data: {"type":"chunk","text":"x"}') == {"type": "chunk", "text": "x"}
 
 
+# ─── ChatClient session_id forwarding ───────────────────────────────────────
+
+
+class _StubStreamResp:
+    """Minimal stand-in for an httpx streaming response."""
+
+    def __init__(self) -> None:
+        self.status_code = 200
+
+    def __enter__(self):  # noqa: D401
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def iter_lines(self):
+        yield 'data: {"type":"done","text":"ok","chat_ended":false}'
+
+
+class _StubHttp:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def stream(self, method: str, url: str, *, json: dict | None = None, params: dict | None = None):
+        self.calls.append({"method": method, "url": url, "json": json, "params": params})
+        return _StubStreamResp()
+
+
+def test_chat_client_omits_session_id_when_caller_did_not_pass_one() -> None:
+    """Regression: passing a random UUID to /widget/chat returns 409
+    session_not_found because the backend treats session_id as 'resume
+    this existing chat'. The runner must let the backend create the
+    session (i.e. NOT include session_id at all)."""
+
+    from backend.evals.client import ChatClient
+
+    http = _StubHttp()
+    client = ChatClient(bot_public_id="ch_test", http=http)
+    client.ask("hello")
+    assert http.calls[0]["params"] == {"bot_id": "ch_test"}
+    assert "session_id" not in http.calls[0]["params"]
+
+
+def test_chat_client_forwards_session_id_when_caller_passes_one() -> None:
+    """Multi-turn callers must still be able to continue an existing
+    conversation by passing session_id explicitly."""
+
+    from backend.evals.client import ChatClient
+
+    http = _StubHttp()
+    client = ChatClient(bot_public_id="ch_test", http=http)
+    client.ask("hello", session_id="00000000-0000-0000-0000-000000000123")
+    assert http.calls[0]["params"] == {
+        "bot_id": "ch_test",
+        "session_id": "00000000-0000-0000-0000-000000000123",
+    }
+
+
 # ─── runner end-to-end (mocked chat + judge) ────────────────────────────────
 
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import time
-import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -52,10 +51,14 @@ class ChatClient:
         self.path = path
 
     def ask(self, question: str, *, session_id: str | None = None) -> ChatResponse:
-        params = {
-            "bot_id": self.bot_public_id,
-            "session_id": session_id or str(uuid.uuid4()),
-        }
+        # Only forward session_id when the caller explicitly passed one
+        # (to continue a multi-turn conversation). Otherwise omit it so the
+        # backend creates a fresh session — passing a random UUID is a
+        # 409 `session_not_found` against /widget/chat because the server
+        # treats it as "resume this existing chat".
+        params: dict[str, str] = {"bot_id": self.bot_public_id}
+        if session_id is not None:
+            params["session_id"] = session_id
         body = {"message": question}
         started = time.perf_counter()
 

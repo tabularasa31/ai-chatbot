@@ -746,7 +746,12 @@ def trigger_refresh(
     last_refresh = source.last_refresh_requested_at
     if last_refresh is not None and last_refresh.tzinfo is None:
         last_refresh = last_refresh.replace(tzinfo=dt.UTC)
-    if last_refresh and now - last_refresh < dt.timedelta(hours=1):
+    stuck_in_indexing = (
+        source.status == SourceStatus.indexing
+        and last_refresh is not None
+        and now - last_refresh > dt.timedelta(minutes=30)
+    )
+    if last_refresh and now - last_refresh < dt.timedelta(hours=1) and not stuck_in_indexing:
         remaining = dt.timedelta(hours=1) - (now - last_refresh)
         minutes = max(1, int(remaining.total_seconds() // 60))
         raise HTTPException(
@@ -920,6 +925,7 @@ def _index_pages(
         chunks_created += page_chunks
         source.pages_indexed = len(indexed_urls)
         source.chunks_created = chunks_created
+        run.pages_indexed = len(indexed_urls)
         if source.pages_indexed and source.pages_indexed % 5 == 0:
             db.commit()
 
@@ -1049,6 +1055,19 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             source.error_message = "Indexing paused — check your OpenAI key."
             db.commit()
             return
+
+        # Close any runs left in "indexing" state from a previously crashed crawl.
+        stale_cutoff = _utcnow() - dt.timedelta(minutes=30)
+        stale_runs = (
+            db.query(UrlSourceRun)
+            .filter(UrlSourceRun.source_id == source_id)
+            .filter(UrlSourceRun.status == SourceStatus.indexing.value)
+            .filter(UrlSourceRun.finished_at.is_(None))
+            .filter(UrlSourceRun.created_at < stale_cutoff)
+            .all()
+        )
+        for stale in stale_runs:
+            _mark_run_finished(stale, status=SourceStatus.error.value, error_message="Crawl interrupted — restarted.")
 
         source.status = SourceStatus.indexing
         source.error_message = None

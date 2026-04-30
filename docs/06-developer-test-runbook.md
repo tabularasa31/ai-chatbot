@@ -125,22 +125,6 @@ psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_doc_topics_topic_embe
 psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_questions_embedding_ivfflat"
 ```
 
-## Internal eval QA (`/eval/*`)
-
-Requires `EVAL_JWT_SECRET` in the environment (see `tests/conftest.py` default for local pytest).
-
-```bash
-pytest -q tests/test_eval.py
-```
-
-Create an internal tester (uses app DB from `DATABASE_URL` / `.env`):
-
-```bash
-PYTHONPATH=. python scripts/create_tester.py --username anna --password 'your-secret'
-```
-
-Manual UI: **`/eval/chat?bot_id=<widget bot ID>`** — same value as the dashboard embed's `data-bot-id` (bot's `public_id`), not the private API key.
-
 ## Coverage Snapshot (backend, SQLite-only)
 
 ```bash
@@ -178,6 +162,5 @@ This guard checks repository migration metadata and currently enforces:
 1) P0 Smoke  
 2) Auth Reset Flow + Escalation group  
 3) RAG Edge Cases  
-4) Internal eval (`tests/test_eval.py`, CI env includes `EVAL_JWT_SECRET`)  
-5) pgvector Integration (separate job with PostgreSQL service)  
-6) Coverage Snapshot
+4) pgvector Integration (separate job with PostgreSQL service)  
+5) Coverage Snapshot

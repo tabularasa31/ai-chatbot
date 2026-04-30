@@ -23,7 +23,6 @@ from backend.models.enums import (
     SourceSchedule,
     SourceStatus,
 )
-from backend.models.eval import EvalResult, EvalSession, Tester
 from backend.models.gap import (
     GapAnalyzerJob,
     GapCluster,
@@ -51,8 +50,6 @@ __all__ = [
     "EscalationStatus",
     "EscalationTicket",
     "EscalationTrigger",
-    "EvalResult",
-    "EvalSession",
     "GapAnalyzerJob",
     "GapCluster",
     "GapClusterStatus",
@@ -79,7 +76,6 @@ __all__ = [
     "TenantApiKey",
     "TenantFaq",
     "TenantProfile",
-    "Tester",
     "UrlSource",
     "UrlSourceRun",
     "User",

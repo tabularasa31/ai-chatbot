@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     database_url: str = Field(..., alias="DATABASE_URL")
     environment: str = Field("development", alias="ENVIRONMENT")
     jwt_secret: str = Field(..., alias="JWT_SECRET")
-    eval_jwt_secret: str = Field(..., alias="EVAL_JWT_SECRET")
     openai_api_key: str | None = Field(None, alias="OPENAI_API_KEY")
     encryption_key: str | None = Field(None, alias="ENCRYPTION_KEY")
     langfuse_host: str | None = Field(None, alias="LANGFUSE_HOST")

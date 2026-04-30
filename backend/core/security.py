@@ -12,7 +12,7 @@ import bcrypt
 import jwt
 
 from .config import settings
-from .jwt_kinds import EVAL_TESTER_JWT_TYP, USER_ACCESS_JWT_TYP
+from .jwt_kinds import USER_ACCESS_JWT_TYP
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
@@ -51,8 +51,7 @@ def decode_access_token(token: str) -> str | None:
         return None
     except jwt.PyJWTError:
         return None
-    # Never treat internal eval tester JWTs as user sessions (even if mis-signed).
-    if payload.get("typ") == EVAL_TESTER_JWT_TYP:
+    if payload.get("typ") != USER_ACCESS_JWT_TYP:
         return None
     return payload.get("sub")
 

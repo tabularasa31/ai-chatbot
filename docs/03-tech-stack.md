@@ -28,7 +28,7 @@
 - **Authentication:** JWT + bcrypt + email verification
   - Stateless auth (good for scalability)
   - Industry standard
-  - User access tokens include `typ=chat9_user`; internal **Eval QA** uses a separate secret `EVAL_JWT_SECRET` and `typ=eval_tester` on `/eval/*` only (`backend/eval/`, `backend/core/jwt_kinds.py`)
+  - User access tokens include `typ=chat9_user` (see `backend/core/jwt_kinds.py`)
   
 - **LLM Integration:** OpenAI API (via client's own API key)
   - `gpt-5-mini` for grounded chat answers

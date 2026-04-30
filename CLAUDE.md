@@ -16,7 +16,7 @@ make db-up          # shorthand for docker compose up -d db
 # Backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env       # fill DATABASE_URL, JWT_SECRET, EVAL_JWT_SECRET, etc.
+cp .env.example .env       # fill DATABASE_URL, JWT_SECRET, etc.
 alembic upgrade head
 uvicorn backend.main:app --reload   # http://localhost:8000
 
@@ -76,7 +76,6 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/guards/` | Injection detection (2-level) + relevance guard — gate on every chat turn |
 | `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
 | `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |
-| `backend/eval/` | QA eval pipeline; uses separate `EVAL_JWT_SECRET` |
 | `backend/knowledge/` | Tenant knowledge profile extraction and topics API |
 | `backend/tenant_knowledge/` | FAQ/tenant-profile service helpers |
 | `tests/conftest.py` | Pytest fixtures (DB session, test client) |

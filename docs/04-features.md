@@ -27,7 +27,7 @@ In practice this means:
 
 - public onboarding routes such as register, login, verify-email, forgot-password, and reset-password stay available without a verified dashboard session
 - dashboard/API routes that operate on a tenant workspace use `require_verified_user`
-- public widget flows and eval/widget-specific auth paths are not part of this rule unless they explicitly use the dashboard JWT stack
+- public widget flows are not part of this rule unless they explicitly use the dashboard JWT stack
 
 ### Forgot password
 
@@ -628,7 +628,7 @@ Behavior details:
 | Widget (public) | `bot_id` query param (bot `public_id`) | `POST /widget/chat?bot_id=…` |
 | Debug tool | JWT + `bot_id` query param (bot `public_id`) | `POST /chat/debug?bot_id=…` |
 
-The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually. The explicit `bot_id` URL pattern remains part of the eval flow only (`/eval/chat?bot_id=...`).
+The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually.
 
 ### Sessions and history
 
@@ -811,62 +811,7 @@ All widget endpoints are rate-limited to **20 requests/minute per IP**:
 
 ---
 
-## 11. Internal manual QA (Eval)
-
-**Purpose:** Internal-only flow for human testers to chat with a client bot (same public widget path as production) and record **pass/fail** (and optional error category + comment) per assistant message. It does **not** change dashboard user auth or the public widget contract.
-
-### Auth and isolation
-
-- **Testers** are rows in `testers` (plain password for MVP, internal use). Created via CLI:  
-  `PYTHONPATH=. python scripts/create_tester.py --username … --password …`
-- **Eval JWT** is signed with **`EVAL_JWT_SECRET`** (required, distinct from `JWT_SECRET`). Claim `typ = eval_tester`. User JWTs use `typ = chat9_user`; tokens with `typ = eval_tester` are **rejected** by `decode_access_token` so eval tokens never authenticate dashboard routes.
-- All eval HTTP routes live under **`/eval/*`** and use the eval dependency only.
-
-### API (summary)
-
-| Method | Path | Auth |
-|--------|------|------|
-| POST | `/eval/login` | Body: `username`, `password` → `access_token` |
-| POST | `/eval/sessions` | Eval JWT; body: `bot_id` (bot's `public_id`, same value as widget `data-bot-id`) |
-| POST | `/eval/sessions/{id}/results` | Eval JWT; snapshot `question`, `bot_answer`, `verdict`, optional `error_category`, `comment` |
-| GET | `/eval/sessions/{id}/results` | Eval JWT; list results for **own** sessions only (404 if not owner) |
-
-### `bot_id` = bot's `public_id` (same value as widget `data-bot-id`, not the API key)
-
-The query/body field **`bot_id`** is exactly the bot's `public_id` from the dashboard embed snippet, e.g. the value of `data-bot-id`.
-
-```html
-<script
-  src="https://<api-host>/embed.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
-</script>
-```
-
-→ use **`/eval/chat?bot_id=YOUR_BOT_PUBLIC_ID`** (same string).
-
-Do **not** use the secret **32-character `api_key`** (used for `X-API-Key` / server chat) as `bot_id`.
-
-### Bot eligibility (aligned with widget)
-
-Creating an eval session uses **`backend/tenants/widget_chat_gate.py`** — the same rules as **`POST /widget/chat`** and **`POST /widget/escalate`**: client must exist, be **active**, and have a **non-empty** OpenAI API key configured. Otherwise the API returns the same class of errors as the widget (404 / 403 / 400), so testers do not get a “session created” state when the chat cannot run.
-
-### Misconfiguration
-
-If `EVAL_JWT_SECRET` is missing or blank, eval login and protected eval routes return **503**; the server logs **`eval_jwt_misconfigured`** at error level.
-
-### Frontend
-
-- **`/eval/login`** — stores token in `localStorage` (`chat9_eval_access_token`); supports `?next=` to return to `/eval/chat?bot_id=…`
-- **`/eval/chat?bot_id=…`** — bootstraps eval session once (deduped in dev under React Strict Mode), reuses **`ChatWidget`** + rating panel under each assistant bubble
-- **Escalation handoff** messages are still assistant bubbles and remain rateable in MVP; if you aggregate scores as “model quality”, filter by turn type later to reduce noise.
-
-### Tests
-
-Regression coverage: `tests/test_eval.py`.
-
----
-
-## 12. Dashboard
+## 11. Dashboard
 
 The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages use a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for `is_admin` users); the top bar shows brand, email, and logout.
 
@@ -885,12 +830,11 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 ---
 
-## 13. Security
+## 12. Security
 
 | Area | Implementation |
 |------|---------------|
 | Authentication | JWT (HS256), bcrypt passwords; user access tokens include `typ=chat9_user` |
-| Internal eval | Separate `EVAL_JWT_SECRET`, `typ=eval_tester`, `/eval/*` only |
 | Data isolation | All queries scoped by `tenant_id`; no cross-tenant access possible |
 | API key storage | AES-GCM encrypted at rest |
 | KYC secret storage | AES-GCM encrypted at rest |
@@ -900,7 +844,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 
 ---
 
-## 14. Infrastructure
+## 13. Infrastructure
 
 ```
 getchat9.live (Vercel, Next.js 14)

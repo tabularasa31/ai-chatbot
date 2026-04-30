@@ -10,9 +10,10 @@ When chat9's product docs change materially, **re-sync the fixtures**
 so golden answers stay realistic:
 
 ```bash
-cp frontend/content/docs/getting-started.mdx tests/eval/datasets/_fixtures/docs/getting-started.md
-cp frontend/content/docs/pricing-and-limits.mdx tests/eval/datasets/_fixtures/docs/pricing-and-limits.md
-cp frontend/content/docs/faq.mdx tests/eval/datasets/_fixtures/docs/faq.md
+cp frontend/content/docs/getting-started.mdx       tests/eval/datasets/_fixtures/docs/getting-started.md
+cp frontend/content/docs/pricing-and-limits.mdx    tests/eval/datasets/_fixtures/docs/pricing-and-limits.md
+cp frontend/content/docs/faq.mdx                   tests/eval/datasets/_fixtures/docs/faq.md
+cp frontend/content/docs/widget-api-reference.mdx  tests/eval/datasets/_fixtures/docs/widget-api-reference.md
 ```
 
 Then audit `chat9_basic.yaml` for any cases whose `must_contain` /

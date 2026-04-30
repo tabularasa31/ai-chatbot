@@ -213,7 +213,7 @@ def pg_client(
         future=True,
     )
 
-    sync_url = str(pg_engine.url)
+    sync_url = pg_engine.url.render_as_string(hide_password=False)
     async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
     async_engine = create_async_engine(async_url, future=True)
     async_session_factory = async_sessionmaker(

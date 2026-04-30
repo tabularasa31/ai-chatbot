@@ -6,7 +6,7 @@ import json
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session

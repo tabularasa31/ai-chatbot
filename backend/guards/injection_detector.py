@@ -45,7 +45,7 @@ class InjectionDetectionResult:
 # Normalization (mandatory before any check)
 # ---------------------------------------------------------------------------
 
-_ZERO_WIDTH_RE = re.compile(r"[​‌‍‎‏﻿­]")
+_ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u00ad]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 

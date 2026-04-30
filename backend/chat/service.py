@@ -54,7 +54,6 @@ from backend.chat.history_service import (
     get_chat_history,  # noqa: F401  (re-export for test imports)
     get_session_logs,  # noqa: F401  (re-export for test imports)
     list_chat_sessions,  # noqa: F401  (re-export for test imports)
-    run_debug,  # noqa: F401  (re-export for test imports)
 )
 from backend.chat.language import (
     ResolvedLanguageContext,

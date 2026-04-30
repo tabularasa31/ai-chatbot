@@ -75,17 +75,6 @@ const mainNav: NavItem[] = [
       </svg>
     ),
   },
-  {
-    href: "/debug",
-    label: "Debug",
-    icon: (
-      <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-        <path d="M5 2.5C5 1.67 5.67 1 6.5 1h2c.83 0 1.5.67 1.5 1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        <path d="M3 6h9M3 9h9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-        <rect x="3" y="4" width="9" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
-      </svg>
-    ),
-  },
 ];
 
 const settingsNav: NavItem[] = [

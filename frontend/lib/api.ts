@@ -33,34 +33,6 @@ export type BadAnswerItem = {
   created_at: string;
 };
 
-export type ChatDebugResponse = {
-  answer: string;
-  raw_answer?: string | null;
-  tokens_used: number;
-  debug: {
-    mode: "vector" | "keyword" | "hybrid" | "none";
-    best_rank_score: number | null;
-    best_confidence_score: number | null;
-    confidence_source: "vector_similarity" | "rank_score" | "none" | null;
-    strategy?: "faq_direct" | "faq_context" | "rag_only" | "guard_reject" | null;
-    reject_reason?:
-      | "injection"
-      | "not_relevant"
-      | "low_retrieval"
-      | "insufficient_confidence"
-      | null;
-    is_reject?: boolean;
-    is_faq_direct?: boolean;
-    validation_applied?: boolean;
-    validation_outcome?: "valid" | "fallback" | "skipped" | null;
-    chunks: Array<{
-      document_id: string;
-      score: number;
-      preview: string;
-    }>;
-  };
-};
-
 export type TenantResponse = {
   id: string;
   name: string;
@@ -1053,17 +1025,6 @@ export const api = {
           created_at: string;
         }>;
       };
-    },
-    async debug(question: string, botId: string): Promise<ChatDebugResponse> {
-      const q = `?bot_id=${encodeURIComponent(botId.trim())}`;
-      const res = await apiFetch(`${BASE_URL}/chat/debug${q}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Debug failed"));
-      return data as ChatDebugResponse;
     },
   },
   escalations: {

@@ -136,11 +136,7 @@ def _serializable(report: RunReport) -> dict:
             "output": c.output,
             "latency_ms": c.latency_ms,
             "metrics": [asdict(m) for m in c.metrics],
-            "judge": (
-                {"score": c.judge.score, "rationale": c.judge.rationale, "model": c.judge.model}
-                if c.judge is not None
-                else None
-            ),
+            "judge": asdict(c.judge) if c.judge is not None else None,
             "error": c.error,
             "deterministic_passed": c.deterministic_passed,
             "overall_passed": c.overall_passed,

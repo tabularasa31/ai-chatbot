@@ -93,6 +93,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 - All DB models go in `backend/models/{domain}.py` (e.g. `auth.py`, `chat.py`), re-exported via `backend/models/__init__.py`. Never import directly from the sub-modules unless needed — use `from backend.models import X`.
 - DB schema changes: Alembic migration only (`alembic revision -m "description"`).
 - Services receive `Session` from the router via `Depends(get_db)`; never import `SessionLocal` in HTTP handlers.
+- **Async-first for new code.** New domains and new services use `AsyncSession` via `Depends(get_async_db)` from `backend/core/db.py`, and `AsyncOpenAI` via `get_async_openai_client`. Substantively reworking an existing sync service = migrate that domain to async in the same PR. Pure-CRUD domains without hot I/O (auth/tenants/admin) may stay sync — that's a legitimate end state, not tech debt. The full critical-path migration (`chat`/`search`/`guards`) is tracked separately; until it lands, those domains stay sync.
 - Every chat turn passes through `backend/guards/` before LLM generation: injection detector (structural → semantic, 2 levels) then relevance guard. Both are synchronous and short-circuit on failure.
 - The bot is language-agnostic: replies must be in the user's language. New hardcoded strings in the chat pipeline go through `backend/chat/language.py` — never hardcode English-only copy.
 - Frontend components: `PascalCase`; utilities: `camelCase`; Tailwind for styles.

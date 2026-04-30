@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 from fastapi import HTTPException
-from openai import OpenAI, RateLimitError
+from openai import AsyncOpenAI, OpenAI, RateLimitError
 
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
@@ -52,6 +52,41 @@ def get_openai_client(encrypted_key: str | None, *, timeout: float | None = None
         pool=_POOL_TIMEOUT_SECONDS,
     )
     return OpenAI(
+        api_key=decrypted_key,
+        timeout=httpx_timeout,
+        max_retries=0,
+    )
+
+
+def get_async_openai_client(
+    encrypted_key: str | None, *, timeout: float | None = None
+) -> AsyncOpenAI:
+    """Async counterpart of :func:`get_openai_client`.
+
+    Same key-decryption and timeout policy as the sync factory; returns an
+    ``AsyncOpenAI`` instance for use from async services. Sync callers stay on
+    ``get_openai_client``.
+    """
+    if not encrypted_key:
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API key not configured. Add your key in dashboard.",
+        )
+    try:
+        decrypted_key = decrypt_value(encrypted_key)
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to decrypt OpenAI API key.",
+        ) from e
+    read_timeout = timeout if timeout is not None else settings.openai_request_timeout_seconds
+    httpx_timeout = httpx.Timeout(
+        connect=_CONNECT_TIMEOUT_SECONDS,
+        read=read_timeout,
+        write=_WRITE_TIMEOUT_SECONDS,
+        pool=_POOL_TIMEOUT_SECONDS,
+    )
+    return AsyncOpenAI(
         api_key=decrypted_key,
         timeout=httpx_timeout,
         max_retries=0,

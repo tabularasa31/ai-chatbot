@@ -401,3 +401,50 @@ def register_and_verify_user(
     db_session.refresh(user)
     token, _ = create_token_for_user(user)
     return token
+
+
+# ---------------------------------------------------------------------------
+# Async fixtures (parallel to the sync contour above).
+#
+# New async services use ``get_async_db`` from backend.core.db; tests for them
+# get an ``AsyncSession`` here. Sync tests are unaffected.
+# ---------------------------------------------------------------------------
+
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_engine_fx():
+    """Per-test async SQLite engine with all tables created."""
+    engine_ = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        future=True,
+    )
+    async with engine_.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    try:
+        yield engine_
+    finally:
+        await engine_.dispose()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_db_session(async_engine_fx) -> "AsyncSession":  # type: ignore[name-defined]
+    """AsyncSession bound to the per-test async engine."""
+    SessionFactory = async_sessionmaker(
+        bind=async_engine_fx,
+        class_=AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    async with SessionFactory() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()

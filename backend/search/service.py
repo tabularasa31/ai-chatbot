@@ -3171,14 +3171,17 @@ def _python_cosine_search(
 # ---------------------------------------------------------------------------
 
 
-def _session_is_sqlite(db: object) -> bool:
-    """Detect SQLite from a sync or async session (for test/pg branching)."""
+def _session_is_sqlite(db: Session | AsyncSession) -> bool:
+    """Detect SQLite from a sync or async session (for test/pg branching).
+
+    Uses ``isinstance`` to pick the right bind accessor, then reads the
+    backing engine's URL.
+    """
     try:
-        bind = getattr(db, "bind", None)
-        if bind is None:
-            sync_session = getattr(db, "sync_session", None)
-            if sync_session is not None:
-                bind = getattr(sync_session, "bind", None)
+        if isinstance(db, AsyncSession):
+            bind = db.sync_session.bind
+        else:
+            bind = db.bind
         return "sqlite" in str(getattr(bind, "url", ""))
     except Exception:
         return False
@@ -3815,7 +3818,7 @@ async def _async_run_candidate_stage(
 
     # NER runs concurrently in the default executor (thread pool).
     ner_task: asyncio.Task[list[str]] | None = None
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     if settings.entity_overlap_enabled and api_key and await _async_tenant_has_embeddings(
         tenant_id, db
     ):
@@ -4080,7 +4083,7 @@ async def _async_run_quality_stage(
     # adjudicate_contradictions is sync (LLM call) — run in executor to avoid
     # blocking the event loop. The helper itself is CPU-light; the OpenAI call
     # inside uses the sync client, which is fine in a thread context.
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     contradiction_adjudication, contradiction_adjudication_observability = await loop.run_in_executor(
         None,
         lambda: _build_contradiction_adjudication_evidence(

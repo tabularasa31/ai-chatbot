@@ -21,7 +21,7 @@ import json
 import os
 import sys
 from typing import Generator
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import psycopg2
 import pytest
@@ -148,14 +148,32 @@ def mock_openai_client() -> Generator[Mock, None, None]:
         ],
         usage=Mock(total_tokens=15),
     )
+    # Async-capable mock that delegates to the same sync mock so tests that
+    # configure mock_openai_client work transparently for both code paths.
+    async_mock_client = AsyncMock()
+
+    async def _async_embeddings_create(*args: object, **kwargs: object) -> Mock:
+        return mock_client.embeddings.create(*args, **kwargs)
+
+    async def _async_chat_completions_create(*args: object, **kwargs: object) -> Mock:
+        return mock_client.chat.completions.create(*args, **kwargs)
+
+    async_mock_client.embeddings.create.side_effect = _async_embeddings_create
+    async_mock_client.chat.completions.create.side_effect = _async_chat_completions_create
+
     with (
         patch("backend.embeddings.service.get_openai_client", return_value=mock_client),
         patch("backend.search.service.get_openai_client", return_value=mock_client),
+        patch("backend.search.service.get_async_openai_client", return_value=async_mock_client),
         patch("backend.chat.service.get_openai_client", return_value=mock_client),
         patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True),
         patch(
             "backend.escalation.openai_escalation.get_openai_client",
             return_value=mock_esc_client,
+        ),
+        patch(
+            "backend.search.service._async_rewrite_query_for_retrieval",
+            new=AsyncMock(return_value=None),
         ),
     ):
         yield mock_client
@@ -175,8 +193,16 @@ def pg_client(
     pg_engine: sa.engine.Engine, pg_db_session: Session
 ) -> Generator[TestClient, None, None]:
     """FastAPI TestClient wired to real PostgreSQL engine (pgvector enabled)."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
     from backend.core import db as core_db
-    from backend.core.db import get_db
+    from backend.core.db import get_async_db, get_db
     from backend.main import app
 
     PgSessionLocal = sessionmaker(
@@ -187,10 +213,22 @@ def pg_client(
         future=True,
     )
 
+    sync_url = str(pg_engine.url)
+    async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    async_engine = create_async_engine(async_url, future=True)
+    async_session_factory = async_sessionmaker(
+        async_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
     def override_get_db() -> Generator[Session, None, None]:
         yield pg_db_session
 
+    async def override_get_async_db():
+        async with async_session_factory() as session:
+            yield session
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_async_db] = override_get_async_db
     original_engine = core_db.engine
     original_session_local = core_db.SessionLocal
     core_db.engine = pg_engine
@@ -203,3 +241,7 @@ def pg_client(
         core_db.engine = original_engine
         core_db.SessionLocal = original_session_local
         app.dependency_overrides.clear()
+        try:
+            asyncio.get_event_loop().run_until_complete(async_engine.dispose())
+        except Exception:
+            pass

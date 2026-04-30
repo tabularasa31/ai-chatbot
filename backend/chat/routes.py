@@ -3,11 +3,10 @@
 import logging
 import uuid
 from collections import defaultdict
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from openai import APIError, RateLimitError
-from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
@@ -17,7 +16,6 @@ from backend.chat.history_service import (
     get_chat_history,
     get_session_logs,
     list_chat_sessions,
-    run_debug,
 )
 from backend.chat.language import detect_language, localize_text_to_language_result
 from backend.chat.schemas import (
@@ -45,7 +43,6 @@ from backend.email.service import send_email
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
-    Bot,
     Chat,
     EscalationTrigger,
     Message,
@@ -124,79 +121,7 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", ap
     ).text
 
 
-class DebugRequest(BaseModel):
-    """Request body for debug endpoint."""
-
-    question: str = Field(..., min_length=1, max_length=1000)
-
-
-class DebugChunkResponse(BaseModel):
-    """Single chunk in debug response."""
-
-    document_id: str
-    score: float
-    preview: str
-
-
-class DebugInfoResponse(BaseModel):
-    """Debug info for RAG retrieval."""
-
-    mode: Literal["vector", "keyword", "hybrid", "none"]
-    best_rank_score: float | None = None
-    best_confidence_score: float | None = None
-    confidence_source: Literal["vector_similarity", "rank_score", "none"] | None = None
-    contradiction_detected: bool = False
-    contradiction_count: int = 0
-    contradiction_pair_count: int = 0
-    contradiction_basis_types: list[str] = Field(default_factory=list)
-    contradiction_adjudication_enabled: bool = False
-    contradiction_adjudication_applied_to_any_fact: bool = False
-    contradiction_adjudication_status: str = "disabled"
-    contradiction_adjudication_candidate_count: int = 0
-    contradiction_adjudication_sent_count: int = 0
-    contradiction_adjudication_completed_count: int = 0
-    contradiction_adjudication_confirmed_count: int = 0
-    contradiction_adjudication_rejected_count: int = 0
-    contradiction_adjudication_inconclusive_count: int = 0
-    contradiction_adjudication_error_count: int = 0
-    reliability: dict | None = None
-    chunks: list[DebugChunkResponse]
-    validation: dict | None = None
-    # Pipeline decision fields (added alongside retrieval info)
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] | None = None
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None = None
-    is_reject: bool = False
-    is_faq_direct: bool = False
-    validation_applied: bool = False
-    validation_outcome: Literal["valid", "fallback"] | None = None
-
-
-class ChatDebugResponse(BaseModel):
-    """Response from chat debug endpoint."""
-
-    answer: str
-    raw_answer: str | None = None
-    tokens_used: int
-    debug: DebugInfoResponse
-
 chat_router = APIRouter(tags=["chat"])
-
-
-def _resolve_debug_client(
-    *,
-    db: Session,
-    current_user: User,
-    bot_id: str,
-) -> Tenant:
-    row = (
-        db.query(Bot, Tenant)
-        .join(Tenant, Bot.tenant_id == Tenant.id)
-        .filter(Bot.public_id == bot_id, Tenant.id == current_user.tenant_id)
-        .first()
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Bot not found")
-    return row[1]
 
 
 def _require_original_access(current_user: User) -> None:
@@ -265,111 +190,6 @@ def chat(
         tokens_used=outcome.tokens_used,
         chat_ended=outcome.chat_ended,
         ticket_number=outcome.ticket_number,
-    )
-
-
-@chat_router.post("/debug", response_model=ChatDebugResponse, include_in_schema=False)
-@limiter.limit("30/minute")
-def chat_debug(
-    request: Request,
-    body: DebugRequest,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-    bot_id: Annotated[str, Query(min_length=1)],
-) -> ChatDebugResponse:
-    """
-    Debug endpoint: run RAG pipeline without persisting to DB.
-    JWT auth required. Returns answer + retrieval debug info.
-    """
-    tenant = _resolve_debug_client(db=db, current_user=current_user, bot_id=bot_id)
-    if not tenant.openai_api_key:
-        raise HTTPException(
-            status_code=400,
-            detail="OpenAI API key not configured. Add your key in dashboard settings.",
-        )
-
-    try:
-        answer, tokens_used, debug_dict = run_debug(
-            tenant_id=tenant.id,
-            question=body.question,
-            db=db,
-            api_key=tenant.openai_api_key,
-        )
-    except RateLimitError as exc:
-        if is_quota_exceeded(exc):
-            lang = detect_language(body.question).detected_language
-            raise HTTPException(
-                status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
-            ) from None
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-    except APIError:
-        raise HTTPException(
-            status_code=503,
-            detail="OpenAI service unavailable",
-        ) from None
-
-    debug_resp = DebugInfoResponse(
-        mode=debug_dict["mode"],
-        best_rank_score=debug_dict.get("best_rank_score"),
-        best_confidence_score=debug_dict.get("best_confidence_score"),
-        confidence_source=debug_dict.get("confidence_source"),
-        contradiction_detected=bool(debug_dict.get("contradiction_detected", False)),
-        contradiction_count=int(debug_dict.get("contradiction_count", 0)),
-        contradiction_pair_count=int(debug_dict.get("contradiction_pair_count", 0)),
-        contradiction_basis_types=list(debug_dict.get("contradiction_basis_types", [])),
-        contradiction_adjudication_enabled=bool(
-            debug_dict.get("contradiction_adjudication_enabled", False)
-        ),
-        contradiction_adjudication_applied_to_any_fact=bool(
-            debug_dict.get("contradiction_adjudication_applied_to_any_fact", False)
-        ),
-        contradiction_adjudication_status=str(
-            debug_dict.get("contradiction_adjudication_status", "disabled")
-        ),
-        contradiction_adjudication_candidate_count=int(
-            debug_dict.get("contradiction_adjudication_candidate_count", 0)
-        ),
-        contradiction_adjudication_sent_count=int(
-            debug_dict.get("contradiction_adjudication_sent_count", 0)
-        ),
-        contradiction_adjudication_completed_count=int(
-            debug_dict.get("contradiction_adjudication_completed_count", 0)
-        ),
-        contradiction_adjudication_confirmed_count=int(
-            debug_dict.get("contradiction_adjudication_confirmed_count", 0)
-        ),
-        contradiction_adjudication_rejected_count=int(
-            debug_dict.get("contradiction_adjudication_rejected_count", 0)
-        ),
-        contradiction_adjudication_inconclusive_count=int(
-            debug_dict.get("contradiction_adjudication_inconclusive_count", 0)
-        ),
-        contradiction_adjudication_error_count=int(
-            debug_dict.get("contradiction_adjudication_error_count", 0)
-        ),
-        reliability=debug_dict.get("reliability"),
-        chunks=[
-            DebugChunkResponse(
-                document_id=c["document_id"],
-                score=c["score"],
-                preview=c["preview"],
-            )
-            for c in debug_dict["chunks"]
-        ],
-        validation=debug_dict.get("validation"),
-        strategy=debug_dict.get("strategy"),
-        reject_reason=debug_dict.get("reject_reason"),
-        is_reject=bool(debug_dict.get("is_reject", False)),
-        is_faq_direct=bool(debug_dict.get("is_faq_direct", False)),
-        validation_applied=bool(debug_dict.get("validation_applied", False)),
-        validation_outcome=debug_dict.get("validation_outcome"),
-    )
-    return ChatDebugResponse(
-        answer=answer,
-        raw_answer=debug_dict.get("raw_answer"),
-        tokens_used=tokens_used,
-        debug=debug_resp,
     )
 
 

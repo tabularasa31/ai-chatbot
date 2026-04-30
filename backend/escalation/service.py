@@ -136,7 +136,27 @@ def detect_human_request(message: str, api_key: str) -> bool:
         return cached
 
     system_prompt = (
-        "Determine if the user wants to speak with a human agent, operator, or live support person. "
+        "Decide whether the user is *currently* asking to be connected to a "
+        "human agent / operator / live support person, RIGHT NOW.\n"
+        "\n"
+        "Return true when the user's intent is to hand the conversation off "
+        "to a person this turn — they want a human, not a self-serve answer. "
+        "Examples (illustrative, not exhaustive): "
+        "\"I want to talk to a human\", \"connect me to support\", "
+        "\"I need to speak with a person\", \"can someone help me?\", "
+        "\"please escalate this\".\n"
+        "\n"
+        "Return false when the user is asking an *informational* question "
+        "ABOUT support / contact options that the bot should answer from "
+        "the documentation. Examples: "
+        "\"how do I contact support?\", \"what's your support email?\", "
+        "\"where can I find help?\", \"do you have a support team?\". "
+        "These are knowledge questions — the user wants to know HOW to "
+        "reach support, not be handed off this turn.\n"
+        "\n"
+        "Look at intent, not exact wording. The same rule applies in any "
+        "language; treat the user's phrasing as a hint, not a template.\n"
+        "\n"
         'Answer ONLY with JSON: {"human_request": true/false}'
     )
 

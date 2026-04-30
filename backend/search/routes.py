@@ -8,21 +8,21 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import APIError
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.middleware import require_verified_user
-from backend.core.db import get_db
+from backend.core.db import get_async_db
 from backend.core.limiter import limiter
-from backend.models import User
+from backend.models import Tenant, User
 from backend.observability import begin_trace
 from backend.search.schemas import SearchRequest, SearchResponse, SearchResultItem
 from backend.search.service import (
     build_reliability_projection,
     build_variant_trace_metadata,
     build_variant_trace_tag,
-    search_similar_chunks_detailed,
+    search_similar_chunks_detailed_async,
 )
-from backend.tenants.service import get_tenant_by_user
 
 search_router = APIRouter(tags=["search"])
 logger = logging.getLogger(__name__)
@@ -30,11 +30,11 @@ logger = logging.getLogger(__name__)
 
 @limiter.limit("30/minute")
 @search_router.post("", response_model=SearchResponse)
-def search_route(
+async def search_route(
     request: Request,
     body: SearchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> SearchResponse:
     """
     Vector similarity search over embeddings (protected JWT).
@@ -42,7 +42,12 @@ def search_route(
     Embeds the query, searches across tenant's embeddings, returns top_k results.
     Errors: 401 (no/invalid JWT), 404 (user has no tenant), 503 (OpenAI unavailable).
     """
-    tenant = get_tenant_by_user(current_user.id, db)
+    result = await db.execute(
+        select(Tenant)
+        .join(User, User.tenant_id == Tenant.id)
+        .filter(User.id == current_user.id)
+    )
+    tenant = result.scalars().first()
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
     if not tenant.openai_api_key:
@@ -66,7 +71,7 @@ def search_route(
     )
 
     try:
-        bundle = search_similar_chunks_detailed(
+        bundle = await search_similar_chunks_detailed_async(
             tenant_id=tenant.id,
             query=body.query,
             top_k=body.top_k,

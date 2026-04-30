@@ -131,8 +131,14 @@ def db_session(engine: Engine) -> Generator[Session, None, None]:
 @pytest.fixture(scope="function")
 def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, None]:
     """Test tenant with auth routes, using test database."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession as _AsyncSession
+    from sqlalchemy.ext.asyncio import async_sessionmaker as _async_sessionmaker
+    from sqlalchemy.ext.asyncio import create_async_engine as _create_async_engine
+
     from backend.core import db as core_db
-    from backend.core.db import get_db
+    from backend.core.db import get_async_db, get_db
     from backend.main import app
 
     TestingSessionLocal = sessionmaker(
@@ -146,7 +152,25 @@ def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
     def override_get_db() -> Generator[Session, None, None]:
         yield db_session
 
+    # Build an async engine pointing to the same SQLite file so async routes
+    # (e.g. the search route) see the same test data as sync fixtures.
+    sync_url = str(engine.url)
+    async_url = sync_url.replace("sqlite:///", "sqlite+aiosqlite:///").split("?")[0]
+    _async_test_engine = _create_async_engine(async_url, future=True)
+    _async_testing_session_factory = _async_sessionmaker(
+        bind=_async_test_engine,
+        class_=_AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+
+    async def override_get_async_db():
+        async with _async_testing_session_factory() as session:
+            yield session
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_async_db] = override_get_async_db
     original_engine = core_db.engine
     original_session_local = core_db.SessionLocal
     core_db.engine = engine
@@ -159,11 +183,17 @@ def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
         core_db.engine = original_engine
         core_db.SessionLocal = original_session_local
         app.dependency_overrides.clear()
+        try:
+            asyncio.get_event_loop().run_until_complete(_async_test_engine.dispose())
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)
 def mock_openai_client():
     """Mock get_openai_client for all tests — no real API calls."""
+    from unittest.mock import AsyncMock
+
     mock_client = Mock()
 
     def _embeddings_create(*args: object, **kwargs: object) -> Mock:
@@ -267,9 +297,27 @@ def mock_openai_client():
         ],
         usage=Mock(total_tokens=15),
     )
+
+    # Async-capable mock that delegates to the same sync side_effects so tests
+    # that configure mock_openai_client.embeddings.create.return_value.data work
+    # transparently for both sync and async code paths.
+    async_mock_client = AsyncMock()
+
+    async def _async_embeddings_create(*args: object, **kwargs: object) -> Mock:
+        # Call through the mock so tests can override side_effect / return_value.
+        return mock_client.embeddings.create(*args, **kwargs)
+
+    async def _async_chat_completions_create(*args: object, **kwargs: object) -> Mock:
+        # Call through the mock so tests can override side_effect / return_value.
+        return mock_client.chat.completions.create(*args, **kwargs)
+
+    async_mock_client.embeddings.create.side_effect = _async_embeddings_create
+    async_mock_client.chat.completions.create.side_effect = _async_chat_completions_create
+
     # Patch where get_openai_client is used (not where defined) so imports see the mock
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.search.service.get_openai_client", return_value=mock_client), \
+         patch("backend.search.service.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.language.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
@@ -286,6 +334,10 @@ def mock_openai_client():
          patch(
              "backend.search.service._rewrite_query_for_retrieval",
              return_value=None,
+         ), \
+         patch(
+             "backend.search.service._async_rewrite_query_for_retrieval",
+             new=AsyncMock(return_value=None),
          ):
         yield mock_client
 

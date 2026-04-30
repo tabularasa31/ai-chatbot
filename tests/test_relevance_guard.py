@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -288,3 +288,226 @@ def test_relevance_checker_uses_relevance_guard_model(
     assert relevant is True
     assert reason == "ok"
     assert mock_openai.chat.completions.create.call_args.kwargs["model"] == "gpt-test-relevance"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Async variants
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _make_profile(tenant_id: uuid.UUID) -> TenantProfile:
+    return TenantProfile(
+        tenant_id=tenant_id,
+        product_name="Product",
+        topics=["ModA"],
+        glossary=[],
+        aliases=[],
+        support_email=None,
+        support_urls=[],
+        escalation_policy=None,
+        updated_at=datetime.now(timezone.utc),
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_no_profile_passes_through() -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile
+
+    relevant, reason, p = await async_check_relevance_with_profile(
+        tenant_id=uuid.uuid4(),
+        user_question="some question",
+        profile=None,
+        api_key="sk-test",
+    )
+    assert relevant is True
+    assert reason == "no_profile"
+    assert p is None
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_short_query_bypass() -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    relevant, reason, p = await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="hi",
+        profile=profile,
+        api_key="sk-test",
+    )
+    assert relevant is True
+    assert reason == "short_query_bypass"
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_llm_returns_relevant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+
+    async_mock = AsyncMock(
+        return_value=Mock(
+            choices=[Mock(message=Mock(content='{"relevant": true, "reason": "on topic"}'))]
+        )
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    relevant, reason, p = await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="how do I configure the integration module",
+        profile=profile,
+        api_key="sk-test",
+    )
+    assert relevant is True
+    assert reason == "on topic"
+    assert p is profile
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_llm_returns_not_relevant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+
+    async_mock = AsyncMock(
+        return_value=Mock(
+            choices=[Mock(message=Mock(content='{"relevant": false, "reason": "off topic"}'))]
+        )
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    relevant, reason, p = await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="write a poem about flowers please",
+        profile=profile,
+        api_key="sk-test",
+    )
+    assert relevant is False
+    assert reason == "off topic"
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_timeout_returns_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+    monkeypatch.setattr("backend.guards.relevance_checker.TIMEOUT_SECONDS", 0.05)
+
+    async def slow_create(*args, **kwargs):
+        await asyncio.sleep(0.2)
+        return Mock(choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))])
+
+    mock_client = Mock()
+    mock_client.chat.completions.create = slow_create
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    relevant, reason, p = await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="how do I configure the integration module",
+        profile=profile,
+        api_key="sk-test",
+    )
+    assert relevant is True
+    assert reason == "timeout"
+    assert p is None
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_cache_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+    call_count = 0
+
+    async def counting_create(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return Mock(
+            choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))]
+        )
+
+    mock_client = Mock()
+    mock_client.chat.completions.create = counting_create
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+    question = "how do I configure the integration module"
+
+    for _ in range(3):
+        await async_check_relevance_with_profile(
+            tenant_id=tid,
+            user_question=question,
+            profile=profile,
+            api_key="sk-test",
+        )
+
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_uses_model_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+
+    async_mock = AsyncMock(
+        return_value=Mock(
+            choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))]
+        )
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.settings.relevance_guard_model",
+        "gpt-test-async",
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="how do I configure the integration module",
+        profile=profile,
+        api_key="sk-test",
+    )
+
+    assert async_mock.call_args.kwargs["model"] == "gpt-test-async"

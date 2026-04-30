@@ -6,6 +6,7 @@ contracts (banned phrases, expected substrings, language mismatch).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from backend.chat.language import detect_language
@@ -19,11 +20,28 @@ class MetricResult:
     detail: str = ""
 
 
+# Strip common thousands separators that sit BETWEEN two digits — `1,000`,
+# `1 000`, `1<NBSP>000` all collapse to `1000`. Anything else (commas in
+# prose, spaces between words, etc.) is left untouched.
+_DIGIT_SEPARATOR_RE = re.compile(r"(?<=\d)[,\s](?=\d)")
+
+
+def _normalize_for_match(text: str) -> str:
+    """Lowercase + collapse thousands separators inside numbers so that
+    a needle of ``1000`` matches a haystack of ``1,000`` or ``1 000``.
+
+    Without this, golden cases like `must_contain: ["1000"]` would
+    falsely fail when the bot writes the value in localised form, even
+    though the LLM judge correctly considered the answer right."""
+
+    return _DIGIT_SEPARATOR_RE.sub("", text.lower())
+
+
 def check_must_contain(case: GoldenCase, output: str) -> MetricResult:
     if not case.must_contain:
         return MetricResult("must_contain", True, "skipped (none configured)")
-    haystack = output.lower()
-    missing = [p for p in case.must_contain if p.lower() not in haystack]
+    haystack = _normalize_for_match(output)
+    missing = [p for p in case.must_contain if _normalize_for_match(p) not in haystack]
     if missing:
         return MetricResult("must_contain", False, f"missing: {missing}")
     return MetricResult("must_contain", True)
@@ -32,8 +50,8 @@ def check_must_contain(case: GoldenCase, output: str) -> MetricResult:
 def check_must_not_contain(case: GoldenCase, output: str) -> MetricResult:
     if not case.must_not_contain:
         return MetricResult("must_not_contain", True, "skipped (none configured)")
-    haystack = output.lower()
-    found = [p for p in case.must_not_contain if p.lower() in haystack]
+    haystack = _normalize_for_match(output)
+    found = [p for p in case.must_not_contain if _normalize_for_match(p) in haystack]
     if found:
         return MetricResult("must_not_contain", False, f"found banned: {found}")
     return MetricResult("must_not_contain", True)

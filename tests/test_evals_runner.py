@@ -115,6 +115,43 @@ def test_must_not_contain_blocks_banned_phrase() -> None:
     assert not r.passed and "claude" in r.detail.lower()
 
 
+def test_must_contain_normalises_thousands_separators() -> None:
+    """Real prod failure on #547: bot said `1,000 characters` but the
+    case demanded substring `1000`. Both forms refer to the same
+    number — strip thousands separators before comparing."""
+
+    c = _case(must_contain=["1000"])
+    # Comma (US/EN locale)
+    assert check_must_contain(c, "Maximum 1,000 characters per message.").passed
+    # Plain space
+    assert check_must_contain(c, "Maximum 1 000 characters per message.").passed
+    # NBSP (Russian-style typography for thousands)
+    assert check_must_contain(c, "Максимум 1 000 символов на сообщение.").passed
+    # And the unseparated form keeps working
+    assert check_must_contain(c, "Maximum 1000 characters per message.").passed
+
+
+def test_must_contain_does_not_collapse_separators_outside_numbers() -> None:
+    """The normaliser must not change anything that isn't between two
+    digits — otherwise we'd silently mutate prose (e.g. ``cap, then``
+    becoming ``capthen``) and start matching things we shouldn't."""
+
+    c = _case(must_contain=["limit, then"])
+    # Caller asked for the exact prose snippet — we must NOT eat the comma+space.
+    assert check_must_contain(c, "There is a limit, then a fallback.").passed
+    # And we must NOT match if the snippet really is missing.
+    assert not check_must_contain(c, "There is no such phrase here.").passed
+
+
+def test_must_not_contain_also_normalises_numbers() -> None:
+    """The same normalisation has to apply to the negative check, or
+    a banned `1000` would slip through as `1,000` in the output."""
+
+    c = _case(must_not_contain=["1000"])
+    r = check_must_not_contain(c, "Cap is 1,000 messages.")
+    assert not r.passed and "1000" in r.detail
+
+
 def test_language_check_skipped_for_any() -> None:
     c = _case(lang="any")
     assert check_language(c, "anything").passed

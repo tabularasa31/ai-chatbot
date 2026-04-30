@@ -136,7 +136,24 @@ def detect_human_request(message: str, api_key: str) -> bool:
         return cached
 
     system_prompt = (
-        "Determine if the user wants to speak with a human agent, operator, or live support person. "
+        "Decide whether the user is *currently* asking to be connected to a "
+        "human agent / operator / live support person, RIGHT NOW.\n"
+        "\n"
+        "Return true ONLY when the user is making the request: "
+        "\"I want to talk to a human\", \"connect me to support\", "
+        "\"can I speak with an agent?\", \"please escalate this\".\n"
+        "\n"
+        "Return false for *informational* questions ABOUT support or contact "
+        "options that the bot should answer from the documentation: "
+        "\"how do I contact support?\", \"what's your support email?\", "
+        "\"where can I find help?\", \"do you have a support team?\". "
+        "These are knowledge questions, not escalation requests — the user "
+        "wants to know HOW to reach support, not be handed off this turn.\n"
+        "\n"
+        "The same rule applies to messages in any language: distinguish "
+        "explicit human-handoff requests (true) from questions about "
+        "contact options (false).\n"
+        "\n"
         'Answer ONLY with JSON: {"human_request": true/false}'
     )
 

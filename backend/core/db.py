@@ -42,10 +42,12 @@ def _to_async_url(url: str) -> str:
     """
     if url.startswith("postgresql+asyncpg://") or url.startswith("sqlite+aiosqlite://"):
         return url
-    if url.startswith("postgresql+psycopg2://"):
-        return "postgresql+asyncpg://" + url[len("postgresql+psycopg2://") :]
-    if url.startswith("postgresql://"):
-        return "postgresql+asyncpg://" + url[len("postgresql://") :]
+    # Railway and some Heroku-style providers expose DATABASE_URL with the
+    # legacy ``postgres://`` scheme — SQLAlchemy 2.0 rejects it, so normalize
+    # it here too.
+    for sync_prefix in ("postgresql+psycopg2://", "postgresql://", "postgres://"):
+        if url.startswith(sync_prefix):
+            return "postgresql+asyncpg://" + url[len(sync_prefix) :]
     if url.startswith("sqlite://"):
         return "sqlite+aiosqlite://" + url[len("sqlite://") :]
     return url

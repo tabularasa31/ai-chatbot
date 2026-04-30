@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -13,13 +14,14 @@ from typing import Literal
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy import Text as SAText
-from sqlalchemy import cast, func, or_
+from sqlalchemy import cast, func, or_, select
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session, selectinload
 
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client
-from backend.core.openai_retry import call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client, get_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.knowledge.entity_extractor import extract_entities_from_query
 from backend.models import Document, Embedding, Tenant
 from backend.observability import TraceHandle
@@ -3158,3 +3160,1071 @@ def _python_cosine_search(
         scored.append((emb, cosine_similarity(query_vector, vector)))
 
     return _sort_scored_embeddings(scored)[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Async layer — Phase 3 async migration (PR 1: search/service.py)
+#
+# All public async entry points are named with an ``_async`` suffix so sync
+# callers (chat/guards, migrating in PR 2-3) continue to work unchanged.
+# The async pipeline stages are private (``_async_*`` prefix).
+# ---------------------------------------------------------------------------
+
+
+def _session_is_sqlite(db: object) -> bool:
+    """Detect SQLite from a sync or async session (for test/pg branching)."""
+    try:
+        bind = getattr(db, "bind", None)
+        if bind is None:
+            sync_session = getattr(db, "sync_session", None)
+            if sync_session is not None:
+                bind = getattr(sync_session, "bind", None)
+        return "sqlite" in str(getattr(bind, "url", ""))
+    except Exception:
+        return False
+
+
+# ── Async OpenAI helpers ─────────────────────────────────────────────────────
+
+
+async def _async_rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
+    """Async counterpart of :func:`_rewrite_query_for_retrieval`."""
+    try:
+        client = get_async_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
+        response = await async_call_openai_with_retry(
+            "query_rewrite_for_retrieval",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a search query optimizer for a product knowledge base.\n"
+                            "Rewrite the user's question as 3-5 English keywords or a short English noun phrase "
+                            "that would appear as a topic or heading in product documentation.\n"
+                            "Always output in English regardless of the input language.\n"
+                            "Output only the rewritten query, nothing else."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+                temperature=0,
+                max_completion_tokens=60,
+            ),
+        )
+        rewritten = (response.choices[0].message.content or "").strip()
+        return rewritten if rewritten else None
+    except Exception:
+        return None
+
+
+async def async_embed_query(
+    query: str,
+    *,
+    api_key: str,
+    timeout: float | None = None,
+) -> list[float]:
+    """Async counterpart of :func:`embed_query`."""
+    client = get_async_openai_client(api_key, timeout=timeout)
+    response = await async_call_openai_with_retry(
+        "search_embed_query",
+        lambda: client.embeddings.create(
+            model=settings.embedding_model,
+            input=query,
+        ),
+        call_type="embedding",
+    )
+    return response.data[0].embedding
+
+
+async def async_embed_queries(
+    queries: list[str],
+    *,
+    api_key: str,
+    timeout: float | None = None,
+) -> list[list[float]]:
+    """Async counterpart of :func:`embed_queries`."""
+    if not queries:
+        return []
+    client = get_async_openai_client(api_key, timeout=timeout)
+    response = await async_call_openai_with_retry(
+        "search_embed_queries",
+        lambda: client.embeddings.create(
+            model=settings.embedding_model,
+            input=queries,
+        ),
+        call_type="embedding",
+    )
+    return [item.embedding for item in response.data]
+
+
+async def async_embed_queries_with_stats(
+    queries: list[str], *, api_key: str, timeout: float | None = None
+) -> tuple[list[list[float]], int]:
+    """Async counterpart of :func:`embed_queries_with_stats`."""
+    if not queries:
+        return [], 0
+    vectors = await async_embed_queries(queries, api_key=api_key, timeout=timeout)
+    return vectors, 1
+
+
+async def async_semantic_query_rewrite(
+    query: str,
+    *,
+    api_key: str,
+    timeout: float = 2.0,
+    bot_id: str | None = None,
+) -> str | None:
+    """Async counterpart of :func:`semantic_query_rewrite`."""
+    if not query or not api_key:
+        return None
+    prompt = _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
+    try:
+        client = get_async_openai_client(api_key, timeout=timeout)
+        response = await async_call_openai_with_retry(
+            "semantic_query_rewrite",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None
+
+
+async def async_semantic_query_rewrite_for_kb(
+    query: str,
+    *,
+    kb_script: str,
+    api_key: str,
+    timeout: float = 2.0,
+    bot_id: str | None = None,
+) -> str | None:
+    """Async counterpart of :func:`semantic_query_rewrite_for_kb`."""
+    lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
+    if not lang_name or not query or not api_key:
+        return None
+    prompt = (
+        _SEMANTIC_REWRITE_PROMPT_PREFIX
+        + query
+        + "\"\n\n"
+        "Write a short technical search query (5-10 words) using product feature "
+        "terminology and technical concepts that would retrieve the relevant "
+        f"documentation. Focus on the FEATURE or SETTING being asked about, not "
+        f"the user's symptom. Output ONLY in {lang_name}, regardless of the input "
+        "language. Reply with ONLY the search query, nothing else."
+    )
+    try:
+        client = get_async_openai_client(api_key, timeout=timeout)
+        response = await async_call_openai_with_retry(
+            "semantic_query_rewrite_for_kb",
+            lambda: client.chat.completions.create(
+                model=settings.query_rewrite_model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
+            ),
+            bot_id=bot_id,
+        )
+        rewrite = (response.choices[0].message.content or "").strip()
+        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
+            return rewrite
+    except Exception:
+        pass
+    return None
+
+
+# ── Async DB helpers ─────────────────────────────────────────────────────────
+
+
+async def _async_pgvector_search(
+    tenant_id: uuid.UUID,
+    query_vector: list[float],
+    top_k: int,
+    db: AsyncSession,
+) -> list[tuple[Embedding, float]]:
+    """Async counterpart of :func:`_pgvector_search`."""
+    try:
+        distance_expr = Embedding.vector.cosine_distance(query_vector)
+        stmt = (
+            select(Embedding, distance_expr.label("distance"))
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Embedding.vector.isnot(None))
+            .order_by(distance_expr)
+            .limit(top_k)
+            .options(selectinload(Embedding.document))
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+        return [(row[0], max(0.0, 1.0 - row[1])) for row in rows]
+    except Exception:
+        logger.exception("async pgvector search failed; falling back to Python cosine search")
+        return await _async_python_cosine_search(tenant_id, query_vector, top_k, db)
+
+
+async def _async_python_cosine_search(
+    tenant_id: uuid.UUID,
+    query_vector: list[float],
+    top_k: int,
+    db: AsyncSession,
+) -> list[tuple[Embedding, float]]:
+    """Async counterpart of :func:`_python_cosine_search`."""
+    stmt = (
+        select(Embedding)
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.tenant_id == tenant_id)
+        .options(selectinload(Embedding.document))
+    )
+    result = await db.execute(stmt)
+    embeddings = result.scalars().all()
+
+    scored: list[tuple[Embedding, float]] = []
+    for emb in embeddings:
+        if emb.vector is not None:
+            vector: list[float] | None = list(emb.vector)
+            meta_vec = (emb.metadata_json or {}).get("vector")
+            if meta_vec is not None and meta_vec != vector:
+                logger.warning(
+                    "embedding %s: emb.vector diverges from metadata_json[vector]",
+                    emb.id,
+                )
+        else:
+            meta = emb.metadata_json or {}
+            vector = meta.get("vector")
+
+        if not vector or not isinstance(vector, list) or len(vector) != len(query_vector):
+            continue
+        scored.append((emb, cosine_similarity(query_vector, vector)))
+
+    return _sort_scored_embeddings(scored)[:top_k]
+
+
+async def _async_build_vector_candidate_set(
+    tenant_id: uuid.UUID,
+    variant_vectors: list[list[float]],
+    db: AsyncSession,
+    *,
+    is_sqlite: bool = False,
+) -> VectorCandidateSet:
+    """Async counterpart of :func:`_build_vector_candidate_set`."""
+    vector_started_at = perf_counter()
+    vector_search_fn = _async_python_cosine_search if is_sqlite else _async_pgvector_search
+    vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
+    vector_search_call_count = 0
+    for variant_vector in variant_vectors:
+        vector_search_call_count += 1
+        for embedding, similarity in await vector_search_fn(
+            tenant_id,
+            variant_vector,
+            BM25_CANDIDATE_POOL,
+            db,
+        ):
+            existing = vector_candidate_map.get(embedding.id)
+            if existing is None or similarity > existing[1]:
+                vector_candidate_map[embedding.id] = (embedding, similarity)
+    return VectorCandidateSet(
+        candidates=_sort_scored_embeddings(list(vector_candidate_map.values()))[
+            :BM25_CANDIDATE_POOL
+        ],
+        call_count=vector_search_call_count,
+        duration_ms=round((perf_counter() - vector_started_at) * 1000, 2),
+    )
+
+
+async def async_bm25_search_chunks(
+    tenant_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: AsyncSession,
+) -> list[tuple[Embedding, float]]:
+    """Async counterpart of :func:`bm25_search_chunks`."""
+    tokens = _bm25_prefilter_tokens(query)
+    if not tokens:
+        return []
+
+    token_conditions = [
+        func.lower(Embedding.chunk_text).like(
+            f"%{_escape_like(token)}%", escape="\\"
+        )
+        for token in tokens
+    ]
+    stmt = (
+        select(Embedding)
+        .join(Document, Embedding.document_id == Document.id)
+        .filter(Document.tenant_id == tenant_id)
+        .filter(Embedding.chunk_text.isnot(None))
+        .filter(or_(*token_conditions))
+        .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+        .limit(BM25_PREFILTER_CANDIDATE_LIMIT)
+        .options(selectinload(Embedding.document))
+    )
+    result = await db.execute(stmt)
+    embeddings = result.scalars().all()
+    return _bm25_score_candidates(list(embeddings), query, top_k)
+
+
+async def async_entity_overlap_search(
+    tenant_id: uuid.UUID,
+    query_entities: list[str],
+    top_k: int,
+    db: AsyncSession,
+    *,
+    is_sqlite: bool = False,
+) -> list[tuple[Embedding, float]]:
+    """Async counterpart of :func:`entity_overlap_search`."""
+    if not query_entities or not tenant_id:
+        return []
+
+    if is_sqlite:
+        stmt = (
+            select(Embedding)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+            .options(selectinload(Embedding.document))
+        )
+    else:
+        stmt = (
+            select(Embedding)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(
+                Embedding.entities.op("?|")(
+                    cast(list(query_entities), ARRAY(SAText()))
+                )
+            )
+            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
+            .limit(ENTITY_SEARCH_CANDIDATE_LIMIT)
+            .options(selectinload(Embedding.document))
+        )
+
+    result = await db.execute(stmt)
+    candidates = result.scalars().all()
+
+    query_set = set(query_entities)
+    scored: list[tuple[Embedding, float]] = []
+    for emb in candidates:
+        chunk_entities = emb.entities or []
+        if not isinstance(chunk_entities, list):
+            continue
+        overlap = len(query_set.intersection(chunk_entities))
+        if overlap == 0:
+            continue
+        scored.append((emb, float(overlap)))
+
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    return scored[:top_k]
+
+
+async def _async_tenant_has_embeddings(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> bool:
+    """Async counterpart of :func:`_tenant_has_embeddings`."""
+    try:
+        stmt = (
+            select(Embedding.id)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar() is not None
+    except Exception:
+        logger.warning("async_tenant_has_embeddings_check_failed", exc_info=True)
+        return False
+
+
+async def _async_kb_bucket_counts_from_languages(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> dict[str, int] | None:
+    try:
+        stmt = (
+            select(Document.language)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Document.language.isnot(None))
+        )
+        result = await db.execute(stmt)
+        rows = result.all()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    counts: dict[str, int] = {}
+    for (lang,) in rows:
+        bucket = _language_to_script_bucket(lang)
+        if bucket is None:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return counts
+
+
+async def _async_kb_bucket_counts_from_chunk_sample(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> dict[str, int] | None:
+    try:
+        stmt = (
+            select(Embedding.chunk_text)
+            .join(Document, Embedding.document_id == Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .limit(_KB_SCRIPT_SAMPLE_SIZE)
+        )
+        result = await db.execute(stmt)
+        sample = result.all()
+    except Exception:
+        return None
+    if not sample:
+        return None
+    counts: dict[str, int] = {}
+    for (chunk_text,) in sample:
+        bucket = detect_query_script_bucket(chunk_text or "")
+        if bucket in ("cyrillic", "latin"):
+            counts[bucket] = counts.get(bucket, 0) + 1
+    return counts
+
+
+async def _async_tenant_has_unlabeled_documents(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> bool:
+    try:
+        stmt = (
+            select(Document.id)
+            .filter(Document.tenant_id == tenant_id)
+            .filter(Document.language.is_(None))
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        return result.scalar() is not None
+    except Exception:
+        return False
+
+
+async def _async_resolve_kb_bucket_counts(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> dict[str, int]:
+    labeled = await _async_kb_bucket_counts_from_languages(tenant_id, db)
+    if labeled is None:
+        return await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    if not await _async_tenant_has_unlabeled_documents(tenant_id, db):
+        return labeled
+    sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
+    merged = dict(labeled)
+    for bucket, count in sampled.items():
+        merged[bucket] = merged.get(bucket, 0) + count
+    return merged
+
+
+async def async_detect_tenant_kb_script(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> str | None:
+    """Async counterpart of :func:`detect_tenant_kb_script`."""
+    key = str(tenant_id)
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
+
+    counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
+    result: str | None = None
+    if counts:
+        dominant = max(counts, key=counts.__getitem__)
+        if dominant in ("cyrillic", "latin"):
+            result = dominant
+
+    _TENANT_KB_SCRIPT_CACHE[key] = (result, now)
+    return result
+
+
+# ── Async pipeline stages ────────────────────────────────────────────────────
+
+
+async def _async_run_query_stage(
+    *,
+    query: str,
+    api_key: str,
+    trace: TraceHandle | None,
+    precomputed_query_variants: list[str] | None,
+    precomputed_variant_vectors: list[list[float]] | None,
+    precomputed_embedding_api_request_count: int | None,
+    precomputed_rewritten_variant: str | None,
+    embedding_timeout: float | None,
+) -> _QueryStageResult:
+    """Async counterpart of :func:`_run_query_stage`.
+
+    Key optimization: when not using precomputed variants, the query-rewrite
+    LLM call and the embedding of base variants are launched concurrently via
+    ``asyncio.gather``, saving the latency of whichever finishes first.
+    If the rewrite produces a new variant it is embedded in a second (fast)
+    call afterward — total API calls stay the same as the sync path.
+    """
+    use_precomputed = (
+        precomputed_query_variants is not None
+        and precomputed_variant_vectors is not None
+        and precomputed_query_variants
+        and len(precomputed_query_variants) == len(precomputed_variant_vectors)
+    )
+
+    query_variants = precomputed_query_variants if use_precomputed else expand_query(query)
+
+    rewritten_variant: str | None = None
+    variant_vectors: list[list[float]] = []
+    embedding_api_request_count = 0
+    query_embedding_duration_ms = 0.0
+    embedded_query_count = 0
+    extra_embedded_queries = 0
+    extra_embedding_api_requests = 0
+
+    if not use_precomputed:
+        embedding_started_at = perf_counter()
+        # Parallel: LLM rewrite + base variant embedding
+        rewritten_variant, (base_vectors, api_count) = await asyncio.gather(
+            _async_rewrite_query_for_retrieval(query, api_key=api_key),
+            async_embed_queries_with_stats(query_variants, api_key=api_key, timeout=embedding_timeout),
+        )
+
+        if rewritten_variant:
+            normalized = _normalize_query_variants([*query_variants, rewritten_variant])
+            new_variants = [v for v in normalized if v not in set(query_variants)]
+            if new_variants:
+                extra_vectors, extra_count = await async_embed_queries_with_stats(
+                    new_variants, api_key=api_key, timeout=embedding_timeout
+                )
+                variant_vectors = base_vectors + extra_vectors
+                embedding_api_request_count = api_count + extra_count
+                query_variants = normalized
+            else:
+                variant_vectors = base_vectors
+                embedding_api_request_count = api_count
+        else:
+            variant_vectors = base_vectors
+            embedding_api_request_count = api_count
+
+        query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
+        embedded_query_count = len(query_variants)
+        extra_embedded_queries = max(embedded_query_count - 1, 0)
+        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
+        trace_query_vector = variant_vectors[0] if variant_vectors else []
+
+        if trace is not None:
+            trace.span(
+                name="query-expansion",
+                input={"query": query},
+            ).end(
+                output={
+                    "variants": query_variants,
+                    "rewritten_variant": rewritten_variant,
+                    "query_variant_count": len(query_variants),
+                    "variant_mode": _variant_mode_for_count(len(query_variants)),
+                    "extra_variant_count": max(len(query_variants) - 1, 0),
+                }
+            )
+            trace.span(
+                name="query-embedding",
+                input={
+                    "query_variants": query_variants,
+                    "query_variant_count": len(query_variants),
+                    "variant_mode": _variant_mode_for_count(len(query_variants)),
+                    "model": settings.embedding_model,
+                },
+            ).end(
+                output={
+                    "embedded_query_count": embedded_query_count,
+                    "extra_embedded_queries": extra_embedded_queries,
+                    "embedding_api_request_count": embedding_api_request_count,
+                    "extra_embedding_api_requests": extra_embedding_api_requests,
+                    "duration_ms": query_embedding_duration_ms,
+                }
+            )
+    else:
+        variant_vectors = precomputed_variant_vectors or []
+        embedding_api_request_count = int(precomputed_embedding_api_request_count or 1)
+        embedded_query_count = len(variant_vectors)
+        extra_embedded_queries = max(embedded_query_count - 1, 0)
+        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
+        trace_query_vector = variant_vectors[0] if variant_vectors else []
+        if trace is not None:
+            trace.span(
+                name="query-expansion",
+                input={"query": query},
+            ).end(
+                output={
+                    "variants": query_variants,
+                    "rewritten_variant": precomputed_rewritten_variant,
+                    "query_variant_count": len(query_variants),
+                    "variant_mode": _variant_mode_for_count(len(query_variants)),
+                    "extra_variant_count": max(len(query_variants) - 1, 0),
+                }
+            )
+
+    query_variant_count = len(query_variants)
+    variant_mode = _variant_mode_for_count(query_variant_count)
+
+    return _QueryStageResult(
+        query_variants=query_variants,
+        variant_vectors=variant_vectors,
+        query_variant_count=query_variant_count,
+        variant_mode=variant_mode,
+        extra_variant_count=max(query_variant_count - 1, 0),
+        embedded_query_count=embedded_query_count,
+        extra_embedded_queries=extra_embedded_queries,
+        embedding_api_request_count=embedding_api_request_count,
+        extra_embedding_api_requests=extra_embedding_api_requests,
+        query_embedding_duration_ms=query_embedding_duration_ms,
+        query_script_bucket=detect_query_script_bucket(query),
+        rewritten_variant=rewritten_variant,
+        trace_query_vector=trace_query_vector,
+    )
+
+
+async def _async_run_candidate_stage(
+    *,
+    tenant_id: uuid.UUID,
+    query: str,
+    query_stage: _QueryStageResult,
+    top_k: int,
+    db: AsyncSession,
+    trace: TraceHandle | None,
+    api_key: str | None = None,
+) -> _CandidateStageResult:
+    """Async counterpart of :func:`_run_candidate_stage`.
+
+    NER is run via ``run_in_executor`` so it remains concurrent with vector
+    and BM25 retrieval without blocking the event loop.
+    """
+    q = query_stage
+    is_sqlite = _session_is_sqlite(db)
+    vector_engine = "python-cosine" if is_sqlite else "pgvector"
+    bm25_expansion_mode = _resolve_bm25_expansion_mode()
+
+    kb_script = await async_detect_tenant_kb_script(tenant_id, db)
+    bm25_variant_queries = _bm25_queries_for_script(
+        query, q.query_variants, q.query_script_bucket, kb_script=kb_script
+    )
+    rerank_lexical_query: str | None = (
+        None
+        if _is_en_query(query, q.query_script_bucket)
+        else (bm25_variant_queries[0] if bm25_variant_queries else None)
+    )
+
+    # NER runs concurrently in the default executor (thread pool).
+    ner_task: asyncio.Task[list[str]] | None = None
+    loop = asyncio.get_event_loop()
+    if settings.entity_overlap_enabled and api_key and await _async_tenant_has_embeddings(
+        tenant_id, db
+    ):
+        ner_task = loop.run_in_executor(
+            None,
+            lambda: extract_entities_from_query(query, api_key, tenant_id=str(tenant_id)),
+        )
+
+    vector_candidate_set = await _async_build_vector_candidate_set(
+        tenant_id,
+        q.variant_vectors,
+        db,
+        is_sqlite=is_sqlite,
+    )
+    vector_candidates = vector_candidate_set.candidates
+    vector_search_call_count = vector_candidate_set.call_count
+    vector_duration_ms = vector_candidate_set.duration_ms
+    extra_vector_search_calls = max(vector_search_call_count - 1, 0)
+
+    if not vector_candidates:
+        if ner_task is not None:
+            ner_task.cancel()
+        if trace is not None:
+            trace.span(
+                name="vector-search",
+                input={
+                    "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                    "query_variants": q.query_variants,
+                    "tenant_id": str(tenant_id),
+                    "top_k": BM25_CANDIDATE_POOL,
+                    "engine": vector_engine,
+                },
+            ).end(
+                output={
+                    "chunks": [],
+                    "duration_ms": vector_duration_ms,
+                    "total_candidates_scanned": 0,
+                    "vector_search_call_count": vector_search_call_count,
+                    "extra_vector_search_calls": extra_vector_search_calls,
+                }
+            )
+        return _CandidateStageResult(
+            vector_candidates=[],
+            vector_search_call_count=vector_search_call_count,
+            vector_duration_ms=vector_duration_ms,
+            vector_engine=vector_engine,
+            bm25_variant_queries=bm25_variant_queries,
+            bm25_bundle=BM25SearchBundle(
+                results=[],
+                has_lexical_signal=False,
+                variant_queries=bm25_variant_queries or [query],
+                variant_eval_count=0,
+                merged_hit_count_before_cap=0,
+                merged_hit_count_after_cap=0,
+                winner_by_id={},
+            ),
+            bm25_duration_ms=0.0,
+            bm25_expansion_mode=bm25_expansion_mode,
+            fused_results=[],
+            rrf_duration_ms=0.0,
+            best_vector_similarity=None,
+            best_keyword_score=None,
+            rerank_lexical_query=rerank_lexical_query,
+        )
+
+    vector_embs = [emb for emb, _ in vector_candidates]
+    if trace is not None:
+        trace.span(
+            name="vector-search",
+            input={
+                "query_embedding": format_query_embedding_preview(q.trace_query_vector),
+                "query_variants": q.query_variants,
+                "tenant_id": str(tenant_id),
+                "top_k": BM25_CANDIDATE_POOL,
+                "engine": vector_engine,
+            },
+        ).end(
+            output={
+                "chunks": format_embedding_results(
+                    vector_candidates[:top_k * 2],
+                    score_name="similarity_score",
+                ),
+                "duration_ms": vector_duration_ms,
+                "total_candidates_scanned": len(vector_candidates),
+                "vector_search_call_count": vector_search_call_count,
+                "extra_vector_search_calls": extra_vector_search_calls,
+            }
+        )
+
+    rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
+    bm25_started_at = perf_counter()
+    bm25_bundle = _run_bm25_search(
+        vector_embs,
+        query=query,
+        variant_queries=bm25_variant_queries,
+        top_k=rrf_candidate_pool,
+        expansion_mode=bm25_expansion_mode,
+    )
+    bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
+    if trace is not None:
+        trace.span(
+            name="bm25-search",
+            input={
+                "query": query,
+                "query_variants": bm25_bundle.variant_queries,
+                "tenant_id": str(tenant_id),
+                "top_k": rrf_candidate_pool,
+                "bm25_expansion_mode": bm25_expansion_mode,
+                "variant_source": (
+                    "original-query"
+                    if bm25_expansion_mode == "asymmetric"
+                    else "lexical-safe-normalized-variants"
+                ),
+            },
+        ).end(
+            output={
+                "chunks": _format_bm25_trace_results(
+                    bm25_bundle.results,
+                    winner_by_id=bm25_bundle.winner_by_id,
+                ),
+                "duration_ms": bm25_duration_ms,
+                "bm25_query_variant_count": len(bm25_bundle.variant_queries),
+                "bm25_variant_eval_count": bm25_bundle.variant_eval_count,
+                "extra_bm25_variant_evals": max(bm25_bundle.variant_eval_count - 1, 0),
+                "bm25_merged_hit_count_before_cap": bm25_bundle.merged_hit_count_before_cap,
+                "bm25_merged_hit_count_after_cap": bm25_bundle.merged_hit_count_after_cap,
+            }
+        )
+
+    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
+
+    entity_results: list[tuple[Embedding, float]] = []
+    query_entities: list[str] = []
+    entity_duration_ms = 0.0
+    if ner_task is not None:
+        wait_started_at = perf_counter()
+        try:
+            query_entities = await asyncio.wait_for(
+                asyncio.ensure_future(ner_task),
+                timeout=settings.ner_query_timeout_seconds + 0.5,
+            )
+        except Exception:
+            logger.warning("async_ner_task_failed", exc_info=True)
+            query_entities = []
+        if query_entities:
+            entity_results = await async_entity_overlap_search(
+                tenant_id=tenant_id,
+                query_entities=query_entities,
+                top_k=rrf_candidate_pool,
+                db=db,
+                is_sqlite=is_sqlite,
+            )
+        entity_duration_ms = round((perf_counter() - wait_started_at) * 1000, 2)
+        if trace is not None:
+            trace.span(
+                name="entity-overlap-search",
+                input={
+                    "query": query,
+                    "tenant_id": str(tenant_id),
+                    "top_k": rrf_candidate_pool,
+                    "query_entities": query_entities,
+                },
+            ).end(
+                output={
+                    "chunks": format_embedding_results(
+                        entity_results,
+                        score_name="entity_overlap_score",
+                    ),
+                    "duration_ms": entity_duration_ms,
+                    "query_entity_count": len(query_entities),
+                    "candidate_count": len(entity_results),
+                }
+            )
+        try:
+            capture_event(
+                "entity_overlap.channel_used",
+                distinct_id=str(tenant_id) if tenant_id else "system",
+                tenant_id=str(tenant_id) if tenant_id else None,
+                properties={
+                    "query_entity_count": len(query_entities),
+                    "had_query_entities": bool(query_entities),
+                    "candidate_count": len(entity_results),
+                    "duration_ms": entity_duration_ms,
+                },
+                groups={"tenant": str(tenant_id)} if tenant_id else None,
+            )
+        except Exception:
+            logger.warning("Failed to emit entity_overlap.channel_used", exc_info=True)
+
+    rrf_started_at = perf_counter()
+    fused_results = reciprocal_rank_fusion(
+        vector_for_rrf,
+        bm25_bundle.results,
+        top_k=rrf_candidate_pool,
+        entity_results=entity_results or None,
+    )
+    rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
+    if trace is not None:
+        trace.span(
+            name="rrf-fusion",
+            input={
+                "vector_results": format_embedding_results(
+                    vector_for_rrf,
+                    score_name="similarity_score",
+                ),
+                "bm25_results": format_embedding_results(
+                    bm25_bundle.results,
+                    score_name="bm25_score",
+                ),
+                "bm25_expansion_mode": bm25_expansion_mode,
+            },
+        ).end(
+            output={
+                "merged_chunks": format_embedding_results(
+                    fused_results,
+                    score_name="rrf_score",
+                ),
+                "duration_ms": rrf_duration_ms,
+            }
+        )
+
+    return _CandidateStageResult(
+        vector_candidates=vector_candidates,
+        vector_search_call_count=vector_search_call_count,
+        vector_duration_ms=vector_duration_ms,
+        vector_engine=vector_engine,
+        bm25_variant_queries=bm25_variant_queries,
+        bm25_bundle=bm25_bundle,
+        bm25_duration_ms=bm25_duration_ms,
+        bm25_expansion_mode=bm25_expansion_mode,
+        fused_results=fused_results,
+        rrf_duration_ms=rrf_duration_ms,
+        best_vector_similarity=vector_candidates[0][1] if vector_candidates else None,
+        best_keyword_score=bm25_bundle.results[0][1] if bm25_bundle.results else None,
+        rerank_lexical_query=rerank_lexical_query,
+    )
+
+
+async def _async_run_quality_stage(
+    *,
+    final_results: list[tuple[Embedding, float]],
+    tenant_id: uuid.UUID,
+    db: AsyncSession,
+    api_key: str,
+    trace: TraceHandle | None,
+) -> _QualityStageResult:
+    """Async counterpart of :func:`_run_quality_stage`.
+
+    ``adjudicate_contradictions`` is a sync LLM call; it runs in the default
+    thread-pool executor so the event loop is not blocked.
+    """
+    overlap_started_at = perf_counter()
+    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(final_results)
+    contradiction_pairs = detect_metadata_contradictions(final_results, source_overlap_pairs)
+
+    client_row: Tenant | None = None
+    if settings.contradiction_adjudication_enabled:
+        stmt = select(Tenant).filter(Tenant.id == tenant_id)
+        result = await db.execute(stmt)
+        client_row = result.scalars().first()
+
+    # adjudicate_contradictions is sync (LLM call) — run in executor to avoid
+    # blocking the event loop. The helper itself is CPU-light; the OpenAI call
+    # inside uses the sync client, which is fine in a thread context.
+    loop = asyncio.get_event_loop()
+    contradiction_adjudication, contradiction_adjudication_observability = await loop.run_in_executor(
+        None,
+        lambda: _build_contradiction_adjudication_evidence(
+            contradiction_pairs=contradiction_pairs,
+            final_results=final_results,
+            tenant=client_row,
+            api_key=api_key,
+        ),
+    )
+
+    reliability = build_reliability_assessment(
+        top_score=final_results[0][1] if final_results else None,
+        result_count=len(final_results),
+        source_overlap_detected=source_overlap_detected,
+        source_overlap_pairs=source_overlap_pairs,
+        source_overlap_similarity_threshold=0.75,
+        contradiction_pairs=contradiction_pairs,
+        contradiction_adjudication=contradiction_adjudication,
+        contradiction_adjudication_observability=contradiction_adjudication_observability,
+    )
+    if trace is not None:
+        trace.span(
+            name="source-overlap-check",
+            input={
+                "candidate_count": len(final_results),
+                "strategy": "cross-document-jaccard-overlap-heuristic",
+            },
+        ).end(
+            output={
+                **build_reliability_projection(reliability),
+                "duration_ms": round((perf_counter() - overlap_started_at) * 1000, 2),
+            }
+        )
+    return _QualityStageResult(reliability=reliability)
+
+
+# ── Async public orchestrators ───────────────────────────────────────────────
+
+
+async def search_similar_chunks_detailed_async(
+    tenant_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: AsyncSession,
+    *,
+    api_key: str,
+    trace: TraceHandle | None = None,
+    precomputed_query_variants: list[str] | None = None,
+    precomputed_variant_vectors: list[list[float]] | None = None,
+    precomputed_embedding_api_request_count: int | None = None,
+    precomputed_rewritten_variant: str | None = None,
+    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
+) -> SearchResultBundle:
+    """Async counterpart of :func:`search_similar_chunks_detailed`.
+
+    Runs the full hybrid retrieval pipeline on an ``AsyncSession``.
+    The query-rewrite LLM call and embedding of base variants execute in
+    parallel (``asyncio.gather``) for measurable latency savings on every turn.
+    """
+    retrieval_started_at = perf_counter()
+
+    q = await _async_run_query_stage(
+        query=query,
+        api_key=api_key,
+        trace=trace,
+        precomputed_query_variants=precomputed_query_variants,
+        precomputed_variant_vectors=precomputed_variant_vectors,
+        precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
+        precomputed_rewritten_variant=precomputed_rewritten_variant,
+        embedding_timeout=embedding_timeout,
+    )
+    c = await _async_run_candidate_stage(
+        tenant_id=tenant_id,
+        query=query,
+        query_stage=q,
+        top_k=top_k,
+        db=db,
+        trace=trace,
+        api_key=api_key,
+    )
+    if not c.vector_candidates:
+        return _build_empty_result_bundle(
+            q, c, round((perf_counter() - retrieval_started_at) * 1000, 2)
+        )
+
+    r = _run_ranking_stage(
+        query=query,
+        query_stage=q,
+        candidate_stage=c,
+        top_k=top_k,
+        trace=trace,
+    )
+    quality = await _async_run_quality_stage(
+        final_results=r.final_results,
+        tenant_id=tenant_id,
+        db=db,
+        api_key=api_key,
+        trace=trace,
+    )
+    return SearchResultBundle(
+        results=r.final_results,
+        best_vector_similarity=c.best_vector_similarity,
+        vector_similarities=r.vector_similarities,
+        best_keyword_score=c.best_keyword_score,
+        has_lexical_signal=c.bm25_bundle.has_lexical_signal,
+        query_variants=q.query_variants,
+        query_script_bucket=q.query_script_bucket,
+        reliability=quality.reliability,
+        query_variant_count=q.query_variant_count,
+        variant_mode=q.variant_mode,
+        extra_variant_count=q.extra_variant_count,
+        embedded_query_count=q.embedded_query_count,
+        extra_embedded_queries=q.extra_embedded_queries,
+        embedding_api_request_count=q.embedding_api_request_count,
+        extra_embedding_api_requests=q.extra_embedding_api_requests,
+        vector_search_call_count=c.vector_search_call_count,
+        extra_vector_search_calls=max(c.vector_search_call_count - 1, 0),
+        bm25_expansion_mode=c.bm25_expansion_mode,
+        bm25_query_variant_count=len(c.bm25_bundle.variant_queries),
+        bm25_variant_eval_count=c.bm25_bundle.variant_eval_count,
+        extra_bm25_variant_evals=max(c.bm25_bundle.variant_eval_count - 1, 0),
+        bm25_merged_hit_count_before_cap=c.bm25_bundle.merged_hit_count_before_cap,
+        bm25_merged_hit_count_after_cap=c.bm25_bundle.merged_hit_count_after_cap,
+        retrieval_duration_ms=round((perf_counter() - retrieval_started_at) * 1000, 2),
+        query_embedding_duration_ms=q.query_embedding_duration_ms,
+        vector_search_duration_ms=c.vector_duration_ms,
+    )
+
+
+async def search_similar_chunks_async(
+    tenant_id: uuid.UUID,
+    query: str,
+    top_k: int,
+    db: AsyncSession,
+    *,
+    api_key: str,
+) -> list[tuple[Embedding, float]]:
+    """Async counterpart of :func:`search_similar_chunks`."""
+    return (
+        await search_similar_chunks_detailed_async(
+            tenant_id=tenant_id,
+            query=query,
+            top_k=top_k,
+            db=db,
+            api_key=api_key,
+        )
+    ).results

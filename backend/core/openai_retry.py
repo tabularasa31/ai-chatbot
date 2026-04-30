@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
-from collections.abc import Callable
-from typing import TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar
 
 from backend.core.config import settings
 from backend.core.openai_errors import (
@@ -142,6 +143,130 @@ def call_openai_with_retry(
     if last_exc is not None:  # pragma: no cover
         raise last_exc
     raise RuntimeError("openai_retry_unreachable")
+
+
+async def async_call_openai_with_retry(
+    operation: str,
+    fn: Callable[[], Coroutine[Any, Any, T]],
+    *,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    endpoint: str | None = None,
+    call_type: str = "chat_completion",
+) -> T:
+    """Async counterpart of :func:`call_openai_with_retry`.
+
+    ``fn`` must be a zero-argument async callable (e.g. a coroutine factory).
+    Same retry policy and budget as the sync version; retries use
+    ``asyncio.sleep`` so the event loop is not blocked during back-off.
+    """
+    started = time.monotonic()
+    max_attempts = settings.openai_user_retry_max_attempts
+    total_budget = settings.openai_user_retry_budget_seconds
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        _emit_call_attempt(
+            operation=operation,
+            attempt=attempt,
+            elapsed=time.monotonic() - started,
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+            call_type=call_type,
+        )
+        try:
+            return await fn()
+        except Exception as exc:
+            classified = classify_openai_error(exc)
+            if classified.kind == OpenAIFailureKind.PERMANENT:
+                raise
+
+            elapsed = time.monotonic() - started
+            remaining = total_budget - elapsed
+            if (
+                classified.kind == OpenAIFailureKind.RATE_LIMIT
+                and classified.retry_after_seconds is not None
+                and classified.retry_after_seconds > total_budget
+            ):
+                _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="rate_limit_over_budget",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
+                    call_type=call_type,
+                )
+                raise
+            if attempt >= max_attempts or remaining <= 0:
+                _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="max_attempts" if attempt >= max_attempts else "budget_exhausted",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
+                    call_type=call_type,
+                )
+                raise
+
+            delay = _delay_for_user(
+                classified=classified,
+                attempt=attempt,
+                budget_seconds=total_budget,
+            )
+            if delay > remaining:
+                _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="delay_over_remaining",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
+                    call_type=call_type,
+                )
+                raise
+
+            delay = min(delay, max(remaining - _USER_BUDGET_HEADROOM_SECONDS, 0.0))
+            logger.info(
+                "openai_user_retry",
+                extra={
+                    "operation": operation,
+                    "attempt": attempt,
+                    "delay_ms": int(delay * 1000),
+                    "kind": classified.kind.value,
+                    "status_code": classified.status_code,
+                },
+            )
+            _emit_retry_scheduled(
+                operation=operation,
+                attempt=attempt,
+                delay_seconds=delay,
+                elapsed=elapsed,
+                remaining=remaining,
+                classified=classified,
+                tenant_id=tenant_id,
+                bot_id=bot_id,
+                call_type=call_type,
+            )
+            await asyncio.sleep(delay)
+            last_exc = exc
+
+    if last_exc is not None:  # pragma: no cover
+        raise last_exc
+    raise RuntimeError("async_openai_retry_unreachable")
 
 
 def _delay_for_user(

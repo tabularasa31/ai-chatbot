@@ -2500,29 +2500,32 @@ def test_search_route_traces_variant_summary(
 
     fake_trace = FakeTrace()
     monkeypatch.setattr("backend.search.routes.begin_trace", lambda **kwargs: fake_trace)
+    from unittest.mock import AsyncMock
+
+    _bundle = SearchResultBundle(
+        results=[],
+        query_variant_count=3,
+        variant_mode="multi",
+        extra_variant_count=2,
+        embedded_query_count=3,
+        extra_embedded_queries=2,
+        embedding_api_request_count=1,
+        extra_embedding_api_requests=0,
+        vector_search_call_count=3,
+        extra_vector_search_calls=2,
+        bm25_expansion_mode="symmetric_variants",
+        bm25_query_variant_count=2,
+        bm25_variant_eval_count=2,
+        extra_bm25_variant_evals=1,
+        bm25_merged_hit_count_before_cap=4,
+        bm25_merged_hit_count_after_cap=3,
+        retrieval_duration_ms=12.5,
+        query_embedding_duration_ms=2.5,
+        vector_search_duration_ms=7.5,
+    )
     monkeypatch.setattr(
-        "backend.search.routes.search_similar_chunks_detailed",
-        lambda **kwargs: SearchResultBundle(
-            results=[],
-            query_variant_count=3,
-            variant_mode="multi",
-            extra_variant_count=2,
-            embedded_query_count=3,
-            extra_embedded_queries=2,
-            embedding_api_request_count=1,
-            extra_embedding_api_requests=0,
-            vector_search_call_count=3,
-            extra_vector_search_calls=2,
-            bm25_expansion_mode="symmetric_variants",
-            bm25_query_variant_count=2,
-            bm25_variant_eval_count=2,
-            extra_bm25_variant_evals=1,
-            bm25_merged_hit_count_before_cap=4,
-            bm25_merged_hit_count_after_cap=3,
-            retrieval_duration_ms=12.5,
-            query_embedding_duration_ms=2.5,
-            vector_search_duration_ms=7.5,
-        ),
+        "backend.search.routes.search_similar_chunks_detailed_async",
+        AsyncMock(return_value=_bundle),
     )
 
     response = tenant.post(

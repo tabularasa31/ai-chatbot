@@ -66,11 +66,20 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
     metrics = run_deterministic_metrics(case, output)
 
     judge_result = None
+    judge_error: str | None = None
     if config.judge is not None and case.judge_rubric:
         try:
             judge_result = config.judge.grade(case, output)
         except Exception as exc:
             logger.warning("eval_case_judge_failed id=%s err=%s", case.id, exc)
+            judge_error = f"judge call failed: {exc}"
+        else:
+            if judge_result is None:
+                # Defensive: grade() returns None only when a rubric is
+                # absent, which we already gated on above. If it ever
+                # comes back here, treat it as a graded failure rather
+                # than a silent pass.
+                judge_error = "judge returned no result for case with rubric"
 
     error_text: str | None = None
     if chat_response.error:
@@ -78,6 +87,11 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
             f"chat error: code={chat_response.error.get('code')} "
             f"msg={chat_response.error.get('message')}"
         )
+    elif judge_error is not None:
+        # Surface judge outages as a per-case error so `overall_passed`
+        # short-circuits to False — otherwise an Anthropic timeout could
+        # silently turn a regression into a green run.
+        error_text = judge_error
 
     return CaseResult(
         case_id=case.id,

@@ -269,6 +269,41 @@ def test_runner_calls_judge_only_when_rubric_present() -> None:
     assert without_case.judge is None
 
 
+def test_runner_fails_case_when_judge_throws_for_case_with_rubric() -> None:
+    """A judge outage (timeout / rate limit / SDK panic) on a case that
+    has a rubric must NOT silently pass on the back of deterministic
+    metrics — otherwise we lose regression detection during Anthropic
+    incidents. Codex P1 review on #546."""
+
+    cases = [
+        GoldenCase(
+            id="rubric_case",
+            category="rag",
+            lang="en",
+            input="anything",
+            must_contain=["ok"],
+            judge_rubric="be helpful",
+        ),
+    ]
+    ds = Dataset(name="t", cases=cases)
+    chat = _FakeChat({"anything": "ok answer that satisfies must_contain"})
+
+    class _ExplodingJudge:
+        model = "stub"
+
+        def grade(self, case, output):  # noqa: ARG002
+            raise RuntimeError("anthropic 503 timeout")
+
+    report = run(RunnerConfig(dataset=ds, tag="unit", chat=chat, judge=_ExplodingJudge()))
+    case = report.cases[0]
+    # Deterministic check passes …
+    assert case.deterministic_passed
+    # … but the case is still failed because the judge couldn't grade it.
+    assert not case.overall_passed
+    assert case.error is not None and "judge call failed" in case.error
+    assert report.passed_count == 0
+
+
 # ─── report rendering ───────────────────────────────────────────────────────
 
 

@@ -3,6 +3,13 @@
 Targets a running chat backend over HTTP via httpx. The bot must
 already be set up (use ``scripts/seed_eval_bot.py`` for a local demo
 bot, or pass ``--bot-id`` for one in your dev / staging deploy).
+
+Subcommands:
+
+- ``run`` — execute a dataset against a chat backend
+- ``list`` — list discoverable datasets
+- ``compare`` — diff two ``report.json`` files (used by GitHub Actions
+  to post before/after summaries on pull requests)
 """
 
 from __future__ import annotations
@@ -14,9 +21,11 @@ from pathlib import Path
 
 import httpx
 
+from backend.evals import compare as compare_module
 from backend.evals.client import ChatClient
 from backend.evals.dataset import load_dataset
 from backend.evals.judge import DEFAULT_JUDGE_MODEL, AnthropicJudge
+from backend.evals.langfuse_sink import upload_dataset, upload_run
 from backend.evals.report import (
     RunReport,
     render_markdown,
@@ -73,6 +82,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=f"Where to write report.json + report.md (default: {DEFAULT_RESULTS_DIR}).",
     )
     run_p.add_argument(
+        "--langfuse",
+        action="store_true",
+        help=(
+            "Mirror dataset items + per-case traces to Langfuse. "
+            "Silently no-ops if LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / "
+            "LANGFUSE_SECRET_KEY are not set."
+        ),
+    )
+    run_p.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -81,6 +99,23 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     list_p = sub.add_parser("list", help="List datasets discoverable in tests/eval/datasets/.")
     list_p.add_argument("--root", default=str(DEFAULT_DATASET_DIR))
+
+    cmp_p = sub.add_parser(
+        "compare",
+        help="Diff two report.json files (before vs after) and print Markdown.",
+    )
+    cmp_p.add_argument("before", help="Path to baseline report.json")
+    cmp_p.add_argument("after", help="Path to current report.json")
+    cmp_p.add_argument(
+        "--out",
+        default=None,
+        help="Optional output path for the Markdown diff. Defaults to stdout.",
+    )
+    cmp_p.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Exit 1 when any case regressed (was passing in 'before', failing in 'after').",
+    )
     return parser
 
 
@@ -92,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_run(args)
     if args.command == "list":
         return _cmd_list(args)
+    if args.command == "compare":
+        return _cmd_compare(args)
     parser.error(f"unknown command: {args.command}")
     return 2
 
@@ -109,6 +146,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if not args.no_judge:
         judge = AnthropicJudge(model=args.judge_model)
 
+    if args.langfuse:
+        # Upload dataset items before the run so traces written below
+        # can reference items by id.
+        upload_dataset(dataset)
+
     with httpx.Client(base_url=args.api_base, timeout=120.0) as http:
         chat = ChatClient(bot_public_id=args.bot_id, http=http)
         config = RunnerConfig(dataset=dataset, tag=args.tag, chat=chat, judge=judge)
@@ -117,6 +159,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
     out_dir = Path(args.out_dir) / args.tag
     json_path = write_json(report, out_dir / "report.json")
     md_path = write_markdown(report, out_dir / "report.md")
+
+    if args.langfuse:
+        upload_run(report)
 
     print(render_markdown(report))
     print(f"\nwrote {json_path}")
@@ -136,6 +181,24 @@ def _cmd_list(args: argparse.Namespace) -> int:
         return 0
     for f in files:
         print(f.stem)
+    return 0
+
+
+def _cmd_compare(args: argparse.Namespace) -> int:
+    before = compare_module.load_report(args.before)
+    after = compare_module.load_report(args.after)
+    deltas = compare_module.diff(before, after)
+    md = compare_module.render_markdown(before, after, deltas=deltas)
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(md, encoding="utf-8")
+        print(f"wrote {out_path}")
+    else:
+        print(md)
+
+    if args.fail_on_regression and any(d.regressed for d in deltas):
+        return 1
     return 0
 
 

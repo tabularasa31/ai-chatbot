@@ -165,15 +165,77 @@ Useful flags: `--api-base http://staging.…` (target a remote backend),
 `--judge-model claude-sonnet-4-6` (more accurate but ~10x more
 expensive than the default Haiku).
 
+### Compare two runs (before vs after)
+
+Use after a prompt / RAG / model change to see what flipped:
+
+```bash
+python -m backend.evals run --tag baseline --dataset chat9_basic --bot-id ch_…
+# … make your code changes …
+python -m backend.evals run --tag candidate --dataset chat9_basic --bot-id ch_…
+
+python -m backend.evals compare \
+    eval-results/baseline/report.json \
+    eval-results/candidate/report.json \
+    --fail-on-regression
+```
+
+Outputs a Markdown summary: per-case **regressions** (was passing,
+now failing) and **fixes** (was failing, now passing), plus the
+average judge-score delta. `--fail-on-regression` returns exit code
+1 so the same command can be wired into a Makefile / pre-deploy gate.
+
+### Persist runs to Langfuse
+
+When `LANGFUSE_HOST` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`
+are set, add `--langfuse` to mirror the dataset items + per-case
+traces (with scores) into Langfuse so the team can browse history
+in the UI:
+
+```bash
+LANGFUSE_HOST=https://cloud.langfuse.com \
+LANGFUSE_PUBLIC_KEY=pk-… LANGFUSE_SECRET_KEY=sk-… \
+ANTHROPIC_API_KEY=sk-ant-… \
+python -m backend.evals run --dataset chat9_basic --bot-id ch_… \
+    --tag manual-2026-04-30 --langfuse
+```
+
+Without those env vars `--langfuse` is a logged no-op.
+
+### Run from GitHub Actions
+
+Two workflows ship in `.github/workflows/`:
+
+- **`eval-manual.yml`** — `workflow_dispatch`. Pick a dataset, a
+  run tag, and (optionally) a PR number to comment on. Posts a
+  Markdown summary as a PR comment when the input is set; uploads
+  `report.json` + `report.md` (and `diff.md` if `compare_with` was
+  passed) as workflow artifacts.
+- **`eval-nightly.yml`** — `cron: "0 2 * * *"` (02:00 UTC). Runs
+  every dataset against the staging bot and opens a labelled
+  `[eval] regression` GitHub Issue when the pass rate drops below
+  `vars.EVAL_REGRESSION_THRESHOLD` (default 0.85).
+
+Both require these to be set on the repository:
+
+| Kind | Name | Purpose |
+|------|------|---------|
+| secret | `ANTHROPIC_API_KEY` | LLM-as-judge |
+| secret | `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Optional persistence |
+| variable | `EVAL_API_BASE` | URL of the staging chat backend |
+| variable | `EVAL_BOT_PUBLIC_ID` | Long-lived demo bot in that backend |
+| variable | `EVAL_REGRESSION_THRESHOLD` | Optional, default `0.85` |
+
 ### Unit tests for the runner
 
 ```bash
-pytest -q tests/test_evals_runner.py
+pytest -q tests/test_evals_runner.py tests/test_evals_compare_and_sink.py
 ```
 
 Run on every PR — covers dataset schema, deterministic metrics, the
-judge JSON parser, the SSE client, and runner orchestration with a
-fake chat client. No real Anthropic / OpenAI calls.
+judge JSON parser, the SSE client, runner orchestration, the
+compare/diff logic, and the Langfuse sink (with a mocked client). No
+real Anthropic / OpenAI / Langfuse calls.
 
 ## Coverage Snapshot (backend, SQLite-only)
 

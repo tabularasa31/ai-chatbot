@@ -1,0 +1,154 @@
+name: Eval (manual run)
+
+# Manual answer-quality eval against a deployed bot. Use the
+# "Run workflow" button on the Actions tab and pick a dataset and PR
+# number. The workflow runs the eval, optionally diffs against a
+# stored baseline, and posts a markdown summary as a PR comment.
+#
+# Pre-reqs (set as repo secrets / vars):
+#   secrets.ANTHROPIC_API_KEY   — judge LLM
+#   secrets.LANGFUSE_HOST/_PUBLIC_KEY/_SECRET_KEY (optional) — UI persistence
+#   vars.EVAL_API_BASE          — e.g. https://chat9-staging.example.com
+#   vars.EVAL_BOT_PUBLIC_ID     — bot to query (a long-lived demo bot)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Dataset name (e.g. chat9_basic)"
+        required: true
+        default: chat9_basic
+      pr_number:
+        description: "PR number to comment on (optional)"
+        required: false
+        default: ""
+      tag:
+        description: "Run tag (e.g. pr-545-after, manual-2026-04-30)"
+        required: true
+        default: manual
+      compare_with:
+        description: "Path to a baseline report.json artifact to diff against (optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: eval-manual-${{ github.event.inputs.dataset }}-${{ github.event.inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: Run eval and (optionally) diff
+    runs-on: ubuntu-latest
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      # Required by backend.core.config import even though the eval
+      # CLI doesn't read them itself.
+      DATABASE_URL: sqlite:///:memory:?check_same_thread=False
+      JWT_SECRET: ci-eval-jwt-secret-min-32-chars-long!
+      ENVIRONMENT: test
+      ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
+      OPENAI_API_KEY: sk-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ vars.EVAL_API_BASE }}" ]; then
+            echo "::error::repo var EVAL_API_BASE is not set"
+            exit 1
+          fi
+          if [ -z "${{ vars.EVAL_BOT_PUBLIC_ID }}" ]; then
+            echo "::error::repo var EVAL_BOT_PUBLIC_ID is not set"
+            exit 1
+          fi
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::repo secret ANTHROPIC_API_KEY is not set"
+            exit 1
+          fi
+
+      - name: Run eval
+        id: run
+        # `python -m backend.evals run` exits 1 when any case fails — that's the
+        # signal we *want* to record, not a reason to abort the workflow. Keep
+        # the step itself marked failed (so the job status reflects reality)
+        # but let the subsequent steps run via `if: always()` so the report
+        # still ships to PR / artifacts.
+        continue-on-error: true
+        run: |
+          python -m backend.evals run \
+            --dataset "${{ github.event.inputs.dataset }}" \
+            --bot-id "${{ vars.EVAL_BOT_PUBLIC_ID }}" \
+            --api-base "${{ vars.EVAL_API_BASE }}" \
+            --tag "${{ github.event.inputs.tag }}" \
+            --langfuse \
+            --out-dir eval-results
+
+      - name: Compare against baseline (if provided)
+        id: compare
+        if: always() && github.event.inputs.compare_with != ''
+        run: |
+          python -m backend.evals compare \
+            "${{ github.event.inputs.compare_with }}" \
+            "eval-results/${{ github.event.inputs.tag }}/report.json" \
+            --out eval-results/${{ github.event.inputs.tag }}/diff.md
+
+      - name: Upload report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ github.event.inputs.tag }}
+          path: eval-results/${{ github.event.inputs.tag }}/
+          retention-days: 30
+
+      - name: Post summary on PR
+        if: always() && github.event.inputs.pr_number != ''
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const tag = '${{ github.event.inputs.tag }}';
+            const pr = parseInt('${{ github.event.inputs.pr_number }}', 10);
+            const baseDir = `eval-results/${tag}`;
+            const summary = fs.readFileSync(`${baseDir}/report.md`, 'utf8');
+            let body = `### Eval — \`${tag}\`\n\n${summary}`;
+            const diffPath = `${baseDir}/diff.md`;
+            if (fs.existsSync(diffPath)) {
+              const diff = fs.readFileSync(diffPath, 'utf8');
+              body += `\n\n---\n\n${diff}`;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr,
+              body,
+            });
+
+      - name: Surface eval failure status
+        # Re-raise the eval step's failure after artifacts/comment posted so
+        # the job status honestly reflects whether any case failed. Without
+        # this `continue-on-error: true` above would always mark the job
+        # green.
+        if: always() && steps.run.outcome != 'success'
+        run: |
+          echo "::error::Eval run had failures — see uploaded report and PR comment."
+          exit 1

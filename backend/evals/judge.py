@@ -21,7 +21,7 @@ from backend.evals.dataset import GoldenCase
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_JUDGE_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_JUDGE_MODEL = "claude-haiku-4-5"
 
 _SYSTEM_PROMPT = """You are an impartial evaluator scoring a chatbot's answer
 against a rubric. Be terse and strict. Reply with a single JSON object only,

@@ -294,7 +294,7 @@ def widget_session_init(
     "/chat",
     responses={
         200: {
-                "description": (
+            "description": (
                     "Server-sent events stream (`text/event-stream`). Each frame is "
                     "`type: 'chunk'` (incremental text) or `type: 'done'`; the `done` "
                     "frame's payload conforms to `WidgetChatTurnResponse`."

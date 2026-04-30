@@ -1,4 +1,4 @@
-"""Verify private /chat and widget /chat advertise the same ChatTurnResponse in OpenAPI."""
+"""Verify private /chat and widget /chat advertise the intended OpenAPI schemas."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ def _component_ref_for(spec: dict, path: str, method: str, media_type: str) -> s
     return None
 
 
-def test_private_and_widget_chat_share_chat_turn_response_schema(tenant: TestClient) -> None:
-    """Private /chat (JSON) and widget /chat (SSE) must reference the same component.
+def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestClient) -> None:
+    """Private /chat and widget /chat must expose schemas that match their wire payloads.
 
     Each endpoint advertises the schema under the media type it actually serves —
     `application/json` for the private API, `text/event-stream` for the widget —
@@ -37,9 +37,8 @@ def test_private_and_widget_chat_share_chat_turn_response_schema(tenant: TestCli
     assert private_ref.endswith("/ChatTurnResponse"), (
         f"private /chat must reference ChatTurnResponse, got {private_ref}"
     )
-    assert private_ref == widget_ref, (
-        "private and widget chat endpoints must share the same response schema "
-        f"(got private={private_ref}, widget={widget_ref})"
+    assert widget_ref.endswith("/WidgetChatTurnResponse"), (
+        f"widget /chat must reference WidgetChatTurnResponse, got {widget_ref}"
     )
 
     # Widget must NOT advertise itself as application/json (it streams SSE).
@@ -49,9 +48,9 @@ def test_private_and_widget_chat_share_chat_turn_response_schema(tenant: TestCli
         f"got {widget_json_ref}"
     )
 
-    schema = spec["components"]["schemas"]["ChatTurnResponse"]
-    properties = schema["properties"]
-    assert set(properties.keys()) == {
+    private_schema = spec["components"]["schemas"]["ChatTurnResponse"]
+    private_properties = private_schema["properties"]
+    assert set(private_properties.keys()) == {
         "text",
         "session_id",
         "chat_ended",
@@ -60,4 +59,15 @@ def test_private_and_widget_chat_share_chat_turn_response_schema(tenant: TestCli
         "tokens_used",
     }
     # `validation` was removed — guard against accidental reintroduction.
-    assert "validation" not in properties
+    assert "validation" not in private_properties
+
+    widget_schema = spec["components"]["schemas"]["WidgetChatTurnResponse"]
+    widget_properties = widget_schema["properties"]
+    assert set(widget_properties.keys()) == {
+        "text",
+        "session_id",
+        "chat_ended",
+        "ticket_number",
+    }
+    assert "source_documents" not in widget_properties
+    assert "tokens_used" not in widget_properties

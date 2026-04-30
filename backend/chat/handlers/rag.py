@@ -2777,7 +2777,7 @@ async def async_run_chat_pipeline(
             _base_embed_task,
             timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
         )
-    except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError, asyncio.CancelledError):
+    except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError):
         logger.warning("async_run_chat_pipeline_embed_queries_failed", exc_info=True)
         base_variant_vectors = []
 

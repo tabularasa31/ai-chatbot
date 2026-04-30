@@ -16,6 +16,7 @@ from backend.evals.client import ChatResponse, _aggregate_events, _parse_sse_dat
 from backend.evals.dataset import Dataset, GoldenCase, load_dataset
 from backend.evals.judge import _parse_judge_response, JudgeResult
 from backend.evals.metrics import (
+    MetricResult,
     check_language,
     check_must_contain,
     check_must_not_contain,
@@ -451,3 +452,56 @@ def test_markdown_report_contains_summary_and_table() -> None:
     )
     md = render_markdown(report)
     assert "Eval run" in md and "ch_fake" in md and "0.80" in md and "| `x` |" in md
+    assert "overall" in md  # explicit pass/fail column, not just deterministic
+
+
+def test_markdown_report_overall_column_distinguishes_judge_vs_deterministic_failure() -> None:
+    """Regression: previously the table only showed `det.` ✅/❌, so a
+    case where deterministic checks passed but the judge scored below
+    0.6 still appeared green in the table even though it was counted
+    as failed in the run summary. Lock in that the new `overall`
+    column reflects the real verdict."""
+
+    metric = MetricResult(name="must_contain", passed=True)
+    cases = [
+        # Deterministic ✅, judge below 0.6 — overall must be ❌.
+        CaseResult(
+            case_id="judge_fail",
+            category="rag",
+            lang="en",
+            input="Q",
+            output="A",
+            latency_ms=10,
+            metrics=[metric],
+            judge=JudgeResult(score=0.45, rationale="weak", model="m"),
+        ),
+        # Deterministic ✅, no judge run — overall must be ✅.
+        CaseResult(
+            case_id="all_pass",
+            category="happy_path",
+            lang="en",
+            input="Q",
+            output="A",
+            latency_ms=10,
+            metrics=[metric],
+        ),
+    ]
+    report = RunReport(
+        dataset="t",
+        tag="unit",
+        judge_model="m",
+        bot_public_id="ch_fake",
+        started_at="2026-04-30T00:00:00+00:00",
+        finished_at="2026-04-30T00:00:01+00:00",
+        cases=cases,
+    )
+    md = render_markdown(report)
+    judge_fail_line = next(line for line in md.splitlines() if "judge_fail" in line)
+    all_pass_line = next(line for line in md.splitlines() if "all_pass" in line)
+    cells_judge_fail = [c.strip() for c in judge_fail_line.split("|")]
+    cells_all_pass = [c.strip() for c in all_pass_line.split("|")]
+    # Header: ['', 'id', 'category', 'lang', 'overall', 'det.', 'judge', 'latency', 'notes', '']
+    assert cells_judge_fail[4] == "❌", f"overall column wrong: {judge_fail_line!r}"
+    assert cells_judge_fail[5] == "✅", f"det. column wrong: {judge_fail_line!r}"
+    assert cells_all_pass[4] == "✅"
+    assert cells_all_pass[5] == "✅"

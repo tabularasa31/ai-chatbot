@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -42,10 +41,7 @@ from backend.chat.handlers.rag import (
     _quick_answers_context,
     _strip_thought_tags,
     _user_context_prompt_line,
-    async_generate_answer,  # noqa: F401
-    async_retrieve_context,  # noqa: F401
     async_run_chat_pipeline,
-    async_validate_answer,  # noqa: F401
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
@@ -637,15 +633,21 @@ async def _ensure_chat_async(
         )
         db.add(chat)
         await db.flush()
-        # touch_user_session is sync; call on sync_session (fast single-row upsert)
-        touch_user_session(
-            db.sync_session,
-            tenant_id=tenant_id,
-            user_context=chat.user_context,
-            started_at=chat.created_at,
+        # touch_user_session is sync; call via run_sync for greenlet context.
+        await db.run_sync(
+            lambda s: touch_user_session(
+                s,
+                tenant_id=tenant_id,
+                user_context=chat.user_context,
+                started_at=chat.created_at,
+            )
         )
         await db.commit()
-        await db.refresh(chat)
+        # Re-query with selectinload so chat.messages is eagerly loaded.
+        _res = await db.execute(
+            select(Chat).options(selectinload(Chat.messages)).where(Chat.id == chat.id)
+        )
+        chat = _res.scalar_one()
     else:
         chat_updated = False
         if bot_id is not None:
@@ -662,7 +664,11 @@ async def _ensure_chat_async(
         if chat_updated:
             db.add(chat)
             await db.commit()
-            await db.refresh(chat)
+            # Re-query with selectinload so chat.messages is eagerly loaded.
+            _res = await db.execute(
+                select(Chat).options(selectinload(Chat.messages)).where(Chat.id == chat.id)
+            )
+            chat = _res.scalar_one()
 
     if effective_user_ctx is None and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
@@ -700,8 +706,6 @@ async def _build_handler_context_async(
     Queries the Bot table via AsyncSession, then passes ``db.sync_session``
     to HandlerContext so downstream sync helpers continue to work.
     """
-    from backend.chat.handlers.rag import _user_context_prompt_line
-
     resolved_bot: Bot | None = None
     if bot_id is not None:
         result = await db.execute(
@@ -760,10 +764,10 @@ async def _build_handler_context_async(
 async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutcome | None:
     """Async handler dispatch.
 
-    Non-RAG handlers (Greeting, SmallTalk, Escalation) are run in a thread
-    via ``asyncio.to_thread`` — they use ``ctx.db`` (sync session) for DB ops.
-    RagHandler is bypassed; ``async_run_chat_pipeline`` is called directly so
-    the event loop handles all guard/embedding I/O without tying up OS threads.
+    RagHandler: async pipeline runs first (concurrent guards/embed), result
+    stashed in ctx.extras, then handler.handle() runs inside db.run_sync()
+    for the persistence/analytics sync DB work.
+    All other handlers: also run via db.run_sync() for greenlet-safe sync DB ops.
     """
     from backend.chat.handlers.rag import RagHandler
 
@@ -771,10 +775,6 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
         if not handler.can_handle(ctx):
             continue
         if isinstance(handler, RagHandler):
-            # Async RAG path: run async pipeline then delegate persistence +
-            # analytics to the sync handler via asyncio.to_thread.  The result
-            # is stashed in ctx.extras so RagHandler.handle() skips its own
-            # (sync) run_chat_pipeline call and reuses the async result.
             pipeline_result = await async_run_chat_pipeline(
                 ctx.tenant_id,
                 ctx.question,
@@ -795,9 +795,12 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 guard_profile=ctx.tenant_profile,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
-            outcome = await asyncio.to_thread(handler.handle, ctx)
-        else:
-            outcome = await asyncio.to_thread(handler.handle, ctx)
+
+        def _run_handler(sync_session, _h=handler):
+            ctx.db = sync_session
+            return _h.handle(ctx)
+
+        outcome = await db.run_sync(_run_handler)
         if outcome is not None:
             return outcome
     return None
@@ -870,15 +873,17 @@ async def async_process_chat_message(
         name="language_detect",
         input={"question_preview": question_text[:80]},
     )
-    language_context = _resolve_chat_language_context(
-        current_turn_text=question_text,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
-        bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
-        browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
-        chat=chat,
-        db=db.sync_session,
+    language_context = await db.run_sync(
+        lambda s: _resolve_chat_language_context(
+            current_turn_text=question_text,
+            tenant_row=tenant_row,
+            tenant_profile=tenant_profile,
+            is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
+            bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
+            browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
+            chat=chat,
+            db=s,
+        )
     )
     _lang_span.end(
         output={

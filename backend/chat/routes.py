@@ -7,6 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from openai import APIError, RateLimitError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
@@ -33,10 +34,10 @@ from backend.chat.schemas import (
     MessageResponse,
 )
 from backend.chat.service import (
-    process_chat_message,
+    async_process_chat_message,
     record_gap_feedback_for_message,
 )
-from backend.core.db import get_db
+from backend.core.db import get_async_db, get_db
 from backend.core.limiter import limiter
 from backend.core.openai_client import is_quota_exceeded
 from backend.email.service import send_email
@@ -131,10 +132,10 @@ def _require_original_access(current_user: User) -> None:
 
 @chat_router.post("", response_model=ChatTurnResponse)
 @limiter.limit("30/minute")
-def chat(
+async def chat(
     request: Request,
     body: ChatRequest,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_async_db)],
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     x_browser_locale: Annotated[str | None, Header(alias="X-Browser-Locale")] = None,
 ) -> ChatTurnResponse:
@@ -147,7 +148,7 @@ def chat(
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    tenant = get_tenant_by_api_key(x_api_key, db)
+    tenant = await db.run_sync(lambda s: get_tenant_by_api_key(x_api_key, s))
     if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
     if not tenant.openai_api_key:
@@ -159,7 +160,7 @@ def chat(
     session_id = body.session_id or uuid.uuid4()
 
     try:
-        outcome = process_chat_message(
+        outcome = await async_process_chat_message(
             tenant_id=tenant.id,
             question=body.question,
             session_id=session_id,
@@ -174,7 +175,9 @@ def chat(
             lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
+                detail=await db.run_sync(
+                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key)
+                ),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:

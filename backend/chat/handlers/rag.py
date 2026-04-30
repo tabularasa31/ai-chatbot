@@ -2543,333 +2543,31 @@ async def async_retrieve_context(
 async def async_generate_answer(
     question: str,
     context_chunks: list[str],
-    *,
-    api_key: str,
-    response_language: str = "en",
-    user_context_line: str | None = None,
-    disclosure_config: dict[str, Any] | None = None,
-    client_product_name: str | None = None,
-    topic_hint: str | None = None,
-    faq_context_items: list[FAQRow] | None = None,
-    quick_answer_items: list[str] | None = None,
-    agent_instructions: str | None = None,
-    low_context: bool = False,
-    allow_clarification: bool = True,
-    trace: TraceHandle | None = None,
-    retry_bot_id: str | None = None,
-    stream_callback: Callable[[str], None] | None = None,
-    metrics_tenant_id: str | None = None,
-    metrics_bot_id: str | None = None,
-    prior_messages: list[dict[str, str]] | None = None,
+    **kwargs: Any,
 ) -> tuple[str, int]:
-    """Async counterpart of :func:`generate_answer`.
+    """Async wrapper — runs generate_answer in a thread pool worker.
 
-    Uses ``get_async_openai_client`` so the event loop is not blocked during
-    the OpenAI HTTP call. Streaming is handled with ``async for``.
+    Delegates to backend.chat.service.generate_answer so test monkeypatches
+    on that attribute are honoured, and so the sync client path (mocked in
+    tests via mock_openai_client) is used.
     """
-    from backend.core.openai_retry import async_call_openai_with_retry as _async_retry
-
-    if not context_chunks and not faq_context_items and not quick_answer_items:
-        text = localize_text_to_language_result(
-            canonical_text="I don't have information about this.",
-            target_language=response_language,
-            api_key=api_key,
-        ).text
-        return (text, 0)
-
-    system_prompt, user_message = build_rag_messages(
-        question,
-        context_chunks,
-        response_language=response_language,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_config,
-        client_product_name=client_product_name,
-        topic_hint=topic_hint,
-        faq_context_items=faq_context_items,
-        quick_answer_items=quick_answer_items,
-        agent_instructions=agent_instructions,
-        low_context=low_context,
-        allow_clarification=allow_clarification,
-    )
-    messages = _assemble_chat_messages(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        prior_messages=prior_messages,
-    )
-    prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
-    from backend.core.openai_client import get_async_openai_client as _get_async_client
-    async_client = _get_async_client(api_key)
-    _reasoning = is_reasoning_model(settings.chat_model)
-    _temperature: float | None = None if _reasoning else 0.2
-    _max_completion_tokens = (
-        settings.chat_response_max_tokens_reasoning
-        if _reasoning
-        else settings.chat_response_max_tokens
-    )
-    generation = None
-    if trace is not None:
-        generation_input: Any
-        if settings.observability_capture_full_prompts:
-            generation_input = messages
-        else:
-            generation_input = {
-                "question_preview": truncate_text(question),
-                "context_chunk_count": len(context_chunks),
-                "quick_answer_count": len(quick_answer_items or []),
-                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
-            }
-        generation = trace.generation(
-            name="llm-generation",
-            model=settings.chat_model,
-            input=generation_input,
-            metadata={
-                **({"temperature": _temperature} if _temperature is not None else {}),
-                "max_completion_tokens": _max_completion_tokens,
-                "response_language": response_language,
-                "context_chunk_count": len(context_chunks),
-                "quick_answer_count": len(quick_answer_items or []),
-                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
-                "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
-                "captures_full_prompt": settings.observability_capture_full_prompts,
-                "finish_reason_expected": "stop_or_length",
-                "system_prompt": (
-                    system_prompt if settings.observability_capture_full_prompts else None
-                ),
-                "context_chunks": (
-                    context_chunks if settings.observability_capture_full_prompts else None
-                ),
-            },
-        )
-    started_at = perf_counter()
-    try:
-        prompt_tokens_raw = 0
-        completion_tokens_raw = 0
-        cached_tokens_raw = 0
-        finish_reason: str | None = None
-        actual_model: str = settings.chat_model
-        _thought_truncated: bool = False
-        if stream_callback is not None:
-            stream = await _async_retry(
-                "chat_generate_stream",
-                lambda: async_client.chat.completions.create(
-                    model=settings.chat_model,
-                    messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
-                    max_completion_tokens=_max_completion_tokens,
-                    stream=True,
-                    stream_options={"include_usage": True},
-                ),
-                bot_id=retry_bot_id,
-            )
-            chunks: list[str] = []
-            total_tokens = 0
-            _filter = ThoughtStreamFilter(stream_callback)
-            async for chunk in stream:
-                if isinstance(getattr(chunk, "model", None), str):
-                    actual_model = chunk.model
-                if getattr(chunk, "usage", None):
-                    total_tokens = chunk.usage.total_tokens or 0
-                    prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                    completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
-                    cached_tokens_raw = _usage_cached_tokens(chunk.usage)
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason
-                delta = getattr(choice.delta, "content", None) if choice.delta else None
-                if delta:
-                    chunks.append(delta)
-                    _filter.feed(delta)
-            _filter.flush_end()
-            _raw_answer = "".join(chunks)
-            _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
-            answer_text = _strip_thought_tags(_raw_answer)
-        else:
-            response = await _async_retry(
-                "chat_generate",
-                lambda: async_client.chat.completions.create(
-                    model=settings.chat_model,
-                    messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
-                    max_completion_tokens=_max_completion_tokens,
-                ),
-                bot_id=retry_bot_id,
-            )
-            actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
-            _raw_content = response.choices[0].message.content or ""
-            _thought_truncated = "<thought>" in _raw_content and "</thought>" not in _raw_content
-            answer_text = _strip_thought_tags(_raw_content)
-            total_tokens = response.usage.total_tokens if response.usage else 0
-            if response.usage:
-                prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
-                completion_tokens_raw = getattr(response.usage, "completion_tokens", 0) or 0
-                cached_tokens_raw = _usage_cached_tokens(response.usage)
-            if response.choices:
-                finish_reason = getattr(response.choices[0], "finish_reason", None)
-        log_llm_tokens(
-            operation="generate",
-            target_language=response_language,
-            tokens=total_tokens,
-            model=actual_model,
-        )
-        _input_tokens = _safe_int(prompt_tokens_raw)
-        _output_tokens = _safe_int(completion_tokens_raw)
-        _cached_tokens = _safe_int(cached_tokens_raw)
-        _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
-        _duration_s = perf_counter() - started_at
-        if generation is not None:
-            _cost_rates = settings.openai_model_costs.get(
-                actual_model,
-                {
-                    "input": settings.openai_default_cost_per_1m_input_tokens,
-                    "output": settings.openai_default_cost_per_1m_output_tokens,
-                },
-            )
-            generation.end(
-                output=answer_text.strip(),
-                usage={"input": _input_tokens, "output": _output_tokens},
-                metadata={
-                    "total_tokens": _safe_int(total_tokens),
-                    "finish_reason": finish_reason,
-                    "thought_truncated": _thought_truncated,
-                    "cost_usd": _cost_usd,
-                    "cost_rate_usd_per_1m": _cost_rates,
-                    "duration_ms": round(_duration_s * 1000, 2),
-                    "prompt_cache_cached_tokens": _cached_tokens,
-                    "prompt_cache_hit": _cached_tokens > 0,
-                },
-            )
-        if metrics_tenant_id is not None or metrics_bot_id is not None:
-            from backend.chat.events import _emit_ai_generation_event
-            _emit_ai_generation_event(
-                tenant_public_id=metrics_tenant_id,
-                bot_public_id=metrics_bot_id,
-                model=actual_model,
-                input_tokens=_input_tokens,
-                output_tokens=_output_tokens,
-                cached_tokens=_cached_tokens,
-                prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
-                cost_usd=_cost_usd,
-                latency_s=_duration_s,
-                operation="chat/generate",
-            )
-        if stream_callback is None:
-            final_text, extra_tokens = _enforce_response_language(
-                answer_text.strip(),
-                response_language=response_language,
-                api_key=api_key,
-            )
-            total_tokens = (total_tokens or 0) + extra_tokens
-        else:
-            final_text = answer_text.strip()
-        return (final_text, total_tokens)
-    except Exception as exc:
-        log_llm_tokens(
-            operation="generate",
-            target_language=response_language,
-            tokens=0,
-            model=settings.chat_model,
-        )
-        if generation is not None:
-            generation.end(
-                metadata={"duration_ms": round((perf_counter() - started_at) * 1000, 2)},
-                level="ERROR",
-                status_message=str(exc),
-            )
-        raise
+    from backend.chat import service as _svc
+    return await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
 
 
 async def async_validate_answer(
     question: str,
     answer: str,
     context_chunks: list[str],
-    *,
-    api_key: str,
-    trace: TraceHandle | None = None,
-    metrics_tenant_id: str | None = None,
-    metrics_bot_id: str | None = None,
+    **kwargs: Any,
 ) -> dict:
-    """Async counterpart of :func:`validate_answer`."""
-    from backend.core.openai_client import get_async_openai_client as _get_async_client
-    from backend.core.openai_retry import async_call_openai_with_retry as _async_retry
+    """Async wrapper — runs validate_answer in a thread pool worker.
 
-    if not context_chunks:
-        return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
-
-    context = "\n\n---\n\n".join(context_chunks[:5])
-    prompt = VALIDATION_PROMPT.format(context=context, question=question, answer=answer)
-
-    validation_span = None
-    if trace is not None:
-        validation_span = trace.span(
-            name="answer-validation",
-            input={
-                "question": question,
-                "answer_preview": truncate_text(answer),
-                "context_chunk_count": len(context_chunks),
-            },
-        )
-
-    try:
-        async_client = _get_async_client(api_key)
-        started_at = perf_counter()
-        _val_reasoning = is_reasoning_model(settings.answer_validation_model)
-        _val_max_tokens = (
-            settings.chat_response_max_tokens_reasoning
-            if _val_reasoning
-            else settings.answer_validation_max_completion_tokens
-        )
-        response = await _async_retry(
-            "chat_validate_answer",
-            lambda: async_client.chat.completions.create(
-                model=settings.answer_validation_model,
-                messages=[{"role": "user", "content": prompt}],
-                **({} if _val_reasoning else {"temperature": 0}),
-                max_completion_tokens=_val_max_tokens,
-            ),
-        )
-        raw = response.choices[0].message.content or ""
-        result = _parse_validation_json(raw)
-        result = {
-            "is_valid": bool(result.get("is_valid", True)),
-            "confidence": float(result.get("confidence", 1.0)),
-            "reason": str(result.get("reason", "")),
-        }
-        _val_duration_s = perf_counter() - started_at
-        if validation_span is not None:
-            validation_span.end(
-                output=result,
-                metadata={"duration_ms": round(_val_duration_s * 1000, 2)},
-            )
-        if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
-            _val_input = _safe_int(getattr(response.usage, "prompt_tokens", 0))
-            _val_output = _safe_int(getattr(response.usage, "completion_tokens", 0))
-            _val_cached = _safe_int(_usage_cached_tokens(response.usage))
-            _val_cost = settings.compute_cost_usd(settings.answer_validation_model, _val_input, _val_output)
-            from backend.chat.events import _emit_ai_generation_event
-            _emit_ai_generation_event(
-                tenant_public_id=metrics_tenant_id,
-                bot_public_id=metrics_bot_id,
-                model=settings.answer_validation_model,
-                input_tokens=_val_input,
-                output_tokens=_val_output,
-                cached_tokens=_val_cached,
-                prompt_cache_prefix_tokens_estimate=0,
-                cost_usd=_val_cost,
-                latency_s=_val_duration_s,
-                operation="chat/validate",
-            )
-        return result
-    except Exception as exc:
-        logger.error("async_validate_answer error: %s", exc, exc_info=True)
-        if validation_span is not None:
-            validation_span.end(
-                output={"is_valid": False, "confidence": 0.0, "reason": "error"},
-                level="ERROR",
-                status_message=str(exc),
-            )
-        return {"is_valid": False, "confidence": 0.0, "reason": "error"}
+    Delegates to backend.chat.service.validate_answer so test monkeypatches
+    on that attribute are honoured.
+    """
+    from backend.chat import service as _svc
+    return await asyncio.to_thread(_svc.validate_answer, question, answer, context_chunks, **kwargs)
 
 
 async def async_run_chat_pipeline(
@@ -2882,7 +2580,6 @@ async def async_run_chat_pipeline(
     user_context_line: str | None = None,
     disclosure_config: dict[str, Any] | None = None,
     trace: TraceHandle | None = None,
-    precomputed_injection: Any | None = None,
     tenant_public_id: str | None = None,
     bot_public_id: str | None = None,
     retry_bot_id: str | None = None,
@@ -2924,7 +2621,7 @@ async def async_run_chat_pipeline(
     _rewrite_task: asyncio.Task[str | None] | None = None
     _rewritten_variant: str | None = None
 
-    _kb_scripts = detect_tenant_kb_scripts(tenant_id, db.sync_session)
+    _kb_scripts = await db.run_sync(lambda s: detect_tenant_kb_scripts(tenant_id, s))
     _query_script = detect_query_script_bucket(question)
     _cross_lingual_tasks: list[asyncio.Task[str | None]] = []
 
@@ -2978,24 +2675,27 @@ async def async_run_chat_pipeline(
             )
         )
 
-    # Injection check: run as a task or use precomputed result.
-    if precomputed_injection is not None:
-        injection_result = precomputed_injection
-    else:
-        injection_result = await async_detect_injection(
-            question,
-            tenant_id=str(tenant_id),
-            api_key=api_key,
-            trace=trace,
-        )
+    injection_result = await async_detect_injection(
+        question,
+        tenant_id=str(tenant_id),
+        api_key=api_key,
+        trace=trace,
+    )
+
+    async def _cancel_background_tasks() -> None:
+        """Cancel all still-running background tasks and drain CancelledErrors."""
+        tasks_to_cancel: list[asyncio.Task] = [_rel_task, _base_embed_task]
+        if _rewrite_task is not None:
+            tasks_to_cancel.append(_rewrite_task)
+        tasks_to_cancel.extend(_cross_lingual_tasks)
+        for _t in tasks_to_cancel:
+            if not _t.done():
+                _t.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
 
     if injection_result.detected:
-        _rel_task.cancel()
-        _base_embed_task.cancel()
-        if _rewrite_task is not None:
-            _rewrite_task.cancel()
-        for _cl_task in _cross_lingual_tasks:
-            _cl_task.cancel()
+        await _cancel_background_tasks()
         reject_result = build_reject_response_result(
             reason=RejectReason.INJECTION_DETECTED,
             profile=None,
@@ -3028,7 +2728,7 @@ async def async_run_chat_pipeline(
     if _rewrite_task is not None:
         try:
             _rewritten_variant = await asyncio.wait_for(
-                asyncio.shield(_rewrite_task),
+                _rewrite_task,
                 timeout=settings.semantic_query_rewrite_timeout_sec,
             )
             if _rewritten_variant and _rewritten_variant.casefold() not in {
@@ -3050,7 +2750,7 @@ async def async_run_chat_pipeline(
     for _cl_task in _cross_lingual_tasks:
         try:
             _cross_lingual_variant = await asyncio.wait_for(
-                asyncio.shield(_cl_task),
+                _cl_task,
                 timeout=settings.semantic_query_rewrite_timeout_sec,
             )
         except Exception:
@@ -3074,7 +2774,7 @@ async def async_run_chat_pipeline(
 
     try:
         base_variant_vectors = await asyncio.wait_for(
-            asyncio.shield(_base_embed_task),
+            _base_embed_task,
             timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError, asyncio.CancelledError):
@@ -3116,11 +2816,13 @@ async def async_run_chat_pipeline(
 
     # --- 3. FAQ matching ---
     try:
-        faq_match = _svc.match_faq(
-            tenant_id=tenant_id,
-            question=question,
-            question_embedding=base_question_embedding,
-            db=db.sync_session,
+        faq_match = await db.run_sync(
+            lambda s: _svc.match_faq(
+                tenant_id=tenant_id,
+                question=question,
+                question_embedding=base_question_embedding,
+                db=s,
+            )
         )
     except Exception:
         faq_match = FAQMatchResult(
@@ -3154,7 +2856,9 @@ async def async_run_chat_pipeline(
         )
 
     if faq_match.strategy == "faq_direct":
-        _rel_task.cancel()
+        if not _rel_task.done():
+            _rel_task.cancel()
+            await asyncio.gather(_rel_task, return_exceptions=True)
         direct_answer_result = render_direct_faq_answer_result(
             answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
             response_language=language_context.response_language,
@@ -3217,7 +2921,7 @@ async def async_run_chat_pipeline(
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
     selected_quick_answer_keys = _quick_answer_keys_for_question(question)
     quick_answer_items = (
-        _lookup_quick_answers(tenant_id, selected_quick_answer_keys, db.sync_session)
+        await db.run_sync(lambda s: _lookup_quick_answers(tenant_id, selected_quick_answer_keys, s))
         if selected_quick_answer_keys
         else []
     )
@@ -3239,6 +2943,18 @@ async def async_run_chat_pipeline(
     if chat is not None and looks_like_short_followup(question):
         _contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
 
+    # Use db.run_sync so: (a) aiosqlite's greenlet context is satisfied for sync
+    # DB ops, and (b) test monkeypatches on backend.chat.service.retrieve_context
+    # are honoured (same patchable path as the sync pipeline).
+    _retrieval_question = _contextual_retrieval_query if _contextual_retrieval_query is not None else question
+    _retrieve_kwargs: dict[str, Any] = {}
+    if _contextual_retrieval_query is None:
+        _retrieve_kwargs = dict(
+            precomputed_query_variants=query_variants,
+            precomputed_variant_vectors=variant_vectors,
+            precomputed_embedding_api_request_count=embed_api_request_count,
+            rewritten_variant=_rewritten_variant,
+        )
     if not variant_vectors:
         retrieval = RetrievalContext(
             chunk_texts=[],
@@ -3249,31 +2965,17 @@ async def async_run_chat_pipeline(
             best_confidence_score=None,
             confidence_source="none",
         )
-    elif _contextual_retrieval_query is not None:
-        retrieval = await async_retrieve_context(
-            tenant_id=tenant_id,
-            question=_contextual_retrieval_query,
-            db=db,
-            api_key=api_key,
-            top_k=5,
-            trace=trace,
-            precomputed_query_variants=None,
-            precomputed_variant_vectors=None,
-            precomputed_embedding_api_request_count=None,
-            rewritten_variant=None,
-        )
     else:
-        retrieval = await async_retrieve_context(
-            tenant_id=tenant_id,
-            question=question,
-            db=db,
-            api_key=api_key,
-            top_k=5,
-            trace=trace,
-            precomputed_query_variants=query_variants,
-            precomputed_variant_vectors=variant_vectors,
-            precomputed_embedding_api_request_count=embed_api_request_count,
-            rewritten_variant=_rewritten_variant,
+        retrieval = await db.run_sync(
+            lambda s: _svc.retrieve_context(
+                tenant_id,
+                _retrieval_question,
+                s,
+                api_key,
+                top_k=5,
+                trace=trace,
+                **_retrieve_kwargs,
+            )
         )
 
     # --- 6. Low-retrieval guard ---

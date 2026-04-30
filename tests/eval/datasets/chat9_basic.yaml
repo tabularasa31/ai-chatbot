@@ -7,9 +7,10 @@ description: |
     - getting-started.md
     - pricing-and-limits.md
     - faq.md
-    - widget-api-reference.md (covers the public widget endpoints —
-      `/widget/chat` SSE format, session/init body, message length
-      limits, rate limits, etc.)
+    - api.md (full API reference — public widget endpoints with
+      SSE format details inline, plus a categorised listing of the
+      authenticated dashboard surface that links into the live
+      Swagger at https://api.getchat9.live/docs)
   Every case is grounded in those fixtures so adding a fixture doc or
   rewording the bot's prompt cannot silently break expectations.
 cases:

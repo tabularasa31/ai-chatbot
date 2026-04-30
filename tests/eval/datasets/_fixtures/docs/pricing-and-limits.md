@@ -1,0 +1,48 @@
+---
+title: Pricing and Limits
+description: Plan pricing, document quotas, API costs, and rate limits for Chat9.
+---
+
+## Current pricing
+
+Chat9 is currently **free to use** during the early access period.
+
+## Document limits
+
+- Maximum **100 documents** per account.
+- Maximum **50 MB** per document.
+
+## Widget limits
+
+- Maximum **1 000 characters** per single message sent through the widget. Messages exceeding this limit are rejected before reaching the bot.
+- Maximum **800 tokens** per bot response (roughly 600 words). Longer answers are truncated by the model.
+
+The 100-document capacity is shared across uploaded files and indexed URL-source pages.
+
+## API costs
+
+Chat9 uses your **own OpenAI API key** — you pay OpenAI directly for:
+
+- Embedding generation (when you upload documents): uses `text-embedding-3-small`.
+- Chat answers: uses `gpt-5-mini`.
+- Lightweight guard and validation checks: use `gpt-4o-mini` by default.
+
+Typical costs are very low — a few cents per document upload, and fractions of a cent per chat message.
+
+## Rate limits
+
+To protect the service, the following rate limits apply:
+
+- Private chat API: 30 requests per minute per API key.
+- Public widget — session init (`POST /widget/session/init`): 10 requests per minute per IP.
+- Public widget — chat (`POST /widget/chat`): 30 requests per minute per visitor IP.
+- Public widget — escalation (`POST /widget/escalate`): 20 requests per minute per IP.
+- Search API: 30 requests per minute.
+- Document upload: 20 uploads per hour.
+- Registration: 5 per hour per IP.
+- Login: 10 per minute per IP.
+- Password reset request: 3 per hour per IP.
+
+## Questions about pricing?
+
+Contact us at: support@getchat9.live

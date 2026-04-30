@@ -1,0 +1,146 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Chat9 Public Widget API",
+    "version": "1.0.0",
+    "description": "Public, no-auth API used by the embedded chat widget on customer websites. The widget identifies itself by the bot's `public_id` (a short string starting with `ch_` — the same value as `data-bot-id` in the embed snippet). All endpoints are rate-limited per visitor IP."
+  },
+  "servers": [
+    {"url": "https://ai-chatbot-production-6531.up.railway.app", "description": "Production"}
+  ],
+  "paths": {
+    "/widget/health": {
+      "get": {
+        "summary": "Liveness check",
+        "description": "Returns 200 OK when the widget service is reachable.",
+        "responses": {"200": {"description": "OK"}}
+      }
+    },
+    "/widget/config": {
+      "get": {
+        "summary": "Widget configuration",
+        "description": "Returns widget config (link safety labels, allowed domains).",
+        "parameters": [
+          {"name": "bot_id", "in": "query", "required": true, "schema": {"type": "string"}, "description": "Bot public_id"}
+        ],
+        "responses": {"200": {"description": "Widget config"}}
+      }
+    },
+    "/widget/session/init": {
+      "post": {
+        "summary": "Initialise a widget chat session",
+        "description": "Bootstrap a chat session for a visitor. Optionally accepts a server-signed `identity_token` to attach a verified end-user identity (identified session). Rate limit: 10 requests per minute per IP.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["bot_id"],
+                "properties": {
+                  "bot_id": {"type": "string", "description": "Bot public_id (same value as widget `data-bot-id`)."},
+                  "identity_token": {"type": "string", "nullable": true, "description": "Optional HMAC-SHA256 signed token issued by the customer's server."},
+                  "locale": {"type": "string", "nullable": true, "description": "Browser locale hint (e.g. `ru-RU`)."}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "session_id": {"type": "string", "format": "uuid"},
+                    "mode": {"type": "string", "enum": ["anonymous", "identified"]}
+                  }
+                }
+              }
+            }
+          },
+          "404": {"description": "Bot not found"},
+          "403": {"description": "Tenant is not active"},
+          "400": {"description": "Bot not available (e.g. OpenAI key missing)"}
+        }
+      }
+    },
+    "/widget/chat": {
+      "post": {
+        "summary": "Send a chat message (Server-Sent Events stream)",
+        "description": "Send a user message and receive the bot's answer as a Server-Sent Events stream. The response stream emits `data: {\"type\":\"chunk\",\"text\":\"...\"}` events as the model streams, then a final `data: {\"type\":\"done\", ...}` event with the full text, sources, and chat_ended flag. Maximum message length is 1000 characters. Rate limit: 30 requests per minute per visitor IP.",
+        "parameters": [
+          {"name": "bot_id", "in": "query", "required": true, "schema": {"type": "string"}, "description": "Bot public_id"},
+          {"name": "session_id", "in": "query", "required": false, "schema": {"type": "string", "format": "uuid"}, "description": "Chat session UUID returned by /widget/session/init"},
+          {"name": "locale", "in": "query", "required": false, "schema": {"type": "string"}}
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": {"type": "string", "maxLength": 1000, "description": "User's question (max 1000 chars; longer messages are rejected)."},
+                  "locale": {"type": "string", "nullable": true}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "SSE stream of chunk + done events", "content": {"text/event-stream": {}}},
+          "404": {"description": "Bot not found"},
+          "422": {"description": "Invalid session_id or empty message"}
+        }
+      }
+    },
+    "/widget/history": {
+      "get": {
+        "summary": "Fetch session message history",
+        "description": "Return prior messages from the same `session_id` so the widget can rehydrate after a page reload. Rate limit: 30 requests per minute per IP.",
+        "parameters": [
+          {"name": "bot_id", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "session_id", "in": "query", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        ],
+        "responses": {"200": {"description": "Message history"}}
+      }
+    },
+    "/widget/escalate": {
+      "post": {
+        "summary": "Manually escalate a session to a human",
+        "description": "Create a support ticket from the widget. Returns the ticket number (e.g. `ESC-42`) which is also displayed to the user. Rate limit: 20 requests per minute per IP.",
+        "parameters": [
+          {"name": "bot_id", "in": "query", "required": true, "schema": {"type": "string"}},
+          {"name": "session_id", "in": "query", "required": true, "schema": {"type": "string", "format": "uuid"}}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {"type": "string", "nullable": true, "description": "Optional free-form reason from the user."}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {"description": "Ticket created"},
+          "404": {"description": "Bot or session not found"}
+        }
+      }
+    },
+    "/embed.js": {
+      "get": {
+        "summary": "Widget loader script",
+        "description": "Returns the JavaScript loader served at https://<api-host>/embed.js. Embed it on your site with `<script src=\".../embed.js\" data-bot-id=\"...\"></script>` to render the chat button.",
+        "responses": {"200": {"description": "JavaScript loader", "content": {"application/javascript": {}}}}
+      }
+    }
+  }
+}

@@ -121,7 +121,7 @@ ai-chatbot/
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
 │   ├── auth/, admin/, bots/, chat/, contact_sessions/, documents/, embeddings/,
-│   │   escalation/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
+│   │   escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
 │   │   observability/, search/, tenant_knowledge/, tenants/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
@@ -141,6 +141,7 @@ Notable non-obvious modules:
 - `backend/knowledge/` — extracts and serves the tenant's knowledge profile (topics) from indexed documents; dashboard `/knowledge` page.
 - `backend/tenant_knowledge/` — low-level FAQ and `TenantProfile` service helpers used by the chat pipeline.
 - `backend/contact_sessions/` — tracks contact-level session state across escalation flows.
+- `backend/evals/` — automated answer-quality eval CLI (`python -m backend.evals run`). Loads YAML golden datasets from `tests/eval/datasets/`, hits the running backend's widget chat endpoint, and scores responses with deterministic checks + Anthropic Claude as LLM-as-judge. Datasets and unit tests in `tests/`; demo bot seeded via `scripts/seed_eval_bot.py`.
 
 Run the API from the repo root with `PYTHONPATH` pointing at the root so `backend.*` imports resolve.
 

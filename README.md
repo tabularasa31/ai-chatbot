@@ -126,6 +126,10 @@ make test
 make coverage-all
 ```
 
+### Answer-quality evals
+
+Separate from unit tests, `backend/evals/` runs golden datasets against a real chat backend and grades answers with deterministic metrics + Anthropic Claude as LLM-as-judge. See [`docs/06-developer-test-runbook.md`](docs/06-developer-test-runbook.md#eval-pipeline-backendevals) for the workflow (seeding the demo bot, running a dataset, before/after comparisons).
+
 ### pgvector test credentials (local)
 
 `tests/pgvector_tests/` connects to Postgres using `PG_HOST/PG_PORT/PG_USER/PG_PASSWORD`.
@@ -145,6 +149,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |----------|-------|-------------|
 | `DATABASE_URL` | Backend | PostgreSQL connection string |
 | `JWT_SECRET` | Backend | Secret for JWT (min 32 chars) |
+| `ANTHROPIC_API_KEY` | Backend (optional) | Anthropic key for the eval pipeline's LLM-as-judge (`backend/evals/`). Not used at runtime. |
 | `ENVIRONMENT` | Backend | `development` or `production` |
 | `ENCRYPTION_KEY` | Backend | Fernet key for OpenAI key encryption |
 | `FRONTEND_URL` | Backend | Frontend URL (e.g. https://getchat9.live) |

@@ -242,7 +242,7 @@ endpoints below by tag.
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| POST | `/chat` | Server-side chat using the tenant's `ck_...` widget API key — same answer pipeline as the widget, returned as JSON with `text`, `session_id`, `chat_ended`, optional `ticket_number`, and private trace fields `source_documents` / `tokens_used`. |
+| POST | `/chat` | Server-side chat using the tenant's `ck_...` widget API key — same answer pipeline as the widget, returned as JSON with `text`, `session_id`, `chat_ended`, optional `ticket_number`, and trace fields `source_documents` / `tokens_used`. |
 | GET  | `/chat/history/{session_id}` | Server-side history fetch (mirrors `/widget/history`). |
 | GET  | `/chat/sessions` | List recent sessions for the current tenant. |
 | GET  | `/chat/logs/session/{session_id}` | Full conversation transcript for a session. |

@@ -218,7 +218,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ### Chat
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/chat` | RAG chat (X-API-Key header); returns `text`, `session_id`, `chat_ended`, optional `ticket_number`, and private trace fields `source_documents` / `tokens_used`; optional header `X-Browser-Locale` |
+| POST | `/chat` | RAG chat (X-API-Key header); returns `text`, `session_id`, `chat_ended`, optional `ticket_number`, and trace fields `source_documents` / `tokens_used`; optional header `X-Browser-Locale` |
 | POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
 | GET | `/chat/sessions` | List chat sessions (JWT) |
 | GET | `/chat/logs/session/{id}` | Full session log (JWT) |

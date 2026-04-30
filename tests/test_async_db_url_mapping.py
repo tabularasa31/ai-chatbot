@@ -1,10 +1,28 @@
-"""Unit tests for ``_to_async_url`` — DATABASE_URL → async-driver mapping."""
+"""Unit tests for DB URL normalization helpers."""
 
 from __future__ import annotations
 
 import pytest
 
 from backend.core.db import _to_async_url
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        # Legacy postgres:// is the primary case to fix.
+        ("postgres://u:p@h:5432/db", "postgresql://u:p@h:5432/db"),
+        # Already-valid URLs pass through unchanged.
+        ("postgresql://u:p@h:5432/db", "postgresql://u:p@h:5432/db"),
+        ("postgresql+psycopg2://u:p@h:5432/db", "postgresql+psycopg2://u:p@h:5432/db"),
+        ("sqlite:///:memory:", "sqlite:///:memory:"),
+    ],
+)
+def test_normalize_database_url_validator(url: str, expected: str) -> None:
+    from backend.core.config import Settings
+
+    result = Settings._normalize_database_url(url)
+    assert result == expected
 
 
 @pytest.mark.parametrize(

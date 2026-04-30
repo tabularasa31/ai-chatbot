@@ -390,6 +390,13 @@ class Settings(BaseSettings):
     enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")
     enable_cot_reasoning: bool = Field(True, alias="ENABLE_COT_REASONING")
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_database_url(cls, v: str) -> str:
+        if v.startswith("postgres://"):
+            return "postgresql://" + v[len("postgres://"):]
+        return v
+
     @field_validator("posthog_host", mode="before")
     @classmethod
     def _strip_posthog_host(cls, v: str) -> str:

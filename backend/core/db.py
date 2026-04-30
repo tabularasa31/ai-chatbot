@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 
+
 def _normalize_db_url(url: str) -> str:
     """Normalize legacy postgres:// scheme to postgresql:// for SQLAlchemy 2.0.
 

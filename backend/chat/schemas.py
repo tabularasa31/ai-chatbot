@@ -57,8 +57,7 @@ class ChatRequest(BaseModel):
 class ChatTurnResponse(BaseModel):
     """Response for a single chat turn.
 
-    Shared schema between private `/chat` (returned as JSON) and widget `/chat`
-    (used as the payload of the SSE `done` frame, with trace fields excluded).
+    Returned by `/chat` as JSON.
     """
 
     text: str
@@ -68,6 +67,15 @@ class ChatTurnResponse(BaseModel):
     # Trace fields — populated only by the private API; widget always omits these.
     source_documents: list[UUID] | None = None
     tokens_used: int | None = None
+
+
+class WidgetChatTurnResponse(BaseModel):
+    """Widget `done` event payload for `/widget/chat` SSE responses."""
+
+    text: str
+    session_id: UUID
+    chat_ended: bool = False
+    ticket_number: str | None = None
 
 
 class MessageResponse(BaseModel):

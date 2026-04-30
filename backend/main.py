@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -20,6 +21,7 @@ from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
 from backend.chat.handlers.rag import shutdown_guard_pool
 from backend.chat.routes import chat_router
+from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
 from backend.documents.routes import documents_router
@@ -68,6 +70,29 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)
 
 app.state.limiter = limiter
+
+
+def custom_openapi() -> dict:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    components = schema.setdefault("components", {})
+    schemas = components.setdefault("schemas", {})
+    schemas.setdefault(
+        "WidgetChatTurnResponse",
+        WidgetChatTurnResponse.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        ),
+    )
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):

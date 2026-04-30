@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import localize_text_to_language_result
-from backend.chat.schemas import ChatTurnResponse
+from backend.chat.schemas import WidgetChatTurnResponse
 from backend.chat.service import process_chat_message
 from backend.contact_sessions.service import start_user_session
 from backend.core import db as core_db
@@ -295,17 +295,16 @@ def widget_session_init(
     responses={
         200: {
             "description": (
-                "Server-sent events stream (`text/event-stream`). Each frame is "
-                "`type: 'chunk'` (incremental text) or `type: 'done'`; the `done` "
-                "frame's payload conforms to `ChatTurnResponse` with trace fields "
-                "(`source_documents`, `tokens_used`) omitted."
-            ),
-            "content": {
-                "text/event-stream": {
-                    "schema": {"$ref": "#/components/schemas/ChatTurnResponse"},
+                    "Server-sent events stream (`text/event-stream`). Each frame is "
+                    "`type: 'chunk'` (incremental text) or `type: 'done'`; the `done` "
+                    "frame's payload conforms to `WidgetChatTurnResponse`."
+                ),
+                "content": {
+                    "text/event-stream": {
+                        "schema": {"$ref": "#/components/schemas/WidgetChatTurnResponse"},
+                    },
                 },
-            },
-        }
+            }
     },
 )
 @limiter.limit(
@@ -508,7 +507,7 @@ def _widget_chat_stream(
         final_text = outcome.text if outcome is not None else ""
         if not streamed_any and final_text:
             yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
-        turn_response = ChatTurnResponse(
+        turn_response = WidgetChatTurnResponse(
             text=final_text,
             session_id=sid,
             chat_ended=bool(outcome.chat_ended) if outcome is not None else False,
@@ -516,11 +515,7 @@ def _widget_chat_stream(
         )
         done_payload: dict[str, Any] = {
             "type": "done",
-            **turn_response.model_dump(
-                exclude={"source_documents", "tokens_used"},
-                exclude_none=True,
-                mode="json",
-            ),
+            **turn_response.model_dump(exclude_none=True, mode="json"),
         }
         sources = result_holder.get("sources")
         if sources:

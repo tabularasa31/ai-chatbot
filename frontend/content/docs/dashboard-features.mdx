@@ -1,6 +1,6 @@
 ---
 title: Dashboard Features
-description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Logs, Debug, and more.
+description: What each section of the Chat9 dashboard does — Knowledge, Gap Analyzer, Logs, Review, and more.
 ---
 
 The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **Admin** for platform admins). The top bar shows the Chat9 brand, your email, and **Logout**.
@@ -80,7 +80,7 @@ View all conversations your users have had with your bot.
 - **Inbox layout:** Sessions list on the left, full conversation on the right.
 - **Session details:** Last question, last answer preview, last activity time.
 - **Message view:** User messages and bot answers in a thread layout.
-- **Clarification visibility:** if the bot asked a follow-up question, you can see that turn in the conversation instead of guessing why the bot paused before answering.
+- **Clarification visibility:** if the bot asked a follow-up question, you can see that turn in the conversation instead of guessing why the bot paused before continuing.
 - **Feedback:** Click thumbs-up or thumbs-down on any bot answer to rate its quality.
 
 ## Review Bad Answers (`/review`)
@@ -96,15 +96,6 @@ This page and **Gap Analyzer** complement each other:
 
 - **Review Bad Answers** is best for inspecting a specific bad turn.
 - **Gap Analyzer** is best for spotting repeated patterns across many turns.
-
-## Debug (`/debug`)
-
-Test your bot directly in the dashboard.
-
-- Ask a question and inspect the retrieved chunks plus matching scores.
-- Reliability metadata includes the canonical score and cap reason from the retrieval pipeline.
-- Clarification-aware debug metadata shows the decision the bot would make for the turn (direct answer, answer with caveat, blocking or inline clarifying question, or escalation).
-- **Answer** is shown in a code-style block with an inline **copy** icon.
 
 ## Response controls
 

@@ -54,7 +54,6 @@ jobs:
     env:
       DATABASE_URL: sqlite:///:memory:?check_same_thread=False
       JWT_SECRET: test-secret-key-min-32-chars-long!!
-      EVAL_JWT_SECRET: test-eval-jwt-secret-min-32-chars-long!!
       ENVIRONMENT: test
       ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
       OPENAI_API_KEY: sk-test
@@ -108,7 +107,6 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:password@localhost:5432/test_pgvector
       JWT_SECRET: test-secret-key-min-32-chars-long!!
-      EVAL_JWT_SECRET: test-eval-jwt-secret-min-32-chars-long!!
       ENVIRONMENT: test
       ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
       OPENAI_API_KEY: sk-test
@@ -159,7 +157,7 @@ jobs:
       - name: Guard against raw fetch to backend
         run: |
           # Catch client-side fetch() calls using BASE_URL outside the helper file.
-          # Server-side API routes (API_URL) and the eval pages (apiBase) are intentionally excluded.
+          # Server-side API routes (API_URL) are intentionally excluded.
           if grep -rn 'fetch(`\${BASE_URL}' --include="*.ts" --include="*.tsx" frontend/ \
               | grep -v "^frontend/lib/api\.ts:"; then
             echo "ERROR: raw fetch() using BASE_URL found outside frontend/lib/api.ts — use apiFetch() instead."

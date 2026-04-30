@@ -12,7 +12,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 |-------|----------------|
 | Backend | Python 3.11, FastAPI 0.111, Pydantic v2 (2.5), SQLAlchemy 2.0, Alembic |
 | Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
-| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user`; internal eval QA (`/eval/*`) uses a separate signing secret `EVAL_JWT_SECRET` |
+| Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user` |
 | LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion, fumadocs-ui for content |
 | Widget | Dedicated Next.js routes (`/widget`), API calls; public endpoints in `backend/routes/widget.py` and `backend/widget/` |
@@ -91,7 +91,7 @@ Chat responses now support structured clarification outcomes in addition to plai
 
 For `/chat` and `/widget/chat`, the response body uses the canonical `text` field only. Legacy aliases (`answer` on `/chat`, `response` on `/widget/chat`) have been removed; consumers must read `text`. Typed behavior lives in `backend/chat/service.py`, `backend/chat/schemas.py`, and the widget/frontend transport types.
 
-Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`, `EVAL_JWT_SECRET`. Optional by group:
+Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars defined in `backend/core/config.py`. Required: `DATABASE_URL`, `JWT_SECRET`. Optional by group:
 
 | Group | Key env vars |
 |---|---|
@@ -121,7 +121,7 @@ ai-chatbot/
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
 │   ├── auth/, admin/, bots/, chat/, contact_sessions/, documents/, embeddings/,
-│   │   escalation/, eval/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
+│   │   escalation/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
 │   │   observability/, search/, tenant_knowledge/, tenants/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
@@ -129,7 +129,7 @@ ai-chatbot/
 │   ├── routes/               # cross-cutting public routes: embed.js loader, widget
 │   └── migrations/           # Alembic: versions/, env.py (43+ migrations)
 ├── frontend/                 # Next.js app
-│   └── app/                  # App Router: (marketing), (auth), (app), widget/, eval/, layout.tsx
+│   └── app/                  # App Router: (marketing), (auth), (app), widget/, layout.tsx
 │       └── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
 │                             #   escalations/, gap-analyzer/, knowledge/, logs/,
 │                             #   review/, settings/, widget-settings/
@@ -140,7 +140,6 @@ ai-chatbot/
 Notable non-obvious modules:
 - `backend/knowledge/` — extracts and serves the tenant's knowledge profile (topics) from indexed documents; dashboard `/knowledge` page.
 - `backend/tenant_knowledge/` — low-level FAQ and `TenantProfile` service helpers used by the chat pipeline.
-- `backend/eval/` — QA eval pipeline; uses a separate `EVAL_JWT_SECRET`; routes under `/eval/`.
 - `backend/contact_sessions/` — tracks contact-level session state across escalation flows.
 
 Run the API from the repo root with `PYTHONPATH` pointing at the root so `backend.*` imports resolve.

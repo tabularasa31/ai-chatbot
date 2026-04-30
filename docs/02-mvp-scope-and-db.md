@@ -23,7 +23,6 @@
 - Token usage tracking per tenant
 - Debug mode (show which chunks were used)
 - Admin metrics + PII-event audit log
-- Internal eval QA framework (`/eval/*`) with a separate JWT secret
 
 **Frontend:**
 - Login/signup page
@@ -40,7 +39,7 @@
 
 **Database:**
 - PostgreSQL 15 with pgvector extension
-- Tenants, Workspaces, Users, Bots, Documents, UrlSources, Embeddings, Chats, Messages, ContactSessions, EscalationTickets, Gap* (Analyzer), PiiEvents, Tester/EvalSession/EvalResult (internal QA)
+- Tenants, Workspaces, Users, Bots, Documents, UrlSources, Embeddings, Chats, Messages, ContactSessions, EscalationTickets, Gap* (Analyzer), PiiEvents
 - Migrations (Alembic) — ~40 versioned revisions under `backend/migrations/versions/`
 
 ### What's EXCLUDED (v2) ❌
@@ -228,36 +227,6 @@ Indexes:
    (workspace_id, contact_id) WHERE session_ended_at IS NULL
 ```
 
-#### Internal manual QA (Eval)
-
-Not tenant-scoped; internal testers only. Migration `eval_qa_mvp_v1`. See `docs/04-features.md` §11.
-
-```sql
-testers
-├─ id (PK, UUID)
-├─ username (UNIQUE, NOT NULL)
-├─ password (TEXT, plain MVP — internal only)
-├─ is_active (BOOLEAN)
-└─ created_at (TIMESTAMP)
-
-eval_sessions
-├─ id (PK, UUID)
-├─ tester_id (FK → testers, NOT NULL)
-├─ bot_id (VARCHAR(21) — the bot's public_id, same value as widget data-bot-id)
-├─ started_at (TIMESTAMP)
-└─ INDEX (tester_id), (bot_id), (tester_id, started_at)
-
-eval_results
-├─ id (PK, UUID)
-├─ session_id (FK → eval_sessions, NOT NULL)
-├─ question, bot_answer (TEXT — snapshots)
-├─ verdict ('pass' | 'fail')
-├─ error_category (nullable enum-like string)
-├─ comment (nullable)
-└─ created_at (TIMESTAMP)
--- CHECK constraints on verdict / category / comment (see migration)
-```
-
 #### Chat Messages
 ```sql
 messages
@@ -335,7 +304,6 @@ The schema above is the **target**. As of April 2026 the code still reflects the
 | Content scope (`documents`, `url_sources`, `chats`, `quick_answers`, `contact_sessions`, `escalation_tickets`, `gap_*`) | `workspace_id` | `tenant_id` |
 | KYC secrets | on `workspaces` | on `tenants` ([backend/models.py:218](backend/models.py:218)) |
 | Tenant public_id | not present | still exists ([backend/models.py:210](backend/models.py:210)) |
-| `eval_sessions.bot_id` | Bot.public_id | actually a Tenant.public_id, resolved via `get_tenant_eligible_for_widget_chat` ([backend/eval/service.py:30](backend/eval/service.py:30)) |
 
 Closing this gap is tracked as a single hard‑cutover migration (no production data to preserve). See `docs/adr/0001-tenant-workspace-bot.md`.
 

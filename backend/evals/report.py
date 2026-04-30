@@ -106,9 +106,10 @@ def render_markdown(report: RunReport) -> str:
     if report.avg_latency_ms is not None:
         lines.append(f"- avg latency: {report.avg_latency_ms:.0f} ms")
     lines.append("")
-    lines.append("| id | category | lang | det. | judge | latency | notes |")
-    lines.append("|----|----------|------|:----:|:-----:|--------:|-------|")
+    lines.append("| id | category | lang | overall | det. | judge | latency | notes |")
+    lines.append("|----|----------|------|:-------:|:----:|:-----:|--------:|-------|")
     for c in report.cases:
+        overall = "✅" if c.overall_passed else "❌"
         det = "✅" if c.deterministic_passed else "❌"
         judge = f"{c.judge.score:.2f}" if c.judge else "—"
         notes_parts: list[str] = []
@@ -120,7 +121,10 @@ def render_markdown(report: RunReport) -> str:
         if c.judge and c.judge.rationale:
             notes_parts.append(c.judge.rationale)
         notes = "; ".join(notes_parts).replace("|", "\\|")
-        lines.append(f"| `{c.case_id}` | {c.category} | {c.lang} | {det} | {judge} | {c.latency_ms} | {notes} |")
+        lines.append(
+            f"| `{c.case_id}` | {c.category} | {c.lang} | {overall} | {det} | "
+            f"{judge} | {c.latency_ms} | {notes} |"
+        )
     return "\n".join(lines) + "\n"
 
 

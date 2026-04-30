@@ -86,6 +86,13 @@ jobs:
           fi
 
       - name: Run eval
+        id: run
+        # `python -m backend.evals run` exits 1 when any case fails — that's the
+        # signal we *want* to record, not a reason to abort the workflow. Keep
+        # the step itself marked failed (so the job status reflects reality)
+        # but let the subsequent steps run via `if: always()` so the report
+        # still ships to PR / artifacts.
+        continue-on-error: true
         run: |
           python -m backend.evals run \
             --dataset "${{ github.event.inputs.dataset }}" \
@@ -97,7 +104,7 @@ jobs:
 
       - name: Compare against baseline (if provided)
         id: compare
-        if: github.event.inputs.compare_with != ''
+        if: always() && github.event.inputs.compare_with != ''
         run: |
           python -m backend.evals compare \
             "${{ github.event.inputs.compare_with }}" \
@@ -105,6 +112,7 @@ jobs:
             --out eval-results/${{ github.event.inputs.tag }}/diff.md
 
       - name: Upload report artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-${{ github.event.inputs.tag }}
@@ -112,7 +120,7 @@ jobs:
           retention-days: 30
 
       - name: Post summary on PR
-        if: github.event.inputs.pr_number != ''
+        if: always() && github.event.inputs.pr_number != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -134,3 +142,13 @@ jobs:
               issue_number: pr,
               body,
             });
+
+      - name: Surface eval failure status
+        # Re-raise the eval step's failure after artifacts/comment posted so
+        # the job status honestly reflects whether any case failed. Without
+        # this `continue-on-error: true` above would always mark the job
+        # green.
+        if: always() && steps.run.outcome != 'success'
+        run: |
+          echo "::error::Eval run had failures — see uploaded report and PR comment."
+          exit 1

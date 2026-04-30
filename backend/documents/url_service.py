@@ -749,7 +749,7 @@ def trigger_refresh(
     stuck_in_indexing = (
         source.status == SourceStatus.indexing
         and last_refresh is not None
-        and now - last_refresh > dt.timedelta(minutes=15)
+        and now - last_refresh > dt.timedelta(minutes=30)
     )
     if last_refresh and now - last_refresh < dt.timedelta(hours=1) and not stuck_in_indexing:
         remaining = dt.timedelta(hours=1) - (now - last_refresh)
@@ -1057,7 +1057,7 @@ def crawl_url_source(source_id: uuid.UUID, api_key: str | None) -> None:
             return
 
         # Close any runs left in "indexing" state from a previously crashed crawl.
-        stale_cutoff = _utcnow() - dt.timedelta(minutes=15)
+        stale_cutoff = _utcnow() - dt.timedelta(minutes=30)
         stale_runs = (
             db.query(UrlSourceRun)
             .filter(UrlSourceRun.source_id == source_id)

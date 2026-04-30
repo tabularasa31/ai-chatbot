@@ -21,16 +21,8 @@ from pathlib import Path
 
 import httpx
 
+from backend.evals import compare as compare_module
 from backend.evals.client import ChatClient
-from backend.evals.compare import (
-    diff as compare_diff,
-)
-from backend.evals.compare import (
-    load_report,
-)
-from backend.evals.compare import (
-    render_markdown as render_compare_markdown,
-)
 from backend.evals.dataset import load_dataset
 from backend.evals.judge import DEFAULT_JUDGE_MODEL, AnthropicJudge
 from backend.evals.langfuse_sink import upload_dataset, upload_run
@@ -193,10 +185,10 @@ def _cmd_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
-    before = load_report(args.before)
-    after = load_report(args.after)
-    deltas = compare_diff(before, after)
-    md = render_compare_markdown(before, after, deltas=deltas)
+    before = compare_module.load_report(args.before)
+    after = compare_module.load_report(args.after)
+    deltas = compare_module.diff(before, after)
+    md = compare_module.render_markdown(before, after, deltas=deltas)
     if args.out:
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)

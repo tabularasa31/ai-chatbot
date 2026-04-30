@@ -152,6 +152,32 @@ def test_must_not_contain_also_normalises_numbers() -> None:
     assert not r.passed and "1000" in r.detail
 
 
+def test_must_contain_does_not_collapse_decimal_comma() -> None:
+    """In Russian / EU locales comma is the decimal separator, so
+    `0,5` means 0.5 — NOT 05. Only collapse comma when it's followed
+    by a canonical three-digit group (`1,000`), not before single or
+    double-digit fractions (`0,5`, `0,55`)."""
+
+    # The Russian-locale answer `0,5 секунды` must not start matching
+    # the unrelated needle `05` after normalisation.
+    c = _case(must_contain=["05"])
+    assert not check_must_contain(c, "Задержка примерно 0,5 секунды.").passed
+
+    # And the natural needle `0,5` keeps matching itself even though
+    # its haystack is unchanged after normalisation.
+    c = _case(must_contain=["0,5"])
+    assert check_must_contain(c, "Задержка примерно 0,5 секунды.").passed
+
+
+def test_must_contain_handles_chained_thousands_separators() -> None:
+    """`1,000,000` and `1 000 000` should both collapse to `1000000`
+    so a needle of `1000000` matches either form."""
+
+    c = _case(must_contain=["1000000"])
+    assert check_must_contain(c, "We saw 1,000,000 events.").passed
+    assert check_must_contain(c, "We saw 1 000 000 events.").passed
+
+
 def test_language_check_skipped_for_any() -> None:
     c = _case(lang="any")
     assert check_language(c, "anything").passed

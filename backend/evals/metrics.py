@@ -20,10 +20,20 @@ class MetricResult:
     detail: str = ""
 
 
-# Strip common thousands separators that sit BETWEEN two digits — `1,000`,
-# `1 000`, `1<NBSP>000` all collapse to `1000`. Anything else (commas in
-# prose, spaces between words, etc.) is left untouched.
-_DIGIT_SEPARATOR_RE = re.compile(r"(?<=\d)[,\s](?=\d)")
+# Collapse thousands separators between digits so `1,000`, `1 000`
+# and `1<NBSP>000` all match `1000`.
+#
+# Comma is restricted to the canonical thousands shape — separator
+# followed by exactly three digits that aren't themselves followed by
+# another digit — because in Russian / many EU locales comma is also
+# the decimal separator (`0,5` means 0.5). The 3-digit lookahead lets
+# `1,000` and `1,000,000` collapse but leaves `0,5` and `0,55` alone.
+#
+# Whitespace (regular space + NBSP via Unicode `\s`) only ever signals
+# thousands grouping inside numbers in our domain, so we collapse it
+# whenever it sits between two digits.
+_THOUSANDS_COMMA_RE = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+_DIGIT_SPACE_RE = re.compile(r"(?<=\d)\s(?=\d)")
 
 
 def _normalize_for_match(text: str) -> str:
@@ -34,7 +44,10 @@ def _normalize_for_match(text: str) -> str:
     falsely fail when the bot writes the value in localised form, even
     though the LLM judge correctly considered the answer right."""
 
-    return _DIGIT_SEPARATOR_RE.sub("", text.lower())
+    out = text.lower()
+    out = _THOUSANDS_COMMA_RE.sub("", out)
+    out = _DIGIT_SPACE_RE.sub("", out)
+    return out
 
 
 def check_must_contain(case: GoldenCase, output: str) -> MetricResult:

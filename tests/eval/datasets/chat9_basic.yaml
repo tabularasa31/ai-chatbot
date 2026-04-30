@@ -2,13 +2,15 @@ name: chat9_basic
 description: |
   Baseline golden dataset for the chat9 product bot. Mixes ru/en across
   five categories: happy_path, rag, guards, multilingual, golden_scenario.
-  Knowledge base = `_fixtures/docs/`:
+  Knowledge base = `_fixtures/docs/` (mirrors the published docs at
+  https://getchat9.live/docs that the prod bot indexes):
     - getting-started.md
     - pricing-and-limits.md
     - faq.md
-    - chat9-public-api.json (Swagger of the public widget API; tests
-      that the bot can answer concrete API questions from a Swagger
-      file the way `swagger` ingestion is supposed to work)
+    - api.md (full API reference — public widget endpoints with
+      SSE format details inline, plus a categorised listing of the
+      authenticated dashboard surface that links into the live
+      Swagger at https://api.getchat9.live/docs)
   Every case is grounded in those fixtures so adding a fixture doc or
   rewording the bot's prompt cannot silently break expectations.
 cases:

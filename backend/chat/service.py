@@ -42,6 +42,10 @@ from backend.chat.handlers.rag import (
     _quick_answers_context,
     _strip_thought_tags,
     _user_context_prompt_line,
+    async_generate_answer,  # noqa: F401
+    async_retrieve_context,  # noqa: F401
+    async_run_chat_pipeline,
+    async_validate_answer,  # noqa: F401
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
@@ -112,12 +116,6 @@ from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
 from backend.guards.injection_detector import detect_injection  # noqa: F401
 from backend.guards.relevance_checker import check_relevance_with_profile  # noqa: F401
-from backend.chat.handlers.rag import (
-    async_generate_answer,  # noqa: F401
-    async_retrieve_context,  # noqa: F401
-    async_run_chat_pipeline,  # noqa: F401
-    async_validate_answer,  # noqa: F401
-)
 from backend.models import (
     Bot,
     Chat,
@@ -767,10 +765,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
     RagHandler is bypassed; ``async_run_chat_pipeline`` is called directly so
     the event loop handles all guard/embedding I/O without tying up OS threads.
     """
-    from backend.chat.handlers.escalation import EscalationStateMachine
-    from backend.chat.handlers.greeting import GreetingHandler
-    from backend.chat.handlers.rag import RagHandler, async_run_chat_pipeline
-    from backend.chat.handlers.small_talk import SmallTalkHandler
+    from backend.chat.handlers.rag import RagHandler
 
     for handler in _HANDLER_ROUTER._handlers:
         if not handler.can_handle(ctx):

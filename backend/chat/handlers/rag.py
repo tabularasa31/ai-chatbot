@@ -2567,7 +2567,6 @@ async def async_generate_answer(
     Uses ``get_async_openai_client`` so the event loop is not blocked during
     the OpenAI HTTP call. Streaming is handled with ``async for``.
     """
-    from backend.chat import service as _svc
     from backend.core.openai_retry import async_call_openai_with_retry as _async_retry
 
     if not context_chunks and not faq_context_items and not quick_answer_items:

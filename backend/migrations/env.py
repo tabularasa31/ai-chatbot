@@ -14,7 +14,6 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from backend.core.config import settings  # noqa: E402
-from backend.core.db import _normalize_db_url  # noqa: E402
 from backend.models import Base  # noqa: E402
 
 config = context.config
@@ -25,7 +24,7 @@ logger = logging.getLogger("alembic.env")
 
 target_metadata = Base.metadata
 
-config.set_main_option("sqlalchemy.url", _normalize_db_url(settings.database_url))
+config.set_main_option("sqlalchemy.url", settings.database_url)
 
 
 def run_migrations_offline() -> None:

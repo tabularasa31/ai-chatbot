@@ -1,10 +1,10 @@
-"""Unit tests for DB URL normalization helpers in backend.core.db."""
+"""Unit tests for DB URL normalization helpers."""
 
 from __future__ import annotations
 
 import pytest
 
-from backend.core.db import _normalize_db_url, _to_async_url
+from backend.core.db import _to_async_url
 
 
 @pytest.mark.parametrize(
@@ -18,8 +18,11 @@ from backend.core.db import _normalize_db_url, _to_async_url
         ("sqlite:///:memory:", "sqlite:///:memory:"),
     ],
 )
-def test_normalize_db_url(url: str, expected: str) -> None:
-    assert _normalize_db_url(url) == expected
+def test_normalize_database_url_validator(url: str, expected: str) -> None:
+    from backend.core.config import Settings
+
+    result = Settings._normalize_database_url(url)
+    assert result == expected
 
 
 @pytest.mark.parametrize(

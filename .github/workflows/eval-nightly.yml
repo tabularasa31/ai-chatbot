@@ -1,0 +1,144 @@
+name: Eval (nightly)
+
+# Nightly answer-quality eval against the deployed staging bot. Runs
+# every dataset and opens a GitHub Issue when the pass rate drops
+# below REGRESSION_THRESHOLD.
+#
+# Pre-reqs (set as repo secrets / vars):
+#   secrets.ANTHROPIC_API_KEY   — judge LLM
+#   secrets.LANGFUSE_HOST/_PUBLIC_KEY/_SECRET_KEY (optional)
+#   vars.EVAL_API_BASE          — e.g. https://chat9-staging.example.com
+#   vars.EVAL_BOT_PUBLIC_ID     — long-lived demo bot
+#   vars.EVAL_REGRESSION_THRESHOLD (optional, default 0.85) — fraction
+#                                  of cases that must pass to count as healthy
+
+on:
+  schedule:
+    # 02:00 UTC = 06:00 Tbilisi (project tz). Quiet hours, gives Anthropic
+    # / OpenAI rate budget for the morning standup review.
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run:
+    name: Nightly eval
+    runs-on: ubuntu-latest
+
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+      DATABASE_URL: sqlite:///:memory:?check_same_thread=False
+      JWT_SECRET: ci-eval-jwt-secret-min-32-chars-long!
+      ENVIRONMENT: test
+      ENCRYPTION_KEY: 7b4_zUZivxPZWzIkXbVf3dpQX9Ab22HB51H9Qcrjya8=
+      OPENAI_API_KEY: sk-test
+      REGRESSION_THRESHOLD: ${{ vars.EVAL_REGRESSION_THRESHOLD || '0.85' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ vars.EVAL_API_BASE }}" ]; then
+            echo "::error::repo var EVAL_API_BASE is not set"
+            exit 1
+          fi
+          if [ -z "${{ vars.EVAL_BOT_PUBLIC_ID }}" ]; then
+            echo "::error::repo var EVAL_BOT_PUBLIC_ID is not set"
+            exit 1
+          fi
+
+      - name: Run all datasets
+        id: run
+        run: |
+          set -euo pipefail
+          TAG="nightly-$(date -u +%Y-%m-%d)"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          mkdir -p eval-results
+          DATASETS=$(python -m backend.evals list)
+          echo "${DATASETS}" | while read -r DS; do
+            [ -z "$DS" ] && continue
+            echo "::group::Running $DS"
+            python -m backend.evals run \
+              --dataset "$DS" \
+              --bot-id "${{ vars.EVAL_BOT_PUBLIC_ID }}" \
+              --api-base "${{ vars.EVAL_API_BASE }}" \
+              --tag "${TAG}/${DS}" \
+              --langfuse \
+              --out-dir eval-results || echo "::warning::dataset $DS had failures"
+            echo "::endgroup::"
+          done
+
+      - name: Check regression threshold
+        id: check
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          threshold = float(os.environ["REGRESSION_THRESHOLD"])
+          breaches: list[str] = []
+          for report in Path("eval-results").rglob("report.json"):
+              data = json.loads(report.read_text())
+              summary = data.get("summary", {})
+              total = summary.get("total", 0)
+              passed = summary.get("passed", 0)
+              if total == 0:
+                  continue
+              ratio = passed / total
+              if ratio < threshold:
+                  breaches.append(
+                      f"- `{data.get('dataset')}` [{data.get('tag')}]: "
+                      f"{passed}/{total} ({ratio:.0%}) < threshold {threshold:.0%}"
+                  )
+          out = Path(os.environ["GITHUB_OUTPUT"])
+          if breaches:
+              with out.open("a") as f:
+                  f.write("regressed=true\n")
+                  f.write("body<<EOF\n")
+                  f.write("\n".join(breaches))
+                  f.write("\nEOF\n")
+          else:
+              with out.open("a") as f:
+                  f.write("regressed=false\n")
+          PY
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ steps.run.outputs.tag }}
+          path: eval-results/
+          retention-days: 90
+
+      - name: Open regression issue
+        if: steps.check.outputs.regressed == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const tag = '${{ steps.run.outputs.tag }}';
+            const body = `Nightly eval (\`${tag}\`) breached the pass-rate threshold:\n\n${{ steps.check.outputs.body }}\n\nReports: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[eval] Regression in nightly run ${tag}`,
+              body,
+              labels: ['eval', 'regression'],
+            });

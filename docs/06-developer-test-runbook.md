@@ -125,6 +125,56 @@ psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_doc_topics_topic_embe
 psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_questions_embedding_ivfflat"
 ```
 
+## Eval pipeline (`backend/evals/`)
+
+Automated answer-quality evaluation against a real chat backend, with
+deterministic metrics + LLM-as-judge (Anthropic Claude Haiku). Used to
+spot regressions in answer quality after prompt / RAG / model changes.
+
+The runner targets a **running** chat backend (local uvicorn or a
+deployed instance) — it does not stand up a backend itself.
+
+### One-time setup
+
+```bash
+# 1. Spin up the backend locally (separate terminal):
+uvicorn backend.main:app --reload
+
+# 2. Seed the demo eval bot from the chat9 fixture docs:
+DATABASE_URL=postgresql://… OPENAI_API_KEY=sk-… \
+    python scripts/seed_eval_bot.py
+# → prints  EVAL_BOT_PUBLIC_ID=ch_xxxxxxxxxxxxxxxx
+```
+
+### Run a dataset
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-… \
+    python -m backend.evals run \
+        --dataset chat9_basic \
+        --bot-id ch_xxxxxxxxxxxxxxxx \
+        --tag local-2026-04-30
+```
+
+Datasets live in `tests/eval/datasets/*.yaml`. List them with
+`python -m backend.evals list`. Reports land in `eval-results/<tag>/`
+as `report.json` + `report.md`.
+
+Useful flags: `--api-base http://staging.…` (target a remote backend),
+`--no-judge` (skip Claude — deterministic metrics only, free), and
+`--judge-model claude-sonnet-4-6` (more accurate but ~10x more
+expensive than the default Haiku).
+
+### Unit tests for the runner
+
+```bash
+pytest -q tests/test_evals_runner.py
+```
+
+Run on every PR — covers dataset schema, deterministic metrics, the
+judge JSON parser, the SSE client, and runner orchestration with a
+fake chat client. No real Anthropic / OpenAI calls.
+
 ## Coverage Snapshot (backend, SQLite-only)
 
 ```bash

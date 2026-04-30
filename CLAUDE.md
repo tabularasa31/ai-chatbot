@@ -76,6 +76,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/guards/` | Injection detection (2-level) + relevance guard — gate on every chat turn |
 | `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
 | `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |
+| `backend/evals/` | Automated answer-quality eval CLI: golden dataset → chat → metrics + Anthropic-as-judge. See `docs/06-developer-test-runbook.md` § Eval pipeline. |
 | `backend/knowledge/` | Tenant knowledge profile extraction and topics API |
 | `backend/tenant_knowledge/` | FAQ/tenant-profile service helpers |
 | `tests/conftest.py` | Pytest fixtures (DB session, test client) |

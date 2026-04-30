@@ -37,7 +37,7 @@
 - **RAG pipeline** — OpenAI embeddings (`text-embedding-3-small`) + `gpt-5-mini` for answers, with lightweight `gpt-4o-mini` guard/validation classifiers
 - **Hybrid retrieval** — PostgreSQL: pgvector cosine candidate acquisition + BM25 (`rank-bm25`) + RRF + reranking; SQLite/tests: Python cosine candidate acquisition followed by the same downstream lexical/ranking orchestration
 - **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
-- **Controlled clarification** — chat/widget replies can return `answer`, `clarification`, or `partial_with_clarification` with structured clarification payloads
+- **Clarification-first behavior** — when one missing detail blocks a grounded answer, the bot asks a focused follow-up question in the normal `text` reply flow
 - **Localized default greeting** — new empty chats can start with a product-aware greeting localized from locale hints before the first real question
 - **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
@@ -218,13 +218,12 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ### Chat
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/chat` | RAG chat (X-API-Key header); returns canonical `text`, `message_type`, optional `clarification`, legacy `answer`, and `chat_ended`; optional header `X-Browser-Locale` |
+| POST | `/chat` | RAG chat (X-API-Key header); returns `text`, `session_id`, `chat_ended`, optional `ticket_number`, and private trace fields `source_documents` / `tokens_used`; optional header `X-Browser-Locale` |
 | POST | `/chat/{session_id}/escalate` | Manual escalation / “not helpful” path (X-API-Key); JSON body: `user_note`, `trigger` (`user_request` or `answer_rejected`) |
 | GET | `/chat/sessions` | List chat sessions (JWT) |
 | GET | `/chat/logs/session/{id}` | Full session log (JWT) |
 | GET | `/chat/bad-answers` | Answers marked 👎 (JWT) |
 | POST | `/chat/messages/{id}/feedback` | Set 👍/👎 + ideal answer (JWT) |
-| POST | `/chat/debug?bot_id=ch_...` | Debug retrieval for a specific bot (JWT) |
 
 ### Gap Analyzer
 | Method | Path | Description |
@@ -269,7 +268,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | GET | `/health` | Health check |
 | GET | `/embed.js` | Widget script |
 | POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
-| POST | `/widget/chat` | Public widget chat by `clientId`; returns canonical `text`, `message_type`, optional `clarification`, legacy `response`, and `chat_ended` |
+| POST | `/widget/chat` | Public widget chat by `clientId`; streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |
 | POST | `/widget/escalate` | Public widget manual escalation |
 
 ---
@@ -281,7 +280,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 <script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
 ```
 
-Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; response includes `chat_ended`, structured `message_type`, and optional clarification payload). Optional identified sessions: `POST /widget/session/init` with `locale` and optional signed `identity_token`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
+Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; the SSE stream ends with a `done` event that includes `text`, `session_id`, `chat_ended`, and optional `ticket_number` / `sources`). Optional identified sessions: `POST /widget/session/init` with `locale` and optional signed `identity_token`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
 
 ---
 

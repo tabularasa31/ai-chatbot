@@ -97,7 +97,9 @@ server emits two kinds of events while it works:
   emitted exactly once at the end with the complete reply, the
   `session_id` (so you can store it), and a `chat_ended` flag that's
   `true` when the bot decided to close the chat (e.g. after a manual
-  escalation).
+  escalation). The final payload can also include `ticket_number` when
+  the turn opened a support ticket and `sources` when the answer cited
+  URL-backed documents.
 
 If something goes wrong server-side you may instead get one
 `{"type":"error","code":...,"message":"..."}` event before the stream
@@ -115,8 +117,9 @@ refreshes the page and you want to rehydrate the conversation.
 
 **Query parameters:** `bot_id`, `session_id` (both required).
 
-**Response:** JSON list of messages with `role`, `content`,
-`created_at`.
+**Response:** JSON object containing the `session_id`, ordered
+`messages` (`role` + `content`), `chat_ended`, and optional
+`ticket_number`.
 
 **Rate limit:** 30 requests per minute per IP.
 
@@ -131,7 +134,10 @@ you can show as confirmation.
 **Request body:**
 
 ```json
-{ "reason": "Optional free-form text from the user" }
+{
+  "user_note": "Optional free-form text from the user",
+  "trigger": "user_request"
+}
 ```
 
 **Rate limit:** 20 requests per minute per IP.
@@ -232,12 +238,11 @@ endpoints below by tag.
 | DELETE | `/documents/sources/{source_id}` | Remove a URL source. |
 | DELETE | `/documents/sources/{source_id}/pages/{document_id}` | Remove one indexed page from a URL source. |
 
-### Chat (dashboard and debugging)
+### Chat
 
 | Method | Path | What it does |
 |--------|------|--------------|
-| POST | `/chat` | Server-side chat using the tenant's `ck_...` widget API key — same answer pipeline as the widget, intended for headless clients. |
-| POST | `/chat/debug?bot_id=...` | Authenticated chat debug — returns the same answer plus the retrieved chunks, scores, and intermediate guard verdicts. Used by the **Debug** dashboard page. |
+| POST | `/chat` | Server-side chat using the tenant's `ck_...` widget API key — same answer pipeline as the widget, returned as JSON with `text`, `session_id`, `chat_ended`, optional `ticket_number`, and private trace fields `source_documents` / `tokens_used`. |
 | GET  | `/chat/history/{session_id}` | Server-side history fetch (mirrors `/widget/history`). |
 | GET  | `/chat/sessions` | List recent sessions for the current tenant. |
 | GET  | `/chat/logs/session/{session_id}` | Full conversation transcript for a session. |

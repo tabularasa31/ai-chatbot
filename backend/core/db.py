@@ -8,8 +8,19 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 
+def _normalize_db_url(url: str) -> str:
+    """Normalize legacy postgres:// scheme to postgresql:// for SQLAlchemy 2.0.
+
+    Railway and some Heroku-style providers expose DATABASE_URL with the legacy
+    ``postgres://`` scheme that SQLAlchemy 2.0 rejects with NoSuchModuleError.
+    """
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://"):]
+    return url
+
+
 engine = create_engine(
-    settings.database_url,
+    _normalize_db_url(settings.database_url),
     pool_size=10,
     max_overflow=20,
     future=True,

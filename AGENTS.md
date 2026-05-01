@@ -82,7 +82,7 @@ Redis is **foundational infra** — used for things that need cross-worker share
 | **Rate-limit storage** | `backend/core/limiter.py` (slowapi `storage_uri`) | Required for correct enforcement under N workers (in-memory storage = limit × N). Tests force `memory://`. |
 | **Caches** (e.g. guard verdicts, embeddings) | `backend/core/redis.py` → `cache_get` / `cache_set_with_ttl` | Optional infra; helpers swallow connection errors and the caller treats it as a miss. |
 | **Distributed locks** (e.g. scheduled jobs, crawl throttle) | `backend/core/redis.py` → `acquire_lock` / `release_lock` | Atomic `SET NX EX` + Lua check-and-delete on release. |
-| **ARQ queue broker** (future) | — | Tracked separately; this module only provides the connection. |
+| **ARQ queue broker** | `backend/core/queue.py` (worker process: `backend/worker.py`) | Durable retry-aware background work — see "Job queue" below. |
 | **Idempotency keys** (future) | — | Tracked separately; will use the cache helpers. |
 
 **Configuration:**
@@ -99,6 +99,63 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
 - Locks: when `acquire_lock` returns `None` (Redis down or already held), the caller decides whether to skip or run unguarded — never block forever.
 - Rate limit: failures surface as 500s on purpose (rate limiting is a security control; silent fallback to memory storage in production would create a window where a single worker has no shared limit).
+
+---
+
+## Job queue (`backend/core/queue.py`)
+
+Single ARQ-backed queue for everything that should outlive a request, survive a deploy, and retry on failure. Replaces ad-hoc `BackgroundTasks` and `threading.Thread` (migrations of existing background work happen ticket-by-ticket).
+
+**Components:**
+- `backend/core/queue.py` — `register_job` decorator, `enqueue` helper, `get_worker_settings()` factory.
+- `backend/worker.py` — entrypoint (`python -m backend.worker`); imports every module that registers jobs, then calls `arq.run_worker`.
+- `backend/jobs/*` — modules containing `@register_job` coroutines.
+- `background_jobs` table (Postgres) — durable mirror of ARQ job state for admin UI and debugging.
+
+**Adding a new job:**
+
+1. Create or pick a module under `backend/jobs/` and decorate the coroutine:
+   ```python
+   from backend.core.queue import register_job
+
+   @register_job(name="reindex_tenant", max_attempts=5)
+   async def reindex_tenant(ctx, tenant_id: str) -> None:
+       ...
+   ```
+   The first arg is always the ARQ `ctx` dict (`ctx['job_id']`, `ctx['job_try']`, etc.). Keep the body **idempotent** — ARQ may retry on failure or worker restart.
+
+2. Register the module in `_JOB_MODULES` inside `backend/worker.py` so the decorator runs when the worker boots.
+
+3. Enqueue from a route or another job:
+   ```python
+   from backend.core.queue import enqueue
+
+   await enqueue(
+       "reindex_tenant",
+       str(tenant.id),
+       kind="reindex_tenant",
+       tenant_id=tenant.id,
+       payload={"tenant_id": str(tenant.id)},
+   )
+   ```
+   Pass `job_id="reindex:{tenant_id}"` to deduplicate while a job is pending.
+
+**Retries and failure handling:**
+- ARQ default retry policy: up to `max_attempts` tries with exponential backoff. Override per job via `max_attempts=` on `register_job`.
+- The status-row wrapper updates `background_jobs.status`: `queued → in_progress → completed | failed | dead_letter`. The terminal `dead_letter` value is set on the **final** failure (attempt == `max_attempts`).
+- Failures re-raise so ARQ schedules the retry; the wrapper records `last_error` / `last_error_at` / `attempt_count` on every attempt.
+
+**Graceful degradation:**
+- When `REDIS_URL` is unset, `enqueue` logs `queue_enqueue_skipped` and returns `None`. The worker process refuses to start without `REDIS_URL` (it is required infra in production; Railway provisions it via the Redis add-on).
+
+**Local dev:**
+```bash
+docker compose up -d redis db
+export REDIS_URL=redis://localhost:6379/0
+alembic upgrade head
+python -m backend.worker          # in one terminal
+uvicorn backend.main:app --reload # in another
+```
 
 ---
 

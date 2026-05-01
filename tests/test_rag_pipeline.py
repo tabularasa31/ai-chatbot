@@ -16,7 +16,9 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
 from backend.search.service import build_reliability_assessment
 
+from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
+
 
 
 def _create_client(
@@ -131,8 +133,8 @@ def test_embedding_once(
         lambda *_, **__: (False, None),
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **_: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
@@ -141,7 +143,7 @@ def test_embedding_once(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="test",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service._start_mode_b_followup",
@@ -225,8 +227,8 @@ def test_faq_context_in_prompt(
         score=0.9,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **_: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_: FAQMatchResult(
             strategy="faq_context",
             faq_items=[faq_item],
             top_score=0.9,
@@ -235,7 +237,7 @@ def test_faq_context_in_prompt(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="test",
-        ),
+        )),
     )
 
     monkeypatch.setattr(
@@ -309,8 +311,8 @@ def test_langfuse_faq_match_span(
         score=0.81,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **_: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_: FAQMatchResult(
             strategy="faq_context",
             faq_items=[faq_item],
             top_score=0.81,
@@ -319,7 +321,7 @@ def test_langfuse_faq_match_span(
             direct_guard_used=True,
             direct_guard_passed=False,
             decision_reason="test_reason",
-        ),
+        )),
     )
 
     monkeypatch.setattr(
@@ -380,8 +382,8 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **_: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
@@ -390,7 +392,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="test",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -468,8 +470,8 @@ def test_faq_direct_skips_retrieval_and_generation(
         score=0.99,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **_: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **_: FAQMatchResult(
             strategy="faq_direct",
             faq_items=[faq_row],
             top_score=0.99,
@@ -478,7 +480,7 @@ def test_faq_direct_skips_retrieval_and_generation(
             direct_guard_used=True,
             direct_guard_passed=True,
             decision_reason="test",
-        ),
+        )),
     )
 
     def _unexpected_retrieve(*_: object, **__: object):
@@ -535,9 +537,12 @@ def test_guard_error_degrades_to_context(
         score=0.99,
     )
 
+    async def _async_fetch_returns_top(**_):
+        return [top]
+
     monkeypatch.setattr(
-        "backend.faq.faq_matcher._fetch_top_faq_rows",
-        lambda **_: [top],
+        "backend.faq.faq_matcher._async_fetch_top_faq_rows",
+        _async_fetch_returns_top,
     )
     monkeypatch.setattr(
         "backend.faq.faq_matcher.direct_applicability_guard",

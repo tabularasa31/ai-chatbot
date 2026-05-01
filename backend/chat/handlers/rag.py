@@ -71,7 +71,6 @@ from backend.search.service import (
     RetrievalReliability,
     default_retrieval_reliability,
     detect_query_script_bucket,
-    detect_tenant_kb_scripts,
 )
 
 logger = logging.getLogger(__name__)
@@ -359,6 +358,32 @@ def _quick_answers_context(tenant_id: uuid.UUID, question: str, db: Session) -> 
     return _lookup_quick_answers(tenant_id, selected_keys, db)
 
 
+_QUICK_ANSWER_LABELS = {
+    "support_email": "Support email",
+    "documentation_url": "Documentation",
+    "pricing_url": "Pricing",
+    "trial_info": "Trial info",
+    "status_page_url": "Status page",
+    "support_chat": "Support chat",
+}
+
+
+def _format_quick_answer_lines(
+    selected_keys: list[str], answers: list[Any]
+) -> list[str]:
+    """Pure formatting shared by sync and async ``_lookup_quick_answers``."""
+    lines_by_key: dict[str, str] = {}
+    for answer in sorted(
+        answers,
+        key=lambda item: (item.key, tuple(-value for value in _quick_answer_quality_score(item))),
+    ):
+        if answer.key in lines_by_key:
+            continue
+        label = _QUICK_ANSWER_LABELS.get(answer.key, answer.key)
+        lines_by_key[answer.key] = f"{label}: {answer.value}"
+    return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
+
+
 def _lookup_quick_answers(
     tenant_id: uuid.UUID, selected_keys: list[str], db: Session
 ) -> list[str]:
@@ -370,24 +395,27 @@ def _lookup_quick_answers(
         .options(selectinload(QuickAnswer.source))
         .all()
     )
-    lines_by_key: dict[str, str] = {}
-    labels = {
-        "support_email": "Support email",
-        "documentation_url": "Documentation",
-        "pricing_url": "Pricing",
-        "trial_info": "Trial info",
-        "status_page_url": "Status page",
-        "support_chat": "Support chat",
-    }
-    for answer in sorted(
-        answers,
-        key=lambda item: (item.key, tuple(-value for value in _quick_answer_quality_score(item))),
-    ):
-        if answer.key in lines_by_key:
-            continue
-        label = labels.get(answer.key, answer.key)
-        lines_by_key[answer.key] = f"{label}: {answer.value}"
-    return [lines_by_key[key] for key in selected_keys if key in lines_by_key]
+    return _format_quick_answer_lines(selected_keys, list(answers))
+
+
+async def _async_lookup_quick_answers(
+    tenant_id: uuid.UUID, selected_keys: list[str], db: AsyncSession
+) -> list[str]:
+    """Async counterpart of :func:`_lookup_quick_answers`."""
+    from sqlalchemy import select as _select
+
+    from backend.models import QuickAnswer
+
+    result = await db.execute(
+        _select(QuickAnswer)
+        .where(
+            QuickAnswer.tenant_id == tenant_id,
+            QuickAnswer.key.in_(selected_keys),
+        )
+        .options(selectinload(QuickAnswer.source))
+    )
+    answers = list(result.scalars().all())
+    return _format_quick_answer_lines(selected_keys, answers)
 
 
 def _metrics_distinct_id(
@@ -1972,7 +2000,7 @@ async def async_run_chat_pipeline(
     _rewrite_task: asyncio.Task[str | None] | None = None
     _rewritten_variant: str | None = None
 
-    _kb_scripts = await run_sync(db, lambda s: detect_tenant_kb_scripts(tenant_id, s))
+    _kb_scripts = await _svc.async_detect_tenant_kb_scripts(tenant_id, db)
     _query_script = detect_query_script_bucket(question)
     _cross_lingual_tasks: list[asyncio.Task[str | None]] = []
 
@@ -2167,14 +2195,11 @@ async def async_run_chat_pipeline(
 
     # --- 3. FAQ matching ---
     try:
-        faq_match = await run_sync(
-            db,
-            lambda s: _svc.match_faq(
-                tenant_id=tenant_id,
-                question=question,
-                question_embedding=base_question_embedding,
-                db=s,
-            ),
+        faq_match = await _svc.async_match_faq(
+            tenant_id=tenant_id,
+            question=question,
+            question_embedding=base_question_embedding,
+            db=db,
         )
     except Exception:
         faq_match = FAQMatchResult(
@@ -2273,7 +2298,7 @@ async def async_run_chat_pipeline(
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
     selected_quick_answer_keys = _quick_answer_keys_for_question(question)
     quick_answer_items = (
-        await run_sync(db, lambda s: _lookup_quick_answers(tenant_id, selected_quick_answer_keys, s))
+        await _svc._async_lookup_quick_answers(tenant_id, selected_quick_answer_keys, db)
         if selected_quick_answer_keys
         else []
     )

@@ -33,6 +33,7 @@ from backend.chat.handlers import (
 from backend.chat.handlers.rag import (
     ChatPipelineResult,
     RetrievalContext,
+    _async_lookup_quick_answers,  # noqa: F401  (re-export for monkeypatch)
     _classify_kb_confidence,
     _emit_quick_answer_lookup_event,
     _lookup_quick_answers,
@@ -105,7 +106,7 @@ from backend.escalation.service import (
     fact_from_ticket,  # noqa: F401
     should_escalate,  # noqa: F401
 )
-from backend.faq.faq_matcher import match_faq  # noqa: F401
+from backend.faq.faq_matcher import async_match_faq, match_faq  # noqa: F401
 from backend.gap_analyzer.enums import GapJobKind
 from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
@@ -130,6 +131,7 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.metrics import capture_event  # noqa: F401  (re-export for monkeypatch)
 from backend.search.service import (
+    async_detect_tenant_kb_scripts,  # noqa: F401
     async_embed_queries,  # noqa: F401
     async_semantic_query_rewrite,  # noqa: F401
     async_semantic_query_rewrite_for_kb,  # noqa: F401

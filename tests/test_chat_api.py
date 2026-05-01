@@ -12,8 +12,10 @@ from sqlalchemy.orm import Session
 from backend.chat.language import LocalizationResult
 from backend.chat.service import RetrievalContext
 from backend.guards.reject_response import RejectReason, build_reject_response
+from tests._async_utils import as_async as _as_async
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
+
 
 
 def test_chat_success(
@@ -529,8 +531,8 @@ def test_chat_injection_detected(
         _async_embed_unused,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("match_faq called")),
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **kwargs: (_ for _ in ()).throw(AssertionError("match_faq called"))),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -604,8 +606,8 @@ def test_chat_faq_direct(
         score=0.95,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **kwargs: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **kwargs: FAQMatchResult(
             strategy="faq_direct",
             faq_items=[faq_row],
             top_score=0.95,
@@ -614,7 +616,7 @@ def test_chat_faq_direct(
             direct_guard_used=True,
             direct_guard_passed=True,
             decision_reason="faq_direct_hit",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -751,8 +753,8 @@ def test_chat_validation_fallback_uses_insufficient_confidence_text(
         _async_relevance_ok,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **kwargs: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **kwargs: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
@@ -761,7 +763,7 @@ def test_chat_validation_fallback_uses_insufficient_confidence_text(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="no_faq",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -891,8 +893,8 @@ def test_chat_validates_quick_answers_as_supporting_context(
         _async_relevance_ok,
     )
     monkeypatch.setattr(
-        "backend.chat.service.match_faq",
-        lambda **kwargs: FAQMatchResult(
+        "backend.chat.service.async_match_faq",
+        _as_async(lambda **kwargs: FAQMatchResult(
             strategy="rag_only",
             faq_items=[],
             top_score=None,
@@ -901,7 +903,7 @@ def test_chat_validates_quick_answers_as_supporting_context(
             direct_guard_used=False,
             direct_guard_passed=False,
             decision_reason="no_faq",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",

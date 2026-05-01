@@ -5,6 +5,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
@@ -85,6 +87,23 @@ def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:
     return out
 
 
+def _bound_db_url(db: Session | AsyncSession) -> str:
+    """Return the bound engine's URL as a string, or ``""`` if unbound.
+
+    ``Session.get_bind()`` raises ``UnboundExecutionError`` when no bind has
+    been associated, and the bind's ``.url`` may itself be missing for
+    custom dialects — both cases collapse to an empty string so the caller's
+    branch on ``"sqlite" in db_url`` falls through to the pgvector path
+    instead of crashing.
+    """
+    try:
+        bind = db.get_bind()
+    except Exception:
+        return ""
+    url = getattr(bind, "url", None)
+    return str(url) if url is not None else ""
+
+
 def _fetch_top_faq_rows(
     *,
     tenant_id: uuid.UUID,
@@ -98,7 +117,7 @@ def _fetch_top_faq_rows(
     Production: use cosine_distance via pgvector operator.
     SQLite tests: fall back to Python cosine over parsed TEXT vectors.
     """
-    db_url = str(getattr(db.bind, "url", ""))
+    db_url = _bound_db_url(db)
     if "sqlite" in db_url:
         rows = (
             db.query(TenantFaq)
@@ -204,21 +223,72 @@ def direct_applicability_guard(
     return False
 
 
-def match_faq(
+async def _async_fetch_top_faq_rows(
     *,
     tenant_id: uuid.UUID,
-    question: str,
     question_embedding: list[float],
-    db: Session,
-) -> FAQMatchResult:
-    direct_threshold, context_threshold, context_max_items = _faq_thresholds()
+    db: AsyncSession,
+    limit: int = 3,
+) -> list[FAQRow]:
+    """Async counterpart of :func:`_fetch_top_faq_rows`."""
+    db_url = _bound_db_url(db)
+    if "sqlite" in db_url:
+        result = await db.execute(
+            select(TenantFaq)
+            .where(TenantFaq.tenant_id == tenant_id)
+            .limit(max(limit * 5, limit))
+        )
+        rows = result.scalars().all()
+        scored: list[FAQRow] = []
+        for r in rows:
+            vec = _parse_sqlite_vector_text(r.question_embedding)
+            if vec is None:
+                continue
+            score = cosine_similarity(question_embedding, vec)
+            scored.append(
+                FAQRow(
+                    id=r.id,
+                    question=r.question,
+                    answer=r.answer,
+                    approved=bool(r.approved),
+                    score=float(score),
+                )
+            )
+        scored.sort(key=lambda x: x.score, reverse=True)
+        return scored[:limit]
 
-    rows = _fetch_top_faq_rows(
-        tenant_id=tenant_id,
-        question_embedding=question_embedding,
-        db=db,
-        limit=3,
+    distance_expr = TenantFaq.question_embedding.cosine_distance(question_embedding)
+    result = await db.execute(
+        select(TenantFaq, distance_expr.label("distance"))
+        .where(TenantFaq.tenant_id == tenant_id)
+        .order_by(distance_expr)
+        .limit(limit)
     )
+    out: list[FAQRow] = []
+    for faq, distance in result.all():
+        try:
+            sim = max(0.0, 1.0 - float(distance))
+        except (TypeError, ValueError):
+            sim = 0.0
+        out.append(
+            FAQRow(
+                id=faq.id,
+                question=faq.question,
+                answer=faq.answer,
+                approved=bool(faq.approved),
+                score=float(sim),
+            )
+        )
+    return out
+
+
+def _classify_faq_match(
+    *,
+    rows: list[FAQRow],
+    question: str,
+) -> FAQMatchResult:
+    """Pure post-fetch classifier shared by sync and async ``match_faq``."""
+    direct_threshold, context_threshold, context_max_items = _faq_thresholds()
 
     if not rows:
         return FAQMatchResult(
@@ -344,3 +414,36 @@ def match_faq(
         direct_guard_passed=False,
         decision_reason="score_below_context_threshold",
     )
+
+
+def match_faq(
+    *,
+    tenant_id: uuid.UUID,
+    question: str,
+    question_embedding: list[float],
+    db: Session,
+) -> FAQMatchResult:
+    rows = _fetch_top_faq_rows(
+        tenant_id=tenant_id,
+        question_embedding=question_embedding,
+        db=db,
+        limit=3,
+    )
+    return _classify_faq_match(rows=rows, question=question)
+
+
+async def async_match_faq(
+    *,
+    tenant_id: uuid.UUID,
+    question: str,
+    question_embedding: list[float],
+    db: AsyncSession,
+) -> FAQMatchResult:
+    """Async counterpart of :func:`match_faq`."""
+    rows = await _async_fetch_top_faq_rows(
+        tenant_id=tenant_id,
+        question_embedding=question_embedding,
+        db=db,
+        limit=3,
+    )
+    return _classify_faq_match(rows=rows, question=question)

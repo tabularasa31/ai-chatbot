@@ -173,8 +173,13 @@ def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
     app.dependency_overrides[get_async_db] = override_get_async_db
     original_engine = core_db.engine
     original_session_local = core_db.SessionLocal
+    original_async_session_local = core_db.AsyncSessionLocal
     core_db.engine = engine
     core_db.SessionLocal = TestingSessionLocal
+    # Code paths that open their own session outside FastAPI dependency
+    # resolution (e.g. widget streaming worker) read AsyncSessionLocal
+    # directly — point it at the test engine for the duration of the fixture.
+    core_db.AsyncSessionLocal = _async_testing_session_factory
 
     try:
         with TestClient(app) as c:
@@ -182,6 +187,7 @@ def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
     finally:
         core_db.engine = original_engine
         core_db.SessionLocal = original_session_local
+        core_db.AsyncSessionLocal = original_async_session_local
         app.dependency_overrides.clear()
         try:
             asyncio.get_event_loop().run_until_complete(_async_test_engine.dispose())

@@ -287,14 +287,17 @@ def test_widget_chat_empty_message_bootstraps_new_session(
     set_client_openai_key(tenant, token)
     bot_public_id = _create_bot(tenant, token)
 
-    monkeypatch.setattr(
-        "backend.widget.routes.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
             text="Hello from bootstrap",
             document_ids=[],
             tokens_used=0,
             chat_ended=False,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
     )
 
     r = _post_widget_chat(tenant, bot_public_id, message="")
@@ -333,14 +336,18 @@ def test_widget_chat_rate_limit_429_after_30_requests_same_client_and_ip(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=2)
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        "backend.widget.routes.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
+
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
             text="ok",
             document_ids=[],
             tokens_used=0,
             chat_ended=False,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
     )
 
     set_widget_public_rate_limit_key_override(lambda _r: "test-widget-rate-limit-ip")
@@ -596,7 +603,7 @@ def test_widget_chat_stream_sse(
     set_client_openai_key(tenant, token)
     bot_public_id = _create_bot(tenant, token)
 
-    def fake_process(*, stream_callback=None, session_id=None, **kwargs):
+    async def fake_process(*, stream_callback=None, session_id=None, **kwargs):
         if stream_callback is not None:
             for piece in ("Hello", ", ", "world!"):
                 stream_callback(piece)
@@ -608,7 +615,7 @@ def test_widget_chat_stream_sse(
         )
 
     monkeypatch.setattr(
-        "backend.widget.routes.process_chat_message",
+        "backend.widget.routes.async_process_chat_message",
         fake_process,
     )
 
@@ -652,14 +659,17 @@ def test_widget_chat_returns_plain_answer_payload(
     set_client_openai_key(tenant, token)
     bot_public_id = _create_bot(tenant, token)
 
-    monkeypatch.setattr(
-        "backend.widget.routes.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
             text="Which provider are you trying to configure?",
             document_ids=[],
             tokens_used=0,
             chat_ended=False,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
     )
 
     r = _post_widget_chat(tenant, bot_public_id, message="How to connect domain?")

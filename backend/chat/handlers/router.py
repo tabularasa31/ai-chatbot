@@ -21,6 +21,11 @@ class HandlerRouter:
     def __init__(self, handlers: Iterable[PipelineHandler]) -> None:
         self._handlers: list[PipelineHandler] = list(handlers)
 
+    @property
+    def handlers(self) -> tuple[PipelineHandler, ...]:
+        """Read-only view of the registered handler chain, in dispatch order."""
+        return tuple(self._handlers)
+
     def dispatch(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         for handler in self._handlers:
             if handler.can_handle(ctx):

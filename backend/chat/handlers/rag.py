@@ -1,20 +1,22 @@
-"""RAG handler — moved RAG implementation from chat/service.py (PR 3/4).
+"""RAG handler module.
 
-This module owns the pure RAG pipeline (``run_chat_pipeline``) plus its direct
+Owns the async RAG pipeline (``async_run_chat_pipeline``) plus its direct
 collaborators (``retrieve_context``, ``generate_answer``, ``validate_answer``,
 ``build_rag_prompt``, ``build_rag_messages``) and the dataclasses they hand
 back to the caller (``RetrievalContext``, ``ChatPipelineResult``).
 
-The ``RagHandler`` placeholder class remains a stub: full handler-class
-encapsulation is deferred to PR 4/4 because converting ``ChatPipelineResult``
-to ``ChatTurnOutcome`` requires the EscalationStateMachine that is still
-inlined in ``service.process_chat_message``.
+``RagHandler`` runs after the async pipeline has already produced a
+``ChatPipelineResult``: ``service._async_dispatch`` precomputes that result
+and stashes it in ``ctx.extras['_pipeline_result']`` before invoking the
+handler. The handler is then responsible for persistence, analytics, and
+escalation side effects only.
 
 Symbols that tests monkeypatch on ``backend.chat.service`` (e.g.
-``detect_injection``, ``match_faq``, ``capture_event``, ``retrieve_context``)
-are looked up dynamically via ``backend.chat.service`` rather than imported
-at module top — that way ``monkeypatch.setattr("backend.chat.service.X", ...)``
-in tests still affects the call sites that now live here.
+``async_detect_injection``, ``match_faq``, ``capture_event``,
+``retrieve_context``) are looked up dynamically via ``backend.chat.service``
+rather than imported at module top — that way
+``monkeypatch.setattr("backend.chat.service.X", ...)`` in tests still affects
+the call sites that now live here.
 """
 
 from __future__ import annotations
@@ -25,8 +27,6 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from concurrent.futures import CancelledError, ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, field
 from datetime import datetime
 from time import perf_counter
@@ -71,7 +71,6 @@ from backend.search.service import (
     default_retrieval_reliability,
     detect_query_script_bucket,
     detect_tenant_kb_scripts,
-    semantic_query_rewrite_for_kb,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,28 +134,6 @@ class _CitationStreamFilter:
 
 LOW_CONFIDENCE_THRESHOLD = 0.4
 _ESCALATION_THRESHOLD = 0.45  # upper bound for "high" KB confidence (see _classify_kb_confidence)
-
-# Shared pool — created once at module import, reused across all requests.
-# Shut down via shutdown_guard_pool() in FastAPI lifespan on application exit.
-_GUARD_POOL = ThreadPoolExecutor(
-    max_workers=settings.guard_pool_workers,
-    thread_name_prefix="rag-guard",
-)
-
-
-def shutdown_guard_pool() -> None:
-    """Drain the shared guard pool and replace it with a fresh one.
-
-    Called from FastAPI lifespan on application exit.  Recreating after shutdown
-    keeps tests working: each TestClient context runs the lifespan, so without
-    recreation subsequent tests would see a dead pool.
-    """
-    global _GUARD_POOL
-    _GUARD_POOL.shutdown(wait=True)
-    _GUARD_POOL = ThreadPoolExecutor(
-        max_workers=settings.guard_pool_workers,
-        thread_name_prefix="rag-guard",
-    )
 
 DISCLOSURE_HARD_LIMITS = (
     "Hard limits (always follow):\n"
@@ -278,8 +255,8 @@ class ChatPipelineResult:
     llm_ms: int = 0
     # debug extras
     faq_match: Any = None  # FAQMatchResult | None
-    # language_context is always populated by run_chat_pipeline; None only for
-    # callers that construct ChatPipelineResult directly without this field.
+    # language_context is always populated by async_run_chat_pipeline; None
+    # only for callers that construct ChatPipelineResult directly without it.
     language_context: ResolvedLanguageContext | None = None
     # cross-lingual retrieval telemetry (populated only on the RAG path)
     query_script: str | None = None
@@ -602,7 +579,7 @@ def _build_prior_messages_for_llm(
     OpenAI chat API. Returns None when there is nothing to add.
 
     The current user turn is NOT yet persisted at this point in the pipeline
-    (run_chat_pipeline runs before _persist_turn_with_response_language), so
+    (async_run_chat_pipeline runs before _persist_turn_with_response_language), so
     the full chat.messages list is "prior" context.
     """
     if chat is None or max_messages <= 0:
@@ -735,655 +712,6 @@ def retrieve_context(
         vector_similarities=bundle.vector_similarities,
     )
 
-
-def run_chat_pipeline(
-    tenant_id: uuid.UUID,
-    question: str,
-    db: Session,
-    *,
-    api_key: str,
-    language_context: ResolvedLanguageContext | None = None,
-    user_context_line: str | None = None,
-    disclosure_config: dict[str, Any] | None = None,
-    trace: TraceHandle | None = None,
-    precomputed_injection: Any | None = None,
-    tenant_public_id: str | None = None,
-    bot_public_id: str | None = None,
-    retry_bot_id: str | None = None,
-    chat_id: str | None = None,
-    chat: Chat | None = None,
-    stream_callback: Callable[[str], None] | None = None,
-    agent_instructions: str | None = None,
-    allow_clarification: bool = True,
-) -> ChatPipelineResult:
-    """
-    Pure RAG pipeline — no DB writes, no escalation actions, no Langfuse trace mutations.
-
-    Invariant stage order:
-      1. detect_prompt_injection  → guard_reject(injection)
-      2. embed queries            (reused for FAQ + retrieval)
-      3. match_faq                → faq_direct short-circuit or faq_context enrichment
-      4. check_relevance_precheck → guard_reject(not_relevant)  [skipped for faq_direct]
-      5. retrieve_context
-      6. low-retrieval guard      → guard_reject(low_retrieval)
-      7. generate_answer
-      8. validate_answer          → optional fallback(insufficient_confidence)
-      9. should_escalate          (compute only, no ticket creation)
-
-    Never writes to DB, never creates/modifies Chat/Message, never triggers
-    escalation actions, never pushes events to queues, never warms caches.
-
-    Telemetry exception: when tenant_public_id / bot_public_id / chat_id are
-    supplied, fire-and-forget product-analytics events (e.g. quick_answer.lookup)
-    are emitted via the PostHog facade. These are best-effort and wrapped so
-    a telemetry failure cannot affect the returned result.
-    """
-    # Look up monkeypatchable symbols via the service module so test
-    # patches against backend.chat.service.<name> still take effect after
-    # the move from service.py to handlers/rag.py.
-    from backend.chat import service as _svc
-
-    if language_context is None:
-        # Fallback resolver for standalone / test invocations where process_chat_message
-        # did not supply a pre-computed context.  In production this branch is never taken
-        # because process_chat_message always resolves language_context first.
-        language_context = _svc._resolve_chat_language_context(
-            current_turn_text=question,
-            tenant_row=None,
-            tenant_profile=None,
-            is_bootstrap_turn=_svc._is_bootstrap_question(question),
-            bootstrap_user_locale=None,
-            browser_locale=None,
-        )
-
-    # --- 1 + 4. Injection detection, relevance pre-check, and capability detection — run concurrently.
-    # Profile is pre-fetched on the main thread: SQLAlchemy sessions are not thread-safe.
-    # _GUARD_POOL is a module-level shared pool — never shut down per request.
-    _guard_profile = db.get(TenantProfile, tenant_id)
-    _rewrite_future = None
-    _rewritten_variant: str | None = None
-
-    # Detect KB languages once (cheap cached DB read) so we can submit a
-    # cross-lingual rewrite for every KB script the query does not natively
-    # cover. For mixed EN+RU KBs this means an EN query gets a RU variant
-    # (and vice versa) so both halves of the corpus are reachable.
-    _kb_scripts = detect_tenant_kb_scripts(tenant_id, db)
-    _query_script = detect_query_script_bucket(question)
-    _cross_lingual_futures: list = []
-
-    # Base query variants are deterministic and cheap to compute, so embedding
-    # of them is dispatched to the guard pool concurrently with the relevance
-    # guard (saves ~100-300 ms on p50). Rewrite + cross-lingual variants
-    # — which depend on LLM calls — are embedded in a second batch once they
-    # arrive.
-    _base_query_variants = _svc.expand_query(question)
-
-    _rel_future = _GUARD_POOL.submit(
-        _svc.check_relevance_with_profile,
-        tenant_id=tenant_id,
-        user_question=question,
-        profile=_guard_profile,
-        api_key=api_key,
-        trace=trace,
-    )
-    _embed_start = perf_counter()
-    _base_embed_future = _GUARD_POOL.submit(
-        _svc.embed_queries,
-        _base_query_variants,
-        api_key=api_key,
-        timeout=settings.embedding_http_timeout_seconds,
-    )
-    # Semantic query rewrite runs in the same guard pool (3rd worker).
-    # Guards take 1-2 s; the rewrite typically finishes within that window
-    # so it adds zero extra latency to the request. Fails silently on any
-    # error so retrieval degrades gracefully to lexical variants only.
-    _rewrite_future = _GUARD_POOL.submit(
-        _svc.semantic_query_rewrite,
-        question,
-        api_key=api_key,
-        timeout=settings.semantic_query_rewrite_timeout_sec,
-        bot_id=retry_bot_id,
-    )
-    # Cross-lingual variants: for every KB script the query does not natively
-    # cover, generate a rewrite in that script so embedding/lexical matching
-    # can reach same-language chunks. Mixed-language KBs (e.g. EN+RU) need
-    # one rewrite per non-query script — the dominant-only logic this
-    # replaces was missing the minority script entirely.
-    _target_kb_scripts = [s for s in _kb_scripts if s != _query_script]
-    _cross_lingual_triggered = len(_target_kb_scripts) > 0
-    _cross_lingual_variants_added = 0
-    if not _kb_scripts or _query_script == "other":
-        _query_kb_language_match = "unknown"
-    elif _query_script in _kb_scripts:
-        _query_kb_language_match = "native"
-    else:
-        _query_kb_language_match = "mismatch"
-    for _target_script in _target_kb_scripts:
-        _cross_lingual_futures.append(
-            _GUARD_POOL.submit(
-                semantic_query_rewrite_for_kb,
-                question,
-                kb_script=_target_script,
-                api_key=api_key,
-                timeout=settings.semantic_query_rewrite_timeout_sec,
-                bot_id=retry_bot_id,
-            )
-        )
-    if precomputed_injection is not None:
-        injection_result = precomputed_injection
-    else:
-        injection_result = _GUARD_POOL.submit(
-            _svc.detect_injection,
-            question,
-            tenant_id=str(tenant_id),
-            api_key=api_key,
-            trace=trace,
-        ).result()
-
-    if injection_result.detected:
-        _rel_future.cancel()
-        _base_embed_future.cancel()
-        if _rewrite_future:
-            _rewrite_future.cancel()
-        for _cl_future in _cross_lingual_futures:
-            _cl_future.cancel()
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INJECTION_DETECTED,
-            profile=None,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="injection",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            language_context=language_context,
-        )
-
-    # --- 2. Embed queries (reused for both FAQ matching and vector retrieval) ---
-    # Base variants were embedded in parallel with the relevance guard (above);
-    # rewrite + cross-lingual variants — which depend on LLM calls — go in a
-    # second embedding batch.
-    query_variants = list(_base_query_variants)
-    extra_variants: list[str] = []
-
-    # Collect semantic rewrite result — guard checks ran concurrently so
-    # the rewrite is usually already finished by now (zero extra wait).
-    _rewrite_collect_start = perf_counter()
-    if _rewrite_future is not None:
-        try:
-            _rewritten_variant = _rewrite_future.result(
-                timeout=settings.semantic_query_rewrite_timeout_sec
-            )
-            if _rewritten_variant and _rewritten_variant.casefold() not in {
-                v.casefold() for v in query_variants
-            }:
-                extra_variants.append(_rewritten_variant)
-        except Exception:
-            _rewritten_variant = None
-    if trace is not None:
-        _rewrite_span = trace.span(name="query_rewrite")
-        _rewrite_span.end(
-            output={
-                "rewritten": _rewritten_variant is not None,
-                "variant_preview": _rewritten_variant[:100] if _rewritten_variant else None,
-            },
-            metadata={"wait_ms": round((perf_counter() - _rewrite_collect_start) * 1000, 2)},
-        )
-
-    # Collect cross-lingual variants — one per KB script the query does not
-    # natively cover. Each is added to query_variants for fan-out retrieval.
-    for _cl_future in _cross_lingual_futures:
-        try:
-            _cross_lingual_variant = _cl_future.result(
-                timeout=settings.semantic_query_rewrite_timeout_sec
-            )
-        except Exception:
-            continue
-        if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
-            v.casefold() for v in (*query_variants, *extra_variants)
-        }:
-            extra_variants.append(_cross_lingual_variant)
-            _cross_lingual_variants_added += 1
-
-    if trace is not None:
-        _embed_span = trace.span(
-            name="query-embedding",
-            input={
-                "query_variants": [*query_variants, *extra_variants],
-                "query_variant_count": len(query_variants) + len(extra_variants),
-                "variant_mode": "multi" if (len(query_variants) + len(extra_variants)) > 1 else "single",
-                "upstream_precomputed": True,
-            },
-        )
-    try:
-        base_variant_vectors = _base_embed_future.result(
-            timeout=settings.embedding_http_timeout_seconds + 1.0
-        )
-    except (
-        APITimeoutError,
-        APIConnectionError,
-        RateLimitError,
-        FutureTimeoutError,
-        CancelledError,
-    ):
-        logger.warning("run_chat_pipeline_embed_queries_failed", exc_info=True)
-        base_variant_vectors = []
-
-    embed_api_request_count = 1 if base_variant_vectors else 0
-    extra_variant_vectors: list[list[float]] = []
-    if extra_variants and base_variant_vectors:
-        try:
-            extra_variant_vectors = _svc.embed_queries(
-                extra_variants,
-                api_key=api_key,
-                timeout=settings.embedding_http_timeout_seconds,
-            )
-            embed_api_request_count += 1
-        except (APITimeoutError, APIConnectionError, RateLimitError):
-            logger.warning("run_chat_pipeline_embed_extras_failed", exc_info=True)
-            extra_variant_vectors = []
-
-    if extra_variant_vectors and len(extra_variant_vectors) == len(extra_variants):
-        query_variants = [*query_variants, *extra_variants]
-        variant_vectors = [*base_variant_vectors, *extra_variant_vectors]
-    else:
-        # Extra-batch embedding failed → fall back to base variants only.
-        variant_vectors = base_variant_vectors
-
-    if trace is not None:
-        _embed_span.end(
-            output={
-                "embedded_query_count": len(variant_vectors),
-                "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
-                "embedding_api_request_count": embed_api_request_count,
-                "extra_embedding_api_requests": max(embed_api_request_count - 1, 0),
-                "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
-                "upstream_precomputed": True,
-            }
-        )
-    base_question_embedding = variant_vectors[0] if variant_vectors else []
-
-    # --- 3. FAQ matching ---
-    try:
-        faq_match = _svc.match_faq(
-            tenant_id=tenant_id,
-            question=question,
-            question_embedding=base_question_embedding,
-            db=db,
-        )
-    except Exception:
-        faq_match = FAQMatchResult(
-            strategy="rag_only",
-            faq_items=[],
-            top_score=None,
-            selected_score=None,
-            selected_faq_id=None,
-            direct_guard_used=False,
-            direct_guard_passed=False,
-            decision_reason="faq_match_error_degraded_to_rag_only",
-        )
-
-    if trace is not None:
-        _faq_span = trace.span(
-            name="faq_match",
-            input={"question_preview": question[:80]},
-        )
-        _retrieval_skipped = faq_match.strategy == "faq_direct"
-        _faq_span.end(
-            metadata={
-                "tenant_id": str(tenant_id),
-                "strategy": faq_match.strategy,
-                "top_score": faq_match.top_score,
-                "selected_score": faq_match.selected_score,
-                "faq_ids": [str(item.id) for item in faq_match.faq_items],
-                "selected_faq_id": faq_match.selected_faq_id,
-                "direct_guard_used": faq_match.direct_guard_used,
-                "direct_guard_passed": faq_match.direct_guard_passed,
-                "decision_reason": faq_match.decision_reason,
-                "retrieval_skipped": _retrieval_skipped,
-                "generation_skipped": _retrieval_skipped,
-            },
-        )
-
-    if faq_match.strategy == "faq_direct":
-        _rel_future.cancel()
-        direct_answer_result = render_direct_faq_answer_result(
-            answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=direct_answer_result.text,
-            final_answer=direct_answer_result.text,
-            tokens_used=direct_answer_result.tokens_used,
-            strategy="faq_direct",
-            reject_reason=None,
-            is_reject=False,
-            is_faq_direct=True,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    # --- 4. Relevance pre-check ---
-    relevant, _, profile = _rel_future.result()
-
-    if not relevant:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.NOT_RELEVANT,
-            profile=profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="not_relevant",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    client_product_name: str | None = profile.product_name if profile else None
-    topic_hint: str | None = None
-    if profile and isinstance(profile.topics, list) and profile.topics:
-        topic_hint = ", ".join([str(m) for m in profile.topics[:3] if str(m).strip()])
-
-    faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    selected_quick_answer_keys = _quick_answer_keys_for_question(question)
-    quick_answer_items = (
-        _lookup_quick_answers(tenant_id, selected_quick_answer_keys, db)
-        if selected_quick_answer_keys
-        else []
-    )
-    # Only emit when the question actually triggered a quick-answer lookup —
-    # emitting on every chat turn would flood PostHog with no-keyword "miss"
-    # noise and bury the hit/miss-after-match signal we care about.
-    if selected_quick_answer_keys:
-        _emit_quick_answer_lookup_event(
-            selected_keys=selected_quick_answer_keys,
-            matched_count=len(quick_answer_items),
-            text_length=len(question),
-            tenant_public_id=tenant_public_id,
-            bot_public_id=bot_public_id,
-            chat_id=chat_id,
-        )
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
-        "faq_context" if faq_context_items else "rag_only"
-    )
-
-    # --- 5. Retrieve context ---
-    # When the user replies with a short follow-up (e.g. "да", "yes please")
-    # to the bot's prior question, the bare reply has no meaningful retrieval
-    # signal on its own. Stitch it with the tail of the last assistant message
-    # so BM25 / vector matching has real terms to work with. The current
-    # question text itself stays unchanged for prompt assembly downstream.
-    _contextual_retrieval_query: str | None = None
-    if chat is not None and looks_like_short_followup(question):
-        _contextual_retrieval_query = build_contextual_retrieval_query(
-            chat.messages, question
-        )
-
-    # When embedding failed upstream, skip retrieve_context entirely to avoid a
-    # redundant second embedding attempt (and another 5s timeout) inside it.
-    if not variant_vectors:
-        retrieval = RetrievalContext(
-            chunk_texts=[],
-            document_ids=[],
-            scores=[],
-            mode="none",
-            best_rank_score=None,
-            best_confidence_score=None,
-            confidence_source="none",
-        )
-    elif _contextual_retrieval_query is not None:
-        # Contextual path: re-embed the stitched query inside search instead
-        # of reusing the precomputed variants/vectors of the bare follow-up.
-        retrieval = _svc.retrieve_context(
-            tenant_id=tenant_id,
-            question=_contextual_retrieval_query,
-            db=db,
-            api_key=api_key,
-            top_k=5,
-            trace=trace,
-            precomputed_query_variants=None,
-            precomputed_variant_vectors=None,
-            precomputed_embedding_api_request_count=None,
-            rewritten_variant=None,
-        )
-    else:
-        retrieval = _svc.retrieve_context(
-            tenant_id=tenant_id,
-            question=question,
-            db=db,
-            api_key=api_key,
-            top_k=5,
-            trace=trace,
-            precomputed_query_variants=query_variants,
-            precomputed_variant_vectors=variant_vectors,
-            precomputed_embedding_api_request_count=embed_api_request_count,
-            rewritten_variant=_rewritten_variant,
-        )
-
-    # --- 6. Low-retrieval guard ---
-    threshold = settings.relevance_retrieval_threshold
-
-    # Bypass the low-retrieval guard when the reranker assigned a confident score.
-    # Raw vector similarities are computed before reranking and can be low even when
-    # the reranker finds a genuinely relevant chunk (e.g. broad onboarding queries).
-    _reranker_rescued = (
-        retrieval.best_rank_score is not None
-        and retrieval.best_rank_score >= settings.reranker_bypass_threshold
-    )
-
-    if (
-        not _reranker_rescued
-        and retrieval.vector_similarities is not None
-        and retrieval.vector_similarities
-        and all(sim is not None for sim in retrieval.vector_similarities)
-        and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
-    ):
-        reject_result = build_reject_response_result(
-            reason=RejectReason.LOW_RETRIEVAL_SCORE,
-            profile=profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-            question=question,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="low_retrieval",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=retrieval,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            retrieval_ms=int(retrieval.retrieval_duration_ms),
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    # --- 7. Generate answer ---
-    # Build trailing conversation history for the LLM so short follow-up
-    # replies ("да", "yes please") are interpreted in context of the bot's
-    # previous question. Falls back to None on empty / first-turn chats —
-    # generate_answer then behaves exactly as before.
-    _prior_messages = _build_prior_messages_for_llm(
-        chat,
-        max_messages=settings.chat_history_turns,
-        char_cap=settings.chat_history_message_char_cap,
-    )
-
-    _llm_start = perf_counter()
-    raw_answer, tokens_used = _svc.generate_answer(
-        question,
-        retrieval.chunk_texts,
-        api_key=api_key,
-        response_language=language_context.response_language,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_config,
-        client_product_name=client_product_name,
-        topic_hint=topic_hint,
-        faq_context_items=faq_context_items,
-        quick_answer_items=quick_answer_items,
-        agent_instructions=agent_instructions,
-        low_context=not _reranker_rescued and retrieval.reliability.score == "low",
-        allow_clarification=allow_clarification,
-        trace=trace,
-        retry_bot_id=retry_bot_id,
-        stream_callback=stream_callback,
-        metrics_tenant_id=tenant_public_id,
-        metrics_bot_id=bot_public_id,
-        prior_messages=_prior_messages,
-    )
-    _llm_ms = int((perf_counter() - _llm_start) * 1000)
-
-    # --- 7b. Language check: regenerate if answer language ≠ question language ---
-    _q_lang = detect_language(question)
-    _a_lang = detect_language(raw_answer)
-    if (
-        _q_lang.is_reliable
-        and _a_lang.is_reliable
-        and _q_lang.detected_language not in ("unknown", "en")
-        and _a_lang.detected_language != "unknown"
-        and _q_lang.detected_language != _a_lang.detected_language
-    ):
-        _lang_span = None
-        if trace is not None:
-            _lang_span = trace.span(
-                name="language-check",
-                input={
-                    "question_lang": _q_lang.detected_language,
-                    "answer_lang": _a_lang.detected_language,
-                },
-            )
-        _retry_answer, _retry_tokens = _svc.generate_answer(
-            question,
-            retrieval.chunk_texts,
-            api_key=api_key,
-            response_language=_q_lang.detected_language,
-            user_context_line=user_context_line,
-            disclosure_config=disclosure_config,
-            client_product_name=client_product_name,
-            topic_hint=topic_hint,
-            faq_context_items=faq_context_items,
-            quick_answer_items=quick_answer_items,
-            agent_instructions=agent_instructions,
-            low_context=not _reranker_rescued and retrieval.reliability.score == "low",
-            allow_clarification=allow_clarification,
-            trace=trace,
-            retry_bot_id=retry_bot_id,
-            stream_callback=None,
-            metrics_tenant_id=tenant_public_id,
-            metrics_bot_id=bot_public_id,
-            prior_messages=_prior_messages,
-        )
-        raw_answer = _retry_answer
-        tokens_used += _retry_tokens
-        if _lang_span is not None:
-            _lang_span.end(
-                output={
-                    "regenerated": True,
-                    "forced_language": _q_lang.detected_language,
-                }
-            )
-
-    raw_answer = _strip_inline_citations(raw_answer)
-
-    # --- 8. Validate answer ---
-    validation_context = retrieval.chunk_texts + quick_answer_items
-    validation = _svc.validate_answer(
-        question,
-        raw_answer,
-        validation_context,
-        api_key=api_key,
-        trace=trace,
-        metrics_tenant_id=tenant_public_id,
-        metrics_bot_id=bot_public_id,
-    )
-    validation_applied = True
-    validation_outcome: Literal["valid", "fallback"] = "valid"
-    final_answer = raw_answer
-
-    if not validation["is_valid"]:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INSUFFICIENT_CONFIDENCE,
-            profile=profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        final_answer = reject_result.text
-        tokens_used += reject_result.tokens_used
-        validation_outcome = "fallback"
-
-    # --- 9. Escalation decision (compute only, no side effects) ---
-    escalate, esc_trigger = _svc.should_escalate(
-        retrieval.best_confidence_score,
-        len(retrieval.chunk_texts),
-        validation=validation,
-        best_rank_score=retrieval.best_rank_score,
-    )
-
-    return ChatPipelineResult(
-        raw_answer=raw_answer,
-        final_answer=final_answer,
-        tokens_used=int(tokens_used),
-        strategy=strategy,
-        reject_reason=None,
-        is_reject=False,
-        is_faq_direct=False,
-        validation_applied=validation_applied,
-        validation_outcome=validation_outcome,
-        retrieval=retrieval,
-        validation=validation,
-        escalation_recommended=escalate,
-        escalation_trigger=esc_trigger,
-        retrieval_ms=int(retrieval.retrieval_duration_ms),
-        llm_ms=_llm_ms,
-        faq_match=faq_match,
-        language_context=language_context,
-        query_script=_query_script,
-        kb_scripts=list(_kb_scripts),
-        cross_lingual_triggered=_cross_lingual_triggered,
-        cross_lingual_variants_count=_cross_lingual_variants_added,
-        query_kb_language_match=_query_kb_language_match,
-        retrieval_used_cross_lingual_variant=(
-            _cross_lingual_triggered
-            and _cross_lingual_variants_added > 0
-            and bool(retrieval.chunk_texts)
-        ),
-    )
 
 
 def build_rag_prompt(
@@ -2055,9 +1383,10 @@ class RagHandler(PipelineHandler):
     one always claims a turn (``can_handle`` returns True for non-empty input
     that didn't trigger an earlier handler). Owns:
 
-      * calling ``run_chat_pipeline`` (pure pipeline, no DB writes)
-      * consuming ``ChatPipelineResult`` — guard rejects, faq_direct fast
-        paths, RAG/faq_context normal paths
+      * consuming the precomputed ``ChatPipelineResult`` produced by
+        ``async_run_chat_pipeline`` (stashed in ``ctx.extras`` by
+        ``_async_dispatch``) — guard rejects, faq_direct fast paths,
+        RAG/faq_context normal paths
       * building the policy ``TurnContext``, calling ``decide()``, and
         promoting the decision to escalation if needed
       * persisting the turn (user + assistant messages), emitting analytics
@@ -2102,35 +1431,20 @@ class RagHandler(PipelineHandler):
         create_escalation_ticket = _svc.create_escalation_ticket
         fact_from_ticket = _svc.fact_from_ticket
         build_chat_messages_for_openai = _svc.build_chat_messages_for_openai
-        run_chat_pipeline_fn = _svc.run_chat_pipeline
 
         chat = ctx.chat
         msgs = build_chat_messages_for_openai(chat, ctx.redacted_question)
-        # The async dispatch path pre-computes the pipeline result and stores it
-        # in extras so the sync handler can skip the (sync) pipeline call and
-        # proceed directly to persistence + analytics.
-        _precomputed: ChatPipelineResult | None = ctx.extras.get("_pipeline_result")
-        if _precomputed is not None:
-            result = _precomputed
-        else:
-            result = run_chat_pipeline_fn(
-                ctx.tenant_id,
-                ctx.redacted_question,
-                ctx.db,
-                api_key=ctx.api_key,
-                language_context=ctx.language_context,
-                user_context_line=ctx.user_context_line,
-                disclosure_config=ctx.disclosure_config,
-                trace=ctx.trace,
-                precomputed_injection=None,
-                tenant_public_id=getattr(ctx.tenant_row, "public_id", None) if ctx.tenant_row else None,
-                bot_public_id=ctx.bot_public_id,
-                retry_bot_id=str(ctx.bot_id) if ctx.bot_id is not None else None,
-                chat_id=str(chat.id) if chat is not None else None,
-                chat=chat,
-                stream_callback=ctx.stream_callback,
-                agent_instructions=ctx.bot_agent_instructions,
-                allow_clarification=ctx.allow_clarification,
+        # ``_async_dispatch`` always pre-computes the async pipeline result and
+        # stores it in ``ctx.extras`` before invoking the handler, so this
+        # handler is now strictly a persistence + analytics + escalation step.
+        result = ctx.extras.get("_pipeline_result")
+        if not isinstance(result, ChatPipelineResult):
+            # Use raise rather than assert so the contract still holds when
+            # the interpreter runs with -O (assertions stripped).
+            raise RuntimeError(
+                "RagHandler.handle requires a precomputed pipeline result "
+                "in ctx.extras['_pipeline_result']; _async_dispatch must run "
+                "async_run_chat_pipeline before invoking the handler."
             )
 
         # Guard rejects and faq_direct: persist and return immediately (no escalation).
@@ -2625,21 +1939,22 @@ async def async_run_chat_pipeline(
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
 ) -> ChatPipelineResult:
-    """Async counterpart of :func:`run_chat_pipeline`.
+    """Pure async RAG pipeline.
 
-    Replaces the ``_GUARD_POOL`` (ThreadPoolExecutor) with ``asyncio.create_task``
-    so guards and embeddings run concurrently on the event loop without tying up
-    OS threads. On injection detected, running tasks are cancelled via
+    Guards and embeddings run concurrently as ``asyncio.create_task``, so they
+    do not tie up OS threads. On injection detected, running tasks are cancelled via
     ``task.cancel()``.
     """
+    # Async helpers are looked up via the service module so that tests' monkey-
+    # patches against ``backend.chat.service.<name>`` (e.g.
+    # ``async_detect_injection``, ``async_check_relevance_with_profile``,
+    # ``async_semantic_query_rewrite``) intercept the call sites here.
     from backend.chat import service as _svc
-    from backend.guards.injection_detector import async_detect_injection
-    from backend.guards.relevance_checker import async_check_relevance_with_profile
-    from backend.search.service import (
-        async_embed_queries,
-        async_semantic_query_rewrite,
-        async_semantic_query_rewrite_for_kb,
-    )
+    async_detect_injection = _svc.async_detect_injection
+    async_check_relevance_with_profile = _svc.async_check_relevance_with_profile
+    async_embed_queries = _svc.async_embed_queries
+    async_semantic_query_rewrite = _svc.async_semantic_query_rewrite
+    async_semantic_query_rewrite_for_kb = _svc.async_semantic_query_rewrite_for_kb
 
     if language_context is None:
         language_context = _svc._resolve_chat_language_context(

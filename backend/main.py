@@ -19,7 +19,6 @@ RATE_LIMIT_RETRY_AFTER_FALLBACK_SECONDS = 60
 from backend.admin.routes import admin_router
 from backend.auth.routes import auth_router
 from backend.bots.routes import bots_router
-from backend.chat.handlers.rag import shutdown_guard_pool
 from backend.chat.routes import chat_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
@@ -58,7 +57,6 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
-        shutdown_guard_pool()
         gap_graceful_shutdown()
         shutdown_log_analysis_threads()
         shutdown_kb_snapshot_thread()

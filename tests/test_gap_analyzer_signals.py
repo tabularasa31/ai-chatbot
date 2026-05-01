@@ -286,9 +286,8 @@ def test_chat_fallback_persists_gap_signal(
         "backend.chat.service._trigger_log_analysis_threshold",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        "backend.chat.service.run_chat_pipeline",
-        lambda *args, **kwargs: ChatPipelineResult(
+    async def _fake_async_pipeline(*args, **kwargs):
+        return ChatPipelineResult(
             raw_answer="I am not sure.",
             final_answer="I am not sure.",
             tokens_used=3,
@@ -302,7 +301,11 @@ def test_chat_fallback_persists_gap_signal(
             validation={"is_valid": False, "confidence": 0.3, "reason": "fallback"},
             escalation_recommended=False,
             escalation_trigger=None,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_run_chat_pipeline",
+        _fake_async_pipeline,
     )
 
     session_id = uuid.uuid4()

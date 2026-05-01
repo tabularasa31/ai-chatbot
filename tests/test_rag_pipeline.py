@@ -150,13 +150,16 @@ def test_embedding_once(
     # Suppress LLM-driven query rewrites so the test isolates the embedding
     # call count: base variants are embedded in parallel with the relevance
     # guard (one call), and retrieve_context must not embed again.
+    async def _no_rewrite(*_, **__):
+        return None
+
     monkeypatch.setattr(
-        "backend.chat.service.semantic_query_rewrite",
-        lambda *_, **__: None,
+        "backend.chat.service.async_semantic_query_rewrite",
+        _no_rewrite,
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.semantic_query_rewrite_for_kb",
-        lambda *_, **__: None,
+        "backend.chat.service.async_semantic_query_rewrite_for_kb",
+        _no_rewrite,
     )
 
     _ = process_chat_message(
@@ -409,13 +412,16 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         lambda *_, **__: {"is_valid": True, "confidence": 1.0, "reason": "grounded"},
     )
     # Suppress LLM-driven query rewrites so only the base embedding batch runs.
+    async def _no_rewrite(*_, **__):
+        return None
+
     monkeypatch.setattr(
-        "backend.chat.service.semantic_query_rewrite",
-        lambda *_, **__: None,
+        "backend.chat.service.async_semantic_query_rewrite",
+        _no_rewrite,
     )
     monkeypatch.setattr(
-        "backend.chat.handlers.rag.semantic_query_rewrite_for_kb",
-        lambda *_, **__: None,
+        "backend.chat.service.async_semantic_query_rewrite_for_kb",
+        _no_rewrite,
     )
 
     process_chat_message(

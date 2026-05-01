@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -10,7 +11,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm import Session, selectinload
 
 from backend.chat.decision import (
     MAX_CLARIFICATIONS_PER_SESSION,
@@ -46,7 +47,6 @@ from backend.chat.handlers.rag import (
     build_rag_prompt,
     generate_answer,
     retrieve_context,
-    run_chat_pipeline,
     validate_answer,
 )
 from backend.chat.history_service import (
@@ -110,8 +110,14 @@ from backend.gap_analyzer.events import GapSignal
 from backend.gap_analyzer.jobs import enqueue_gap_job_for_tenant_best_effort
 from backend.gap_analyzer.orchestrator import GapAnalyzerOrchestrator
 from backend.gap_analyzer.repository import SqlAlchemyGapAnalyzerRepository
-from backend.guards.injection_detector import detect_injection  # noqa: F401
-from backend.guards.relevance_checker import check_relevance_with_profile  # noqa: F401
+from backend.guards.injection_detector import (
+    async_detect_injection,  # noqa: F401
+    detect_injection,  # noqa: F401
+)
+from backend.guards.relevance_checker import (
+    async_check_relevance_with_profile,  # noqa: F401
+    check_relevance_with_profile,  # noqa: F401
+)
 from backend.models import (
     Bot,
     Chat,
@@ -123,6 +129,9 @@ from backend.models import (
 from backend.observability import TraceHandle, begin_trace
 from backend.observability.metrics import capture_event  # noqa: F401  (re-export for monkeypatch)
 from backend.search.service import (
+    async_embed_queries,  # noqa: F401
+    async_semantic_query_rewrite,  # noqa: F401
+    async_semantic_query_rewrite_for_kb,  # noqa: F401
     embed_queries,  # noqa: F401
     expand_query,  # noqa: F401
     search_similar_chunks_detailed,  # noqa: F401
@@ -152,7 +161,6 @@ __all__ = (
     "build_rag_prompt",
     "generate_answer",
     "retrieve_context",
-    "run_chat_pipeline",
     "validate_answer",
 )
 
@@ -318,146 +326,6 @@ def _trigger_log_analysis_threshold(
     threading.Thread(target=_run, daemon=True).start()
 
 
-def _ensure_chat(
-    db: Session,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    bot_id: uuid.UUID | None,
-    user_context: dict | None,
-    browser_locale: str | None,
-) -> tuple[Chat, dict | None]:
-    """Load or create the Chat row; return (chat, effective_user_ctx)."""
-    chat = (
-        db.query(Chat)
-        .options(joinedload(Chat.messages))
-        .filter(Chat.session_id == session_id, Chat.tenant_id == tenant_id)
-        .first()
-    )
-    effective_user_ctx: dict | None = None
-    if chat and chat.user_context:
-        effective_user_ctx = dict(chat.user_context)
-    elif user_context:
-        effective_user_ctx = dict(user_context)
-
-    if not chat:
-        uc: dict | None = dict(effective_user_ctx) if effective_user_ctx else None
-        if browser_locale:
-            uc = dict(uc or {})
-            uc.setdefault("browser_locale", browser_locale)
-        chat = Chat(
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-            session_id=session_id,
-            user_context=uc,
-        )
-        db.add(chat)
-        db.flush()
-        touch_user_session(
-            db,
-            tenant_id=tenant_id,
-            user_context=chat.user_context,
-            started_at=chat.created_at,
-        )
-        db.commit()
-        db.refresh(chat)
-    else:
-        chat_updated = False
-        if bot_id is not None:
-            if chat.bot_id is None:
-                chat.bot_id = bot_id
-                chat_updated = True
-            elif chat.bot_id != bot_id:
-                raise ValueError("Session belongs to another bot")
-        if browser_locale and not (chat.user_context or {}).get("browser_locale"):
-            ctx = dict(chat.user_context or {})
-            ctx["browser_locale"] = browser_locale
-            chat.user_context = ctx
-            chat_updated = True
-        if chat_updated:
-            db.add(chat)
-            db.commit()
-            db.refresh(chat)
-
-    if effective_user_ctx is None and chat.user_context:
-        effective_user_ctx = dict(chat.user_context)
-    return chat, effective_user_ctx
-
-
-def _build_handler_context(
-    *,
-    db: Session,
-    tenant_id: uuid.UUID,
-    tenant_row: Tenant | None,
-    tenant_profile: TenantProfile | None,
-    chat: Chat,
-    question: str,
-    redacted_question: str,
-    question_text: str,
-    language_context: ResolvedLanguageContext,
-    api_key: str,
-    optional_entity_types: set[str] | None,
-    is_new_session: bool,
-    trace: TraceHandle,
-    session_id: uuid.UUID,
-    user_context: dict | None,
-    effective_user_ctx: dict | None,
-    bot_public_id: str | None,
-    bot_id: uuid.UUID | None,
-    disclosure_config: dict | None,
-    allow_clarification: bool,
-    stream_callback: Callable[[str], None] | None,
-    explicit_human_request: bool,
-    turn_started_at: float,
-) -> HandlerContext:
-    """Resolve the active bot and assemble the HandlerContext for dispatch."""
-    resolved_bot: Bot | None = None
-    if bot_id is not None:
-        resolved_bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
-    if resolved_bot is None:
-        resolved_bot = (
-            db.query(Bot)
-            .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
-            .order_by(Bot.created_at.asc())
-            .first()
-        )
-    if disclosure_config is _DISCLOSURE_UNSET:
-        disclosure_config = (
-            resolved_bot.disclosure_config
-            if resolved_bot and isinstance(resolved_bot.disclosure_config, dict)
-            else None
-        )
-    disclosure_cfg: dict[str, Any] | None = disclosure_config if isinstance(disclosure_config, dict) else None
-
-    return HandlerContext(
-        tenant_id=tenant_id,
-        chat=chat,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        question=question,
-        redacted_question=redacted_question,
-        question_text=question_text,
-        language_context=language_context,
-        api_key=api_key,
-        optional_entity_types=optional_entity_types,
-        is_new_session=is_new_session,
-        trace=trace,
-        db=db,
-        session_id=session_id,
-        user_context=user_context,
-        effective_user_ctx=effective_user_ctx,
-        bot_public_id=bot_public_id,
-        bot_id=bot_id,
-        bot=resolved_bot,
-        bot_agent_instructions=resolved_bot.agent_instructions if resolved_bot else None,
-        disclosure_config=disclosure_cfg,
-        allow_clarification=allow_clarification,
-        user_context_line=_user_context_prompt_line(effective_user_ctx),
-        stream_callback=stream_callback,
-        explicit_human_request=explicit_human_request,
-        turn_started_at=turn_started_at,
-    )
-
-
 def process_chat_message(
     tenant_id: uuid.UUID,
     question: str,
@@ -472,127 +340,92 @@ def process_chat_message(
     bot_public_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
-    """RAG pipeline with FI-ESC escalation state machine."""
-    _turn_started_at = perf_counter()
-    tenant_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    optional_entity_types = _tenant_optional_entity_types(tenant_row)
-    redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
+    """Sync entry point retained **only** for legacy tests that drive the
+    chat pipeline synchronously.
 
-    explicit_human_request = detect_human_request(redacted_question, api_key)
+    Production callers (the chat HTTP route, widget streaming) use
+    :func:`async_process_chat_message` directly. New tests should do the same
+    via the ``async_db_session`` fixture. This wrapper is a thin compat shim
+    around the async orchestrator with two non-obvious requirements:
 
-    # Create trace early so chat_setup and language_detect spans are attached.
-    trace = begin_trace(
-        name="rag-query",
-        session_id=str(session_id),
-        tenant_id=str(tenant_id),
-        input=redacted_question or None,
-        metadata={"tenant_id": str(tenant_id), "session_id": str(session_id)},
-        tags=[f"tenant:{tenant_id}"],
-        force_trace=explicit_human_request,
-    )
+    1. ``db`` (the caller's sync ``Session``) must be bound to the same engine
+       as ``core_db.engine`` — i.e. the test conftest must have rebound
+       ``core_db.SessionLocal`` and ``core_db.AsyncSessionLocal`` to share the
+       same underlying database (the ``tenant`` fixture does this). The wrapper
+       deliberately does **not** derive an ``AsyncSession`` from ``db``: SQLite
+       prevents multiplexing one connection across sync and asyncio drivers, so
+       it opens its own ``AsyncSession`` from ``AsyncSessionLocal``. If those
+       two engines point at different databases the call will silently write
+       to one and the caller will read from the other; the assertion below
+       catches the most common form of that mismatch.
+    2. There must be no running event loop. ``asyncio.run`` raises
+       ``RuntimeError`` if called from inside one — but pytest sync tests have
+       no loop, and async tests should not call this wrapper at all (they can
+       ``await async_process_chat_message`` directly).
 
-    _setup_start = perf_counter()
-    _setup_span = trace.span(
-        name="chat_setup",
-        input={"session_id": str(session_id), "has_bot_id": bot_id is not None},
-    )
-    chat, effective_user_ctx = _ensure_chat(db, tenant_id, session_id, bot_id, user_context, browser_locale)
-    tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant_id).first()
-        if tenant_row is not None
-        else None
-    )
-    _setup_span.end(
-        output={"is_new_session": not chat.messages, "chat_id": str(chat.id)},
-        metadata={"duration_ms": round((perf_counter() - _setup_start) * 1000, 2)},
-    )
+    Caller's session is mutated:
 
-    question_text = question.strip()
-    is_new_session = not chat.messages
+    - Committed on entry so SQLite releases locks before the async pipeline
+      opens its own connection (otherwise concurrent writes deadlock). **Any
+      uncommitted state staged on ``db`` before the call is therefore
+      persisted** — tests that staged data without committing must be aware.
+    - ``expire_all()``-ed on exit so subsequent reads reflect the writes the
+      pipeline made on its own connection (any in-memory ORM objects the
+      caller held are also invalidated and re-loaded on next access).
+    """
+    if db is not None:
+        # Defensive check: the wrapper relies on the conftest rebinding both
+        # SessionLocal and AsyncSessionLocal to the same engine. If callers
+        # pass a session bound elsewhere, surface it loudly instead of silently
+        # writing to the wrong DB.
+        if db.get_bind() is not core_db.engine:
+            raise RuntimeError(
+                "process_chat_message: caller's Session is bound to an engine "
+                "that differs from core_db.engine. The sync wrapper opens its "
+                "own AsyncSession against core_db.AsyncSessionLocal, so writes "
+                "would go to a different database than the caller's reads. "
+                "Use async_process_chat_message directly, or rebind "
+                "core_db.AsyncSessionLocal in your fixture (the tenant fixture "
+                "in tests/conftest.py shows the pattern)."
+            )
 
-    _lang_start = perf_counter()
-    _lang_span = trace.span(
-        name="language_detect",
-        input={"question_preview": question_text[:80]},
-    )
-    language_context = _resolve_chat_language_context(
-        current_turn_text=question_text,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        is_bootstrap_turn=_is_bootstrap_question(question_text) and is_new_session,
-        bootstrap_user_locale=(effective_user_ctx or {}).get("locale"),
-        browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
-        chat=chat,
-        db=db,
-    )
-    _lang_span.end(
-        output={
-            "detected_language": language_context.detected_language,
-            "response_language": language_context.response_language,
-            "confidence": language_context.confidence,
-            "is_reliable": language_context.is_reliable,
-        },
-        metadata={"duration_ms": round((perf_counter() - _lang_start) * 1000, 2)},
-    )
+        # Flush + release any locks held by the caller's session before the
+        # async pipeline opens its own connection. Without this, concurrent
+        # SQLite writes raise "database is locked".
+        db.commit()
 
-    # Update trace with full metadata now that chat and language context are resolved.
-    trace.update(
-        metadata={
-            "tenant_id": str(tenant_id),
-            "session_id": str(session_id),
-            "chat_id": str(chat.id),
-            "browser_locale": browser_locale,
-            "question": redacted_question,
-            "has_user_context": bool(effective_user_ctx),
-            "detected_language": language_context.detected_language,
-            "confidence": language_context.confidence,
-            "is_reliable": language_context.is_reliable,
-            "response_language": language_context.response_language,
-            "response_language_resolution_reason": language_context.response_language_resolution_reason,
-            "escalation_language": language_context.escalation_language,
-            "escalation_language_source": language_context.escalation_language_source,
-        },
-        user_id=str((effective_user_ctx or {}).get("user_id")) if effective_user_ctx else None,
-    )
+    async def _run() -> ChatTurnOutcome:
+        async with core_db.AsyncSessionLocal() as async_db:
+            return await async_process_chat_message(
+                tenant_id,
+                question,
+                session_id,
+                async_db,
+                api_key=api_key,
+                user_context=user_context,
+                browser_locale=browser_locale,
+                disclosure_config=disclosure_config,
+                bot_id=bot_id,
+                bot_public_id=bot_public_id,
+                stream_callback=stream_callback,
+            )
 
-    if not question_text and not is_new_session:
-        raise ValueError("Question is required")
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no running loop — the expected case
+    else:
+        raise RuntimeError(
+            "process_chat_message must not be called from a running event "
+            "loop; call async_process_chat_message directly instead."
+        )
 
-    handler_ctx = _build_handler_context(
-        db=db,
-        tenant_id=tenant_id,
-        tenant_row=tenant_row,
-        tenant_profile=tenant_profile,
-        chat=chat,
-        question=question,
-        redacted_question=redacted_question,
-        question_text=question_text,
-        language_context=language_context,
-        api_key=api_key,
-        optional_entity_types=optional_entity_types,
-        is_new_session=is_new_session,
-        trace=trace,
-        session_id=session_id,
-        user_context=user_context,
-        effective_user_ctx=effective_user_ctx,
-        bot_public_id=bot_public_id,
-        bot_id=bot_id,
-        disclosure_config=disclosure_config,
-        allow_clarification=chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION,
-        stream_callback=stream_callback,
-        explicit_human_request=explicit_human_request,
-        turn_started_at=_turn_started_at,
-    )
+    try:
+        return asyncio.run(_run())
+    finally:
+        if db is not None:
+            db.expire_all()
 
-    outcome = _HANDLER_ROUTER.dispatch(handler_ctx)
-    if outcome is None:
-        raise RuntimeError("Pipeline router produced no outcome for chat turn")
-    return outcome
-
-
-# ---------------------------------------------------------------------------
-# Async counterparts — Phase 3 async migration
-# ---------------------------------------------------------------------------
 
 async def _ensure_chat_async(
     db: AsyncSession,
@@ -730,6 +563,9 @@ async def _build_handler_context_async(
         disclosure_config if isinstance(disclosure_config, dict) else None
     )
 
+    # ``db`` is intentionally left at the dataclass default (``None``); the
+    # actual sync ``Session`` is set by ``_async_dispatch._run_handler`` right
+    # before each handler runs (inside ``AsyncSession.run_sync``).
     return HandlerContext(
         tenant_id=tenant_id,
         chat=chat,
@@ -743,7 +579,6 @@ async def _build_handler_context_async(
         optional_entity_types=optional_entity_types,
         is_new_session=is_new_session,
         trace=trace,
-        db=db.sync_session,
         session_id=session_id,
         user_context=user_context,
         effective_user_ctx=effective_user_ctx,
@@ -771,7 +606,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
     """
     from backend.chat.handlers.rag import RagHandler
 
-    for handler in _HANDLER_ROUTER._handlers:
+    for handler in _HANDLER_ROUTER.handlers:
         if not handler.can_handle(ctx):
             continue
         if isinstance(handler, RagHandler):

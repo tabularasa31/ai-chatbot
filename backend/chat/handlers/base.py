@@ -47,7 +47,11 @@ class HandlerContext:
     optional_entity_types: set[str] | None
     is_new_session: bool
     trace: TraceHandle | None
-    db: Session
+
+    # Sync session for handler use. Populated by ``_async_dispatch._run_handler``
+    # right before the handler runs (inside ``AsyncSession.run_sync``); ``None``
+    # outside that window. Handlers may rely on this being set.
+    db: Session | None = None
 
     # Used by EscalationStateMachine + RagHandler
     session_id: uuid.UUID | None = None
@@ -74,7 +78,7 @@ class HandlerContext:
 
     # Mutable scratch space for handlers — currently unused; reserved for future
     # cross-handler state (e.g. precomputed injection result threaded between
-    # injection guard and run_chat_pipeline).
+    # injection guard and async_run_chat_pipeline).
     extras: dict[str, Any] = field(default_factory=dict)
 
 

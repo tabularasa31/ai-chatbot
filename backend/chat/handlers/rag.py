@@ -943,7 +943,7 @@ def run_chat_pipeline(
         )
     try:
         base_variant_vectors = _base_embed_future.result(
-            timeout=settings.embedding_http_timeout_seconds
+            timeout=settings.embedding_http_timeout_seconds + 1.0
         )
     except (
         APITimeoutError,
@@ -2774,7 +2774,7 @@ async def async_run_chat_pipeline(
     try:
         base_variant_vectors = await asyncio.wait_for(
             _base_embed_task,
-            timeout=settings.embedding_http_timeout_seconds,
+            timeout=settings.embedding_http_timeout_seconds + 1.0,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError):
         logger.warning("async_run_chat_pipeline_embed_queries_failed", exc_info=True)

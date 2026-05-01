@@ -69,6 +69,21 @@ def test_classify_returns_high_without_caps() -> None:
     assert _classify_kb_confidence(retrieval) == "high"
 
 
+def test_classify_does_not_downgrade_uncapped_high_when_reliability_score_is_only_medium() -> None:
+    """Regression guard: flooring must use `reliability.cap`, not `reliability.score`.
+
+    The reliability score uses stricter base thresholds than the classifier
+    (`high` only at top_score ≥ 0.8), so a top_score of 0.5 yields raw="high"
+    here but reliability.score="medium". Without a cap set, the classifier
+    must keep "high" — flooring by score would silently regress decision
+    routing for uncapped queries.
+    """
+    retrieval = _make_retrieval(top_score=0.5)
+    assert retrieval.reliability.cap is None
+    assert retrieval.reliability.score == "medium"
+    assert _classify_kb_confidence(retrieval) == "high"
+
+
 def test_contradiction_cap_lowers_classify_to_low_even_for_high_top_score() -> None:
     pairs = (
         ContradictionPair(

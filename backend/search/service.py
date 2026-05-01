@@ -863,13 +863,10 @@ def _adjudication_suppresses_contradiction_cap(
     items = contradiction_adjudication.items
     if not items:
         return False
-    for item in items:
-        adjudication = item.adjudication
-        if adjudication is None:
-            return False
-        if adjudication.verdict != "rejected":
-            return False
-    return True
+    return all(
+        item.adjudication is not None and item.adjudication.verdict == "rejected"
+        for item in items
+    )
 
 
 def build_reliability_assessment(

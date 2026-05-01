@@ -308,9 +308,14 @@ def _floor_kb_confidence(raw: KbConfidence, ceiling: KbConfidence) -> KbConfiden
 def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
     """Map retrieval confidence score to the three-tier KbConfidence used by decide().
 
-    The raw similarity-based tier is floored by `retrieval.reliability.score` so
-    that contradiction caps (`low`) and source_overlap caps (`medium`) reach the
-    decision engine. Without this floor, caps live only in observability.
+    When `retrieval.reliability.cap` is set (contradiction cap → ``low``,
+    source_overlap cap → ``medium``), the raw similarity-based tier is floored
+    by that cap so the cap actually reaches the decision engine. Without this
+    floor, caps live only in observability. We deliberately do NOT floor by
+    `reliability.score` because the reliability score uses stricter base
+    thresholds (`high` only at top score ≥0.8) than this classifier
+    (`high` at ≥0.45); flooring by score would silently downgrade many
+    uncapped high-confidence queries to medium.
     """
     if retrieval is None or retrieval.best_confidence_score is None:
         return "low"
@@ -321,7 +326,10 @@ def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
         raw = "medium"
     else:
         raw = "low"
-    return _floor_kb_confidence(raw, retrieval.reliability.score)
+    cap = retrieval.reliability.cap
+    if cap is None:
+        return raw
+    return _floor_kb_confidence(raw, cap)
 
 
 def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:

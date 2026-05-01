@@ -444,7 +444,7 @@ Any other state — `confirmed`, `inconclusive`, mixed verdicts, partial coverag
 
 #### Cap propagation to the decision engine
 
-The contradiction cap (and the existing `source_overlap` cap) reach the clarification decision engine via `_classify_kb_confidence` in `backend/chat/handlers/rag.py`, which floors the raw similarity-based tier by `retrieval.reliability.score`. A high raw similarity score with a contradiction cap therefore reports `kb_confidence="low"` to `decide()`, and the existing `multiple_conflicting_matches` clarify branch fires when the contradiction cap is the active reason. Without this floor (the prior behavior), caps lived only in observability and had no user-visible effect.
+The contradiction cap (and the existing `source_overlap` cap) reach the clarification decision engine via `_classify_kb_confidence` in `backend/chat/handlers/rag.py`, which floors the raw similarity-based tier by `retrieval.reliability.cap` when a cap is set. A high raw similarity score with a contradiction cap therefore reports `kb_confidence="low"` to `decide()`, and the existing `multiple_conflicting_matches` clarify branch fires when the contradiction cap is the active reason. Flooring is intentionally driven by `cap`, not `reliability.score`: the reliability score uses stricter base thresholds (`high` only at top_score ≥ 0.8) than the classifier (`high` at ≥ 0.45), so flooring by score would silently downgrade uncapped high-confidence queries. Without this floor (the prior behavior), caps lived only in observability and had no user-visible effect.
 
 ### Retrieval contradiction observability projection
 

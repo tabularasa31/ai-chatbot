@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.chat.language import LocalizationResult
 from backend.chat.service import RetrievalContext
 from backend.guards.reject_response import RejectReason, build_reject_response
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, async_assert_not_called
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -536,7 +536,7 @@ def test_chat_injection_detected(
     )
     monkeypatch.setattr(
         "backend.chat.service.async_retrieve_context",
-        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
+        async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -620,7 +620,7 @@ def test_chat_faq_direct(
     )
     monkeypatch.setattr(
         "backend.chat.service.async_retrieve_context",
-        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
+        async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -685,7 +685,7 @@ def test_chat_not_relevant_returns_localized_reject(
     )
     monkeypatch.setattr(
         "backend.chat.service.async_retrieve_context",
-        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
+        async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",

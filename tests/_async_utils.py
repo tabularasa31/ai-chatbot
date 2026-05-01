@@ -19,3 +19,18 @@ def as_async(fn: Callable[..., Any]) -> Callable[..., Any]:
         return fn(*args, **kwargs)
 
     return _wrapped
+
+
+def async_assert_not_called(name: str) -> Callable[..., Any]:
+    """Return an async stub that raises ``AssertionError`` when called.
+
+    Use as a monkeypatch target for async helpers that the test asserts
+    must *not* be invoked (e.g. ``async_retrieve_context`` after a guard
+    reject). Reads more clearly than the equivalent
+    ``_as_async(lambda *a, **kw: (_ for _ in ()).throw(...))`` chain.
+    """
+
+    async def _raiser(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(f"{name} should not have been called")
+
+    return _raiser

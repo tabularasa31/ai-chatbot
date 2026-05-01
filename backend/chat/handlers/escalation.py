@@ -21,6 +21,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
@@ -74,7 +76,7 @@ class EscalationStateMachine(PipelineHandler):
 
         return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
 
-    def _handle_sync(self, ctx: HandlerContext, sync_db) -> ChatTurnOutcome | None:  # type: ignore[no-untyped-def]
+    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
         ctx.db = sync_db
         chat = ctx.chat
         if chat.ended_at is not None:

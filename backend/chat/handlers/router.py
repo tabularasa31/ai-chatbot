@@ -26,10 +26,10 @@ class HandlerRouter:
         """Read-only view of the registered handler chain, in dispatch order."""
         return tuple(self._handlers)
 
-    def dispatch(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+    async def dispatch(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         for handler in self._handlers:
             if handler.can_handle(ctx):
-                outcome = handler.handle(ctx)
+                outcome = await handler.handle(ctx)
                 if outcome is not None:
                     return outcome
                 # Fall through to the next handler when this one opted out

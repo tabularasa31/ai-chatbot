@@ -51,7 +51,7 @@ def upload_dataset(dataset: Dataset, *, client: Any | None = None) -> bool:
 
     client = client or _client_or_none()
     if client is None:
-        logger.warning("langfuse_dataset_upload_skipped reason=no_creds dataset=%s", dataset.name)
+        logger.info("langfuse_dataset_upload_skipped reason=no_creds dataset=%s", dataset.name)
         return False
 
     try:
@@ -104,7 +104,7 @@ def upload_run(report: RunReport, *, client: Any | None = None) -> bool:
 
     client = client or _client_or_none()
     if client is None:
-        logger.warning(
+        logger.info(
             "langfuse_run_upload_skipped reason=no_creds dataset=%s tag=%s",
             report.dataset,
             report.tag,

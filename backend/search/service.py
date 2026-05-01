@@ -839,6 +839,36 @@ def _build_contradiction_adjudication_evidence(
     )
 
 
+def _adjudication_suppresses_contradiction_cap(
+    contradiction_adjudication: ContradictionAdjudicationEvidence | None,
+) -> bool:
+    """
+    Decide whether LLM adjudication should drop the deterministic contradiction cap.
+
+    v1 rule (intentionally strict, fail-open): suppress only when every adjudicated
+    item returned `verdict == "rejected"`. Any other state — `confirmed`,
+    `inconclusive`, `error`, `skip_reason`, mixed verdicts, partial coverage where
+    some facts were not sent, or a `failed_open`/non-completed run — leaves the
+    deterministic cap untouched. The global flag must be on.
+    """
+    if not settings.contradiction_adjudication_filter_cap_enabled:
+        return False
+    if contradiction_adjudication is None:
+        return False
+    run = contradiction_adjudication.run
+    if run.status not in {"completed", "completed_with_errors"}:
+        return False
+    if run.sent_count <= 0:
+        return False
+    items = contradiction_adjudication.items
+    if not items:
+        return False
+    return all(
+        item.adjudication is not None and item.adjudication.verdict == "rejected"
+        for item in items
+    )
+
+
 def build_reliability_assessment(
     *,
     top_score: float | None,
@@ -878,7 +908,11 @@ def build_reliability_assessment(
     cap: ReliabilityScore | None = None
     cap_reason: ReliabilityCapReason | None = None
     score = base_score
-    if contradiction_policy.threshold_reached:
+    contradiction_cap_suppressed_by_adjudication = (
+        contradiction_policy.threshold_reached
+        and _adjudication_suppresses_contradiction_cap(contradiction_adjudication)
+    )
+    if contradiction_policy.threshold_reached and not contradiction_cap_suppressed_by_adjudication:
         cap = "low"
         cap_reason = "contradiction"
         score = "low"

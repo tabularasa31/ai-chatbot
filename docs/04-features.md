@@ -431,6 +431,21 @@ Rollout note:
 - review the share of single-fact cases, same-pair `2+` fact cases, multi-pair cases, and the rate of outcomes that would flip versus the old behavior
 - define an acceptable flip-rate threshold first; if the observed flip rate exceeds it, require product review or gate rollout behind a feature flag
 
+#### Adjudication-driven cap suppression
+
+The contradiction cap can be suppressed by the LLM contradiction adjudicator when the `CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED` global flag is enabled (default `false`). The flag is intentionally asymmetric: adjudication can only **drop** a deterministic cap, never add a new one. Suppression applies only when **all** of the following hold:
+
+- the global flag is on,
+- adjudication ran and finished with status `completed` or `completed_with_errors`,
+- `sent_count > 0` (at least one fact was actually adjudicated),
+- every adjudicated item carries `verdict == "rejected"`.
+
+Any other state — `confirmed`, `inconclusive`, mixed verdicts, partial coverage with skipped facts, `failed_open`/non-completed runs, missing items — leaves the deterministic cap untouched (fail-open). When suppression applies, `cap` and `cap_reason` reset to `None`; the contradiction signal and evidence remain in the payload for traces.
+
+#### Cap propagation to the decision engine
+
+The contradiction cap (and the existing `source_overlap` cap) reach the clarification decision engine via `_classify_kb_confidence` in `backend/chat/handlers/rag.py`, which floors the raw similarity-based tier by `retrieval.reliability.cap` when a cap is set. A high raw similarity score with a contradiction cap therefore reports `kb_confidence="low"` to `decide()`, and the existing `multiple_conflicting_matches` clarify branch fires when the contradiction cap is the active reason. Flooring is intentionally driven by `cap`, not `reliability.score`: the reliability score uses stricter base thresholds (`high` only at top_score ≥ 0.8) than the classifier (`high` at ≥ 0.45), so flooring by score would silently downgrade uncapped high-confidence queries. Without this floor (the prior behavior), caps lived only in observability and had no user-visible effect.
+
 ### Retrieval contradiction observability projection
 
 Canonical reliability continues to answer "what the system believes" via `score`, `cap_reason`, `signals`, and `evidence`. Observability-only contradiction metrics now sit alongside that payload in trace/debug projections to answer "how much contradiction evidence was present and of what shape" without parsing nested evidence manually.

@@ -87,6 +87,23 @@ def _parse_sqlite_vector_text(raw: Any) -> list[float] | None:
     return out
 
 
+def _bound_db_url(db: Session | AsyncSession) -> str:
+    """Return the bound engine's URL as a string, or ``""`` if unbound.
+
+    ``Session.get_bind()`` raises ``UnboundExecutionError`` when no bind has
+    been associated, and the bind's ``.url`` may itself be missing for
+    custom dialects — both cases collapse to an empty string so the caller's
+    branch on ``"sqlite" in db_url`` falls through to the pgvector path
+    instead of crashing.
+    """
+    try:
+        bind = db.get_bind()
+    except Exception:
+        return ""
+    url = getattr(bind, "url", None)
+    return str(url) if url is not None else ""
+
+
 def _fetch_top_faq_rows(
     *,
     tenant_id: uuid.UUID,
@@ -100,7 +117,7 @@ def _fetch_top_faq_rows(
     Production: use cosine_distance via pgvector operator.
     SQLite tests: fall back to Python cosine over parsed TEXT vectors.
     """
-    db_url = str(getattr(db.get_bind(), "url", ""))
+    db_url = _bound_db_url(db)
     if "sqlite" in db_url:
         rows = (
             db.query(TenantFaq)
@@ -214,7 +231,7 @@ async def _async_fetch_top_faq_rows(
     limit: int = 3,
 ) -> list[FAQRow]:
     """Async counterpart of :func:`_fetch_top_faq_rows`."""
-    db_url = str(getattr(db.get_bind(), "url", ""))
+    db_url = _bound_db_url(db)
     if "sqlite" in db_url:
         result = await db.execute(
             select(TenantFaq)

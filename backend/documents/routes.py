@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session, selectinload
 
 from backend.auth.middleware import require_verified_user
@@ -31,7 +31,6 @@ from backend.documents.service import (
     upload_document,
 )
 from backend.documents.url_service import (
-    crawl_url_source,
     create_url_source,
     delete_source_document,
     delete_url_source,
@@ -40,6 +39,7 @@ from backend.documents.url_service import (
     trigger_refresh,
     update_url_source,
 )
+from backend.jobs.crawl_url import enqueue_crawl_for_source_sync
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
 from backend.observability.metrics import capture_event
 from backend.tenants.service import get_tenant_by_user
@@ -205,7 +205,6 @@ def list_knowledge_sources_route(
 @documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
 def create_url_source_route(
     payload: UrlSourceCreateRequest,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
@@ -223,7 +222,11 @@ def create_url_source_route(
         db=db,
     )
     if tenant.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, tenant.openai_api_key)
+        enqueue_crawl_for_source_sync(
+            source_id=source.id,
+            api_key=tenant.openai_api_key,
+            tenant_id=tenant.id,
+        )
     try:
         capture_event(
             "knowledge.uploaded",
@@ -306,7 +309,6 @@ def update_url_source_route(
 @documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
 def refresh_url_source_route(
     source_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
 ) -> UrlSourceResponse:
@@ -316,7 +318,11 @@ def refresh_url_source_route(
         raise HTTPException(status_code=404, detail="Tenant not found")
     source = trigger_refresh(source_id=source_id, tenant=tenant, db=db)
     if tenant.openai_api_key:
-        background_tasks.add_task(crawl_url_source, source.id, tenant.openai_api_key)
+        enqueue_crawl_for_source_sync(
+            source_id=source.id,
+            api_key=tenant.openai_api_key,
+            tenant_id=tenant.id,
+        )
     return _url_source_response(source)
 
 

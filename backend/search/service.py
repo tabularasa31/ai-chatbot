@@ -667,18 +667,26 @@ def detect_metadata_contradictions(
 
 
 def _tenant_contradiction_adjudication_enabled(tenant: Tenant | None) -> bool:
-    """Resolve per-tenant contradiction adjudication override from JSON settings."""
+    """Resolve per-tenant contradiction adjudication override from JSON settings.
+
+    Default is ``True`` when the setting is absent or malformed: a tenant only
+    opts out by explicitly setting
+    ``settings.retrieval.contradiction_adjudication.enabled = false``.
+    The whole tenant-level gate is scheduled for removal — see the settings
+    audit task — but until then this default keeps adjudication on for every
+    tenant without manual JSON edits.
+    """
     if tenant is None or not isinstance(tenant.settings, dict):
-        return False
+        return True
     retrieval_settings = tenant.settings.get("retrieval")
     if not isinstance(retrieval_settings, dict):
-        return False
+        return True
     contradiction_settings = retrieval_settings.get(
         CONTRADICTION_ADJUDICATION_SETTINGS_KEY
     )
     if not isinstance(contradiction_settings, dict):
-        return False
-    return contradiction_settings.get("enabled") is True
+        return True
+    return contradiction_settings.get("enabled") is not False
 
 
 def _candidate_preview_text(embedding: Embedding) -> str:

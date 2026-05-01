@@ -133,6 +133,9 @@ def _limiter_storage_uri() -> str:
     if settings.environment == "test":
         return "memory://"
     if settings.redis_url:
+        # `settings.redis_url` is already normalized in `core/config.py`
+        # (any `async+` prefix is stripped at the env boundary), so we
+        # forward it as-is to slowapi's sync redis storage.
         return settings.redis_url
     return "memory://"
 

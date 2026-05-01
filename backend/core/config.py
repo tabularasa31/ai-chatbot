@@ -419,6 +419,21 @@ class Settings(BaseSettings):
             return "postgresql://" + v[len("postgres://"):]
         return v
 
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def _normalize_redis_url(cls, v: str | None) -> str | None:
+        # Strip slowapi/limits' `async+` URI prefix at the env boundary so
+        # both downstream consumers (slowapi storage in `core/limiter.py`,
+        # redis-py client in `core/redis.py`) always receive a plain
+        # `redis://` URL. slowapi 0.1.9 cannot accept an AsyncStorage and
+        # would crash uvicorn at import time if `async+` ever leaked through.
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        return v.removeprefix("async+")
+
     @field_validator("posthog_host", mode="before")
     @classmethod
     def _strip_posthog_host(cls, v: str) -> str:

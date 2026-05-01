@@ -7,10 +7,11 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from backend.core.db import _to_async_url
+
 
 def _async_url(pg_engine: sa.engine.Engine) -> str:
-    sync_url = pg_engine.url.render_as_string(hide_password=False)
-    return sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    return _to_async_url(pg_engine.url.render_as_string(hide_password=False))
 
 
 @pytest.mark.pgvector

@@ -76,17 +76,28 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
         yield db
 
 
-_async_readonly_engine_kwargs: dict = {"future": True}
-if _async_url.startswith("postgresql+asyncpg://"):
-    # asyncpg-level switch: every connection starts transactions in
-    # read-only mode. Writes raise InternalError("cannot execute UPDATE/...
-    # in a read-only transaction"). Pure mechanism — no statement parsing.
-    _async_readonly_engine_kwargs["connect_args"] = {
-        "server_settings": {"default_transaction_read_only": "on"},
-    }
-    _async_readonly_engine_kwargs.update(pool_size=10, max_overflow=20)
+def _build_async_readonly_engine_kwargs(url: str) -> dict:
+    """Engine kwargs for the read-only async engine.
 
-async_readonly_engine = create_async_engine(_async_url, **_async_readonly_engine_kwargs)
+    asyncpg ``server_settings={"default_transaction_read_only": "on"}`` makes
+    every transaction start in read-only mode; writes raise SQLAlchemy
+    ``DBAPIError`` wrapping ``asyncpg.ReadOnlySQLTransactionError``. Pure
+    connection-level mechanism — no statement parsing. SQLite has no such
+    flag, so the test contour falls back to a regular session.
+    """
+    kwargs: dict = {"future": True}
+    if url.startswith("postgresql+asyncpg://"):
+        kwargs["connect_args"] = {
+            "server_settings": {"default_transaction_read_only": "on"},
+        }
+    if not url.startswith("sqlite"):
+        kwargs.update(pool_size=10, max_overflow=20)
+    return kwargs
+
+
+async_readonly_engine = create_async_engine(
+    _async_url, **_build_async_readonly_engine_kwargs(_async_url)
+)
 
 AsyncReadOnlySessionLocal = async_sessionmaker(
     bind=async_readonly_engine,

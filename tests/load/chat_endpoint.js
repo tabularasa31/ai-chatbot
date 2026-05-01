@@ -81,9 +81,9 @@ export default function () {
   const res = http.post(url, payload, params);
   check(res, {
     'status is 200': (r) => r.status === 200,
-    'has answer': (r) => {
+    'has text': (r) => {
       try {
-        return typeof r.json('answer') === 'string';
+        return typeof r.json('text') === 'string';
       } catch (_) {
         return false;
       }

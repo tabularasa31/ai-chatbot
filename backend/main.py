@@ -23,6 +23,8 @@ from backend.chat.routes import chat_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
+from backend.core.redis import init_redis, redis_ping, shutdown_redis
+from backend.core.redis import is_enabled as redis_is_enabled
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.escalation.routes import escalation_router
@@ -50,6 +52,7 @@ from backend.widget.routes import widget_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await init_redis()
     init_observability()
     init_metrics()
     init_sentry()
@@ -63,6 +66,7 @@ async def lifespan(_: FastAPI):
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()
+        await shutdown_redis()
 
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)
@@ -167,6 +171,24 @@ app.include_router(widget_router)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "ok"}
+async def health() -> JSONResponse:
+    """Health/readiness endpoint.
+
+    - Redis unset → `200 {status: ok, redis: disabled}` (single-worker dev).
+    - Redis configured and reachable → `200 {status: ok, redis: ok}`.
+    - Redis configured but unreachable → `503 {status: degraded, redis: unavailable}`.
+
+    The 503 is intentional: rate-limit storage is now Redis-backed
+    (see `backend/core/limiter.py`), so when Redis is down the limiter raises
+    on every protected request and the instance can't reliably serve chat /
+    auth / widget. Reporting unhealthy lets Railway pull the instance out of
+    rotation instead of returning 500s to clients.
+    """
+    if not redis_is_enabled():
+        return JSONResponse({"status": "ok", "redis": "disabled"})
+    if await redis_ping():
+        return JSONResponse({"status": "ok", "redis": "ok"})
+    return JSONResponse(
+        {"status": "degraded", "redis": "unavailable"},
+        status_code=503,
+    )

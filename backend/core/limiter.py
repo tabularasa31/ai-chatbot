@@ -115,4 +115,25 @@ def set_owner_jwt_rate_limit_key_override(
     _owner_jwt_rate_limit_key_override = fn
 
 
-limiter = Limiter(key_func=_key_func)
+def _limiter_storage_uri() -> str:
+    """Resolve slowapi storage URI.
+
+    Production with Redis configured → shared Redis storage (correct under
+    multiple workers). Tests and local dev without Redis → in-memory.
+
+    The `async+` prefix forces the `limits` library to use its asyncio
+    Redis backend; without it slowapi calls the sync client and blocks
+    the FastAPI event loop on every limited request.
+    """
+    if settings.environment == "test":
+        return "memory://"
+    if settings.redis_url:
+        url = settings.redis_url
+        for scheme in ("redis://", "rediss://", "unix://"):
+            if url.startswith(scheme) and not url.startswith("async+"):
+                return f"async+{url}"
+        return url
+    return "memory://"
+
+
+limiter = Limiter(key_func=_key_func, storage_uri=_limiter_storage_uri())

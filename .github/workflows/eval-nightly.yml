@@ -81,6 +81,7 @@ jobs:
               --api-base "${{ vars.EVAL_API_BASE }}" \
               --tag "${TAG}/${DS}" \
               --langfuse \
+              --verbose \
               --out-dir eval-results || echo "::warning::dataset $DS had failures"
             echo "::endgroup::"
           done

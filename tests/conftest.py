@@ -485,6 +485,20 @@ async def async_engine_fx():
         await engine_.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _reset_escalation_rate_window() -> Generator[None, None, None]:
+    """Reset the module-level escalation sliding-window deque before every test.
+
+    The deque accumulates timestamps across the entire process lifetime.  Without
+    this reset, tests that run after many escalation-triggering tests see the counter
+    already at/above the threshold, causing _check_escalation_rate to fire an extra
+    event and break assertions that expect exactly one captured event.
+    """
+    from backend.chat.events import _reset_escalation_rate_for_tests
+    _reset_escalation_rate_for_tests()
+    yield
+
+
 @pytest_asyncio.fixture(scope="function")
 async def async_db_session(async_engine_fx) -> "AsyncSession":  # type: ignore[name-defined]
     """AsyncSession bound to the per-test async engine."""

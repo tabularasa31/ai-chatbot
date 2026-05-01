@@ -547,11 +547,14 @@ def test_generate_answer_logs_tokens_with_operation_generate(
 
 def test_build_rag_prompt_language_directive_uses_full_language_name() -> None:
     """The output-language rule must use the human-readable name (English/Russian),
-    not the bare ISO code — full names steer the model far more reliably."""
+    not the bare ISO code — full names steer the model far more reliably.
+
+    The directive lives in the user-message section (after Context:) so the system
+    message stays stable for prompt caching; check the full prompt, not just head.
+    """
     prompt = build_rag_prompt("Q?", ["chunk"], response_language="en")
-    head = prompt[:600]
-    assert "CRITICAL — OUTPUT LANGUAGE" in head
-    assert "English" in head
+    assert "CRITICAL — OUTPUT LANGUAGE" in prompt
+    assert "English" in prompt
     # Bare two-letter directive removed; must not appear as a standalone rule.
     assert "Respond strictly in en" not in prompt
 

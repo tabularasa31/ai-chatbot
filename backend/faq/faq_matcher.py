@@ -100,7 +100,7 @@ def _fetch_top_faq_rows(
     Production: use cosine_distance via pgvector operator.
     SQLite tests: fall back to Python cosine over parsed TEXT vectors.
     """
-    db_url = str(getattr(db.bind, "url", ""))
+    db_url = str(getattr(db.get_bind(), "url", ""))
     if "sqlite" in db_url:
         rows = (
             db.query(TenantFaq)
@@ -214,7 +214,7 @@ async def _async_fetch_top_faq_rows(
     limit: int = 3,
 ) -> list[FAQRow]:
     """Async counterpart of :func:`_fetch_top_faq_rows`."""
-    db_url = str(getattr(db.bind, "url", ""))
+    db_url = str(getattr(db.get_bind(), "url", ""))
     if "sqlite" in db_url:
         result = await db.execute(
             select(TenantFaq)

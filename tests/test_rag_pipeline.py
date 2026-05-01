@@ -16,13 +16,8 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
 from backend.search.service import build_reliability_assessment
 
+from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
-
-def _as_async(fn):
-    """Wrap a sync callable so it can be passed as an async monkeypatch."""
-    async def _wrapped(*args, **kwargs):
-        return fn(*args, **kwargs)
-    return _wrapped
 
 
 
@@ -147,8 +142,8 @@ def test_embedding_once(
             selected_faq_id=None,
             direct_guard_used=False,
             direct_guard_passed=False,
-            decision_reason="test"),
-        ),
+            decision_reason="test",
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service._start_mode_b_followup",
@@ -241,8 +236,8 @@ def test_faq_context_in_prompt(
             selected_faq_id=str(faq_item.id),
             direct_guard_used=False,
             direct_guard_passed=False,
-            decision_reason="test"),
-        ),
+            decision_reason="test",
+        )),
     )
 
     monkeypatch.setattr(
@@ -325,8 +320,8 @@ def test_langfuse_faq_match_span(
             selected_faq_id=str(faq_item.id),
             direct_guard_used=True,
             direct_guard_passed=False,
-            decision_reason="test_reason"),
-        ),
+            decision_reason="test_reason",
+        )),
     )
 
     monkeypatch.setattr(
@@ -396,8 +391,8 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
             selected_faq_id=None,
             direct_guard_used=False,
             direct_guard_passed=False,
-            decision_reason="test"),
-        ),
+            decision_reason="test",
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
@@ -484,8 +479,8 @@ def test_faq_direct_skips_retrieval_and_generation(
             selected_faq_id=str(faq_row.id),
             direct_guard_used=True,
             direct_guard_passed=True,
-            decision_reason="test"),
-        ),
+            decision_reason="test",
+        )),
     )
 
     def _unexpected_retrieve(*_: object, **__: object):

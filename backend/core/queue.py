@@ -19,7 +19,7 @@ Callers must decide whether to fall back (e.g. run inline) or fail loudly.
 
 from __future__ import annotations
 
-import datetime as dt
+import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -32,6 +32,7 @@ from sqlalchemy import update
 
 from backend.core.config import settings
 from backend.core.db import AsyncSessionLocal
+from backend.models.base import _utcnow
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 
 logger = logging.getLogger(__name__)
@@ -40,12 +41,48 @@ JobFunc = Callable[..., Awaitable[Any]]
 
 _REGISTERED: list[Any] = []
 _REGISTERED_NAMES: dict[str, JobFunc] = {}
+_REGISTERED_MAX_ATTEMPTS: dict[str, int] = {}
+
+_pool: ArqRedis | None = None
+_pool_lock = asyncio.Lock()
 
 
 def _redis_settings_or_none() -> RedisSettings | None:
     if not settings.redis_url:
         return None
     return RedisSettings.from_dsn(settings.redis_url)
+
+
+async def get_pool() -> ArqRedis | None:
+    """Return the shared ARQ pool, opening it on first use.
+
+    Cached module-wide so HTTP handlers do not pay connection-pool setup cost
+    on every ``enqueue``. Returns ``None`` when ``REDIS_URL`` is unset.
+    """
+    global _pool
+    if _pool is not None:
+        return _pool
+    async with _pool_lock:
+        if _pool is not None:
+            return _pool
+        rs = _redis_settings_or_none()
+        if rs is None:
+            return None
+        _pool = await create_pool(rs)
+        return _pool
+
+
+async def close_pool() -> None:
+    """Close the shared ARQ pool. Idempotent; safe in lifespan shutdown."""
+    global _pool
+    if _pool is None:
+        return
+    try:
+        await _pool.aclose()
+    except Exception as exc:
+        logger.warning("queue_pool_close_failed: %s", exc)
+    finally:
+        _pool = None
 
 
 def register_job(
@@ -89,6 +126,7 @@ def register_job(
         registered = arq_func(wrapper, name=job_name, max_tries=max_attempts)
         _REGISTERED.append(registered)
         _REGISTERED_NAMES[job_name] = wrapper
+        _REGISTERED_MAX_ATTEMPTS[job_name] = max_attempts
         return fn
 
     return decorator
@@ -101,7 +139,6 @@ async def enqueue(
     tenant_id: uuid.UUID | None = None,
     payload: dict[str, Any] | None = None,
     job_id: str | None = None,
-    max_attempts: int = 5,
     **kwargs: Any,
 ) -> str | None:
     """Schedule a registered job. Returns the ARQ job id, or ``None`` when
@@ -111,15 +148,16 @@ async def enqueue(
     ``payload`` is for human-readable debugging — pass the inputs you want
     visible in the row, separately from the function args.
     Pass ``job_id`` to deduplicate (ARQ rejects duplicate ids while pending).
+
+    The status row's ``max_attempts`` is sourced from the ``@register_job``
+    declaration so the admin UI cannot disagree with what the worker enforces.
     """
-    redis_settings = _redis_settings_or_none()
-    if redis_settings is None:
+    pool = await get_pool()
+    if pool is None:
         logger.warning("queue_enqueue_skipped name=%s reason=redis_disabled", name)
         return None
 
-    pool: ArqRedis | None = None
     try:
-        pool = await create_pool(redis_settings)
         job = await pool.enqueue_job(name, *args, _job_id=job_id, **kwargs)
         if job is None:
             logger.warning(
@@ -133,15 +171,12 @@ async def enqueue(
             kind=kind or name,
             tenant_id=tenant_id,
             payload=payload or {},
-            max_attempts=max_attempts,
+            max_attempts=_REGISTERED_MAX_ATTEMPTS.get(name, 5),
         )
         return job.job_id
     except Exception as exc:
         logger.warning("queue_enqueue_failed name=%s: %s", name, exc)
         return None
-    finally:
-        if pool is not None:
-            await pool.aclose()
 
 
 async def _record_queued(
@@ -175,7 +210,7 @@ async def _mark_started(arq_job_id: str, attempt: int) -> None:
             .values(
                 status=BackgroundJobStatus.in_progress.value,
                 attempt_count=attempt,
-                started_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+                started_at=_utcnow(),
             )
         )
         await db.commit()
@@ -190,7 +225,7 @@ async def _mark_completed(arq_job_id: str) -> None:
             .where(BackgroundJob.arq_job_id == arq_job_id)
             .values(
                 status=BackgroundJobStatus.completed.value,
-                finished_at=dt.datetime.now(dt.UTC).replace(tzinfo=None),
+                finished_at=_utcnow(),
             )
         )
         await db.commit()
@@ -205,7 +240,7 @@ async def _mark_failed(
 ) -> None:
     if not arq_job_id:
         return
-    now = dt.datetime.now(dt.UTC).replace(tzinfo=None)
+    now = _utcnow()
     new_status = (
         BackgroundJobStatus.dead_letter.value
         if dead_letter

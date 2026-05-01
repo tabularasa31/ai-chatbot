@@ -125,6 +125,43 @@ psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_doc_topics_topic_embe
 psql "$DATABASE_URL" -c "REINDEX INDEX CONCURRENTLY ix_gap_questions_embedding_ivfflat"
 ```
 
+## Contradiction adjudication smoke (`scripts/contradiction_demo.py`)
+
+End-to-end verification that the LLM contradiction-adjudication wiring is
+alive: detector → effective_pairs → adjudicator → cap decision. Use after
+changes to anything in `backend/search/contradiction_adjudication.py` or
+the contradiction-cap policy in `build_reliability_assessment`.
+
+The script does not touch the DB or the chat HTTP layer — it calls the
+search-layer functions directly with two synthetic conflicting facts and
+prints the resulting reliability object under both flag states.
+
+```bash
+# Real OpenAI call to the adjudicator (needs a working OPENAI_API_KEY in .env;
+# placeholder keys exercise the failed_open / fail-open branch).
+python scripts/contradiction_demo.py
+
+# Skip the OpenAI round-trip and synthesize an all-`rejected` run; the only
+# branch where suppression engages. Use when validating the cap-suppression
+# branch without spending tokens or depending on a live key.
+python scripts/contradiction_demo.py --mock-all-rejected
+
+# Restrict to one flag state if you only want to see one half of the matrix.
+python scripts/contradiction_demo.py --on-only --mock-all-rejected
+python scripts/contradiction_demo.py --off-only
+```
+
+What the four observable cells of the truth table mean:
+
+| Flag | Run outcome | Expected `cap` / `cap_reason` |
+|---|---|---|
+| `false` | any | `low` / `contradiction` (legacy: arbiter is observer-only) |
+| `true` | every fact `verdict == "rejected"` | `None` / `None` (cap suppressed — main feature path) |
+| `true` | mixed / `confirmed` / `inconclusive` / `failed_open` | `low` / `contradiction` (fail-open) |
+
+The script prints a one-line `verdict:` summary for each cell so a green
+run is obvious without parsing the dataclass dump.
+
 ## Eval pipeline (`backend/evals/`)
 
 Automated answer-quality evaluation against a real chat backend, with

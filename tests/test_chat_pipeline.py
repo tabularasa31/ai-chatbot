@@ -18,6 +18,7 @@ from backend.chat.service import (
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
 from backend.search.service import build_reliability_assessment
+from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -142,8 +143,8 @@ def test_process_chat_message_adds_variant_summary_to_trace(
     fake_trace = FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=["reset password in settings"],
             document_ids=[uuid.uuid4()],
             scores=[0.93],
@@ -183,7 +184,7 @@ def test_process_chat_message_adds_variant_summary_to_trace(
             bm25_merged_hit_count_before_cap=4,
             bm25_merged_hit_count_after_cap=3,
             retrieval_duration_ms=18.4,
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",

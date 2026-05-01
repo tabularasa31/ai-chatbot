@@ -74,3 +74,38 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     """
     async with AsyncSessionLocal() as db:
         yield db
+
+
+_async_readonly_engine_kwargs: dict = {"future": True}
+if _async_url.startswith("postgresql+asyncpg://"):
+    # asyncpg-level switch: every connection starts transactions in
+    # read-only mode. Writes raise InternalError("cannot execute UPDATE/...
+    # in a read-only transaction"). Pure mechanism — no statement parsing.
+    _async_readonly_engine_kwargs["connect_args"] = {
+        "server_settings": {"default_transaction_read_only": "on"},
+    }
+    _async_readonly_engine_kwargs.update(pool_size=10, max_overflow=20)
+
+async_readonly_engine = create_async_engine(_async_url, **_async_readonly_engine_kwargs)
+
+AsyncReadOnlySessionLocal = async_sessionmaker(
+    bind=async_readonly_engine,
+    class_=AsyncSession,
+    autocommit=False,
+    autoflush=False,
+    expire_on_commit=False,
+)
+
+
+async def get_async_readonly_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency that yields a read-only async database session.
+
+    Postgres enforces ``default_transaction_read_only=on`` at the connection
+    level, so any write statement raises before reaching the table. Intended
+    for analytics/reporting endpoints that must never mutate state.
+
+    On SQLite (tests) the engine has no read-only mechanism; the dependency
+    still works for query-shape parity but does not block writes.
+    """
+    async with AsyncReadOnlySessionLocal() as db:
+        yield db

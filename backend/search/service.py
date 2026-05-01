@@ -3688,6 +3688,22 @@ async def async_detect_tenant_kb_script(
     return result
 
 
+async def async_detect_tenant_kb_scripts(
+    tenant_id: uuid.UUID, db: AsyncSession
+) -> frozenset[str]:
+    """Async counterpart of :func:`detect_tenant_kb_scripts`."""
+    key = str(tenant_id)
+    now = time.monotonic()
+    cached = _TENANT_KB_SCRIPTS_CACHE.get(key)
+    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
+        return cached[0]
+
+    counts = await _async_resolve_kb_bucket_counts(tenant_id, db)
+    result = frozenset(b for b in counts if b in ("cyrillic", "latin"))
+    _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
+    return result
+
+
 # ── Async pipeline stages ────────────────────────────────────────────────────
 
 

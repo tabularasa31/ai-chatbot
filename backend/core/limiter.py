@@ -121,18 +121,19 @@ def _limiter_storage_uri() -> str:
     Production with Redis configured → shared Redis storage (correct under
     multiple workers). Tests and local dev without Redis → in-memory.
 
-    The `async+` prefix forces the `limits` library to use its asyncio
-    Redis backend; without it slowapi calls the sync client and blocks
-    the FastAPI event loop on every limited request.
+    Note: we intentionally use the **sync** redis storage (no `async+` prefix).
+    `slowapi==0.1.9` only supports sync `Storage` instances — passing an
+    `AsyncStorage` (what `async+redis://` produces) trips an `isinstance`
+    assert at import time. Each rate-limit check therefore makes a synchronous
+    Redis call that briefly blocks the event loop (sub-ms over Railway's
+    private network). That cost is acceptable; correct shared counters under
+    N workers matter more than micro-latency, and switching to the async
+    backend requires a slowapi upgrade — tracked separately.
     """
     if settings.environment == "test":
         return "memory://"
     if settings.redis_url:
-        url = settings.redis_url
-        for scheme in ("redis://", "rediss://", "unix://"):
-            if url.startswith(scheme) and not url.startswith("async+"):
-                return f"async+{url}"
-        return url
+        return settings.redis_url
     return "memory://"
 
 

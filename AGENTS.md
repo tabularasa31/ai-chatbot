@@ -88,7 +88,7 @@ Redis is **foundational infra** — used for things that need cross-worker share
 **Configuration:**
 - `REDIS_URL` (env). Unset locally → in-memory rate-limit storage and no-op cache/lock helpers. Required in production (Railway provisions it via the Redis add-on).
 - Local dev: `docker-compose up redis` (port `6379`).
-- `/health` reports `redis: ok | unavailable | disabled` without affecting the overall `status`.
+- `/health`: `200 {status: ok, redis: ok|disabled}` when healthy; **`503 {status: degraded, redis: unavailable}`** when `REDIS_URL` is set but Redis is unreachable (so Railway pulls the instance out of rotation — rate-limit storage depends on Redis).
 
 **Key namespaces** (`<domain>:<purpose>:<id>`, lowercase, colon-separated):
 - `ratelimit:*` — managed by slowapi (do not touch directly)

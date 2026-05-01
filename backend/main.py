@@ -171,16 +171,24 @@ app.include_router(widget_router)
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    """Health check endpoint.
+async def health() -> JSONResponse:
+    """Health/readiness endpoint.
 
-    Returns `status: ok` when the app is reachable. The `redis` field reports
-    Redis availability without affecting overall status — Redis is optional
-    infra (rate-limit storage, caches), and the chat critical path tolerates
-    its absence via graceful degradation.
+    - Redis unset → `200 {status: ok, redis: disabled}` (single-worker dev).
+    - Redis configured and reachable → `200 {status: ok, redis: ok}`.
+    - Redis configured but unreachable → `503 {status: degraded, redis: unavailable}`.
+
+    The 503 is intentional: rate-limit storage is now Redis-backed
+    (see `backend/core/limiter.py`), so when Redis is down the limiter raises
+    on every protected request and the instance can't reliably serve chat /
+    auth / widget. Reporting unhealthy lets Railway pull the instance out of
+    rotation instead of returning 500s to clients.
     """
     if not redis_is_enabled():
-        redis_status = "disabled"
-    else:
-        redis_status = "ok" if await redis_ping() else "unavailable"
-    return {"status": "ok", "redis": redis_status}
+        return JSONResponse({"status": "ok", "redis": "disabled"})
+    if await redis_ping():
+        return JSONResponse({"status": "ok", "redis": "ok"})
+    return JSONResponse(
+        {"status": "degraded", "redis": "unavailable"},
+        status_code=503,
+    )

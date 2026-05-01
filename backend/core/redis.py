@@ -48,10 +48,15 @@ def is_enabled() -> bool:
 async def init_redis() -> None:
     """Open the shared async Redis client. No-op when `REDIS_URL` is unset.
 
+    Idempotent: a second call while a client is live is a no-op, so repeated
+    lifespan starts (hot-reload, test fixtures) do not leak connection pools.
+
     Connection errors at startup are logged but not raised — Redis is
     optional infra, and the app must boot even if Redis is briefly down.
     """
     global _client
+    if _client is not None:
+        return
     if not settings.redis_url:
         logger.info("redis_disabled: REDIS_URL not configured")
         return

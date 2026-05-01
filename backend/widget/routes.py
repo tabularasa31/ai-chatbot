@@ -3,8 +3,6 @@
 import asyncio
 import json
 import logging
-import queue
-import threading
 import uuid
 from typing import Annotated, Any, Literal
 
@@ -12,13 +10,13 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import localize_text_to_language_result
 from backend.chat.schemas import WidgetChatTurnResponse
-from backend.chat.service import process_chat_message
+from backend.chat.service import async_process_chat_message
 from backend.contact_sessions.service import start_user_session
 from backend.core import db as core_db
 from backend.core.config import settings
@@ -434,62 +432,75 @@ def _widget_chat_stream(
     sid: uuid.UUID,
     process_kwargs: dict,
 ) -> StreamingResponse:
-    q: queue.Queue[Any] = queue.Queue()
-    result_holder: dict[str, Any] = {}
-
-    _citation_filter = _CitationStreamFilter(lambda t: q.put(("chunk", t)))
-
-    def on_chunk(text: str) -> None:
-        if text:
-            _citation_filter.feed(text)
-
-    def run_pipeline() -> None:
-        worker_db = core_db.SessionLocal()
-        try:
-            outcome = process_chat_message(
-                db=worker_db,
-                stream_callback=on_chunk,
-                **process_kwargs,
-            )
-            result_holder["outcome"] = outcome
-            if outcome and outcome.document_ids:
-                try:
-                    seen: dict[str, str] = {}
-                    docs = (
-                        worker_db.query(Document.filename, Document.source_url)
-                        .filter(Document.id.in_(outcome.document_ids))
-                        .all()
-                    )
-                    for d in docs:
-                        if d.source_url and d.source_url not in seen:
-                            seen[d.source_url] = d.filename
-                    result_holder["sources"] = [
-                        {"title": title, "url": url} for url, title in seen.items()
-                    ]
-                except Exception:
-                    logger.warning("widget_source_lookup_failed", exc_info=True)
-        except BaseException as exc:
-            result_holder["error"] = exc
-        finally:
-            _citation_filter.finish()
-            worker_db.close()
-            q.put(_STREAM_SENTINEL)
-
-    worker = threading.Thread(target=run_pipeline, daemon=True)
-    worker.start()
-
     async def event_stream():
-        streamed_any = False
-        while True:
-            item = await asyncio.to_thread(q.get)
-            if item is _STREAM_SENTINEL:
-                break
-            kind, text = item
-            if kind == "chunk":
-                streamed_any = True
-                yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue[Any] = asyncio.Queue()
+        result_holder: dict[str, Any] = {}
 
-        worker.join()
+        # The async pipeline delegates LLM generation to ``asyncio.to_thread``,
+        # so ``stream_callback`` fires from a worker thread. Bridge each token
+        # back onto the running loop via ``call_soon_threadsafe``.
+        _citation_filter = _CitationStreamFilter(
+            lambda t: loop.call_soon_threadsafe(q.put_nowait, ("chunk", t))
+        )
+
+        def on_chunk(text: str) -> None:
+            if text:
+                _citation_filter.feed(text)
+
+        async def run_pipeline() -> None:
+            try:
+                async with core_db.AsyncSessionLocal() as worker_db:
+                    outcome = await async_process_chat_message(
+                        db=worker_db,
+                        stream_callback=on_chunk,
+                        **process_kwargs,
+                    )
+                    result_holder["outcome"] = outcome
+                    if outcome and outcome.document_ids:
+                        try:
+                            res = await worker_db.execute(
+                                select(Document.filename, Document.source_url).where(
+                                    Document.id.in_(outcome.document_ids)
+                                )
+                            )
+                            seen: dict[str, str] = {}
+                            for filename, source_url in res.all():
+                                if source_url and source_url not in seen:
+                                    seen[source_url] = filename
+                            result_holder["sources"] = [
+                                {"title": title, "url": url}
+                                for url, title in seen.items()
+                            ]
+                        except Exception:
+                            logger.warning("widget_source_lookup_failed", exc_info=True)
+            except BaseException as exc:
+                result_holder["error"] = exc
+            finally:
+                _citation_filter.finish()
+                # Drain pending call_soon_threadsafe puts so the final flushed
+                # chunk lands before the sentinel.
+                await asyncio.sleep(0)
+                q.put_nowait(_STREAM_SENTINEL)
+
+        task = asyncio.create_task(run_pipeline())
+        streamed_any = False
+        try:
+            while True:
+                item = await q.get()
+                if item is _STREAM_SENTINEL:
+                    break
+                kind, text = item
+                if kind == "chunk":
+                    streamed_any = True
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
+        except BaseException:
+            # Client disconnected or generator was closed — cancel the worker
+            # so it doesn't keep running detached.
+            task.cancel()
+            raise
+
+        await task
 
         err = result_holder.get("error")
         if err is not None:

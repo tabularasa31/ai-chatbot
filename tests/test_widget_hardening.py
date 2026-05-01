@@ -111,9 +111,12 @@ def test_per_client_ip_rate_limit(
         name="Widget Hardening Tenant IP",
     )
     _seed_rag_chunk(db_session, uuid.UUID(body["id"]))
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False)
+
     monkeypatch.setattr(
-        "backend.widget.routes.process_chat_message",
-        lambda *args, **kwargs: ChatTurnOutcome(text="ok", document_ids=[], tokens_used=0, chat_ended=False),
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
     )
 
     set_widget_public_rate_limit_key_override(

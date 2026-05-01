@@ -37,7 +37,7 @@ from backend.chat.service import (
     async_process_chat_message,
     record_gap_feedback_for_message,
 )
-from backend.core.db import get_async_db, get_db
+from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.limiter import limiter
 from backend.core.openai_client import is_quota_exceeded
 from backend.email.service import send_email
@@ -148,7 +148,7 @@ async def chat(
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    tenant = await db.run_sync(lambda s: get_tenant_by_api_key(x_api_key, s))
+    tenant = await run_sync(db, lambda s: get_tenant_by_api_key(x_api_key, s))
     if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
     if not tenant.openai_api_key:
@@ -175,8 +175,9 @@ async def chat(
             lang = detect_language(body.question).detected_language
             raise HTTPException(
                 status_code=402,
-                detail=await db.run_sync(
-                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key)
+                detail=await run_sync(
+                    db,
+                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
                 ),
             ) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None

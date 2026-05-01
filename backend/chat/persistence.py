@@ -46,6 +46,10 @@ def _create_message(
     )
     db.add(message)
     if redaction.was_redacted:
+        # SQLite enforces FK at row level and SQLAlchemy's UoW does not reorder
+        # PiiEvent (FK-only, no relationship) ahead of its parent Message, so
+        # flush the Message INSERT before queuing dependent PiiEvent rows.
+        db.flush()
         for entity in redaction.entities_found:
             db.add(
                 PiiEvent(

@@ -43,6 +43,7 @@ JobFunc = Callable[..., Awaitable[Any]]
 _REGISTERED: list[Any] = []
 _REGISTERED_NAMES: dict[str, JobFunc] = {}
 _REGISTERED_MAX_ATTEMPTS: dict[str, int] = {}
+_CRON_JOBS: list[Any] = []
 
 _pool: ArqRedis | None = None
 _pool_lock = asyncio.Lock()
@@ -311,6 +312,7 @@ def get_worker_settings() -> type:
         (),
         {
             "functions": list(_REGISTERED),
+            "cron_jobs": list(_CRON_JOBS),
             "redis_settings": _redis_settings_or_none() or RedisSettings(),
             "on_startup": _on_worker_startup,
             "on_shutdown": _on_worker_shutdown,

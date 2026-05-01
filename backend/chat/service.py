@@ -342,6 +342,7 @@ def process_chat_message(
     bot_id: uuid.UUID | None = None,
     bot_public_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
     """Sync entry point retained **only** for legacy tests that drive the
     chat pipeline synchronously.
@@ -411,6 +412,7 @@ def process_chat_message(
                 bot_id=bot_id,
                 bot_public_id=bot_public_id,
                 stream_callback=stream_callback,
+                status_callback=status_callback,
             )
 
     try:
@@ -535,6 +537,7 @@ async def _build_handler_context_async(
     disclosure_config: dict | None,
     allow_clarification: bool,
     stream_callback: Callable[[str], None] | None,
+    status_callback: Callable[[str], None] | None = None,
     explicit_human_request: bool,
     turn_started_at: float,
 ) -> HandlerContext:
@@ -594,6 +597,7 @@ async def _build_handler_context_async(
         allow_clarification=allow_clarification,
         user_context_line=_user_context_prompt_line(effective_user_ctx),
         stream_callback=stream_callback,
+        status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         turn_started_at=turn_started_at,
         extras={"async_db": db},
@@ -629,6 +633,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 chat_id=str(ctx.chat.id),
                 chat=ctx.chat,
                 stream_callback=ctx.stream_callback,
+                status_callback=ctx.status_callback,
                 agent_instructions=ctx.bot_agent_instructions,
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
@@ -658,6 +663,7 @@ async def async_process_chat_message(
     bot_id: uuid.UUID | None = None,
     bot_public_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
     """Async counterpart of :func:`process_chat_message`.
 
@@ -779,6 +785,7 @@ async def async_process_chat_message(
         disclosure_config=disclosure_config,
         allow_clarification=chat.clarification_count < MAX_CLARIFICATIONS_PER_SESSION,
         stream_callback=stream_callback,
+        status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         turn_started_at=_turn_started_at,
     )

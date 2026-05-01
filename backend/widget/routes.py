@@ -448,12 +448,17 @@ def _widget_chat_stream(
             if text:
                 _citation_filter.feed(text)
 
+        def on_status(stage: str) -> None:
+            if stage:
+                loop.call_soon_threadsafe(q.put_nowait, ("status", stage))
+
         async def run_pipeline() -> None:
             try:
                 async with core_db.AsyncSessionLocal() as worker_db:
                     outcome = await async_process_chat_message(
                         db=worker_db,
                         stream_callback=on_chunk,
+                        status_callback=on_status,
                         **process_kwargs,
                     )
                     result_holder["outcome"] = outcome
@@ -483,6 +488,10 @@ def _widget_chat_stream(
                 await asyncio.sleep(0)
                 q.put_nowait(_STREAM_SENTINEL)
 
+        # Initial "thinking" status so the client shows a meaningful label
+        # immediately, before guards and retrieval start producing signals.
+        yield f"data: {json.dumps({'type': 'status', 'stage': 'thinking'})}\n\n"
+
         task = asyncio.create_task(run_pipeline())
         streamed_any = False
         try:
@@ -494,6 +503,8 @@ def _widget_chat_stream(
                 if kind == "chunk":
                     streamed_any = True
                     yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
+                elif kind == "status":
+                    yield f"data: {json.dumps({'type': 'status', 'stage': text})}\n\n"
         except BaseException:
             # Client disconnected or generator was closed — cancel the worker
             # so it doesn't keep running detached.

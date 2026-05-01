@@ -71,6 +71,7 @@ class HandlerContext:
     allow_clarification: bool = True
     user_context_line: str | None = None
     stream_callback: Callable[[str], None] | None = None
+    status_callback: Callable[[str], None] | None = None
     explicit_human_request: bool = False
 
     # Per-turn metrics

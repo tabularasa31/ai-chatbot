@@ -1964,6 +1964,7 @@ async def async_run_chat_pipeline(
     chat_id: str | None = None,
     chat: Chat | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
     agent_instructions: str | None = None,
     allow_clarification: bool = True,
     guard_profile: TenantProfile | None = None,
@@ -2072,6 +2073,12 @@ async def async_run_chat_pipeline(
                 _t.cancel()
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+    if not injection_result.detected and status_callback is not None:
+        try:
+            status_callback("searching")
+        except Exception:
+            logger.debug("status_callback(searching) failed", exc_info=True)
 
     if injection_result.detected:
         await _cancel_background_tasks()
@@ -2401,6 +2408,12 @@ async def async_run_chat_pipeline(
         max_messages=settings.chat_history_turns,
         char_cap=settings.chat_history_message_char_cap,
     )
+
+    if status_callback is not None and stream_callback is not None:
+        try:
+            status_callback("writing")
+        except Exception:
+            logger.debug("status_callback(writing) failed", exc_info=True)
 
     _llm_start = perf_counter()
     raw_answer, tokens_used = await async_generate_answer(

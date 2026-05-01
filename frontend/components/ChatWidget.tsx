@@ -279,6 +279,7 @@ export function ChatWidget({
   const [chatClosed, setChatClosed] = useState(false);
   const [activeTicket, setActiveTicket] = useState<string | null>(null);
   const [streamingText, setStreamingText] = useState<string>("");
+  const [statusStage, setStatusStage] = useState<string | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetConfig | null>(null);
   const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -490,14 +491,22 @@ export function ChatWidget({
     }
   }, [handleChatEnded]);
 
+  const STATUS_LABELS: Record<string, string> = {
+    thinking: "Reading your question…",
+    searching: "Searching the knowledge base…",
+    writing: "Composing the answer…",
+  };
+
   const requestWidgetTurn = useCallback(async ({
     message,
     attemptSessionId,
     onChunk,
+    onStatus,
   }: {
     message: string;
     attemptSessionId: string | null;
     onChunk?: (partialText: string) => void;
+    onStatus?: (stage: string) => void;
   }) => {
     const params = new URLSearchParams({
       botId,
@@ -539,7 +548,7 @@ export function ChatWidget({
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
       if (!raw) return;
-      let parsed: { type?: string; text?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: WidgetSource[] };
+      let parsed: { type?: string; text?: string; stage?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: WidgetSource[] };
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -548,6 +557,8 @@ export function ChatWidget({
       if (parsed.type === "chunk" && typeof parsed.text === "string") {
         fullText += parsed.text;
         onChunk?.(fullText);
+      } else if (parsed.type === "status" && typeof parsed.stage === "string") {
+        onStatus?.(parsed.stage);
       } else if (parsed.type === "done") {
         payload.text = typeof parsed.text === "string" ? parsed.text : fullText;
         payload.session_id = parsed.session_id;
@@ -679,13 +690,20 @@ export function ChatWidget({
     setLoading(true);
     setInput("");
     setStreamingText("");
+    setStatusStage(null);
     setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
+
+    const handleChunk = (partial: string) => {
+      setStreamingText(partial);
+      setStatusStage(null);
+    };
 
     try {
       let { res, payload } = await requestWidgetTurn({
         message: userMessage,
         attemptSessionId: sessionId,
-        onChunk: setStreamingText,
+        onChunk: handleChunk,
+        onStatus: setStatusStage,
       });
       let detail = payload.detail;
       let code = apiErrorCode(detail);
@@ -693,10 +711,12 @@ export function ChatWidget({
         clearStoredSession(botId, userIdRef.current);
         setSessionId(null);
         setStreamingText("");
+        setStatusStage(null);
         ({ res, payload } = await requestWidgetTurn({
           message: userMessage,
           attemptSessionId: null,
-          onChunk: setStreamingText,
+          onChunk: handleChunk,
+          onStatus: setStatusStage,
         }));
         detail = payload.detail;
         code = apiErrorCode(detail);
@@ -728,6 +748,7 @@ export function ChatWidget({
       ]);
     } finally {
       setStreamingText("");
+      setStatusStage(null);
       setLoading(false);
     }
   };
@@ -896,10 +917,17 @@ export function ChatWidget({
             ) : loading ? (
               <div className="flex items-end gap-3">
                 <div className="rounded-2xl bg-gray-100 px-4 py-3">
-                  <span className="flex h-6 items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" />
+                  <span className="flex h-6 items-center gap-2">
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.3s]" />
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.15s]" />
+                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" />
+                    </span>
+                    {statusStage && STATUS_LABELS[statusStage] ? (
+                      <span className="text-xs text-gray-500">
+                        {STATUS_LABELS[statusStage]}
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               </div>

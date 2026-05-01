@@ -2313,11 +2313,19 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
     assert obs.enabled is False
     assert obs.candidate_count == 1
 
+    # Tenant gate is default-on: only an explicit `enabled: false` opts the
+    # tenant out. Missing subkey / malformed shape keeps adjudication enabled.
     monkeypatch.setattr(
         "backend.search.service.settings.contradiction_adjudication_enabled",
         True,
     )
-    tenant.settings = {"retrieval": {}}
+    tenant.settings = {
+        "retrieval": {
+            "contradiction_adjudication": {
+                "enabled": False,
+            }
+        }
+    }
     db_session.commit()
 
     _canonical, obs = _build_contradiction_adjudication_evidence(
@@ -2330,6 +2338,50 @@ def test_contradiction_adjudication_evidence_skips_when_global_or_client_setting
     assert _canonical is None
     assert obs.status == "skipped_client_setting"
     assert obs.enabled is False
+
+
+def test_tenant_contradiction_adjudication_enabled_defaults_to_true_for_missing_settings() -> None:
+    """A tenant without the contradiction_adjudication subkey is gated ON by default.
+
+    The tenant flag is a temporary stop-gap; pending its full removal, the
+    default-on behavior keeps adjudication usable for every tenant without
+    requiring manual JSON edits to ``tenant.settings``.
+    """
+    from backend.search.service import _tenant_contradiction_adjudication_enabled
+
+    class _Stub:
+        def __init__(self, settings: object) -> None:
+            self.settings = settings
+
+    assert _tenant_contradiction_adjudication_enabled(_Stub(None)) is True
+    assert _tenant_contradiction_adjudication_enabled(_Stub({})) is True
+    assert _tenant_contradiction_adjudication_enabled(_Stub({"retrieval": {}})) is True
+    assert (
+        _tenant_contradiction_adjudication_enabled(
+            _Stub({"retrieval": {"contradiction_adjudication": {}}})
+        )
+        is True
+    )
+    assert (
+        _tenant_contradiction_adjudication_enabled(
+            _Stub(
+                {"retrieval": {"contradiction_adjudication": {"enabled": True}}}
+            )
+        )
+        is True
+    )
+    # Only an explicit false opts the tenant out.
+    assert (
+        _tenant_contradiction_adjudication_enabled(
+            _Stub(
+                {"retrieval": {"contradiction_adjudication": {"enabled": False}}}
+            )
+        )
+        is False
+    )
+    # `None` tenant (no row loaded) also defaults to True so retrieval that is
+    # not tenant-scoped does not silently disable the layer.
+    assert _tenant_contradiction_adjudication_enabled(None) is True
 
 
 def test_contradiction_adjudication_evidence_uses_stable_fact_ids_and_marks_fact_limit_skip(

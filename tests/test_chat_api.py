@@ -639,3 +639,308 @@ def test_chat_faq_direct(
     # what matters is that no downstream call (retrieve_context / generate)
     # ran, which the monkeypatches above already enforce.
     assert relevance_called["count"] in (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# Async-path coverage ported from the deleted run_chat_pipeline unit tests.
+# ---------------------------------------------------------------------------
+
+
+def test_chat_not_relevant_returns_localized_reject(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Relevance guard rejects → 200 with the localized off-topic text."""
+    from types import SimpleNamespace
+
+    token = register_and_verify_user(tenant, db_session, email="chat-irrel@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Chat Irrelevant Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+
+    async def _async_no_inject(*args, **kwargs):
+        return SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        )
+
+    async def _async_relevance_off_topic(**kwargs):
+        return (False, "off_topic", None)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_no_inject,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_off_topic,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+    )
+    monkeypatch.setattr(
+        "backend.guards.reject_response.localize_text_result",
+        lambda **kwargs: LocalizationResult(
+            text="Je ne peux pas aider avec cette question.",
+            tokens_used=9,
+        ),
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "comment preparer des crepes?"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "Je ne peux pas aider avec cette question."
+    assert body["source_documents"] == []
+    assert body["tokens_used"] == 9
+
+
+def test_chat_validation_fallback_uses_insufficient_confidence_text(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """validate_answer returns is_valid=False → response uses the localized
+    INSUFFICIENT_CONFIDENCE text, raw_answer (the hallucinated one) is kept
+    on the pipeline result for trace/logging but not surfaced to the user."""
+    from types import SimpleNamespace
+
+    from backend.faq.faq_matcher import FAQMatchResult
+    from backend.search.service import default_retrieval_reliability
+
+    token = register_and_verify_user(tenant, db_session, email="chat-valfall@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Chat ValFall Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    doc_id = uuid.uuid4()
+
+    async def _async_no_inject(*args, **kwargs):
+        return SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        )
+
+    async def _async_relevance_ok(**kwargs):
+        return (True, "relevant", None)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_no_inject,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_ok,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.match_faq",
+        lambda **kwargs: FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="no_faq",
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=["some context"],
+            document_ids=[doc_id],
+            scores=[0.7],
+            mode="vector",
+            best_rank_score=0.7,
+            best_confidence_score=0.7,
+            confidence_source="vector_similarity",
+            reliability=default_retrieval_reliability(),
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: ("A hallucinated answer", 10),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.validate_answer",
+        lambda *args, **kwargs: {"is_valid": False, "confidence": 0.9, "reason": "not_grounded"},
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+    monkeypatch.setattr(
+        "backend.guards.reject_response.localize_text_result",
+        lambda **kwargs: LocalizationResult(
+            text="Je n'ai pas assez d'informations pour repondre de maniere fiable.",
+            tokens_used=13,
+        ),
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Question generale en francais"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert (
+        body["text"]
+        == "Je n'ai pas assez d'informations pour repondre de maniere fiable."
+    )
+    # tokens_used = 10 (first LLM call) + 10 (language-check retry: fr question
+    # / en answer mismatch) + 13 (fallback localization).
+    assert body["tokens_used"] == 33
+
+
+def test_chat_validates_quick_answers_as_supporting_context(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When retrieval returns no chunks but a QuickAnswer matches and the
+    LLM produces an answer that includes it, validate_answer is called with
+    the answer text itself as the supporting context chunk so it can verify
+    grounding."""
+    from types import SimpleNamespace
+
+    from backend.faq.faq_matcher import FAQMatchResult
+    from backend.models import (
+        QuickAnswer,
+        SourceSchedule,
+        SourceStatus,
+        Tenant,
+        UrlSource,
+    )
+    from backend.search.service import default_retrieval_reliability
+
+    token = register_and_verify_user(
+        tenant, db_session, email="chat-quick-validate@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Chat Quick Validate Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    client_row = db_session.get(Tenant, uuid.UUID(cl_resp.json()["id"]))
+    assert client_row is not None
+
+    source = UrlSource(
+        tenant_id=client_row.id,
+        name="Documentation",
+        url="https://docs.example.com/",
+        normalized_domain="docs.example.com",
+        status=SourceStatus.ready,
+        crawl_schedule=SourceSchedule.manual,
+        pages_indexed=0,
+        chunks_created=0,
+        tokens_used=0,
+        metadata_json={},
+    )
+    db_session.add(source)
+    db_session.flush()
+    db_session.add(
+        QuickAnswer(
+            tenant_id=client_row.id,
+            source_id=source.id,
+            key="documentation_url",
+            value="https://docs.example.com/",
+            source_url="https://docs.example.com/",
+            metadata_json={"method": "source_url"},
+        )
+    )
+    db_session.commit()
+
+    async def _async_no_inject(*args, **kwargs):
+        return SimpleNamespace(
+            detected=False, level=None, method=None, pattern=None, score=None,
+        )
+
+    async def _async_relevance_ok(**kwargs):
+        return (True, "relevant", None)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_no_inject,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_ok,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.match_faq",
+        lambda **kwargs: FAQMatchResult(
+            strategy="rag_only",
+            faq_items=[],
+            top_score=None,
+            selected_score=None,
+            selected_faq_id=None,
+            direct_guard_used=False,
+            direct_guard_passed=False,
+            decision_reason="no_faq",
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.retrieve_context",
+        lambda *args, **kwargs: RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+            reliability=default_retrieval_reliability(),
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.generate_answer",
+        lambda *args, **kwargs: ("Documentation: https://docs.example.com/", 7),
+    )
+
+    captured_contexts: list[list[str]] = []
+
+    def _validate(
+        question: str, answer: str, context_chunks: list[str], **kwargs: object
+    ) -> dict[str, object]:
+        captured_contexts.append(list(context_chunks))
+        return {"is_valid": True, "confidence": 0.95, "reason": "grounded"}
+
+    monkeypatch.setattr("backend.chat.service.validate_answer", _validate)
+    monkeypatch.setattr(
+        "backend.chat.service.should_escalate",
+        lambda *args, **kwargs: (False, None),
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Where is the documentation?"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "Documentation: https://docs.example.com/"
+    assert captured_contexts == [["Documentation: https://docs.example.com/"]]

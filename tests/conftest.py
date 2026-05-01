@@ -177,8 +177,14 @@ def tenant(engine: Engine, db_session: Session) -> Generator[TestClient, None, N
     core_db.engine = engine
     core_db.SessionLocal = TestingSessionLocal
     # Code paths that open their own session outside FastAPI dependency
-    # resolution (e.g. widget streaming worker) read AsyncSessionLocal
-    # directly — point it at the test engine for the duration of the fixture.
+    # resolution read ``AsyncSessionLocal`` directly — point it at the test
+    # engine for the duration of the fixture. This rebind is load-bearing for:
+    #   - the widget streaming worker (backend/widget/routes.py)
+    #   - the sync ``process_chat_message`` test wrapper (backend/chat/service.py),
+    #     which guards against an engine mismatch and refuses to run if this
+    #     rebind is missing — failing loudly instead of silently writing to a
+    #     different database than ``db_session`` reads from.
+    # Do not remove without updating both call sites.
     core_db.AsyncSessionLocal = _async_testing_session_factory
 
     try:

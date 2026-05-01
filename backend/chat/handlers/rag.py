@@ -1438,9 +1438,14 @@ class RagHandler(PipelineHandler):
         # stores it in ``ctx.extras`` before invoking the handler, so this
         # handler is now strictly a persistence + analytics + escalation step.
         result = ctx.extras.get("_pipeline_result")
-        assert isinstance(result, ChatPipelineResult), (
-            "RagHandler.handle requires a precomputed pipeline result"
-        )
+        if not isinstance(result, ChatPipelineResult):
+            # Use raise rather than assert so the contract still holds when
+            # the interpreter runs with -O (assertions stripped).
+            raise RuntimeError(
+                "RagHandler.handle requires a precomputed pipeline result "
+                "in ctx.extras['_pipeline_result']; _async_dispatch must run "
+                "async_run_chat_pipeline before invoking the handler."
+            )
 
         # Guard rejects and faq_direct: persist and return immediately (no escalation).
         if result.is_reject or result.is_faq_direct:

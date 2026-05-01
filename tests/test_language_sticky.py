@@ -557,17 +557,14 @@ def test_chat_escalation_uses_user_response_language(
 
     monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _escalating_pipeline)
 
-    def _create_ticket(*args, **kwargs) -> EscalationTicket:
-        # Write via whatever session the pipeline passed in (the async path's
+    def _create_ticket(
+        _tenant_id, _primary_question, _trigger, pipeline_db, **kwargs
+    ) -> EscalationTicket:
+        # Write via the session the pipeline passed in (the async path's
         # sync_session), not ``db_session`` — concurrent writes from two
-        # SQLite connections would deadlock.
-        pipeline_db = kwargs.get("db")
-        if pipeline_db is None and args:
-            # ``create_escalation_ticket`` accepts db as a positional arg.
-            for a in args:
-                if isinstance(a, Session):
-                    pipeline_db = a
-                    break
+        # SQLite connections would deadlock. The signature mirrors
+        # ``create_escalation_ticket`` (tenant_id, primary_question, trigger,
+        # db, **kwargs).
         ticket = EscalationTicket(
             tenant_id=tenant_id,
             ticket_number="ESC-TEST",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Callable
@@ -362,13 +363,16 @@ def process_chat_message(
        no loop, and async tests should not call this wrapper at all (they can
        ``await async_process_chat_message`` directly).
 
-    The caller's ``Session`` is committed before the async pipeline runs so
-    SQLite releases any locks the test setup may hold; afterwards the session
-    is expired so subsequent reads reflect writes performed on the pipeline's
-    own connection.
-    """
-    import asyncio
+    Caller's session is mutated:
 
+    - Committed on entry so SQLite releases locks before the async pipeline
+      opens its own connection (otherwise concurrent writes deadlock). **Any
+      uncommitted state staged on ``db`` before the call is therefore
+      persisted** — tests that staged data without committing must be aware.
+    - ``expire_all()``-ed on exit so subsequent reads reflect the writes the
+      pipeline made on its own connection (any in-memory ORM objects the
+      caller held are also invalidated and re-loaded on next access).
+    """
     if db is not None:
         # Defensive check: the wrapper relies on the conftest rebinding both
         # SessionLocal and AsyncSessionLocal to the same engine. If callers

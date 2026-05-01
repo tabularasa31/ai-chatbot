@@ -42,19 +42,25 @@ def test_injection_rejects_before_rag(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="inj@example.com")
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
+    async def _async_inject_detected(_text, *, tenant_id, api_key, trace=None):
+        return SimpleNamespace(
             detected=True, level=1, method="structural", pattern="x", score=None,
-        ),
+        )
+
+    async def _async_relevance_unused(**kwargs):
+        raise AssertionError("relevance called")
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_inject_detected,
     )
     monkeypatch.setattr(
         "backend.chat.service.retrieve_context",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
     )
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("relevance called")),
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_unused,
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -83,16 +89,23 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="lowmix@example.com")
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
+    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
+        return SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_no_inject,
     )
     profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
+
+    async def _async_relevance_ok(**kwargs):
+        return (True, "ok", profile)
+
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **kwargs: (True, "ok", profile),
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_ok,
     )
 
     retrieval = RetrievalContext(
@@ -144,16 +157,23 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
 ) -> None:
     cl_row, api_key = _create_client(tenant, db_session, email="lownone@example.com")
 
-    monkeypatch.setattr(
-        "backend.chat.service.detect_injection",
-        lambda _text, *, tenant_id, api_key, trace=None: SimpleNamespace(
+    async def _async_no_inject(_text, *, tenant_id, api_key, trace=None):
+        return SimpleNamespace(
             detected=False, level=None, method=None, pattern=None, score=None,
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_detect_injection",
+        _async_no_inject,
     )
     profile = SimpleNamespace(product_name="Product", topics=["ModA", "ModB"])
+
+    async def _async_relevance_ok(**kwargs):
+        return (True, "ok", profile)
+
     monkeypatch.setattr(
-        "backend.chat.service.check_relevance_with_profile",
-        lambda **kwargs: (True, "ok", profile),
+        "backend.chat.service.async_check_relevance_with_profile",
+        _async_relevance_ok,
     )
 
     retrieval = RetrievalContext(

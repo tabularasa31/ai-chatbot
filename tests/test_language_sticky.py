@@ -386,11 +386,14 @@ def _patch_process_chat_dependencies(
             {"detected": False, "level": None, "method": None, "score": None},
         )(),
     )
-    monkeypatch.setattr(
-        "backend.chat.service.run_chat_pipeline",
-        lambda *args, **kwargs: _make_pipeline_result_for_language(
+    async def _fake_async_pipeline(*args, **kwargs):
+        return _make_pipeline_result_for_language(
             kwargs["language_context"].response_language
-        ),
+        )
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_run_chat_pipeline",
+        _fake_async_pipeline,
     )
     monkeypatch.setattr("backend.chat.service._try_ingest_gap_signal", lambda **kwargs: None)
     monkeypatch.setattr("backend.chat.service._trigger_log_analysis_threshold", lambda *_args, **_kwargs: None)
@@ -534,7 +537,7 @@ def test_chat_escalation_uses_user_response_language(
         {"Как сбросить пароль": _detection("ru")},
     )
 
-    def _escalating_pipeline(*args, **kwargs) -> ChatPipelineResult:
+    async def _escalating_pipeline(*args, **kwargs) -> ChatPipelineResult:
         result = _make_pipeline_result_for_language(kwargs["language_context"].response_language)
         return ChatPipelineResult(
             raw_answer=result.raw_answer,
@@ -552,9 +555,19 @@ def test_chat_escalation_uses_user_response_language(
             escalation_trigger=type("Trigger", (), {"value": "user_request"})(),
         )
 
-    monkeypatch.setattr("backend.chat.service.run_chat_pipeline", _escalating_pipeline)
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _escalating_pipeline)
 
     def _create_ticket(*args, **kwargs) -> EscalationTicket:
+        # Write via whatever session the pipeline passed in (the async path's
+        # sync_session), not ``db_session`` — concurrent writes from two
+        # SQLite connections would deadlock.
+        pipeline_db = kwargs.get("db")
+        if pipeline_db is None and args:
+            # ``create_escalation_ticket`` accepts db as a positional arg.
+            for a in args:
+                if isinstance(a, Session):
+                    pipeline_db = a
+                    break
         ticket = EscalationTicket(
             tenant_id=tenant_id,
             ticket_number="ESC-TEST",
@@ -563,8 +576,9 @@ def test_chat_escalation_uses_user_response_language(
             chat_id=kwargs.get("chat_id"),
             session_id=kwargs.get("session_id"),
         )
-        db_session.add(ticket)
-        db_session.flush()
+        target_db = pipeline_db if pipeline_db is not None else db_session
+        target_db.add(ticket)
+        target_db.flush()
         return ticket
 
     monkeypatch.setattr("backend.chat.service.create_escalation_ticket", _create_ticket)

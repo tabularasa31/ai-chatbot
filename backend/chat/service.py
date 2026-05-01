@@ -378,8 +378,7 @@ def process_chat_message(
         # SessionLocal and AsyncSessionLocal to the same engine. If callers
         # pass a session bound elsewhere, surface it loudly instead of silently
         # writing to the wrong DB.
-        caller_engine = getattr(db, "bind", None) or getattr(db, "get_bind", lambda: None)()
-        if caller_engine is not None and caller_engine is not core_db.engine:
+        if db.get_bind() is not core_db.engine:
             raise RuntimeError(
                 "process_chat_message: caller's Session is bound to an engine "
                 "that differs from core_db.engine. The sync wrapper opens its "

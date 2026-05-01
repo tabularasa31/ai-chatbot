@@ -2409,7 +2409,7 @@ async def async_run_chat_pipeline(
         char_cap=settings.chat_history_message_char_cap,
     )
 
-    if status_callback is not None and stream_callback is not None:
+    if status_callback is not None:
         try:
             status_callback("writing")
         except Exception:

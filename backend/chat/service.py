@@ -339,16 +339,30 @@ def process_chat_message(
     bot_public_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
 ) -> ChatTurnOutcome:
-    """Sync entry point retained for tests.
+    """Sync entry point retained **only** for legacy tests that drive the
+    chat pipeline synchronously.
 
-    All production callers (chat HTTP route, widget streaming) drive the chat
-    pipeline through :func:`async_process_chat_message`. Tests that have not
-    yet been migrated to the async fixture call this wrapper, which opens its
-    own ``AsyncSession`` against ``core_db.AsyncSessionLocal`` (the test
-    fixture rebinds it to the same SQLite engine as ``db_session``) and runs
-    the async orchestrator via ``asyncio.run``.
+    Production callers (the chat HTTP route, widget streaming) use
+    :func:`async_process_chat_message` directly. New tests should do the same
+    via the ``async_db_session`` fixture. This wrapper is a thin compat shim
+    around the async orchestrator with two non-obvious requirements:
 
-    The caller's ``Session`` is committed before running the async pipeline so
+    1. ``db`` (the caller's sync ``Session``) must be bound to the same engine
+       as ``core_db.engine`` — i.e. the test conftest must have rebound
+       ``core_db.SessionLocal`` and ``core_db.AsyncSessionLocal`` to share the
+       same underlying database (the ``tenant`` fixture does this). The wrapper
+       deliberately does **not** derive an ``AsyncSession`` from ``db``: SQLite
+       prevents multiplexing one connection across sync and asyncio drivers, so
+       it opens its own ``AsyncSession`` from ``AsyncSessionLocal``. If those
+       two engines point at different databases the call will silently write
+       to one and the caller will read from the other; the assertion below
+       catches the most common form of that mismatch.
+    2. There must be no running event loop. ``asyncio.run`` raises
+       ``RuntimeError`` if called from inside one — but pytest sync tests have
+       no loop, and async tests should not call this wrapper at all (they can
+       ``await async_process_chat_message`` directly).
+
+    The caller's ``Session`` is committed before the async pipeline runs so
     SQLite releases any locks the test setup may hold; afterwards the session
     is expired so subsequent reads reflect writes performed on the pipeline's
     own connection.
@@ -356,6 +370,22 @@ def process_chat_message(
     import asyncio
 
     if db is not None:
+        # Defensive check: the wrapper relies on the conftest rebinding both
+        # SessionLocal and AsyncSessionLocal to the same engine. If callers
+        # pass a session bound elsewhere, surface it loudly instead of silently
+        # writing to the wrong DB.
+        caller_engine = getattr(db, "bind", None) or getattr(db, "get_bind", lambda: None)()
+        if caller_engine is not None and caller_engine is not core_db.engine:
+            raise RuntimeError(
+                "process_chat_message: caller's Session is bound to an engine "
+                "that differs from core_db.engine. The sync wrapper opens its "
+                "own AsyncSession against core_db.AsyncSessionLocal, so writes "
+                "would go to a different database than the caller's reads. "
+                "Use async_process_chat_message directly, or rebind "
+                "core_db.AsyncSessionLocal in your fixture (the tenant fixture "
+                "in tests/conftest.py shows the pattern)."
+            )
+
         # Flush + release any locks held by the caller's session before the
         # async pipeline opens its own connection. Without this, concurrent
         # SQLite writes raise "database is locked".
@@ -376,6 +406,16 @@ def process_chat_message(
                 bot_public_id=bot_public_id,
                 stream_callback=stream_callback,
             )
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no running loop — the expected case
+    else:
+        raise RuntimeError(
+            "process_chat_message must not be called from a running event "
+            "loop; call async_process_chat_message directly instead."
+        )
 
     try:
         return asyncio.run(_run())

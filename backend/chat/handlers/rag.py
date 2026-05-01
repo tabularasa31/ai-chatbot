@@ -1437,7 +1437,7 @@ class RagHandler(PipelineHandler):
         # ``_async_dispatch`` always pre-computes the async pipeline result and
         # stores it in ``ctx.extras`` before invoking the handler, so this
         # handler is now strictly a persistence + analytics + escalation step.
-        result = ctx.extras["_pipeline_result"]
+        result = ctx.extras.get("_pipeline_result")
         assert isinstance(result, ChatPipelineResult), (
             "RagHandler.handle requires a precomputed pipeline result"
         )

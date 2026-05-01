@@ -23,6 +23,12 @@ _escalation_times: deque[float] = deque()
 _escalation_lock = threading.Lock()
 
 
+def _reset_escalation_rate_for_tests() -> None:
+    """Clear the sliding-window deque. Call from test fixtures only."""
+    with _escalation_lock:
+        _escalation_times.clear()
+
+
 def _check_escalation_rate(tenant_public_id: str | None, bot_public_id: str | None) -> None:
     from backend.core.config import settings
 

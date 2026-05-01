@@ -27,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -242,7 +243,7 @@ class TestLanguageNotValidated:
                 return LanguageDetectionResult(detected_language="nl", confidence=0.95, is_reliable=True)
             return original_detect(text)
 
-        monkeypatch.setattr("backend.chat.service.retrieve_context", _fake_retrieve)
+        monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve))
         monkeypatch.setattr("backend.chat.service.generate_answer", _fake_generate)
         monkeypatch.setattr("backend.chat.service.validate_answer", _fake_validate)
         monkeypatch.setattr("backend.chat.handlers.rag.detect_language", _fake_detect)
@@ -511,8 +512,8 @@ class TestShortFollowupFalseEscalation:
         doc_id = uuid.uuid4()
 
         monkeypatch.setattr(
-            "backend.chat.service.retrieve_context",
-            lambda *args, **kwargs: RetrievalContext(
+            "backend.chat.service.async_retrieve_context",
+            _as_async(lambda *args, **kwargs: RetrievalContext(
                 chunk_texts=["Chat9 pricing information."],
                 document_ids=[doc_id],
                 scores=[0.015],
@@ -524,7 +525,7 @@ class TestShortFollowupFalseEscalation:
                     top_score=0.15,
                     result_count=1,
                 ),
-            ),
+            )),
         )
 
         monkeypatch.setattr(
@@ -697,7 +698,7 @@ class TestTurboFlareFalseEscalation:
 
         expected_answer = "Для удаления домена из TurboFlare обратитесь в службу поддержки."
 
-        monkeypatch.setattr("backend.chat.service.retrieve_context", _fake_retrieve)
+        monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve))
         monkeypatch.setattr(
             "backend.chat.service.generate_answer",
             lambda *a, **kw: (expected_answer, 50),

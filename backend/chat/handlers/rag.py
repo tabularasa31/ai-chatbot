@@ -55,7 +55,6 @@ from backend.chat.language import (
 )
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
-from backend.core.db import run_sync
 from backend.core.openai_client import is_reasoning_model
 from backend.core.openai_retry import call_openai_with_retry
 from backend.disclosure_config import resolve_level
@@ -2403,9 +2402,8 @@ async def async_run_chat_pipeline(
         if chat is not None and looks_like_short_followup(question):
             contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
 
-        # Use db.run_sync so: (a) aiosqlite's greenlet context is satisfied for sync
-        # DB ops, and (b) test monkeypatches on backend.chat.service.retrieve_context
-        # are honoured (same patchable path as the sync pipeline).
+        # Native async retrieval — looked up via _svc so test monkeypatches on
+        # ``backend.chat.service.async_retrieve_context`` intercept the call.
         retrieval_question = (
             contextual_retrieval_query if contextual_retrieval_query is not None else question
         )
@@ -2428,17 +2426,14 @@ async def async_run_chat_pipeline(
                 confidence_source="none",
             )
         else:
-            state.retrieval = await run_sync(
+            state.retrieval = await _svc.async_retrieve_context(
+                tenant_id,
+                retrieval_question,
                 db,
-                lambda s: _svc.retrieve_context(
-                    tenant_id,
-                    retrieval_question,
-                    s,
-                    api_key,
-                    top_k=5,
-                    trace=trace,
-                    **retrieve_kwargs,
-                ),
+                api_key,
+                top_k=5,
+                trace=trace,
+                **retrieve_kwargs,
             )
 
         # --- 6. Low-retrieval guard ---

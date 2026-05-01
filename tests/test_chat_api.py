@@ -385,8 +385,8 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
     doc_id = uuid.uuid4()
 
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=["Maximum 100 documents per account."],
             document_ids=[doc_id],
             scores=[0.0328],
@@ -394,7 +394,7 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
             best_rank_score=0.0328,
             best_confidence_score=0.94,
             confidence_source="vector_similarity",
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -535,8 +535,8 @@ def test_chat_injection_detected(
         _as_async(lambda **kwargs: (_ for _ in ()).throw(AssertionError("match_faq called"))),
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -619,8 +619,8 @@ def test_chat_faq_direct(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -684,8 +684,8 @@ def test_chat_not_relevant_returns_localized_reject(
         _async_relevance_off_topic,
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -766,8 +766,8 @@ def test_chat_validation_fallback_uses_insufficient_confidence_text(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=["some context"],
             document_ids=[doc_id],
             scores=[0.7],
@@ -776,7 +776,7 @@ def test_chat_validation_fallback_uses_insufficient_confidence_text(
             best_confidence_score=0.7,
             confidence_source="vector_similarity",
             reliability=default_retrieval_reliability(),
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -906,8 +906,8 @@ def test_chat_validates_quick_answers_as_supporting_context(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: RetrievalContext(
             chunk_texts=[],
             document_ids=[],
             scores=[],
@@ -916,7 +916,7 @@ def test_chat_validates_quick_answers_as_supporting_context(
             best_confidence_score=None,
             confidence_source="none",
             reliability=default_retrieval_reliability(),
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",

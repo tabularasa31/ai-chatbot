@@ -205,8 +205,8 @@ def test_faq_context_in_prompt(
 
     # Keep retrieval deterministic and fast.
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *_, **__: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
             scores=[0.9],
@@ -216,7 +216,7 @@ def test_faq_context_in_prompt(
             confidence_source="vector_similarity",
             reliability=build_reliability_assessment(top_score=0.9, result_count=2),
             vector_similarities=None,
-        ),
+        )),
     )
 
     faq_item = FAQRow(
@@ -289,8 +289,8 @@ def test_langfuse_faq_match_span(
     monkeypatch.setattr("backend.chat.service.should_escalate", lambda *_, **__: (False, None))
 
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *_, **__: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
             scores=[0.9],
@@ -300,7 +300,7 @@ def test_langfuse_faq_match_span(
             confidence_source="vector_similarity",
             reliability=build_reliability_assessment(top_score=0.9, result_count=2),
             vector_similarities=None,
-        ),
+        )),
     )
 
     faq_item = FAQRow(
@@ -395,8 +395,8 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *_, **__: RetrievalContext(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_, **__: RetrievalContext(
             chunk_texts=["Retrieved chunk"],
             document_ids=[uuid.uuid4()],
             scores=[0.9],
@@ -406,7 +406,7 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
             confidence_source="vector_similarity",
             reliability=build_reliability_assessment(top_score=0.9, result_count=2),
             vector_similarities=None,
-        ),
+        )),
     )
     monkeypatch.setattr("backend.chat.service.generate_answer", lambda *_, **__: ("Answer", 1))
     monkeypatch.setattr(
@@ -489,7 +489,7 @@ def test_faq_direct_skips_retrieval_and_generation(
     def _unexpected_generate(*_: object, **__: object):
         raise AssertionError("generate_answer must not be called")
 
-    monkeypatch.setattr("backend.chat.service.retrieve_context", _unexpected_retrieve)
+    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_unexpected_retrieve))
     monkeypatch.setattr("backend.chat.service.generate_answer", _unexpected_generate)
     monkeypatch.setattr("backend.chat.service.validate_answer", _unexpected_generate)
 
@@ -552,8 +552,8 @@ def test_guard_error_degrades_to_context(
     # Ensure retrieval and generation run (rag_only/direct not allowed).
     called = {"retrieval": False, "generation": False}
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *_, **__: (
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_, **__: (
             called.__setitem__("retrieval", True)
             or RetrievalContext(
                 chunk_texts=["Retrieved chunk"],
@@ -566,7 +566,7 @@ def test_guard_error_degrades_to_context(
                 reliability=build_reliability_assessment(top_score=0.9, result_count=2),
                 vector_similarities=None,
             )
-        ),
+        )),
     )
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",

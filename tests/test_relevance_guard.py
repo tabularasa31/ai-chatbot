@@ -15,6 +15,7 @@ from backend.guards.reject_response import RejectReason, build_reject_response
 from backend.models import Tenant, TenantProfile
 from backend.search.service import build_reliability_assessment
 
+from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -55,8 +56,8 @@ def test_injection_rejects_before_rag(
         _async_inject_detected,
     )
     monkeypatch.setattr(
-        "backend.chat.service.retrieve_context",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called")),
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("retrieve_context called"))),
     )
     monkeypatch.setattr(
         "backend.chat.service.async_check_relevance_with_profile",
@@ -119,7 +120,7 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         reliability=build_reliability_assessment(top_score=0.2, result_count=2),
         vector_similarities=[None, 0.1],
     )
-    monkeypatch.setattr("backend.chat.service.retrieve_context", lambda *args, **kwargs: retrieval)
+    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
@@ -187,7 +188,7 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
         reliability=build_reliability_assessment(top_score=0.2, result_count=2),
         vector_similarities=[0.1, 0.2],
     )
-    monkeypatch.setattr("backend.chat.service.retrieve_context", lambda *args, **kwargs: retrieval)
+    monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",

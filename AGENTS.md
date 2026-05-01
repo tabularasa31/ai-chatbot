@@ -12,6 +12,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 |-------|----------------|
 | Backend | Python 3.11, FastAPI 0.111, Pydantic v2 (2.5), SQLAlchemy 2.0, Alembic |
 | Database | PostgreSQL 15 with **pgvector** (production, see `docker-compose.yml`); tests may use SQLite with simplified types and Python cosine candidate acquisition, then the shared BM25/RRF/reranking retrieval flow (see `backend/models.py`, `backend/search/service.py`) |
+| Cache / coordination | Redis 7 (foundational infra: rate-limit storage, caches, distributed locks). Optional locally — see "Redis" section below. |
 | Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user` |
 | LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion, fumadocs-ui for content |
@@ -69,6 +70,35 @@ Every chat turn passes through two synchronous guards **before** LLM generation.
 Key config knobs (all in `backend/core/config.py`):
 - `INJECTION_SEMANTIC_THRESHOLD` (default 0.82), `INJECTION_SEMANTIC_TIMEOUT_SEC` (0.5), `INJECTION_SEMANTIC_ENABLED`
 - `RELEVANCE_RETRIEVAL_THRESHOLD` (0.35), `RERANKER_BYPASS_THRESHOLD` (0.5)
+
+---
+
+## Redis (`backend/core/redis.py`)
+
+Redis is **foundational infra** — used for things that need cross-worker shared state. It is wired through a single async client (`backend/core/redis.py`) opened in the FastAPI `lifespan`.
+
+| Use case | Where | Notes |
+|---|---|---|
+| **Rate-limit storage** | `backend/core/limiter.py` (slowapi `storage_uri`) | Required for correct enforcement under N workers (in-memory storage = limit × N). Tests force `memory://`. |
+| **Caches** (e.g. guard verdicts, embeddings) | `backend/core/redis.py` → `cache_get` / `cache_set_with_ttl` | Optional infra; helpers swallow connection errors and the caller treats it as a miss. |
+| **Distributed locks** (e.g. scheduled jobs, crawl throttle) | `backend/core/redis.py` → `acquire_lock` / `release_lock` | Atomic `SET NX EX` + Lua check-and-delete on release. |
+| **ARQ queue broker** (future) | — | Tracked separately; this module only provides the connection. |
+| **Idempotency keys** (future) | — | Tracked separately; will use the cache helpers. |
+
+**Configuration:**
+- `REDIS_URL` (env). Unset locally → in-memory rate-limit storage and no-op cache/lock helpers. Required in production (Railway provisions it via the Redis add-on).
+- Local dev: `docker-compose up redis` (port `6379`).
+- `/health` reports `redis: ok | unavailable | disabled` without affecting the overall `status`.
+
+**Key namespaces** (`<domain>:<purpose>:<id>`, lowercase, colon-separated):
+- `ratelimit:*` — managed by slowapi (do not touch directly)
+- `cache:guard:<sha256>` — guard-verdict caches
+- `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
+
+**Graceful degradation rules:**
+- Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
+- Locks: when `acquire_lock` returns `None` (Redis down or already held), the caller decides whether to skip or run unguarded — never block forever.
+- Rate limit: failures surface as 500s on purpose (rate limiting is a security control; silent fallback to memory storage in production would create a window where a single worker has no shared limit).
 
 ---
 

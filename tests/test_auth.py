@@ -169,10 +169,12 @@ def test_token_expiration(tenant: TestClient, db_session) -> None:
 
 
 def test_health(tenant: TestClient) -> None:
-    """Health check endpoint returns ok."""
+    """Health check endpoint returns ok and reports Redis status."""
     response = tenant.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["redis"] in {"ok", "unavailable", "disabled"}
 
 
 def test_forgot_password_returns_same_message_for_existing_and_missing_email(

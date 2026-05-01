@@ -23,6 +23,8 @@ from backend.chat.routes import chat_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
+from backend.core.redis import init_redis, redis_ping, shutdown_redis
+from backend.core.redis import is_enabled as redis_is_enabled
 from backend.documents.routes import documents_router
 from backend.embeddings.routes import embeddings_router
 from backend.escalation.routes import escalation_router
@@ -50,6 +52,7 @@ from backend.widget.routes import widget_router
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    await init_redis()
     init_observability()
     init_metrics()
     init_sentry()
@@ -63,6 +66,7 @@ async def lifespan(_: FastAPI):
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()
+        await shutdown_redis()
 
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)
@@ -167,6 +171,16 @@ app.include_router(widget_router)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "ok"}
+async def health() -> dict[str, str]:
+    """Health check endpoint.
+
+    Returns `status: ok` when the app is reachable. The `redis` field reports
+    Redis availability without affecting overall status — Redis is optional
+    infra (rate-limit storage, caches), and the chat critical path tolerates
+    its absence via graceful degradation.
+    """
+    if not redis_is_enabled():
+        redis_status = "disabled"
+    else:
+        redis_status = "ok" if await redis_ping() else "unavailable"
+    return {"status": "ok", "redis": redis_status}

@@ -115,4 +115,17 @@ def set_owner_jwt_rate_limit_key_override(
     _owner_jwt_rate_limit_key_override = fn
 
 
-limiter = Limiter(key_func=_key_func)
+def _limiter_storage_uri() -> str:
+    """Resolve slowapi storage URI.
+
+    Production with Redis configured → shared Redis storage (correct under
+    multiple workers). Tests and local dev without Redis → in-memory.
+    """
+    if settings.environment == "test":
+        return "memory://"
+    if settings.redis_url:
+        return settings.redis_url
+    return "memory://"
+
+
+limiter = Limiter(key_func=_key_func, storage_uri=_limiter_storage_uri())

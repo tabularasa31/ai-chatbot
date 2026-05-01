@@ -39,7 +39,7 @@ from backend.documents.url_service import (
     trigger_refresh,
     update_url_source,
 )
-from backend.jobs.crawl_url import enqueue_crawl_for_source
+from backend.jobs.crawl_url import enqueue_crawl_for_source_sync
 from backend.models import Document, QuickAnswer, UrlSource, UrlSourceRun, User
 from backend.observability.metrics import capture_event
 from backend.tenants.service import get_tenant_by_user
@@ -203,7 +203,7 @@ def list_knowledge_sources_route(
 
 
 @documents_router.post("/sources/url", response_model=UrlSourceResponse, status_code=201)
-async def create_url_source_route(
+def create_url_source_route(
     payload: UrlSourceCreateRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -222,16 +222,11 @@ async def create_url_source_route(
         db=db,
     )
     if tenant.openai_api_key:
-        job_id = await enqueue_crawl_for_source(
+        enqueue_crawl_for_source_sync(
             source_id=source.id,
             api_key=tenant.openai_api_key,
             tenant_id=tenant.id,
         )
-        if job_id is None:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "crawl_enqueue_skipped source_id=%s reason=redis_unavailable", source.id
-            )
     try:
         capture_event(
             "knowledge.uploaded",
@@ -312,7 +307,7 @@ def update_url_source_route(
 
 
 @documents_router.post("/sources/{source_id}/refresh", response_model=UrlSourceResponse)
-async def refresh_url_source_route(
+def refresh_url_source_route(
     source_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -323,16 +318,11 @@ async def refresh_url_source_route(
         raise HTTPException(status_code=404, detail="Tenant not found")
     source = trigger_refresh(source_id=source_id, tenant=tenant, db=db)
     if tenant.openai_api_key:
-        job_id = await enqueue_crawl_for_source(
+        enqueue_crawl_for_source_sync(
             source_id=source.id,
             api_key=tenant.openai_api_key,
             tenant_id=tenant.id,
         )
-        if job_id is None:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "crawl_enqueue_skipped source_id=%s reason=redis_unavailable", source.id
-            )
     return _url_source_response(source)
 
 

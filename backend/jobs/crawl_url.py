@@ -21,7 +21,7 @@ from arq.cron import cron
 from sqlalchemy import select
 
 from backend.core import db as core_db
-from backend.core.queue import _CRON_JOBS, enqueue, register_job
+from backend.core.queue import _CRON_JOBS, enqueue, get_main_loop, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,33 @@ async def enqueue_crawl_for_source(
         tenant_id=tenant_id,
         payload={"source_id": str(source_id)},
     )
+
+
+def enqueue_crawl_for_source_sync(
+    *,
+    source_id: uuid.UUID,
+    api_key: str,
+    tenant_id: uuid.UUID,
+) -> str | None:
+    """Sync bridge for HTTP handlers running in FastAPI's thread pool.
+
+    Submits the async enqueue coroutine to the main event loop via
+    ``asyncio.run_coroutine_threadsafe`` and waits up to 5 s for the result.
+    Returns None if the loop is unavailable (startup edge case) or on timeout.
+    """
+    loop = get_main_loop()
+    if loop is None or not loop.is_running():
+        logger.warning("crawl_enqueue_sync_skipped reason=no_loop source_id=%s", source_id)
+        return None
+    future = asyncio.run_coroutine_threadsafe(
+        enqueue_crawl_for_source(source_id=source_id, api_key=api_key, tenant_id=tenant_id),
+        loop,
+    )
+    try:
+        return future.result(timeout=5)
+    except Exception:
+        logger.warning("crawl_enqueue_sync_failed source_id=%s", source_id, exc_info=True)
+        return None
 
 
 async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:

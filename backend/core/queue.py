@@ -48,6 +48,20 @@ _CRON_JOBS: list[Any] = []
 _pool: ArqRedis | None = None
 _pool_lock = asyncio.Lock()
 
+# Stored during app lifespan startup so sync routes can submit coroutines to
+# the main event loop via asyncio.run_coroutine_threadsafe.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Store the running event loop. Called once from the app lifespan startup."""
+    global _main_loop
+    _main_loop = loop
+
+
+def get_main_loop() -> asyncio.AbstractEventLoop | None:
+    return _main_loop
+
 
 def _redis_settings_or_none() -> RedisSettings | None:
     if not settings.redis_url:

@@ -46,6 +46,7 @@ from backend.core.crypto import encrypt_value  # noqa: E402
 from backend.search.contradiction_adjudication import (  # noqa: E402
     ContradictionAdjudication,
     ContradictionAdjudicationCandidate,
+    ContradictionAdjudicationRun,
     FactAdjudicationResult,
     adjudicate_contradictions,
     build_contradiction_adjudication_run,
@@ -107,7 +108,10 @@ def _build_candidates() -> list[ContradictionAdjudicationCandidate]:
     ]
 
 
-def _evidence_from_run(run, pairs):
+def _evidence_from_run(
+    run: ContradictionAdjudicationRun,
+    pairs: tuple[ContradictionPair, ...],
+) -> ContradictionAdjudicationEvidence:
     by_id = {item.fact_id: item.adjudication for item in run.items}
     items = []
     for idx, pair in enumerate(pairs, start=1):
@@ -120,7 +124,7 @@ def _evidence_from_run(run, pairs):
     return ContradictionAdjudicationEvidence(run=run, items=tuple(items))
 
 
-def _build_mock_rejected_run() -> object:
+def _build_mock_rejected_run() -> ContradictionAdjudicationRun:
     """Synthesize a 'completed' run with verdict='rejected' for every fact.
 
     Skips the real OpenAI call; useful when only validating the cap-suppression
@@ -157,7 +161,11 @@ def _run_once(*, flag_value: bool, mock_rejected: bool) -> None:
         run = _build_mock_rejected_run()
         print("  arbiter run: (mocked) all facts → verdict='rejected'")
     else:
-        api_key = os.environ.get("OPENAI_API_KEY")
+        # Read via pydantic settings rather than os.environ — pydantic-settings
+        # loads `.env` directly and does not export those variables to the
+        # process environment, so `os.environ.get("OPENAI_API_KEY")` would miss
+        # a key defined only in `.env`.
+        api_key = settings.openai_api_key
         if not api_key:
             sys.exit("OPENAI_API_KEY must be set in the environment (or .env).")
         candidates = _build_candidates()

@@ -28,10 +28,11 @@ from typing import Any
 from arq import create_pool
 from arq.connections import ArqRedis, RedisSettings
 from arq.worker import func as arq_func
-from sqlalchemy import update
+from sqlalchemy import delete, update
+from sqlalchemy.exc import IntegrityError
 
+from backend.core import db as core_db
 from backend.core.config import settings
-from backend.core.db import AsyncSessionLocal
 from backend.models.base import _utcnow
 from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 
@@ -157,26 +158,37 @@ async def enqueue(
         logger.warning("queue_enqueue_skipped name=%s reason=redis_disabled", name)
         return None
 
+    # Insert the status row BEFORE publishing to Redis. Otherwise a fast
+    # worker can run the wrapper and its UPDATEs before the row exists,
+    # leaving an orphan ``queued`` row that never transitions.
+    arq_job_id = job_id or uuid.uuid4().hex
+    inserted = await _record_queued(
+        arq_job_id=arq_job_id,
+        kind=kind or name,
+        tenant_id=tenant_id,
+        payload=payload or {},
+        max_attempts=_REGISTERED_MAX_ATTEMPTS.get(name, 5),
+    )
+    if not inserted:
+        # Caller-supplied job_id collided with an existing row — the prior
+        # job is either still pending or has already been recorded.
+        logger.warning("queue_enqueue_duplicate name=%s job_id=%s", name, arq_job_id)
+        return None
+
     try:
-        job = await pool.enqueue_job(name, *args, _job_id=job_id, **kwargs)
-        if job is None:
-            logger.warning(
-                "queue_enqueue_duplicate name=%s job_id=%s",
-                name,
-                job_id,
-            )
-            return None
-        await _record_queued(
-            arq_job_id=job.job_id,
-            kind=kind or name,
-            tenant_id=tenant_id,
-            payload=payload or {},
-            max_attempts=_REGISTERED_MAX_ATTEMPTS.get(name, 5),
-        )
-        return job.job_id
+        job = await pool.enqueue_job(name, *args, _job_id=arq_job_id, **kwargs)
     except Exception as exc:
         logger.warning("queue_enqueue_failed name=%s: %s", name, exc)
+        await _delete_status_row(arq_job_id)
         return None
+
+    if job is None:
+        # ARQ rejected as duplicate — another producer raced us between the
+        # row insert and enqueue. Drop the orphan row.
+        logger.warning("queue_enqueue_duplicate name=%s job_id=%s", name, arq_job_id)
+        await _delete_status_row(arq_job_id)
+        return None
+    return job.job_id
 
 
 async def _record_queued(
@@ -186,8 +198,10 @@ async def _record_queued(
     tenant_id: uuid.UUID | None,
     payload: dict[str, Any],
     max_attempts: int,
-) -> None:
-    async with AsyncSessionLocal() as db:
+) -> bool:
+    """Insert a status row. Returns False when ``arq_job_id`` already exists
+    (caller-supplied dedup key collided)."""
+    async with core_db.AsyncSessionLocal() as db:
         row = BackgroundJob(
             arq_job_id=arq_job_id,
             kind=kind,
@@ -197,13 +211,26 @@ async def _record_queued(
             max_attempts=max_attempts,
         )
         db.add(row)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            return False
+    return True
+
+
+async def _delete_status_row(arq_job_id: str) -> None:
+    async with core_db.AsyncSessionLocal() as db:
+        await db.execute(
+            delete(BackgroundJob).where(BackgroundJob.arq_job_id == arq_job_id)
+        )
         await db.commit()
 
 
 async def _mark_started(arq_job_id: str, attempt: int) -> None:
     if not arq_job_id:
         return
-    async with AsyncSessionLocal() as db:
+    async with core_db.AsyncSessionLocal() as db:
         await db.execute(
             update(BackgroundJob)
             .where(BackgroundJob.arq_job_id == arq_job_id)
@@ -219,7 +246,7 @@ async def _mark_started(arq_job_id: str, attempt: int) -> None:
 async def _mark_completed(arq_job_id: str) -> None:
     if not arq_job_id:
         return
-    async with AsyncSessionLocal() as db:
+    async with core_db.AsyncSessionLocal() as db:
         await db.execute(
             update(BackgroundJob)
             .where(BackgroundJob.arq_job_id == arq_job_id)
@@ -246,7 +273,7 @@ async def _mark_failed(
         if dead_letter
         else BackgroundJobStatus.failed.value
     )
-    async with AsyncSessionLocal() as db:
+    async with core_db.AsyncSessionLocal() as db:
         values: dict[str, Any] = {
             "status": new_status,
             "attempt_count": attempt,

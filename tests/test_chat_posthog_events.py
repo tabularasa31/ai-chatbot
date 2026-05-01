@@ -179,7 +179,7 @@ def test_chat_escalated_has_trigger_and_plan_tier(monkeypatch):
     assert props["escalation_trigger"] == "no_docs"
     assert props["plan_tier"] == "enterprise"
     assert props["priority"] == "High"
-    assert props["reason"] == "no_docs"
+    assert props["escalation_reason"] == "no_docs"
 
 
 def test_chat_escalated_tenant_isolation_required():

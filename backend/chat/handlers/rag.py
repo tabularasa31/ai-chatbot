@@ -2566,19 +2566,37 @@ async def async_run_chat_pipeline(
                     output={"regenerated": True, "forced_language": q_lang.detected_language}
                 )
 
+        # Check for LLM-emitted source citations before stripping them — used to
+        # decide whether the model actually grounded its answer in retrieved context.
+        _answer_has_citations = bool(_INLINE_CITATION_RE.search(raw_answer))
         raw_answer = _strip_inline_citations(raw_answer)
 
         # --- 8. Validate answer ---
         validation_context = retrieval.chunk_texts + state.quick_answer_items
-        validation = await async_validate_answer(
-            question,
-            raw_answer,
-            validation_context,
-            api_key=api_key,
-            trace=trace,
-            metrics_tenant_id=tenant_public_id,
-            metrics_bot_id=bot_public_id,
+        _retrieval_confidence = retrieval.best_confidence_score or 0.0
+        _skip_validation = (
+            not settings.validation_always_on
+            and _retrieval_confidence >= settings.validation_confidence_threshold
+            and _answer_has_citations
         )
+        if _skip_validation:
+            validation: dict = {
+                "is_valid": True,
+                "confidence": 1.0,
+                "reason": "skipped_high_confidence",
+            }
+            validation_applied_flag = False
+        else:
+            validation = await async_validate_answer(
+                question,
+                raw_answer,
+                validation_context,
+                api_key=api_key,
+                trace=trace,
+                metrics_tenant_id=tenant_public_id,
+                metrics_bot_id=bot_public_id,
+            )
+            validation_applied_flag = True
         validation_outcome: Literal["valid", "fallback"] = "valid"
         final_answer = raw_answer
 
@@ -2609,10 +2627,10 @@ async def async_run_chat_pipeline(
             reject_reason=None,
             is_reject=False,
             is_faq_direct=False,
-            validation_applied=True,
+            validation_applied=validation_applied_flag,
             validation_outcome=validation_outcome,
             retrieval=retrieval,
-            validation=validation,
+            validation=validation if validation_applied_flag else None,
             escalation_recommended=escalate,
             escalation_trigger=esc_trigger,
             retrieval_ms=int(retrieval.retrieval_duration_ms),

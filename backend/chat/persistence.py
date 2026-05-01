@@ -36,6 +36,7 @@ def _create_message(
 ) -> Message:
     redaction = redact(content, optional_entity_types=optional_entity_types)
     message = Message(
+        id=uuid.uuid4(),
         chat_id=chat.id,
         role=role,
         content=redaction.redacted_text,
@@ -44,8 +45,11 @@ def _create_message(
         source_documents=source_documents,
     )
     db.add(message)
-    db.flush()
     if redaction.was_redacted:
+        # SQLite enforces FK at row level and SQLAlchemy's UoW does not reorder
+        # PiiEvent (FK-only, no relationship) ahead of its parent Message, so
+        # flush the Message INSERT before queuing dependent PiiEvent rows.
+        db.flush()
         for entity in redaction.entities_found:
             db.add(
                 PiiEvent(

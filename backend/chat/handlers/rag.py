@@ -67,7 +67,6 @@ from backend.models import Chat, MessageRole, TenantProfile
 from backend.observability import TraceHandle
 from backend.observability.formatters import truncate_text
 from backend.search.service import (
-    EMBEDDING_HTTP_TIMEOUT_SECONDS,
     RetrievalReliability,
     default_retrieval_reliability,
     detect_query_script_bucket,
@@ -807,7 +806,7 @@ def run_chat_pipeline(
         _svc.embed_queries,
         _base_query_variants,
         api_key=api_key,
-        timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+        timeout=settings.embedding_http_timeout_seconds,
     )
     # Semantic query rewrite runs in the same guard pool (3rd worker).
     # Guards take 1-2 s; the rewrite typically finishes within that window
@@ -944,7 +943,7 @@ def run_chat_pipeline(
         )
     try:
         base_variant_vectors = _base_embed_future.result(
-            timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS
+            timeout=settings.embedding_http_timeout_seconds + 1.0
         )
     except (
         APITimeoutError,
@@ -963,7 +962,7 @@ def run_chat_pipeline(
             extra_variant_vectors = _svc.embed_queries(
                 extra_variants,
                 api_key=api_key,
-                timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+                timeout=settings.embedding_http_timeout_seconds,
             )
             embed_api_request_count += 1
         except (APITimeoutError, APIConnectionError, RateLimitError):
@@ -2641,7 +2640,7 @@ async def async_run_chat_pipeline(
         async_embed_queries(
             list(_base_query_variants),
             api_key=api_key,
-            timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+            timeout=settings.embedding_http_timeout_seconds,
         )
     )
     _rewrite_task = asyncio.create_task(
@@ -2775,7 +2774,7 @@ async def async_run_chat_pipeline(
     try:
         base_variant_vectors = await asyncio.wait_for(
             _base_embed_task,
-            timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+            timeout=settings.embedding_http_timeout_seconds + 1.0,
         )
     except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError):
         logger.warning("async_run_chat_pipeline_embed_queries_failed", exc_info=True)
@@ -2788,7 +2787,7 @@ async def async_run_chat_pipeline(
             extra_variant_vectors = await async_embed_queries(
                 extra_variants,
                 api_key=api_key,
-                timeout=EMBEDDING_HTTP_TIMEOUT_SECONDS,
+                timeout=settings.embedding_http_timeout_seconds,
             )
             embed_api_request_count += 1
         except (APITimeoutError, APIConnectionError, RateLimitError):

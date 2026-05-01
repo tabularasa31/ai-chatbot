@@ -72,8 +72,6 @@ BM25_DEBUG_VARIANT_TEXT_MAX_LEN = 80
 # settings.openai_user_retry_budget_seconds (default 1.5s) — this value only
 # matters if the retry budget is raised above it.
 QUERY_REWRITE_HTTP_TIMEOUT_SECONDS = 3.0
-# Embeddings are fast (<1s normally); bail early and degrade to keyword search.
-EMBEDDING_HTTP_TIMEOUT_SECONDS = 5.0
 
 ReliabilityScore = Literal["low", "medium", "high"]
 ReliabilityCapReason = Literal["source_overlap", "contradiction"]
@@ -3036,7 +3034,7 @@ def search_similar_chunks_detailed(
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
     precomputed_rewritten_variant: str | None = None,
-    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
+    embedding_timeout: float | None = None,
 ) -> SearchResultBundle:
     """
     Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
@@ -3045,6 +3043,9 @@ def search_similar_chunks_detailed(
     Python cosine search. Downstream ranking and observability stages are shared.
     """
     retrieval_started_at = perf_counter()
+
+    if embedding_timeout is None:
+        embedding_timeout = settings.embedding_http_timeout_seconds
 
     q = _run_query_stage(
         query=query,
@@ -4135,7 +4136,7 @@ async def search_similar_chunks_detailed_async(
     precomputed_variant_vectors: list[list[float]] | None = None,
     precomputed_embedding_api_request_count: int | None = None,
     precomputed_rewritten_variant: str | None = None,
-    embedding_timeout: float | None = EMBEDDING_HTTP_TIMEOUT_SECONDS,
+    embedding_timeout: float | None = None,
 ) -> SearchResultBundle:
     """Async counterpart of :func:`search_similar_chunks_detailed`.
 
@@ -4144,6 +4145,9 @@ async def search_similar_chunks_detailed_async(
     parallel (``asyncio.gather``) for measurable latency savings on every turn.
     """
     retrieval_started_at = perf_counter()
+
+    if embedding_timeout is None:
+        embedding_timeout = settings.embedding_http_timeout_seconds
 
     q = await _async_run_query_stage(
         query=query,

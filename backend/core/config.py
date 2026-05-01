@@ -318,8 +318,13 @@ class Settings(BaseSettings):
         alias="INJECTION_SEMANTIC_THRESHOLD",
     )
     injection_semantic_timeout_sec: float = Field(
-        0.5,
+        2.0,
         alias="INJECTION_SEMANTIC_TIMEOUT_SEC",
+    )
+    embedding_http_timeout_seconds: float = Field(
+        10.0,
+        alias="EMBEDDING_HTTP_TIMEOUT_SECONDS",
+        description="Read timeout (seconds) for OpenAI embedding HTTP calls in the RAG hot path.",
     )
     injection_semantic_enabled: bool = Field(
         True,

@@ -27,6 +27,7 @@ email-validator==2.1.0
 pytest-cov==4.1.0
 slowapi==0.1.9
 redis>=5.0,<6
+coredis>=3.4,<5
 cryptography==42.0.5
 pgvector>=0.2.0
 asyncpg>=0.29.0

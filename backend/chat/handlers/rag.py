@@ -295,16 +295,33 @@ class ChatPipelineResult:
 # ---------------------------------------------------------------------------
 
 
+_KB_CONFIDENCE_RANK: dict[KbConfidence, int] = {"low": 0, "medium": 1, "high": 2}
+
+
+def _floor_kb_confidence(raw: KbConfidence, ceiling: KbConfidence) -> KbConfidence:
+    """Return the lower of two KbConfidence tiers."""
+    if _KB_CONFIDENCE_RANK[ceiling] < _KB_CONFIDENCE_RANK[raw]:
+        return ceiling
+    return raw
+
+
 def _classify_kb_confidence(retrieval: RetrievalContext | None) -> KbConfidence:
-    """Map retrieval confidence score to the three-tier KbConfidence used by decide()."""
+    """Map retrieval confidence score to the three-tier KbConfidence used by decide().
+
+    The raw similarity-based tier is floored by `retrieval.reliability.score` so
+    that contradiction caps (`low`) and source_overlap caps (`medium`) reach the
+    decision engine. Without this floor, caps live only in observability.
+    """
     if retrieval is None or retrieval.best_confidence_score is None:
         return "low"
     score = retrieval.best_confidence_score
     if score >= _ESCALATION_THRESHOLD:
-        return "high"
-    if score >= LOW_CONFIDENCE_THRESHOLD:
-        return "medium"
-    return "low"
+        raw: KbConfidence = "high"
+    elif score >= LOW_CONFIDENCE_THRESHOLD:
+        raw = "medium"
+    else:
+        raw = "low"
+    return _floor_kb_confidence(raw, retrieval.reliability.score)
 
 
 def _quick_answer_quality_score(answer: Any) -> tuple[int, int, int]:
@@ -2217,7 +2234,9 @@ class RagHandler(PipelineHandler):
             # partial answer. Low-confidence chunks are too unreliable to caveat from;
             # the budget-exhausted path escalates instead (clarify_loop_limit).
             kb_has_partial_answer=_kb_confidence == "medium" and bool(chunk_texts),
-            kb_contradiction_detected=False,  # not yet propagated from search layer (v1)
+            kb_contradiction_detected=(
+                retrieval.reliability.cap_reason == "contradiction"
+            ),
             low_retrieval_no_chunks=not chunk_texts,
         )
         _decision: Decision = decide(_turn_ctx)

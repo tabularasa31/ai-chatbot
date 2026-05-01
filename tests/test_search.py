@@ -1817,6 +1817,197 @@ def test_build_reliability_assessment_keeps_contradiction_reason_when_base_score
     }
 
 
+def _build_adjudication_evidence(
+    pairs: tuple[ContradictionPair, ...],
+    verdicts: tuple[str | None, ...],
+    *,
+    status: str = "completed",
+    sent_count: int | None = None,
+    skip_reasons: tuple[str | None, ...] | None = None,
+) -> ContradictionAdjudicationEvidence:
+    """Build adjudication evidence for the given pairs and per-fact verdicts."""
+    items: list[AdjudicatedContradiction] = []
+    for index, (pair, verdict) in enumerate(zip(pairs, verdicts), start=1):
+        skip_reason = (
+            skip_reasons[index - 1] if skip_reasons and index - 1 < len(skip_reasons) else None
+        )
+        adj = ContradictionAdjudication(
+            verdict=verdict,
+            model="gpt-4.1-mini",
+            skip_reason=skip_reason,
+        )
+        items.append(
+            AdjudicatedContradiction(
+                fact_id=f"fact_{index:03d}",
+                pair=pair,
+                adjudication=adj,
+            )
+        )
+    sent = sent_count if sent_count is not None else sum(1 for v in verdicts if v is not None)
+    rejected = sum(1 for v in verdicts if v == "rejected")
+    confirmed = sum(1 for v in verdicts if v == "confirmed")
+    inconclusive = sum(1 for v in verdicts if v == "inconclusive")
+    run = build_contradiction_adjudication_run(
+        enabled=True,
+        status=status,
+        candidate_count=len(pairs),
+        sent_count=sent,
+        completed_count=sent,
+        confirmed_count=confirmed,
+        rejected_count=rejected,
+        inconclusive_count=inconclusive,
+        model="gpt-4.1-mini",
+        applied_to_any_fact=True,
+    )
+    return ContradictionAdjudicationEvidence(run=run, items=tuple(items))
+
+
+def _two_facts_same_pair() -> tuple[ContradictionPair, ContradictionPair]:
+    return (
+        ContradictionPair(
+            chunk_a_id="a",
+            chunk_b_id="b",
+            basis="effective_date",
+            value_a="2024-03-01",
+            value_b="2025-03-01",
+        ),
+        ContradictionPair(
+            chunk_a_id="a",
+            chunk_b_id="b",
+            basis="version",
+            value_a="v2",
+            value_b="v3",
+        ),
+    )
+
+
+def test_adjudication_does_not_drop_cap_when_filter_flag_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        False,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(pairs, ("rejected", "rejected"))
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+    assert reliability.score == "low"
+
+
+def test_adjudication_drops_cap_when_all_rejected_and_flag_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        True,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(pairs, ("rejected", "rejected"))
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap is None
+    assert reliability.cap_reason is None
+    assert reliability.score == "high"
+    # Effective contradiction pairs are still surfaced as evidence/signal for traces.
+    assert reliability.evidence.contradiction is not None
+    assert any(signal.kind == "contradiction" for signal in reliability.signals)
+
+
+def test_adjudication_keeps_cap_when_any_verdict_is_confirmed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        True,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(pairs, ("rejected", "confirmed"))
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+
+
+def test_adjudication_keeps_cap_when_any_verdict_is_inconclusive(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        True,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(pairs, ("rejected", "inconclusive"))
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+
+
+def test_adjudication_keeps_cap_on_failed_open_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        True,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(
+        pairs, ("rejected", "rejected"), status="failed_open"
+    )
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+
+
+def test_adjudication_keeps_cap_when_some_facts_unjudged(monkeypatch) -> None:
+    """Partial coverage (skip_reason on one fact) blocks cap suppression."""
+    monkeypatch.setattr(
+        "backend.search.service.settings.contradiction_adjudication_filter_cap_enabled",
+        True,
+    )
+    pairs = _two_facts_same_pair()
+    evidence = _build_adjudication_evidence(
+        pairs,
+        ("rejected", None),
+        sent_count=1,
+        skip_reasons=(None, "fact_limit"),
+    )
+
+    reliability = build_reliability_assessment(
+        top_score=0.9,
+        result_count=5,
+        contradiction_pairs=pairs,
+        contradiction_adjudication=evidence,
+    )
+
+    assert reliability.cap == "low"
+    assert reliability.cap_reason == "contradiction"
+
+
 def test_build_reliability_projection_does_not_mutate_canonical_object() -> None:
     reliability = build_reliability_assessment(
         top_score=0.9,

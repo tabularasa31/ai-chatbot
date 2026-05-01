@@ -149,6 +149,10 @@ class Settings(BaseSettings):
         500,
         alias="CONTRADICTION_ADJUDICATION_MAX_TOKENS",
     )
+    contradiction_adjudication_filter_cap_enabled: bool = Field(
+        False,
+        alias="CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED",
+    )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
     language_detection_reliability_threshold: float = Field(
         0.7,

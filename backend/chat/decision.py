@@ -18,8 +18,6 @@ Block rules (evaluated in order, first match wins):
 v1 limitations (intentional, documented):
   - No intent classifier: ambiguous_intent and missing_critical_slot reasons
     are never emitted. Extend decide() when a classifier is added.
-  - kb_contradiction_detected is not yet populated by the pipeline; it is
-    always False until search/service.py propagates the contradiction flag.
 """
 
 from __future__ import annotations
@@ -95,7 +93,7 @@ class TurnContext:
     # KB / retrieval signals
     kb_confidence: KbConfidence = "low"
     kb_has_partial_answer: bool = False
-    kb_contradiction_detected: bool = False  # not yet populated — always False in v1
+    kb_contradiction_detected: bool = False
 
     # True when retrieval returned zero chunks (guides escalation over clarify)
     low_retrieval_no_chunks: bool = False
@@ -143,8 +141,8 @@ def _allowed_clarify_reason(turn: TurnContext) -> ClarifyReason | None:
     """Return the first applicable allowed clarify reason, or None.
 
     v1 sources (no intent classifier):
-      - multiple_conflicting_matches: kb_contradiction_detected (always False until
-        the search layer propagates this — future work)
+      - multiple_conflicting_matches: kb_contradiction_detected, populated from
+        retrieval.reliability.cap_reason == "contradiction" upstream
       - low_retrieval_confidence: confidence is LOW and we have some chunks
         (zero-chunk case escalates directly as low_confidence_no_path)
     """

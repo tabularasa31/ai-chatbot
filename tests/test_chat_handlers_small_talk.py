@@ -184,7 +184,7 @@ def test_handle_persists_both_user_and_assistant_messages(
     ctx = _make_handler_context(
         db=db_session, tenant=tenant, chat=chat, question_text="hi"
     )
-    outcome = SmallTalkHandler().handle(ctx)
+    outcome = SmallTalkHandler()._handle_sync(ctx, db_session)
 
     assert outcome.text == "Hi there, I am the Acme assistant."
     assert outcome.tokens_used == 8

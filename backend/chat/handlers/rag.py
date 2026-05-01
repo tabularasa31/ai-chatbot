@@ -1427,7 +1427,15 @@ class RagHandler(PipelineHandler):
         # else falls through to RAG once earlier handlers decline.
         return bool(ctx.question_text)
 
-    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
+    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
+        from backend.core.db import run_sync
+
+        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+
+    def _handle_sync(
+        self, ctx: HandlerContext, sync_db: Session
+    ) -> ChatTurnOutcome:
+        ctx.db = sync_db
         from time import perf_counter
 
         from backend.chat import service as _svc

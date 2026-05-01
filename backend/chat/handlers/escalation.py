@@ -21,6 +21,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
@@ -69,7 +71,13 @@ class EscalationStateMachine(PipelineHandler):
         # contained for tests.
         return bool(detect_human_request(ctx.redacted_question, ctx.api_key))
 
-    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+        from backend.core.db import run_sync
+
+        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+
+    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
+        ctx.db = sync_db
         chat = ctx.chat
         if chat.ended_at is not None:
             return self._handle_chat_closed(ctx)
@@ -83,10 +91,11 @@ class EscalationStateMachine(PipelineHandler):
         if chat.escalation_followup_pending:
             return self._handle_followup_yes_no(ctx)
         # Explicit human request (T-3) — only fires when the user actually
-        # asked for a human. Without this gate, a stale-pointer recovery (vanished
-        # awaiting-ticket cleared above) would mint a fresh escalation ticket on
-        # any ordinary reply, which the legacy inline flow did not do. Returns
-        # None on failure so the router retries with RagHandler.
+        # asked for a human. Without this gate, a stale-pointer recovery
+        # (vanished awaiting-ticket cleared above) would mint a fresh
+        # escalation ticket on any ordinary reply, which the legacy inline
+        # flow did not do. Returns None on failure so the router retries
+        # with RagHandler.
         if ctx.explicit_human_request:
             return self._handle_explicit_request(ctx)
         return None

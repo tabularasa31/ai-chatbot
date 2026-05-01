@@ -119,7 +119,7 @@ def test_handle_produces_outcome_and_persists_only_assistant_message(
     )
 
     ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
-    outcome = GreetingHandler().handle(ctx)
+    outcome = GreetingHandler()._handle_sync(ctx, db_session)
 
     assert outcome.text == "Hello, I am the Acme assistant."
     assert outcome.tokens_used == 7

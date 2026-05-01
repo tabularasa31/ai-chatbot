@@ -1956,6 +1956,38 @@ async def async_validate_answer(
     return await asyncio.to_thread(_svc.validate_answer, question, answer, context_chunks, **kwargs)
 
 
+@dataclass
+class _PipelineState:
+    """Mutable state shared across the three pipeline stages.
+
+    Read-only inputs (``tenant_id``, ``api_key``, callbacks, …) stay as
+    closure variables on ``async_run_chat_pipeline``; this dataclass only
+    holds values that one stage *produces* and a later stage *consumes*.
+    """
+
+    # Pre-retrieval outputs
+    query_script: str = ""
+    kb_scripts: list[str] = field(default_factory=list)
+    cross_lingual_triggered: bool = False
+    cross_lingual_variants_added: int = 0
+    query_kb_language_match: Literal["native", "mismatch", "unknown"] = "unknown"
+    query_variants: list[str] = field(default_factory=list)
+    variant_vectors: list[list[float]] = field(default_factory=list)
+    embed_api_request_count: int = 0
+    rewritten_variant: str | None = None
+    faq_match: FAQMatchResult | None = None
+    profile: TenantProfile | None = None
+    client_product_name: str | None = None
+    topic_hint: str | None = None
+    faq_context_items: list[FAQRow] | None = None
+    quick_answer_items: list[str] = field(default_factory=list)
+    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = "rag_only"
+
+    # Retrieval outputs
+    retrieval: RetrievalContext | None = None
+    reranker_rescued: bool = False
+
+
 async def async_run_chat_pipeline(
     tenant_id: uuid.UUID,
     question: str,
@@ -1982,6 +2014,20 @@ async def async_run_chat_pipeline(
     Guards and embeddings run concurrently as ``asyncio.create_task``, so they
     do not tie up OS threads. On injection detected, running tasks are cancelled via
     ``task.cancel()``.
+
+    The body is split into three nested stages that share a ``_PipelineState``
+    dataclass:
+
+    * :func:`_run_pre_retrieval_concurrent` — KB-script detection, injection
+      guard, query embedding, FAQ matching, relevance pre-check.
+    * :func:`_run_retrieval` — vector + lexical retrieval and the
+      low-retrieval guard.
+    * :func:`_run_generation` — LLM answer, language-mismatch retry, validation
+      and escalation decision.
+
+    Each stage returns ``ChatPipelineResult | None`` — a non-``None`` value
+    short-circuits the pipeline (reject paths, ``faq_direct``); ``None`` means
+    "continue to the next stage".
     """
     # Async helpers are looked up via the service module so that tests' monkey-
     # patches against ``backend.chat.service.<name>`` (e.g.
@@ -2004,553 +2050,596 @@ async def async_run_chat_pipeline(
             browser_locale=None,
         )
 
-    # Pre-fetch guard profile; use preloaded value if supplied by caller.
-    _guard_profile = guard_profile if guard_profile is not None else await db.get(TenantProfile, tenant_id)
-    _rewrite_task: asyncio.Task[str | None] | None = None
-    _rewritten_variant: str | None = None
+    state = _PipelineState()
 
-    _kb_scripts = await _svc.async_detect_tenant_kb_scripts(tenant_id, db)
-    _query_script = detect_query_script_bucket(question)
-    _cross_lingual_tasks: list[asyncio.Task[str | None]] = []
+    async def _run_pre_retrieval_concurrent() -> ChatPipelineResult | None:
+        """Stage 1: KB-script detection, concurrent guards/embeds, FAQ, relevance.
 
-    _base_query_variants = _svc.expand_query(question)
-
-    # Launch guard + embedding tasks concurrently — event loop handles all I/O.
-    _rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
-        async_check_relevance_with_profile(
-            tenant_id=tenant_id,
-            user_question=question,
-            profile=_guard_profile,
-            api_key=api_key,
-            trace=trace,
+        Launches the relevance guard, base embedding and semantic-rewrite tasks
+        in parallel before awaiting the (synchronous-relative) injection guard,
+        so I/O overlaps. On injection / FAQ-direct / not-relevant the stage
+        returns a terminal :class:`ChatPipelineResult`; otherwise it populates
+        ``state`` with retrieval inputs and returns ``None``.
+        """
+        # Pre-fetch guard profile; use preloaded value if supplied by caller.
+        _guard_profile = (
+            guard_profile if guard_profile is not None else await db.get(TenantProfile, tenant_id)
         )
-    )
-    _base_embed_task: asyncio.Task[list[list[float]]] = asyncio.create_task(
-        async_embed_queries(
-            list(_base_query_variants),
-            api_key=api_key,
-            timeout=settings.embedding_http_timeout_seconds,
-        )
-    )
-    _rewrite_task = asyncio.create_task(
-        async_semantic_query_rewrite(
-            question,
-            api_key=api_key,
-            timeout=settings.semantic_query_rewrite_timeout_sec,
-            bot_id=retry_bot_id,
-        )
-    )
+        rewrite_task: asyncio.Task[str | None] | None = None
 
-    _target_kb_scripts = [s for s in _kb_scripts if s != _query_script]
-    _cross_lingual_triggered = len(_target_kb_scripts) > 0
-    _cross_lingual_variants_added = 0
-    if not _kb_scripts or _query_script == "other":
-        _query_kb_language_match = "unknown"
-    elif _query_script in _kb_scripts:
-        _query_kb_language_match = "native"
-    else:
-        _query_kb_language_match = "mismatch"
-    for _target_script in _target_kb_scripts:
-        _cross_lingual_tasks.append(
-            asyncio.create_task(
-                async_semantic_query_rewrite_for_kb(
-                    question,
-                    kb_script=_target_script,
-                    api_key=api_key,
-                    timeout=settings.semantic_query_rewrite_timeout_sec,
-                    bot_id=retry_bot_id,
-                )
+        state.kb_scripts = await _svc.async_detect_tenant_kb_scripts(tenant_id, db)
+        state.query_script = detect_query_script_bucket(question)
+        cross_lingual_tasks: list[asyncio.Task[str | None]] = []
+
+        base_query_variants = _svc.expand_query(question)
+
+        # Launch guard + embedding tasks concurrently — event loop handles all I/O.
+        rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
+            async_check_relevance_with_profile(
+                tenant_id=tenant_id,
+                user_question=question,
+                profile=_guard_profile,
+                api_key=api_key,
+                trace=trace,
             )
         )
-
-    injection_result = await async_detect_injection(
-        question,
-        tenant_id=str(tenant_id),
-        api_key=api_key,
-        trace=trace,
-    )
-
-    async def _cancel_background_tasks() -> None:
-        """Cancel all still-running background tasks and drain CancelledErrors."""
-        tasks_to_cancel: list[asyncio.Task] = [_rel_task, _base_embed_task]
-        if _rewrite_task is not None:
-            tasks_to_cancel.append(_rewrite_task)
-        tasks_to_cancel.extend(_cross_lingual_tasks)
-        for _t in tasks_to_cancel:
-            if not _t.done():
-                _t.cancel()
-        if tasks_to_cancel:
-            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-    if not injection_result.detected and status_callback is not None:
-        try:
-            status_callback("searching")
-        except Exception:
-            logger.debug("status_callback(searching) failed", exc_info=True)
-
-    if injection_result.detected:
-        await _cancel_background_tasks()
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INJECTION_DETECTED,
-            profile=None,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="injection",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            language_context=language_context,
-        )
-
-    # --- 2. Embed queries ---
-    _embed_start = perf_counter()
-    query_variants = list(_base_query_variants)
-    extra_variants: list[str] = []
-
-    _rewrite_collect_start = perf_counter()
-    if _rewrite_task is not None:
-        try:
-            _rewritten_variant = await asyncio.wait_for(
-                _rewrite_task,
-                timeout=settings.semantic_query_rewrite_timeout_sec,
-            )
-            if _rewritten_variant and _rewritten_variant.casefold() not in {
-                v.casefold() for v in query_variants
-            }:
-                extra_variants.append(_rewritten_variant)
-        except Exception:
-            _rewritten_variant = None
-    if trace is not None:
-        _rewrite_span = trace.span(name="query_rewrite")
-        _rewrite_span.end(
-            output={
-                "rewritten": _rewritten_variant is not None,
-                "variant_preview": _rewritten_variant[:100] if _rewritten_variant else None,
-            },
-            metadata={"wait_ms": round((perf_counter() - _rewrite_collect_start) * 1000, 2)},
-        )
-
-    for _cl_task in _cross_lingual_tasks:
-        try:
-            _cross_lingual_variant = await asyncio.wait_for(
-                _cl_task,
-                timeout=settings.semantic_query_rewrite_timeout_sec,
-            )
-        except Exception:
-            continue
-        if _cross_lingual_variant and _cross_lingual_variant.casefold() not in {
-            v.casefold() for v in (*query_variants, *extra_variants)
-        }:
-            extra_variants.append(_cross_lingual_variant)
-            _cross_lingual_variants_added += 1
-
-    if trace is not None:
-        _embed_span = trace.span(
-            name="query-embedding",
-            input={
-                "query_variants": [*query_variants, *extra_variants],
-                "query_variant_count": len(query_variants) + len(extra_variants),
-                "variant_mode": "multi" if (len(query_variants) + len(extra_variants)) > 1 else "single",
-                "upstream_precomputed": True,
-            },
-        )
-
-    try:
-        base_variant_vectors = await asyncio.wait_for(
-            _base_embed_task,
-            timeout=settings.embedding_http_timeout_seconds + 1.0,
-        )
-    except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError):
-        logger.warning("async_run_chat_pipeline_embed_queries_failed", exc_info=True)
-        base_variant_vectors = []
-
-    embed_api_request_count = 1 if base_variant_vectors else 0
-    extra_variant_vectors: list[list[float]] = []
-    if extra_variants and base_variant_vectors:
-        try:
-            extra_variant_vectors = await async_embed_queries(
-                extra_variants,
+        base_embed_task: asyncio.Task[list[list[float]]] = asyncio.create_task(
+            async_embed_queries(
+                list(base_query_variants),
                 api_key=api_key,
                 timeout=settings.embedding_http_timeout_seconds,
             )
-            embed_api_request_count += 1
-        except (APITimeoutError, APIConnectionError, RateLimitError):
-            logger.warning("async_run_chat_pipeline_embed_extras_failed", exc_info=True)
-            extra_variant_vectors = []
-
-    if extra_variant_vectors and len(extra_variant_vectors) == len(extra_variants):
-        query_variants = [*query_variants, *extra_variants]
-        variant_vectors = [*base_variant_vectors, *extra_variant_vectors]
-    else:
-        variant_vectors = base_variant_vectors
-
-    if trace is not None:
-        _embed_span.end(
-            output={
-                "embedded_query_count": len(variant_vectors),
-                "extra_embedded_queries": max(len(variant_vectors) - 1, 0),
-                "embedding_api_request_count": embed_api_request_count,
-                "extra_embedding_api_requests": max(embed_api_request_count - 1, 0),
-                "duration_ms": round((perf_counter() - _embed_start) * 1000, 2),
-                "upstream_precomputed": True,
-            }
         )
-    base_question_embedding = variant_vectors[0] if variant_vectors else []
-
-    # --- 3. FAQ matching ---
-    try:
-        faq_match = await _svc.async_match_faq(
-            tenant_id=tenant_id,
-            question=question,
-            question_embedding=base_question_embedding,
-            db=db,
-        )
-    except Exception:
-        faq_match = FAQMatchResult(
-            strategy="rag_only",
-            faq_items=[],
-            top_score=None,
-            selected_score=None,
-            selected_faq_id=None,
-            direct_guard_used=False,
-            direct_guard_passed=False,
-            decision_reason="faq_match_error_degraded_to_rag_only",
-        )
-
-    if trace is not None:
-        _faq_span = trace.span(name="faq_match", input={"question_preview": question[:80]})
-        _retrieval_skipped = faq_match.strategy == "faq_direct"
-        _faq_span.end(
-            metadata={
-                "tenant_id": str(tenant_id),
-                "strategy": faq_match.strategy,
-                "top_score": faq_match.top_score,
-                "selected_score": faq_match.selected_score,
-                "faq_ids": [str(item.id) for item in faq_match.faq_items],
-                "selected_faq_id": faq_match.selected_faq_id,
-                "direct_guard_used": faq_match.direct_guard_used,
-                "direct_guard_passed": faq_match.direct_guard_passed,
-                "decision_reason": faq_match.decision_reason,
-                "retrieval_skipped": _retrieval_skipped,
-                "generation_skipped": _retrieval_skipped,
-            },
-        )
-
-    if faq_match.strategy == "faq_direct":
-        if not _rel_task.done():
-            _rel_task.cancel()
-            await asyncio.gather(_rel_task, return_exceptions=True)
-        direct_answer_result = render_direct_faq_answer_result(
-            answer_text=faq_match.faq_items[0].answer if faq_match.faq_items else "",
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=direct_answer_result.text,
-            final_answer=direct_answer_result.text,
-            tokens_used=direct_answer_result.tokens_used,
-            strategy="faq_direct",
-            reject_reason=None,
-            is_reject=False,
-            is_faq_direct=True,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    # --- 4. Relevance pre-check ---
-    try:
-        relevant, _, profile = await _rel_task
-    except asyncio.CancelledError:
-        relevant, profile = True, _guard_profile
-
-    if not relevant:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.NOT_RELEVANT,
-            profile=profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="not_relevant",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=None,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    client_product_name: str | None = profile.product_name if profile else None
-    topic_hint: str | None = None
-    if profile and isinstance(profile.topics, list) and profile.topics:
-        topic_hint = ", ".join([str(m) for m in profile.topics[:3] if str(m).strip()])
-
-    faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
-    selected_quick_answer_keys = _quick_answer_keys_for_question(question)
-    quick_answer_items = (
-        await _svc._async_lookup_quick_answers(tenant_id, selected_quick_answer_keys, db)
-        if selected_quick_answer_keys
-        else []
-    )
-    if selected_quick_answer_keys:
-        _emit_quick_answer_lookup_event(
-            selected_keys=selected_quick_answer_keys,
-            matched_count=len(quick_answer_items),
-            text_length=len(question),
-            tenant_public_id=tenant_public_id,
-            bot_public_id=bot_public_id,
-            chat_id=chat_id,
-        )
-    strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"] = (
-        "faq_context" if faq_context_items else "rag_only"
-    )
-
-    # --- 5. Retrieve context ---
-    _contextual_retrieval_query: str | None = None
-    if chat is not None and looks_like_short_followup(question):
-        _contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
-
-    # Use db.run_sync so: (a) aiosqlite's greenlet context is satisfied for sync
-    # DB ops, and (b) test monkeypatches on backend.chat.service.retrieve_context
-    # are honoured (same patchable path as the sync pipeline).
-    _retrieval_question = _contextual_retrieval_query if _contextual_retrieval_query is not None else question
-    _retrieve_kwargs: dict[str, Any] = {}
-    if _contextual_retrieval_query is None:
-        _retrieve_kwargs = dict(
-            precomputed_query_variants=query_variants,
-            precomputed_variant_vectors=variant_vectors,
-            precomputed_embedding_api_request_count=embed_api_request_count,
-            rewritten_variant=_rewritten_variant,
-        )
-    if not variant_vectors:
-        retrieval = RetrievalContext(
-            chunk_texts=[],
-            document_ids=[],
-            scores=[],
-            mode="none",
-            best_rank_score=None,
-            best_confidence_score=None,
-            confidence_source="none",
-        )
-    else:
-        retrieval = await run_sync(
-            db,
-            lambda s: _svc.retrieve_context(
-                tenant_id,
-                _retrieval_question,
-                s,
-                api_key,
-                top_k=5,
-                trace=trace,
-                **_retrieve_kwargs,
-            ),
-        )
-
-    # --- 6. Low-retrieval guard ---
-    threshold = settings.relevance_retrieval_threshold
-    _reranker_rescued = (
-        retrieval.best_rank_score is not None
-        and retrieval.best_rank_score >= settings.reranker_bypass_threshold
-    )
-
-    if (
-        not _reranker_rescued
-        and retrieval.vector_similarities is not None
-        and retrieval.vector_similarities
-        and all(sim is not None for sim in retrieval.vector_similarities)
-        and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
-    ):
-        reject_result = build_reject_response_result(
-            reason=RejectReason.LOW_RETRIEVAL_SCORE,
-            profile=profile,
-            response_language=language_context.response_language,
-            api_key=api_key,
-            question=question,
-        )
-        return ChatPipelineResult(
-            raw_answer=reject_result.text,
-            final_answer=reject_result.text,
-            tokens_used=reject_result.tokens_used,
-            strategy="guard_reject",
-            reject_reason="low_retrieval",
-            is_reject=True,
-            is_faq_direct=False,
-            validation_applied=False,
-            validation_outcome=None,
-            retrieval=retrieval,
-            validation=None,
-            escalation_recommended=False,
-            escalation_trigger=None,
-            faq_match=faq_match,
-            language_context=language_context,
-        )
-
-    # --- 7. Generate answer ---
-    _prior_messages = _build_prior_messages_for_llm(
-        chat,
-        max_messages=settings.chat_history_turns,
-        char_cap=settings.chat_history_message_char_cap,
-    )
-
-    if status_callback is not None:
-        try:
-            status_callback("writing")
-        except Exception:
-            logger.debug("status_callback(writing) failed", exc_info=True)
-
-    _llm_start = perf_counter()
-    raw_answer, tokens_used = await async_generate_answer(
-        question,
-        retrieval.chunk_texts,
-        api_key=api_key,
-        response_language=language_context.response_language,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_config,
-        client_product_name=client_product_name,
-        topic_hint=topic_hint,
-        faq_context_items=faq_context_items,
-        quick_answer_items=quick_answer_items,
-        agent_instructions=agent_instructions,
-        low_context=not _reranker_rescued and retrieval.reliability.score == "low",
-        allow_clarification=allow_clarification,
-        trace=trace,
-        retry_bot_id=retry_bot_id,
-        stream_callback=stream_callback,
-        metrics_tenant_id=tenant_public_id,
-        metrics_bot_id=bot_public_id,
-        prior_messages=_prior_messages,
-    )
-    _llm_ms = int((perf_counter() - _llm_start) * 1000)
-
-    # --- 7b. Language check ---
-    _q_lang = detect_language(question)
-    _a_lang = detect_language(raw_answer)
-    if (
-        _q_lang.is_reliable
-        and _a_lang.is_reliable
-        and _q_lang.detected_language not in ("unknown", "en")
-        and _a_lang.detected_language != "unknown"
-        and _q_lang.detected_language != _a_lang.detected_language
-    ):
-        _lang_span = None
-        if trace is not None:
-            _lang_span = trace.span(
-                name="language-check",
-                input={"question_lang": _q_lang.detected_language, "answer_lang": _a_lang.detected_language},
+        rewrite_task = asyncio.create_task(
+            async_semantic_query_rewrite(
+                question,
+                api_key=api_key,
+                timeout=settings.semantic_query_rewrite_timeout_sec,
+                bot_id=retry_bot_id,
             )
-        _retry_answer, _retry_tokens = await async_generate_answer(
+        )
+
+        target_kb_scripts = [s for s in state.kb_scripts if s != state.query_script]
+        state.cross_lingual_triggered = len(target_kb_scripts) > 0
+        if not state.kb_scripts or state.query_script == "other":
+            state.query_kb_language_match = "unknown"
+        elif state.query_script in state.kb_scripts:
+            state.query_kb_language_match = "native"
+        else:
+            state.query_kb_language_match = "mismatch"
+        for target_script in target_kb_scripts:
+            cross_lingual_tasks.append(
+                asyncio.create_task(
+                    async_semantic_query_rewrite_for_kb(
+                        question,
+                        kb_script=target_script,
+                        api_key=api_key,
+                        timeout=settings.semantic_query_rewrite_timeout_sec,
+                        bot_id=retry_bot_id,
+                    )
+                )
+            )
+
+        injection_result = await async_detect_injection(
+            question,
+            tenant_id=str(tenant_id),
+            api_key=api_key,
+            trace=trace,
+        )
+
+        async def _cancel_background_tasks() -> None:
+            """Cancel all still-running background tasks and drain CancelledErrors."""
+            tasks_to_cancel: list[asyncio.Task] = [rel_task, base_embed_task]
+            if rewrite_task is not None:
+                tasks_to_cancel.append(rewrite_task)
+            tasks_to_cancel.extend(cross_lingual_tasks)
+            for _t in tasks_to_cancel:
+                if not _t.done():
+                    _t.cancel()
+            if tasks_to_cancel:
+                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
+        if not injection_result.detected and status_callback is not None:
+            try:
+                status_callback("searching")
+            except Exception:
+                logger.debug("status_callback(searching) failed", exc_info=True)
+
+        if injection_result.detected:
+            await _cancel_background_tasks()
+            reject_result = build_reject_response_result(
+                reason=RejectReason.INJECTION_DETECTED,
+                profile=None,
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=reject_result.text,
+                final_answer=reject_result.text,
+                tokens_used=reject_result.tokens_used,
+                strategy="guard_reject",
+                reject_reason="injection",
+                is_reject=True,
+                is_faq_direct=False,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=None,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                language_context=language_context,
+            )
+
+        # --- 2. Embed queries ---
+        embed_start = perf_counter()
+        query_variants = list(base_query_variants)
+        extra_variants: list[str] = []
+
+        rewrite_collect_start = perf_counter()
+        if rewrite_task is not None:
+            try:
+                state.rewritten_variant = await asyncio.wait_for(
+                    rewrite_task,
+                    timeout=settings.semantic_query_rewrite_timeout_sec,
+                )
+                if state.rewritten_variant and state.rewritten_variant.casefold() not in {
+                    v.casefold() for v in query_variants
+                }:
+                    extra_variants.append(state.rewritten_variant)
+            except Exception:
+                state.rewritten_variant = None
+        if trace is not None:
+            rewrite_span = trace.span(name="query_rewrite")
+            rewrite_span.end(
+                output={
+                    "rewritten": state.rewritten_variant is not None,
+                    "variant_preview": state.rewritten_variant[:100]
+                    if state.rewritten_variant
+                    else None,
+                },
+                metadata={"wait_ms": round((perf_counter() - rewrite_collect_start) * 1000, 2)},
+            )
+
+        for cl_task in cross_lingual_tasks:
+            try:
+                cross_lingual_variant = await asyncio.wait_for(
+                    cl_task,
+                    timeout=settings.semantic_query_rewrite_timeout_sec,
+                )
+            except Exception:
+                continue
+            if cross_lingual_variant and cross_lingual_variant.casefold() not in {
+                v.casefold() for v in (*query_variants, *extra_variants)
+            }:
+                extra_variants.append(cross_lingual_variant)
+                state.cross_lingual_variants_added += 1
+
+        embed_span = None
+        if trace is not None:
+            embed_span = trace.span(
+                name="query-embedding",
+                input={
+                    "query_variants": [*query_variants, *extra_variants],
+                    "query_variant_count": len(query_variants) + len(extra_variants),
+                    "variant_mode": "multi"
+                    if (len(query_variants) + len(extra_variants)) > 1
+                    else "single",
+                    "upstream_precomputed": True,
+                },
+            )
+
+        try:
+            base_variant_vectors = await asyncio.wait_for(
+                base_embed_task,
+                timeout=settings.embedding_http_timeout_seconds + 1.0,
+            )
+        except (APITimeoutError, APIConnectionError, RateLimitError, TimeoutError):
+            logger.warning("async_run_chat_pipeline_embed_queries_failed", exc_info=True)
+            base_variant_vectors = []
+
+        state.embed_api_request_count = 1 if base_variant_vectors else 0
+        extra_variant_vectors: list[list[float]] = []
+        if extra_variants and base_variant_vectors:
+            try:
+                extra_variant_vectors = await async_embed_queries(
+                    extra_variants,
+                    api_key=api_key,
+                    timeout=settings.embedding_http_timeout_seconds,
+                )
+                state.embed_api_request_count += 1
+            except (APITimeoutError, APIConnectionError, RateLimitError):
+                logger.warning("async_run_chat_pipeline_embed_extras_failed", exc_info=True)
+                extra_variant_vectors = []
+
+        if extra_variant_vectors and len(extra_variant_vectors) == len(extra_variants):
+            state.query_variants = [*query_variants, *extra_variants]
+            state.variant_vectors = [*base_variant_vectors, *extra_variant_vectors]
+        else:
+            state.query_variants = query_variants
+            state.variant_vectors = base_variant_vectors
+
+        if embed_span is not None:
+            embed_span.end(
+                output={
+                    "embedded_query_count": len(state.variant_vectors),
+                    "extra_embedded_queries": max(len(state.variant_vectors) - 1, 0),
+                    "embedding_api_request_count": state.embed_api_request_count,
+                    "extra_embedding_api_requests": max(state.embed_api_request_count - 1, 0),
+                    "duration_ms": round((perf_counter() - embed_start) * 1000, 2),
+                    "upstream_precomputed": True,
+                }
+            )
+        base_question_embedding = state.variant_vectors[0] if state.variant_vectors else []
+
+        # --- 3. FAQ matching ---
+        try:
+            state.faq_match = await _svc.async_match_faq(
+                tenant_id=tenant_id,
+                question=question,
+                question_embedding=base_question_embedding,
+                db=db,
+            )
+        except Exception:
+            state.faq_match = FAQMatchResult(
+                strategy="rag_only",
+                faq_items=[],
+                top_score=None,
+                selected_score=None,
+                selected_faq_id=None,
+                direct_guard_used=False,
+                direct_guard_passed=False,
+                decision_reason="faq_match_error_degraded_to_rag_only",
+            )
+
+        if trace is not None:
+            faq_span = trace.span(name="faq_match", input={"question_preview": question[:80]})
+            retrieval_skipped = state.faq_match.strategy == "faq_direct"
+            faq_span.end(
+                metadata={
+                    "tenant_id": str(tenant_id),
+                    "strategy": state.faq_match.strategy,
+                    "top_score": state.faq_match.top_score,
+                    "selected_score": state.faq_match.selected_score,
+                    "faq_ids": [str(item.id) for item in state.faq_match.faq_items],
+                    "selected_faq_id": state.faq_match.selected_faq_id,
+                    "direct_guard_used": state.faq_match.direct_guard_used,
+                    "direct_guard_passed": state.faq_match.direct_guard_passed,
+                    "decision_reason": state.faq_match.decision_reason,
+                    "retrieval_skipped": retrieval_skipped,
+                    "generation_skipped": retrieval_skipped,
+                },
+            )
+
+        if state.faq_match.strategy == "faq_direct":
+            if not rel_task.done():
+                rel_task.cancel()
+                await asyncio.gather(rel_task, return_exceptions=True)
+            direct_answer_result = render_direct_faq_answer_result(
+                answer_text=state.faq_match.faq_items[0].answer
+                if state.faq_match.faq_items
+                else "",
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=direct_answer_result.text,
+                final_answer=direct_answer_result.text,
+                tokens_used=direct_answer_result.tokens_used,
+                strategy="faq_direct",
+                reject_reason=None,
+                is_reject=False,
+                is_faq_direct=True,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=None,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                faq_match=state.faq_match,
+                language_context=language_context,
+            )
+
+        # --- 4. Relevance pre-check ---
+        try:
+            relevant, _, state.profile = await rel_task
+        except asyncio.CancelledError:
+            relevant, state.profile = True, _guard_profile
+
+        if not relevant:
+            reject_result = build_reject_response_result(
+                reason=RejectReason.NOT_RELEVANT,
+                profile=state.profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=reject_result.text,
+                final_answer=reject_result.text,
+                tokens_used=reject_result.tokens_used,
+                strategy="guard_reject",
+                reject_reason="not_relevant",
+                is_reject=True,
+                is_faq_direct=False,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=None,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                faq_match=state.faq_match,
+                language_context=language_context,
+            )
+
+        state.client_product_name = state.profile.product_name if state.profile else None
+        if state.profile and isinstance(state.profile.topics, list) and state.profile.topics:
+            state.topic_hint = ", ".join(
+                [str(m) for m in state.profile.topics[:3] if str(m).strip()]
+            )
+
+        state.faq_context_items = (
+            state.faq_match.faq_items if state.faq_match.strategy == "faq_context" else None
+        )
+        selected_quick_answer_keys = _quick_answer_keys_for_question(question)
+        state.quick_answer_items = (
+            await _svc._async_lookup_quick_answers(tenant_id, selected_quick_answer_keys, db)
+            if selected_quick_answer_keys
+            else []
+        )
+        if selected_quick_answer_keys:
+            _emit_quick_answer_lookup_event(
+                selected_keys=selected_quick_answer_keys,
+                matched_count=len(state.quick_answer_items),
+                text_length=len(question),
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                chat_id=chat_id,
+            )
+        state.strategy = "faq_context" if state.faq_context_items else "rag_only"
+        return None
+
+    async def _run_retrieval() -> ChatPipelineResult | None:
+        """Stage 2: vector + lexical retrieval, plus the low-retrieval guard."""
+        contextual_retrieval_query: str | None = None
+        if chat is not None and looks_like_short_followup(question):
+            contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
+
+        # Use db.run_sync so: (a) aiosqlite's greenlet context is satisfied for sync
+        # DB ops, and (b) test monkeypatches on backend.chat.service.retrieve_context
+        # are honoured (same patchable path as the sync pipeline).
+        retrieval_question = (
+            contextual_retrieval_query if contextual_retrieval_query is not None else question
+        )
+        retrieve_kwargs: dict[str, Any] = {}
+        if contextual_retrieval_query is None:
+            retrieve_kwargs = dict(
+                precomputed_query_variants=state.query_variants,
+                precomputed_variant_vectors=state.variant_vectors,
+                precomputed_embedding_api_request_count=state.embed_api_request_count,
+                rewritten_variant=state.rewritten_variant,
+            )
+        if not state.variant_vectors:
+            state.retrieval = RetrievalContext(
+                chunk_texts=[],
+                document_ids=[],
+                scores=[],
+                mode="none",
+                best_rank_score=None,
+                best_confidence_score=None,
+                confidence_source="none",
+            )
+        else:
+            state.retrieval = await run_sync(
+                db,
+                lambda s: _svc.retrieve_context(
+                    tenant_id,
+                    retrieval_question,
+                    s,
+                    api_key,
+                    top_k=5,
+                    trace=trace,
+                    **retrieve_kwargs,
+                ),
+            )
+
+        # --- 6. Low-retrieval guard ---
+        threshold = settings.relevance_retrieval_threshold
+        retrieval = state.retrieval
+        assert retrieval is not None  # set above on every branch
+        state.reranker_rescued = (
+            retrieval.best_rank_score is not None
+            and retrieval.best_rank_score >= settings.reranker_bypass_threshold
+        )
+
+        if (
+            not state.reranker_rescued
+            and retrieval.vector_similarities is not None
+            and retrieval.vector_similarities
+            and all(sim is not None for sim in retrieval.vector_similarities)
+            and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
+        ):
+            reject_result = build_reject_response_result(
+                reason=RejectReason.LOW_RETRIEVAL_SCORE,
+                profile=state.profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+                question=question,
+            )
+            return ChatPipelineResult(
+                raw_answer=reject_result.text,
+                final_answer=reject_result.text,
+                tokens_used=reject_result.tokens_used,
+                strategy="guard_reject",
+                reject_reason="low_retrieval",
+                is_reject=True,
+                is_faq_direct=False,
+                validation_applied=False,
+                validation_outcome=None,
+                retrieval=retrieval,
+                validation=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                faq_match=state.faq_match,
+                language_context=language_context,
+            )
+        return None
+
+    async def _run_generation() -> ChatPipelineResult:
+        """Stage 3: LLM answer (+ language-mismatch retry), validate, escalate."""
+        retrieval = state.retrieval
+        assert retrieval is not None  # invariant: set by _run_retrieval
+
+        prior_messages = _build_prior_messages_for_llm(
+            chat,
+            max_messages=settings.chat_history_turns,
+            char_cap=settings.chat_history_message_char_cap,
+        )
+
+        if status_callback is not None:
+            try:
+                status_callback("writing")
+            except Exception:
+                logger.debug("status_callback(writing) failed", exc_info=True)
+
+        llm_start = perf_counter()
+        raw_answer, tokens_used = await async_generate_answer(
             question,
             retrieval.chunk_texts,
             api_key=api_key,
-            response_language=_q_lang.detected_language,
+            response_language=language_context.response_language,
             user_context_line=user_context_line,
             disclosure_config=disclosure_config,
-            client_product_name=client_product_name,
-            topic_hint=topic_hint,
-            faq_context_items=faq_context_items,
-            quick_answer_items=quick_answer_items,
+            client_product_name=state.client_product_name,
+            topic_hint=state.topic_hint,
+            faq_context_items=state.faq_context_items,
+            quick_answer_items=state.quick_answer_items,
             agent_instructions=agent_instructions,
-            low_context=not _reranker_rescued and retrieval.reliability.score == "low",
+            low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
             allow_clarification=allow_clarification,
             trace=trace,
             retry_bot_id=retry_bot_id,
-            stream_callback=None,
+            stream_callback=stream_callback,
             metrics_tenant_id=tenant_public_id,
             metrics_bot_id=bot_public_id,
-            prior_messages=_prior_messages,
+            prior_messages=prior_messages,
         )
-        raw_answer = _retry_answer
-        tokens_used += _retry_tokens
-        if _lang_span is not None:
-            _lang_span.end(output={"regenerated": True, "forced_language": _q_lang.detected_language})
+        llm_ms = int((perf_counter() - llm_start) * 1000)
 
-    raw_answer = _strip_inline_citations(raw_answer)
+        # --- 7b. Language check ---
+        q_lang = detect_language(question)
+        a_lang = detect_language(raw_answer)
+        if (
+            q_lang.is_reliable
+            and a_lang.is_reliable
+            and q_lang.detected_language not in ("unknown", "en")
+            and a_lang.detected_language != "unknown"
+            and q_lang.detected_language != a_lang.detected_language
+        ):
+            lang_span = None
+            if trace is not None:
+                lang_span = trace.span(
+                    name="language-check",
+                    input={
+                        "question_lang": q_lang.detected_language,
+                        "answer_lang": a_lang.detected_language,
+                    },
+                )
+            retry_answer, retry_tokens = await async_generate_answer(
+                question,
+                retrieval.chunk_texts,
+                api_key=api_key,
+                response_language=q_lang.detected_language,
+                user_context_line=user_context_line,
+                disclosure_config=disclosure_config,
+                client_product_name=state.client_product_name,
+                topic_hint=state.topic_hint,
+                faq_context_items=state.faq_context_items,
+                quick_answer_items=state.quick_answer_items,
+                agent_instructions=agent_instructions,
+                low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
+                allow_clarification=allow_clarification,
+                trace=trace,
+                retry_bot_id=retry_bot_id,
+                stream_callback=None,
+                metrics_tenant_id=tenant_public_id,
+                metrics_bot_id=bot_public_id,
+                prior_messages=prior_messages,
+            )
+            raw_answer = retry_answer
+            tokens_used += retry_tokens
+            if lang_span is not None:
+                lang_span.end(
+                    output={"regenerated": True, "forced_language": q_lang.detected_language}
+                )
 
-    # --- 8. Validate answer ---
-    validation_context = retrieval.chunk_texts + quick_answer_items
-    validation = await async_validate_answer(
-        question,
-        raw_answer,
-        validation_context,
-        api_key=api_key,
-        trace=trace,
-        metrics_tenant_id=tenant_public_id,
-        metrics_bot_id=bot_public_id,
-    )
-    validation_applied = True
-    validation_outcome: Literal["valid", "fallback"] = "valid"
-    final_answer = raw_answer
+        raw_answer = _strip_inline_citations(raw_answer)
 
-    if not validation["is_valid"]:
-        reject_result = build_reject_response_result(
-            reason=RejectReason.INSUFFICIENT_CONFIDENCE,
-            profile=profile,
-            response_language=language_context.response_language,
+        # --- 8. Validate answer ---
+        validation_context = retrieval.chunk_texts + state.quick_answer_items
+        validation = await async_validate_answer(
+            question,
+            raw_answer,
+            validation_context,
             api_key=api_key,
+            trace=trace,
+            metrics_tenant_id=tenant_public_id,
+            metrics_bot_id=bot_public_id,
         )
-        final_answer = reject_result.text
-        tokens_used += reject_result.tokens_used
-        validation_outcome = "fallback"
+        validation_outcome: Literal["valid", "fallback"] = "valid"
+        final_answer = raw_answer
 
-    # --- 9. Escalation decision ---
-    escalate, esc_trigger = _svc.should_escalate(
-        retrieval.best_confidence_score,
-        len(retrieval.chunk_texts),
-        validation=validation,
-        best_rank_score=retrieval.best_rank_score,
-    )
+        if not validation["is_valid"]:
+            reject_result = build_reject_response_result(
+                reason=RejectReason.INSUFFICIENT_CONFIDENCE,
+                profile=state.profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            final_answer = reject_result.text
+            tokens_used += reject_result.tokens_used
+            validation_outcome = "fallback"
 
-    return ChatPipelineResult(
-        raw_answer=raw_answer,
-        final_answer=final_answer,
-        tokens_used=int(tokens_used),
-        strategy=strategy,
-        reject_reason=None,
-        is_reject=False,
-        is_faq_direct=False,
-        validation_applied=validation_applied,
-        validation_outcome=validation_outcome,
-        retrieval=retrieval,
-        validation=validation,
-        escalation_recommended=escalate,
-        escalation_trigger=esc_trigger,
-        retrieval_ms=int(retrieval.retrieval_duration_ms),
-        llm_ms=_llm_ms,
-        faq_match=faq_match,
-        language_context=language_context,
-        query_script=_query_script,
-        kb_scripts=list(_kb_scripts),
-        cross_lingual_triggered=_cross_lingual_triggered,
-        cross_lingual_variants_count=_cross_lingual_variants_added,
-        query_kb_language_match=_query_kb_language_match,
-        retrieval_used_cross_lingual_variant=(
-            _cross_lingual_triggered
-            and _cross_lingual_variants_added > 0
-            and bool(retrieval.chunk_texts)
-        ),
-    )
+        # --- 9. Escalation decision ---
+        escalate, esc_trigger = _svc.should_escalate(
+            retrieval.best_confidence_score,
+            len(retrieval.chunk_texts),
+            validation=validation,
+            best_rank_score=retrieval.best_rank_score,
+        )
+
+        return ChatPipelineResult(
+            raw_answer=raw_answer,
+            final_answer=final_answer,
+            tokens_used=int(tokens_used),
+            strategy=state.strategy,
+            reject_reason=None,
+            is_reject=False,
+            is_faq_direct=False,
+            validation_applied=True,
+            validation_outcome=validation_outcome,
+            retrieval=retrieval,
+            validation=validation,
+            escalation_recommended=escalate,
+            escalation_trigger=esc_trigger,
+            retrieval_ms=int(retrieval.retrieval_duration_ms),
+            llm_ms=llm_ms,
+            faq_match=state.faq_match,
+            language_context=language_context,
+            query_script=state.query_script,
+            kb_scripts=list(state.kb_scripts),
+            cross_lingual_triggered=state.cross_lingual_triggered,
+            cross_lingual_variants_count=state.cross_lingual_variants_added,
+            query_kb_language_match=state.query_kb_language_match,
+            retrieval_used_cross_lingual_variant=(
+                state.cross_lingual_triggered
+                and state.cross_lingual_variants_added > 0
+                and bool(retrieval.chunk_texts)
+            ),
+        )
+
+    early = await _run_pre_retrieval_concurrent()
+    if early is not None:
+        return early
+    early = await _run_retrieval()
+    if early is not None:
+        return early
+    return await _run_generation()

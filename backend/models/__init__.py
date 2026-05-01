@@ -31,12 +31,15 @@ from backend.models.gap import (
     GapQuestion,
     GapQuestionMessageLink,
 )
+from backend.models.jobs import BackgroundJob, BackgroundJobStatus
 from backend.models.knowledge import Document, Embedding, QuickAnswer, UrlSource, UrlSourceRun
 from backend.models.pii import PiiEvent
 from backend.models.tenant import Bot, Tenant, TenantApiKey
 from backend.models.tenant_profile import LogAnalysisState, TenantFaq, TenantProfile
 
 __all__ = [
+    "BackgroundJob",
+    "BackgroundJobStatus",
     "Base",
     "Bot",
     "Chat",

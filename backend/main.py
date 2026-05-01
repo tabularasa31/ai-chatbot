@@ -23,6 +23,7 @@ from backend.chat.routes import chat_router
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.core.config import settings
 from backend.core.limiter import hash_ip_for_logs, limiter
+from backend.core.queue import close_pool as close_queue_pool
 from backend.core.redis import init_redis, redis_ping, shutdown_redis
 from backend.core.redis import is_enabled as redis_is_enabled
 from backend.documents.routes import documents_router
@@ -66,6 +67,7 @@ async def lifespan(_: FastAPI):
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()
+        await close_queue_pool()
         await shutdown_redis()
 
 

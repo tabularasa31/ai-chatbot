@@ -817,12 +817,29 @@ The iframe isolation means the widget has **no access to the host page DOM** —
 - Locale passed automatically (`navigator.language`)
 - "Powered by Chat9 →" footer (links to getchat9.live)
 
-### Rate limits
+### Rate limits (source of truth)
 
-All widget endpoints are rate-limited to **20 requests/minute per IP**:
-- `POST /widget/session/init`
-- `POST /widget/chat`
-- `POST /widget/escalate`
+The backend uses `slowapi` limits from route decorators (see `backend/*/routes.py`).
+`POST /widget/chat` has two stacked limits: one per-bot and one per-client.
+
+| Endpoint | Limit | Key scope |
+|---|---|---|
+| `POST /auth/register` | `5/hour` | IP (default slowapi key) |
+| `POST /auth/login` | `10/minute` | IP (default slowapi key) |
+| `POST /auth/forgot-password` | `3/hour` | IP (default slowapi key) |
+| `POST /auth/reset-password` | `5/hour` | IP (default slowapi key) |
+| `POST /tenants/me/api-keys/rotate` | `10/hour` | Owner JWT subject (`owner:<user_id>`) |
+| `DELETE /tenants/me/api-keys/{key_id}` | `20/hour` | Owner JWT subject (`owner:<user_id>`) |
+| `POST /documents` | `20/hour` | IP (default slowapi key) |
+| `POST /chat` | `30/minute` | IP (default slowapi key) |
+| `POST /chat/{session_id}/escalate` | `30/minute` | IP (default slowapi key) |
+| `POST /search` | `30/minute` | IP (default slowapi key) |
+| `GET /widget/config` | `30/minute` | `bot_id + IP` |
+| `POST /widget/session/init` | `10/minute` | IP (widget-specific key func) |
+| `POST /widget/chat` | `WIDGET_CHAT_PER_CLIENT_RATE` (or `120/minute` by default, `1000/minute` in development when unset) | per `bot_id` |
+| `POST /widget/chat` | `30/minute` | `bot_id + IP` |
+| `GET /widget/history` | `30/minute` | `bot_id + IP` |
+| `POST /widget/escalate` | `20/minute` | `bot_id + IP` |
 
 ---
 
@@ -854,7 +871,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | API key storage | AES-GCM encrypted at rest |
 | KYC secret storage | AES-GCM encrypted at rest |
 | PII protection | Regex redaction before all OpenAI calls |
-| Rate limiting | slowapi (per-IP): chat 30/min, search 30/min, validate 20/min, widget 20/min |
+| Rate limiting | `slowapi` with Redis-backed shared counters in production; route-level limits are listed in the "Rate limits (source of truth)" section above |
 | CORS | Production allowlist; widget served via iframe (same-origin for widget API calls) |
 
 ---

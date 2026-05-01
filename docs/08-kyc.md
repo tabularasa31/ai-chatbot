@@ -363,7 +363,8 @@ Behavior:
 
 - Identified-session metrics in the dashboard are based on chats with non-null `user_context`
 - invalid KYC tokens are logged as validation failures without logging raw PII
-- rate limit for `POST /widget/session/init` is `20/minute`
+- rate limit for `POST /widget/session/init` is `10/minute`
+- for the full current list of API limits, see "Rate limits (source of truth)" in `docs/04-features.md`
 
 ## Example integration sequence
 

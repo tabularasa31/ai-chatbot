@@ -55,6 +55,7 @@ from backend.chat.language import (
 )
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
+from backend.core.db import run_sync
 from backend.core.openai_client import is_reasoning_model
 from backend.core.openai_retry import call_openai_with_retry
 from backend.disclosure_config import resolve_level
@@ -1971,7 +1972,7 @@ async def async_run_chat_pipeline(
     _rewrite_task: asyncio.Task[str | None] | None = None
     _rewritten_variant: str | None = None
 
-    _kb_scripts = await db.run_sync(lambda s: detect_tenant_kb_scripts(tenant_id, s))
+    _kb_scripts = await run_sync(db, lambda s: detect_tenant_kb_scripts(tenant_id, s))
     _query_script = detect_query_script_bucket(question)
     _cross_lingual_tasks: list[asyncio.Task[str | None]] = []
 
@@ -2166,13 +2167,14 @@ async def async_run_chat_pipeline(
 
     # --- 3. FAQ matching ---
     try:
-        faq_match = await db.run_sync(
+        faq_match = await run_sync(
+            db,
             lambda s: _svc.match_faq(
                 tenant_id=tenant_id,
                 question=question,
                 question_embedding=base_question_embedding,
                 db=s,
-            )
+            ),
         )
     except Exception:
         faq_match = FAQMatchResult(
@@ -2271,7 +2273,7 @@ async def async_run_chat_pipeline(
     faq_context_items = faq_match.faq_items if faq_match.strategy == "faq_context" else None
     selected_quick_answer_keys = _quick_answer_keys_for_question(question)
     quick_answer_items = (
-        await db.run_sync(lambda s: _lookup_quick_answers(tenant_id, selected_quick_answer_keys, s))
+        await run_sync(db, lambda s: _lookup_quick_answers(tenant_id, selected_quick_answer_keys, s))
         if selected_quick_answer_keys
         else []
     )
@@ -2316,7 +2318,8 @@ async def async_run_chat_pipeline(
             confidence_source="none",
         )
     else:
-        retrieval = await db.run_sync(
+        retrieval = await run_sync(
+            db,
             lambda s: _svc.retrieve_context(
                 tenant_id,
                 _retrieval_question,
@@ -2325,7 +2328,7 @@ async def async_run_chat_pipeline(
                 top_k=5,
                 trace=trace,
                 **_retrieve_kwargs,
-            )
+            ),
         )
 
     # --- 6. Low-retrieval guard ---

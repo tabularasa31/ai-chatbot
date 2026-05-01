@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Callable, Generator
+from typing import TypeVar
 
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
+
+T = TypeVar("T")
 
 engine = create_engine(
     settings.database_url,
@@ -64,6 +67,21 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     expire_on_commit=False,
 )
+
+
+async def run_sync(
+    db: AsyncSession,
+    fn: Callable[[Session], T],
+) -> T:
+    """Greenlet-safe call into sync DB code from an async context.
+
+    Single named entry point for the ``AsyncSession.run_sync`` pattern that
+    bridges async chat handlers to sync DB helpers. Two reasons we cross the
+    boundary: aiosqlite's greenlet context must be active for sync session
+    ops, and tests monkeypatch sync paths (e.g. ``retrieve_context``) — both
+    only fire when the call goes through ``run_sync``.
+    """
+    return await db.run_sync(fn)
 
 
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:

@@ -87,6 +87,7 @@ from backend.core import db as core_db
 from backend.core.config import (
     settings,  # noqa: F401  (re-export for monkeypatch via backend.chat.service.settings)
 )
+from backend.core.db import run_sync
 
 # Symbols below are re-exported so that tests can monkeypatch them through
 # ``backend.chat.service.<name>`` and the lazy ``_svc.*`` lookups in handlers
@@ -467,13 +468,14 @@ async def _ensure_chat_async(
         db.add(chat)
         await db.flush()
         # touch_user_session is sync; call via run_sync for greenlet context.
-        await db.run_sync(
+        await run_sync(
+            db,
             lambda s: touch_user_session(
                 s,
                 tenant_id=tenant_id,
                 user_context=chat.user_context,
                 started_at=chat.created_at,
-            )
+            ),
         )
         await db.commit()
         # Re-query with selectinload so chat.messages is eagerly loaded.
@@ -635,7 +637,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
             ctx.db = sync_session
             return _h.handle(ctx)
 
-        outcome = await db.run_sync(_run_handler)
+        outcome = await run_sync(db, _run_handler)
         if outcome is not None:
             return outcome
     return None
@@ -708,7 +710,8 @@ async def async_process_chat_message(
         name="language_detect",
         input={"question_preview": question_text[:80]},
     )
-    language_context = await db.run_sync(
+    language_context = await run_sync(
+        db,
         lambda s: _resolve_chat_language_context(
             current_turn_text=question_text,
             tenant_row=tenant_row,
@@ -718,7 +721,7 @@ async def async_process_chat_message(
             browser_locale=(effective_user_ctx or {}).get("browser_locale") or browser_locale,
             chat=chat,
             db=s,
-        )
+        ),
     )
     _lang_span.end(
         output={

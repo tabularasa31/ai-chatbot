@@ -61,22 +61,28 @@ class GreetingHandler(PipelineHandler):
     def can_handle(self, ctx: HandlerContext) -> bool:
         return not ctx.question_text and ctx.is_new_session
 
-    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
+    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
+        from backend.core.db import run_sync
+
+        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+
+    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome:
         # Lazy import: service.py imports the router at module load, so importing
         # the persistence helper at module top would create a cycle.
         from backend.chat.service import _persist_assistant_message_with_response_language
 
+        ctx.db = sync_db
         greeting = _build_greeting_result(
             product_name=_resolve_product_name(
                 tenant=ctx.tenant_row,
-                db=ctx.db,
+                db=sync_db,
                 profile=ctx.tenant_profile,
             ),
             response_language=ctx.language_context.response_language,
             api_key=ctx.api_key,
         )
         _persist_assistant_message_with_response_language(
-            db=ctx.db,
+            db=sync_db,
             chat=ctx.chat,
             tenant_id=ctx.tenant_id,
             response_language=ctx.language_context.response_language,

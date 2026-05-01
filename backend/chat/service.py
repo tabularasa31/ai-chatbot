@@ -540,8 +540,9 @@ async def _build_handler_context_async(
 ) -> HandlerContext:
     """Async counterpart of :func:`_build_handler_context`.
 
-    Queries the Bot table via AsyncSession, then passes ``db.sync_session``
-    to HandlerContext so downstream sync helpers continue to work.
+    Queries the Bot table via AsyncSession. ``HandlerContext.async_db`` is
+    populated by ``_async_dispatch`` right before handlers run; ``ctx.db``
+    (sync) is populated by each handler's internal ``run_sync`` block.
     """
     resolved_bot: Bot | None = None
     if bot_id is not None:
@@ -596,20 +597,21 @@ async def _build_handler_context_async(
         stream_callback=stream_callback,
         explicit_human_request=explicit_human_request,
         turn_started_at=turn_started_at,
-        extras={"async_db": db},
     )
 
 
 async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutcome | None:
     """Async handler dispatch.
 
-    RagHandler: async pipeline runs first (concurrent guards/embed), result
-    stashed in ctx.extras, then handler.handle() runs inside db.run_sync()
-    for the persistence/analytics sync DB work.
-    All other handlers: also run via db.run_sync() for greenlet-safe sync DB ops.
+    For RagHandler: async pipeline runs first (concurrent guards/embed),
+    result stashed in ``ctx.extras['_pipeline_result']`` so the handler
+    body picks it up. Every handler is invoked via ``await handler.handle()``;
+    each handler is responsible for its own sync/async bridging (currently
+    via an internal ``run_sync`` wrapper around its persistence body).
     """
     from backend.chat.handlers.rag import RagHandler
 
+    ctx.async_db = db
     for handler in _HANDLER_ROUTER.handlers:
         if not handler.can_handle(ctx):
             continue
@@ -635,11 +637,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
             )
             ctx.extras["_pipeline_result"] = pipeline_result
 
-        def _run_handler(sync_session, _h=handler):
-            ctx.db = sync_session
-            return _h.handle(ctx)
-
-        outcome = await run_sync(db, _run_handler)
+        outcome = await handler.handle(ctx)
         if outcome is not None:
             return outcome
     return None

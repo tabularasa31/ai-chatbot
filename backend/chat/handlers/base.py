@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm import Session
 
     from backend.chat.language import ResolvedLanguageContext
@@ -48,10 +49,18 @@ class HandlerContext:
     is_new_session: bool
     trace: TraceHandle | None
 
-    # Sync session for handler use. Populated by ``_async_dispatch._run_handler``
-    # right before the handler runs (inside ``AsyncSession.run_sync``); ``None``
-    # outside that window. Handlers may rely on this being set.
+    # Sync session for handler use. Populated inside the handler's
+    # ``await run_sync(ctx.async_db, ...)`` block; ``None`` outside that
+    # window. Handlers that wrap their sync body in ``run_sync`` should set
+    # ``ctx.db`` to the inner sync session at the start of the wrapped fn
+    # so existing sync helpers continue to work unchanged.
     db: Session | None = None
+
+    # Async session — populated by ``_async_dispatch`` for the lifetime of
+    # the dispatch call. Handlers use it directly when calling native-async
+    # helpers (e.g. ``async_match_faq``) or pass it to ``run_sync`` to bridge
+    # sync persistence helpers.
+    async_db: AsyncSession | None = None
 
     # Used by EscalationStateMachine + RagHandler
     session_id: uuid.UUID | None = None
@@ -97,4 +106,4 @@ class PipelineHandler(ABC):
     def can_handle(self, ctx: HandlerContext) -> bool: ...
 
     @abstractmethod
-    def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None: ...
+    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None: ...

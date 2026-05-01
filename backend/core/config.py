@@ -125,6 +125,18 @@ class Settings(BaseSettings):
         alias="ANSWER_VALIDATION_MAX_COMPLETION_TOKENS",
         ge=1,
     )
+    validation_always_on: bool = Field(
+        False,
+        alias="VALIDATION_ALWAYS_ON",
+        description="Force answer validation on every turn, bypassing confidence gating.",
+    )
+    validation_confidence_threshold: float = Field(
+        0.75,
+        alias="VALIDATION_CONFIDENCE_THRESHOLD",
+        ge=0.0,
+        le=1.0,
+        description="Minimum retrieval confidence to skip answer validation when answer has citations.",
+    )
     query_rewrite_model: str = Field(
         "gpt-4.1-mini",
         alias="QUERY_REWRITE_MODEL",

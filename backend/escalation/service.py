@@ -862,7 +862,7 @@ def perform_manual_escalation(
         escalation_reason=trigger.value,
         escalation_trigger=trigger.value,
         plan_tier=effective.get("plan_tier"),
-        priority=ticket.priority if ticket is not None else None,
+        priority=ticket.priority.value,
     )
 
     return (out.message_to_user, ticket.ticket_number)

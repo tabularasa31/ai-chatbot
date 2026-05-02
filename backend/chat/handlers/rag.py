@@ -57,7 +57,7 @@ from backend.chat.language import (
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
 from backend.core.openai_client import is_reasoning_model
-from backend.core.openai_retry import call_openai_with_retry
+from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.disclosure_config import resolve_level
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
@@ -1947,19 +1947,287 @@ async def async_retrieve_context(
     )
 
 
+async def _async_generate_answer_native(
+    question: str,
+    context_chunks: list[str],
+    *,
+    api_key: str,
+    response_language: str = "en",
+    user_context_line: str | None = None,
+    disclosure_config: dict[str, Any] | None = None,
+    client_product_name: str | None = None,
+    topic_hint: str | None = None,
+    faq_context_items: list[FAQRow] | None = None,
+    quick_answer_items: list[str] | None = None,
+    agent_instructions: str | None = None,
+    low_context: bool = False,
+    allow_clarification: bool = True,
+    trace: TraceHandle | None = None,
+    retry_bot_id: str | None = None,
+    stream_callback: Callable[[str], None] | None = None,
+    metrics_tenant_id: str | None = None,
+    metrics_bot_id: str | None = None,
+    prior_messages: list[dict[str, str]] | None = None,
+) -> tuple[str, int]:
+    """Native async port of :func:`generate_answer`.
+
+    Same behaviour and telemetry shape as the sync version, but uses
+    ``AsyncOpenAI`` + ``async_call_openai_with_retry``. The stream loop is
+    ``async for`` so back-pressure on slow OpenAI tokens does not occupy a
+    default-executor thread for the full duration of the call. The post-gen
+    language guard (``_enforce_response_language``) and ``stream_callback``
+    are kept sync — both are bounded and mostly CPU-cheap; ``stream_callback``
+    is called inline because it's a thin synchronous push to the queue
+    backing the SSE response.
+    """
+    from backend.chat import service as _svc
+
+    if not context_chunks and not faq_context_items and not quick_answer_items:
+        text = localize_text_to_language_result(
+            canonical_text="I don't have information about this.",
+            target_language=response_language,
+            api_key=api_key,
+        ).text
+        return (text, 0)
+
+    system_prompt, user_message = build_rag_messages(
+        question,
+        context_chunks,
+        response_language=response_language,
+        user_context_line=user_context_line,
+        disclosure_config=disclosure_config,
+        client_product_name=client_product_name,
+        topic_hint=topic_hint,
+        faq_context_items=faq_context_items,
+        quick_answer_items=quick_answer_items,
+        agent_instructions=agent_instructions,
+        low_context=low_context,
+        allow_clarification=allow_clarification,
+    )
+    messages = _assemble_chat_messages(
+        system_prompt=system_prompt,
+        user_message=user_message,
+        prior_messages=prior_messages,
+    )
+    prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
+    openai_client = _svc.get_async_openai_client(api_key)
+    _reasoning = is_reasoning_model(settings.chat_model)
+    _temperature: float | None = None if _reasoning else 0.2
+    _max_completion_tokens = (
+        settings.chat_response_max_tokens_reasoning
+        if _reasoning
+        else settings.chat_response_max_tokens
+    )
+    generation = None
+    if trace is not None:
+        if settings.observability_capture_full_prompts:
+            generation_input: Any = messages
+        else:
+            generation_input = {
+                "question_preview": truncate_text(question),
+                "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
+                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
+            }
+        generation = trace.generation(
+            name="llm-generation",
+            model=settings.chat_model,
+            input=generation_input,
+            metadata={
+                **({"temperature": _temperature} if _temperature is not None else {}),
+                "max_completion_tokens": _max_completion_tokens,
+                "response_language": response_language,
+                "context_chunk_count": len(context_chunks),
+                "quick_answer_count": len(quick_answer_items or []),
+                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
+                "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
+                "captures_full_prompt": settings.observability_capture_full_prompts,
+                "finish_reason_expected": "stop_or_length",
+                "system_prompt": (
+                    system_prompt if settings.observability_capture_full_prompts else None
+                ),
+                "context_chunks": (
+                    context_chunks if settings.observability_capture_full_prompts else None
+                ),
+            },
+        )
+    started_at = perf_counter()
+    try:
+        prompt_tokens_raw = 0
+        completion_tokens_raw = 0
+        cached_tokens_raw = 0
+        finish_reason: str | None = None
+        actual_model: str = settings.chat_model
+        _thought_truncated: bool = False
+        if stream_callback is not None:
+            stream = await async_call_openai_with_retry(
+                "chat_generate_stream",
+                lambda: openai_client.chat.completions.create(
+                    model=settings.chat_model,
+                    messages=messages,
+                    **({} if _reasoning else {"temperature": 0.2}),
+                    max_completion_tokens=_max_completion_tokens,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                ),
+                bot_id=retry_bot_id,
+            )
+            chunks: list[str] = []
+            total_tokens = 0
+            _filter = ThoughtStreamFilter(stream_callback)
+            async for chunk in stream:
+                if isinstance(getattr(chunk, "model", None), str):
+                    actual_model = chunk.model
+                if getattr(chunk, "usage", None):
+                    total_tokens = chunk.usage.total_tokens or 0
+                    prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                    completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
+                    cached_tokens_raw = _usage_cached_tokens(chunk.usage)
+                if not chunk.choices:
+                    continue
+                choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason
+                delta = getattr(choice.delta, "content", None) if choice.delta else None
+                if delta:
+                    chunks.append(delta)
+                    _filter.feed(delta)
+            _filter.flush_end()
+            _raw_answer = "".join(chunks)
+            _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
+            answer_text = _strip_thought_tags(_raw_answer)
+        else:
+            response = await async_call_openai_with_retry(
+                "chat_generate",
+                lambda: openai_client.chat.completions.create(
+                    model=settings.chat_model,
+                    messages=messages,
+                    **({} if _reasoning else {"temperature": 0.2}),
+                    max_completion_tokens=_max_completion_tokens,
+                ),
+                bot_id=retry_bot_id,
+            )
+            actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
+            _raw_content = response.choices[0].message.content or ""
+            _thought_truncated = "<thought>" in _raw_content and "</thought>" not in _raw_content
+            answer_text = _strip_thought_tags(_raw_content)
+            total_tokens = response.usage.total_tokens if response.usage else 0
+            if response.usage:
+                prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
+                completion_tokens_raw = getattr(response.usage, "completion_tokens", 0) or 0
+                cached_tokens_raw = _usage_cached_tokens(response.usage)
+            if response.choices:
+                finish_reason = getattr(response.choices[0], "finish_reason", None)
+        log_llm_tokens(
+            operation="generate",
+            target_language=response_language,
+            tokens=total_tokens,
+            model=actual_model,
+        )
+        _input_tokens = _safe_int(prompt_tokens_raw)
+        _output_tokens = _safe_int(completion_tokens_raw)
+        _cached_tokens = _safe_int(cached_tokens_raw)
+        _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
+        _duration_s = perf_counter() - started_at
+        _gen_duration_ms = round(_duration_s * 1000, 2)
+        if generation is not None:
+            _cost_rates = settings.openai_model_costs.get(
+                actual_model,
+                {
+                    "input": settings.openai_default_cost_per_1m_input_tokens,
+                    "output": settings.openai_default_cost_per_1m_output_tokens,
+                },
+            )
+            generation.end(
+                output=answer_text.strip(),
+                usage={
+                    "input": _input_tokens,
+                    "output": _output_tokens,
+                },
+                metadata={
+                    "total_tokens": _safe_int(total_tokens),
+                    "finish_reason": finish_reason,
+                    "thought_truncated": _thought_truncated,
+                    "cost_usd": _cost_usd,
+                    "cost_rate_usd_per_1m": _cost_rates,
+                    "duration_ms": _gen_duration_ms,
+                    "prompt_cache_cached_tokens": _cached_tokens,
+                    "prompt_cache_hit": _cached_tokens > 0,
+                },
+            )
+        if trace is not None:
+            record_stage_ms(trace, "llm_generate_ms", _gen_duration_ms)
+        if metrics_tenant_id is not None or metrics_bot_id is not None:
+            from backend.chat.events import _emit_ai_generation_event
+            _emit_ai_generation_event(
+                tenant_public_id=metrics_tenant_id,
+                bot_public_id=metrics_bot_id,
+                model=actual_model,
+                input_tokens=_input_tokens,
+                output_tokens=_output_tokens,
+                cached_tokens=_cached_tokens,
+                prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
+                cost_usd=_cost_usd,
+                latency_s=_duration_s,
+                operation="chat/generate",
+            )
+        # Post-gen language guard runs only on non-streamed generation. In
+        # the streaming path the answer was already emitted to the client
+        # chunk-by-chunk via ``stream_callback``; rewriting the final text
+        # here would produce a UI/history mismatch. The guard does its own
+        # sync OpenAI call inside translate_text_result, so we keep it on a
+        # worker thread to avoid blocking the loop.
+        if stream_callback is None:
+            final_text, extra_tokens = await asyncio.to_thread(
+                _enforce_response_language,
+                answer_text.strip(),
+                response_language=response_language,
+                api_key=api_key,
+            )
+            total_tokens = (total_tokens or 0) + extra_tokens
+        else:
+            final_text = answer_text.strip()
+        return (final_text, total_tokens)
+    except Exception as exc:
+        log_llm_tokens(
+            operation="generate",
+            target_language=response_language,
+            tokens=0,
+            model=settings.chat_model,
+        )
+        if generation is not None:
+            generation.end(
+                metadata={
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                },
+                level="ERROR",
+                status_message=str(exc),
+            )
+        raise
+
+
 async def async_generate_answer(
     question: str,
     context_chunks: list[str],
     **kwargs: Any,
 ) -> tuple[str, int]:
-    """Async wrapper — runs generate_answer in a thread pool worker.
+    """Native-async generation entry point.
 
-    Delegates to backend.chat.service.generate_answer so test monkeypatches
-    on that attribute are honoured, and so the sync client path (mocked in
-    tests via mock_openai_client) is used.
+    Production path uses :func:`_async_generate_answer_native` to avoid the
+    ``to_thread`` hop on the dominant LLM call. When tests monkeypatch
+    ``backend.chat.service.generate_answer`` (the sync sibling), the patch is
+    honoured by falling back to ``asyncio.to_thread`` of the patched function
+    so existing test fakes continue to work without modification.
     """
     from backend.chat import service as _svc
-    return await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
+
+    # Identity check: if the sync alias on the service module has been
+    # replaced by a test monkeypatch, route through it. Otherwise use the
+    # native async path so the LLM hop no longer occupies a default-executor
+    # thread for ~5-15 s per turn.
+    if _svc.generate_answer is not generate_answer:
+        return await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
+    return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
 async def async_validate_answer(
@@ -1968,13 +2236,120 @@ async def async_validate_answer(
     context_chunks: list[str],
     **kwargs: Any,
 ) -> dict:
-    """Async wrapper — runs validate_answer in a thread pool worker.
-
-    Delegates to backend.chat.service.validate_answer so test monkeypatches
-    on that attribute are honoured.
+    """Native-async validation entry point. Same monkeypatch fallback as
+    :func:`async_generate_answer` — see that docstring for the rationale.
     """
     from backend.chat import service as _svc
-    return await asyncio.to_thread(_svc.validate_answer, question, answer, context_chunks, **kwargs)
+
+    if _svc.validate_answer is not validate_answer:
+        return await asyncio.to_thread(_svc.validate_answer, question, answer, context_chunks, **kwargs)
+    return await _async_validate_answer_native(question, answer, context_chunks, **kwargs)
+
+
+async def _async_validate_answer_native(
+    question: str,
+    answer: str,
+    context_chunks: list[str],
+    *,
+    api_key: str,
+    trace: TraceHandle | None = None,
+    metrics_tenant_id: str | None = None,
+    metrics_bot_id: str | None = None,
+) -> dict:
+    """Native async port of :func:`validate_answer`.
+
+    Mirrors the sync function's behaviour exactly (same prompt, same return
+    shape, same fallback semantics on error) but uses ``AsyncOpenAI`` +
+    ``async_call_openai_with_retry`` so the call does not occupy a worker
+    thread. Telemetry helpers stay sync — they're cheap and avoiding another
+    pair of awaits keeps the diff small.
+    """
+    from backend.chat import service as _svc
+
+    if not context_chunks:
+        return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
+
+    context = "\n\n---\n\n".join(context_chunks[:5])
+    prompt = VALIDATION_PROMPT.format(
+        context=context,
+        question=question,
+        answer=answer,
+    )
+
+    validation_span = None
+    if trace is not None:
+        validation_span = trace.span(
+            name="answer-validation",
+            input={
+                "question": question,
+                "answer_preview": truncate_text(answer),
+                "context_chunk_count": len(context_chunks),
+            },
+        )
+
+    try:
+        openai_client = _svc.get_async_openai_client(api_key)
+        started_at = perf_counter()
+        _val_reasoning = is_reasoning_model(settings.answer_validation_model)
+        _val_max_tokens = (
+            settings.chat_response_max_tokens_reasoning
+            if _val_reasoning
+            else settings.answer_validation_max_completion_tokens
+        )
+        response = await async_call_openai_with_retry(
+            "chat_validate_answer",
+            lambda: openai_client.chat.completions.create(
+                model=settings.answer_validation_model,
+                messages=[{"role": "user", "content": prompt}],
+                **({} if _val_reasoning else {"temperature": 0}),
+                max_completion_tokens=_val_max_tokens,
+            ),
+        )
+        raw = response.choices[0].message.content or ""
+        result = _parse_validation_json(raw)
+        result = {
+            "is_valid": bool(result.get("is_valid", True)),
+            "confidence": float(result.get("confidence", 1.0)),
+            "reason": str(result.get("reason", "")),
+        }
+        _val_duration_s = perf_counter() - started_at
+        _val_duration_ms = round(_val_duration_s * 1000, 2)
+        if validation_span is not None:
+            validation_span.end(
+                output=result,
+                metadata={"duration_ms": _val_duration_ms},
+            )
+        if trace is not None:
+            record_stage_ms(trace, "llm_validate_ms", _val_duration_ms)
+        if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
+            _val_input = getattr(response.usage, "prompt_tokens", 0) or 0
+            _val_output = getattr(response.usage, "completion_tokens", 0) or 0
+            from backend.chat.events import _emit_ai_generation_event
+            _emit_ai_generation_event(
+                tenant_public_id=metrics_tenant_id,
+                bot_public_id=metrics_bot_id,
+                model=settings.answer_validation_model,
+                input_tokens=_safe_int(_val_input),
+                output_tokens=_safe_int(_val_output),
+                cost_usd=settings.compute_cost_usd(
+                    settings.answer_validation_model,
+                    _safe_int(_val_input),
+                    _safe_int(_val_output),
+                ),
+                latency_s=_val_duration_s,
+                operation="chat/validate",
+            )
+        return result
+    except Exception as e:
+        logger.exception("Answer validation failed")
+        result = {"is_valid": False, "confidence": 0.0, "reason": "validation_error"}
+        if validation_span is not None:
+            validation_span.end(
+                output=result,
+                level="ERROR",
+                status_message=str(e),
+            )
+        return result
 
 
 @dataclass

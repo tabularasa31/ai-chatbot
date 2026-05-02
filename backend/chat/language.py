@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -929,6 +930,26 @@ def render_direct_faq_answer_result(
     return translate_text_result(
         source_text=answer_text,
         target_language=normalized_target,
+        api_key=api_key,
+    )
+
+
+async def async_render_direct_faq_answer_result(
+    *,
+    answer_text: str,
+    response_language: str,
+    api_key: str | None,
+) -> LocalizationResult:
+    """Async wrapper — runs ``render_direct_faq_answer_result`` in a worker thread.
+
+    The sync helper makes a translate OpenAI call (1-2 s) when source/target
+    languages diverge; calling it from ``async_run_chat_pipeline`` directly
+    would freeze the event loop and stall every other in-flight chat turn.
+    """
+    return await asyncio.to_thread(
+        render_direct_faq_answer_result,
+        answer_text=answer_text,
+        response_language=response_language,
         api_key=api_key,
     )
 

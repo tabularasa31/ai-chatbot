@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import enum
 
 from backend.chat.language import (
@@ -149,3 +150,30 @@ def build_reject_response_result(
         operation="reject_guard",
     )
     return result
+
+
+async def async_build_reject_response_result(
+    *,
+    reason: RejectReason,
+    profile: TenantProfileModel | None,
+    response_language: str | None = None,
+    api_key: str | None = None,
+    question: str | None = None,
+    fallback_locale: str | None = None,
+) -> LocalizationResult:
+    """Async wrapper — runs ``build_reject_response_result`` in a worker thread.
+
+    The sync helper makes a localization OpenAI call (1-2 s); calling it from
+    ``async_run_chat_pipeline`` directly would freeze the event loop and stall
+    every other in-flight chat turn. Offloading via ``asyncio.to_thread`` keeps
+    the loop responsive under concurrency.
+    """
+    return await asyncio.to_thread(
+        build_reject_response_result,
+        reason=reason,
+        profile=profile,
+        response_language=response_language,
+        api_key=api_key,
+        question=question,
+        fallback_locale=fallback_locale,
+    )

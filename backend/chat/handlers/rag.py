@@ -35,6 +35,7 @@ from typing import Any, Literal
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.util import await_only
 
 from backend.chat.decision import KbConfidence
 from backend.chat.followup import (
@@ -46,11 +47,11 @@ from backend.chat.language import (
     LangDetectError,
     ResolvedLanguageContext,
     _language_root,
+    async_render_direct_faq_answer_result,
     detect_language,
     language_display_name,
     localize_text_to_language_result,
     log_llm_tokens,
-    render_direct_faq_answer_result,
     translate_text_result,
 )
 from backend.chat.presets import COT_REASONING_BLOCK
@@ -61,7 +62,7 @@ from backend.disclosure_config import resolve_level
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
     RejectReason,
-    build_reject_response_result,
+    async_build_reject_response_result,
 )
 from backend.models import Chat, MessageRole, TenantProfile
 from backend.observability import TraceHandle
@@ -1670,13 +1671,22 @@ class RagHandler(PipelineHandler):
                     if not ticket.user_email
                     else EscalationPhase.handoff_email_known
                 )
-                esc = complete_escalation_openai_turn(
-                    phase=esc_phase,
-                    chat_messages=msgs,
-                    fact_json=fact_from_ticket(ticket, chat=chat),
-                    latest_user_text=ctx.redacted_question,
-                    api_key=ctx.api_key,
-                    response_language=ctx.language_context.response_language,
+                # We are inside a SQLAlchemy run_sync greenlet that runs ON the
+                # event loop thread, so a direct sync OpenAI call here would
+                # freeze the loop for the 2-5 s of the handoff completion. Bridge
+                # back to the loop via ``await_only`` + ``asyncio.to_thread``: the
+                # greenlet suspends, the OpenAI call runs in a worker thread, and
+                # other coroutines progress in the meantime.
+                esc = await_only(
+                    asyncio.to_thread(
+                        complete_escalation_openai_turn,
+                        phase=esc_phase,
+                        chat_messages=msgs,
+                        fact_json=fact_from_ticket(ticket, chat=chat),
+                        latest_user_text=ctx.redacted_question,
+                        api_key=ctx.api_key,
+                        response_language=ctx.language_context.response_language,
+                    )
                 )
                 answer = answer + "\n\n" + esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
@@ -2151,7 +2161,7 @@ async def async_run_chat_pipeline(
 
         if injection_result.detected:
             await _cancel_background_tasks()
-            reject_result = build_reject_response_result(
+            reject_result = await async_build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
                 profile=None,
                 response_language=language_context.response_language,
@@ -2318,7 +2328,7 @@ async def async_run_chat_pipeline(
             if not rel_task.done():
                 rel_task.cancel()
                 await asyncio.gather(rel_task, return_exceptions=True)
-            direct_answer_result = render_direct_faq_answer_result(
+            direct_answer_result = await async_render_direct_faq_answer_result(
                 answer_text=state.faq_match.faq_items[0].answer
                 if state.faq_match.faq_items
                 else "",
@@ -2353,7 +2363,7 @@ async def async_run_chat_pipeline(
             relevant, state.profile = True, _guard_profile
 
         if not relevant:
-            reject_result = build_reject_response_result(
+            reject_result = await async_build_reject_response_result(
                 reason=RejectReason.NOT_RELEVANT,
                 profile=state.profile,
                 response_language=language_context.response_language,
@@ -2460,7 +2470,7 @@ async def async_run_chat_pipeline(
             and all(sim is not None for sim in retrieval.vector_similarities)
             and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
         ):
-            reject_result = build_reject_response_result(
+            reject_result = await async_build_reject_response_result(
                 reason=RejectReason.LOW_RETRIEVAL_SCORE,
                 profile=state.profile,
                 response_language=language_context.response_language,
@@ -2609,7 +2619,7 @@ async def async_run_chat_pipeline(
         final_answer = raw_answer
 
         if not validation["is_valid"]:
-            reject_result = build_reject_response_result(
+            reject_result = await async_build_reject_response_result(
                 reason=RejectReason.INSUFFICIENT_CONFIDENCE,
                 profile=state.profile,
                 response_language=language_context.response_language,

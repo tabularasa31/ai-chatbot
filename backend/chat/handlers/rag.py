@@ -2657,7 +2657,14 @@ async def async_run_chat_pipeline(
         return early
     # Release the DB connection before the LLM call. _run_generation does not
     # touch the DB; holding a connection open for 20-30 s of LLM latency exhausts
-    # the pool under any meaningful concurrency. The session remains valid and will
-    # re-acquire a connection when the handler writes the result after returning.
+    # the pool under any meaningful concurrency.
+    #
+    # close() is used instead of rollback() because the aiosqlite driver routes
+    # rollback() through await_only() (the greenlet sync bridge), which raises
+    # MissingGreenlet when called from a pure async context. close() releases
+    # the connection without sending any DB command.
+    #
+    # In SQLAlchemy 2.0, AsyncSession.close() leaves the session reusable — it
+    # re-acquires a connection automatically when the handler writes the result.
     await db.close()
     return await _run_generation()

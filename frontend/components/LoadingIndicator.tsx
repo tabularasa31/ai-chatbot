@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const PHASE_LABELS: Record<string, string> = {
   thinking: "Looking it up",
@@ -18,23 +18,21 @@ export function LoadingIndicator({ stage }: { stage: string | null }) {
 
   const [text, setText] = useState("");
   const [showCaret, setShowCaret] = useState(true);
-  const cancelledRef = useRef(false);
 
   useEffect(() => {
-    cancelledRef.current = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     setText("");
     let i = 0;
     const tick = () => {
-      if (cancelledRef.current) return;
       if (i <= target.length) {
         setText(target.slice(0, i));
         i++;
-        setTimeout(tick, 40 + Math.random() * 35);
+        timeoutId = setTimeout(tick, 40 + Math.random() * 35);
       }
     };
     tick();
     return () => {
-      cancelledRef.current = true;
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     };
   }, [target]);
 
@@ -44,7 +42,7 @@ export function LoadingIndicator({ stage }: { stage: string | null }) {
   }, []);
 
   return (
-    <div className="flex items-center gap-2.5 px-1 py-1">
+    <div className="flex items-center gap-2.5 px-1 py-1" role="status" aria-live="polite">
       <Spark />
       <span
         className="inline-flex items-center text-[12.5px] tracking-[0.2px] text-[#A8A3B8]"

@@ -711,6 +711,11 @@ async def async_process_chat_message(
     chat, effective_user_ctx = await _ensure_chat_async(
         db, tenant_id, session_id, bot_id, user_context, browser_locale
     )
+    # Re-attach tenant_row to the now-active session: db.close() above detached
+    # it. Today only loaded scalar columns are read downstream, but merging
+    # protects future lazy-loaded relationships from DetachedInstanceError.
+    if tenant_row is not None:
+        tenant_row = await db.merge(tenant_row, load=False)
     tenant_profile = (
         await db.get(TenantProfile, tenant_id) if tenant_row is not None else None
     )

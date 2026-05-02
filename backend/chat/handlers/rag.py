@@ -2072,6 +2072,11 @@ async def async_run_chat_pipeline(
 
         base_query_variants = _svc.expand_query(question)
 
+        # Release the connection before the concurrent guard/embed OpenAI tasks.
+        # async_match_faq (stage 3) will re-acquire it briefly; another close()
+        # follows before await rel_task so that 2-10 s wait is also connectionless.
+        await db.close()
+
         # Launch guard + embedding tasks concurrently — event loop handles all I/O.
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
             async_check_relevance_with_profile(
@@ -2339,6 +2344,9 @@ async def async_run_chat_pipeline(
             )
 
         # --- 4. Relevance pre-check ---
+        # async_match_faq re-acquired a connection; release it before awaiting
+        # rel_task (the relevance guard OpenAI call, 2-10 s).
+        await db.close()
         try:
             relevant, _, state.profile = await rel_task
         except asyncio.CancelledError:

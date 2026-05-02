@@ -232,25 +232,20 @@ def _escalation_turn_response(
     )
 
 
-def _ingest_gap_signal_sync(
+def _try_ingest_gap_signal(
     *,
-    chat_id: uuid.UUID,
+    chat: Chat,
     tenant_id: uuid.UUID,
     session_id: uuid.UUID,
-    user_message_id: uuid.UUID,
-    assistant_message_id: uuid.UUID,
+    user_message: Message,
+    assistant_message: Message,
     question_text: str,
     answer_confidence: float | None,
     was_rejected: bool,
     had_fallback: bool,
     was_escalated: bool,
-    language: str | None,
+    language: str | None = None,
 ) -> None:
-    """Sync body of gap-signal ingestion. Opens its own ``SessionLocal`` and
-    runs psycopg2 calls — must NEVER be invoked directly on the event-loop
-    thread. The dispatcher (:func:`_try_ingest_gap_signal`) routes calls from
-    a running loop into the default thread executor.
-    """
     ingestion_db = core_db.SessionLocal()
     try:
         orchestrator = GapAnalyzerOrchestrator(
@@ -259,10 +254,10 @@ def _ingest_gap_signal_sync(
         orchestrator.ingest_signal(
             GapSignal(
                 tenant_id=tenant_id,
-                chat_id=chat_id,
+                chat_id=chat.id,
                 session_id=session_id,
-                user_message_id=user_message_id,
-                assistant_message_id=assistant_message_id,
+                user_message_id=user_message.id,
+                assistant_message_id=assistant_message.id,
                 question_text=question_text,
                 answer_confidence=answer_confidence,
                 was_rejected=was_rejected,
@@ -280,7 +275,7 @@ def _ingest_gap_signal_sync(
             "gap_analyzer_signal_ingestion_contract_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
             tenant_id,
             session_id,
-            assistant_message_id,
+            assistant_message.id,
             exc_info=True,
         )
     except Exception:
@@ -289,73 +284,10 @@ def _ingest_gap_signal_sync(
             "gap_analyzer_signal_ingestion_failed: tenant_id=%s session_id=%s assistant_message_id=%s",
             tenant_id,
             session_id,
-            assistant_message_id,
+            assistant_message.id,
         )
     finally:
         ingestion_db.close()
-
-
-def _try_ingest_gap_signal(
-    *,
-    chat: Chat,
-    tenant_id: uuid.UUID,
-    session_id: uuid.UUID,
-    user_message: Message,
-    assistant_message: Message,
-    question_text: str,
-    answer_confidence: float | None,
-    was_rejected: bool,
-    had_fallback: bool,
-    was_escalated: bool,
-    language: str | None = None,
-) -> None:
-    """Fire-and-forget dispatcher for gap-signal ingestion.
-
-    Chat handlers call this from inside a SQLAlchemy ``run_sync`` greenlet
-    that runs on the event loop thread, so the sync ``SessionLocal`` + psycopg2
-    syscalls in :func:`_ingest_gap_signal_sync` would block the loop on every
-    successful turn. We snapshot the ORM identity attributes here and dispatch
-    the work to the default thread executor whenever a running loop is detected
-    — the response can return immediately and the next turn's ``chat_setup`` is
-    no longer starved.
-
-    Sync callers (legacy direct-call tests) hit the ``RuntimeError`` branch and
-    run the body inline, preserving the previous synchronous semantics.
-    """
-    # Snapshot identity-only attributes on the caller's session so the worker
-    # thread does not depend on the caller's session lifecycle. PK access on a
-    # detached SQLAlchemy instance is normally safe, but capturing here avoids
-    # any DetachedInstanceError surprise across thread / loop boundaries.
-    chat_id = chat.id
-    user_message_id = user_message.id
-    assistant_message_id = assistant_message.id
-
-    kwargs = dict(
-        chat_id=chat_id,
-        tenant_id=tenant_id,
-        session_id=session_id,
-        user_message_id=user_message_id,
-        assistant_message_id=assistant_message_id,
-        question_text=question_text,
-        answer_confidence=answer_confidence,
-        was_rejected=was_rejected,
-        had_fallback=had_fallback,
-        was_escalated=was_escalated,
-        language=language,
-    )
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop — sync test path; preserve synchronous semantics.
-        _ingest_gap_signal_sync(**kwargs)
-        return
-
-    # Fire-and-forget on the default thread executor. ``asyncio.run`` (used by
-    # the sync ``process_chat_message`` shim) calls ``shutdown_default_executor``
-    # before returning, so tests that drive the orchestrator via the shim still
-    # see the persisted signal once the call returns.
-    loop.run_in_executor(None, lambda: _ingest_gap_signal_sync(**kwargs))
 
 
 def _start_mode_b_followup(tenant_id: uuid.UUID) -> None:

@@ -83,7 +83,7 @@ Redis is **foundational infra** — used for things that need cross-worker share
 | **Caches** (e.g. guard verdicts, embeddings) | `backend/core/redis.py` → `cache_get` / `cache_set_with_ttl` | Optional infra; helpers swallow connection errors and the caller treats it as a miss. |
 | **Distributed locks** (e.g. scheduled jobs, crawl throttle) | `backend/core/redis.py` → `acquire_lock` / `release_lock` | Atomic `SET NX EX` + Lua check-and-delete on release. |
 | **ARQ queue broker** | `backend/core/queue.py` (worker process: `backend/worker.py`) | Durable retry-aware background work — see "Job queue" below. |
-| **Idempotency keys** (future) | — | Tracked separately; will use the cache helpers. |
+| **Idempotency keys** | `backend/core/idempotency.py` → `idempotent_section` | Replays the cached response for retries of write endpoints — see "Idempotency-Key" below. |
 
 **Configuration:**
 - `REDIS_URL` (env). Unset locally → in-memory rate-limit storage and no-op cache/lock helpers. Required in production (Railway provisions it via the Redis add-on).
@@ -94,11 +94,41 @@ Redis is **foundational infra** — used for things that need cross-worker share
 - `ratelimit:*` — managed by slowapi (do not touch directly)
 - `cache:guard:<sha256>` — guard-verdict caches
 - `lock:gap_analyzer:<job>` — distributed locks for periodic jobs
+- `idempotency:<scope>:<tenant_id>:<key>:response` / `:lock` — idempotent-write replays
 
 **Graceful degradation rules:**
 - Cache misses on Redis errors must not break the request — log at debug, return as if cache miss.
 - Locks: when `acquire_lock` returns `None` (Redis down or already held), the caller decides whether to skip or run unguarded — never block forever.
 - Rate limit: failures surface as 500s on purpose (rate limiting is a security control; silent fallback to memory storage in production would create a window where a single worker has no shared limit).
+
+---
+
+## Idempotency-Key (`backend/core/idempotency.py`)
+
+Non-streaming write endpoints accept an optional `Idempotency-Key` request header so client retries (mobile timeout, slow SSE bootstrap) do not double-process work or duplicate LLM calls.
+
+**Contract for callers (clients):**
+- Generate a UUIDv4 on the first attempt; reuse the same value on every retry of the same logical operation.
+- Replays return the original status code and JSON body verbatim for **24h** after the first successful processing.
+- Header missing → endpoint behaves as before (backwards-compatible).
+- A parallel duplicate that arrives while the first request is still in flight either gets the stored response (if the sibling finishes within ~5s) or **`409 Conflict`** with `code: "idempotency_in_flight"` (retry with backoff).
+
+**Currently applied to:**
+- `POST /chat` (scope `chat`).
+
+**Out of scope for this helper:** SSE streams (`POST /widget/chat`, where the response is `text/event-stream`) — streaming has different semantics; dedup for the widget's chat path is tracked separately.
+
+**Storage:** `idempotency:<scope>:<tenant_id>:<key>:response` (response, 24h TTL) and `:lock` (in-flight marker, ~30s TTL). Keys are scoped per `<tenant_id>` so different tenants reusing the same UUID never collide. When Redis is unavailable, the helper degrades to a no-op (handler runs unguarded).
+
+**Adding to a new endpoint:**
+```python
+async with idempotent_section(request, tenant_id=str(tenant.id), scope="my_op") as section:
+    if section.cached is not None:
+        return JSONResponse(status_code=section.cached.status_code, content=section.cached.body)
+    payload = MyResponse(...).model_dump(mode="json")
+    await section.record(status_code=200, body=payload)
+    return JSONResponse(status_code=200, content=payload)
+```
 
 ---
 

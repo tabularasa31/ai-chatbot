@@ -1983,12 +1983,17 @@ async def _async_generate_answer_native(
     from backend.chat import service as _svc
 
     if not context_chunks and not faq_context_items and not quick_answer_items:
-        text = localize_text_to_language_result(
+        # ``localize_text_to_language_result`` does its own sync OpenAI call for
+        # non-English targets — push to the default executor so this fallback
+        # branch doesn't reblock the loop the rest of this function works hard
+        # to keep free.
+        result = await asyncio.to_thread(
+            localize_text_to_language_result,
             canonical_text="I don't have information about this.",
             target_language=response_language,
             api_key=api_key,
-        ).text
-        return (text, 0)
+        )
+        return (result.text, 0)
 
     system_prompt, user_message = build_rag_messages(
         question,

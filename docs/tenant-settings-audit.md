@@ -78,6 +78,12 @@ Recommended target:
    support setting. If profile extraction still needs a language hint, rename it
    to something clearly extracted/non-authoritative or keep it out of runtime
    escalation selection.
+4. Audit the profile extraction path during migration. The current code search
+   found runtime reads of `TenantProfile.escalation_language`, but no active
+   writer beyond the model/migration definition. If extraction later writes this
+   field, it should either write only an explicitly extracted metadata field or
+   stop writing escalation-language state altogether; it must not overwrite the
+   tenant-managed support setting.
 
 ### Remove
 
@@ -95,11 +101,15 @@ Recommended as a series of small PRs, not one large PR:
 1. Remove contradiction adjudication tenant override.
    - Delete `_tenant_contradiction_adjudication_enabled`.
    - Remove the tenant-level skip branch from contradiction adjudication.
+   - Delete `CONTRADICTION_ADJUDICATION_SETTINGS_KEY` from
+     `backend/search/service.py` if no other code still uses it.
    - Delete tests that preserve the JSON override contract.
    - Keep global env knobs as the only rollout controls.
 2. Normalize escalation language ownership.
    - Decide the typed destination (`tenant_support_settings` or a typed column).
    - Backfill from `settings.support.escalation_language`.
+   - Audit and update any profile extraction writer before the new typed setting
+     becomes authoritative; extracted profile data must not clobber tenant input.
    - Update reads/writes to the typed source.
    - Remove the `TenantProfile.escalation_language` runtime fallback or rename
      the profile field if it remains useful as extracted metadata.

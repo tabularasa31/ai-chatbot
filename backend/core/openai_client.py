@@ -10,7 +10,9 @@ keepalive of the prior client.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 import threading
 from collections import OrderedDict
 
@@ -20,6 +22,8 @@ from openai import AsyncOpenAI, OpenAI, RateLimitError
 
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value
+
+logger = logging.getLogger(__name__)
 
 # Fast timeouts for non-data phases — failures here surface quickly.
 _CONNECT_TIMEOUT_SECONDS = 10.0
@@ -39,6 +43,35 @@ def _fingerprint_key(decrypted_key: str) -> str:
     return hashlib.sha256(decrypted_key.encode("utf-8")).hexdigest()
 
 
+def _close_client_best_effort(client: OpenAI | AsyncOpenAI) -> None:
+    """Release an evicted client's httpx pool / sockets.
+
+    The OpenAI SDK exposes a sync ``close()`` for the sync client and an
+    ``async close()`` coroutine for the async one. For ``AsyncOpenAI`` we
+    schedule the close on the running loop when one is available; otherwise
+    we fall back to closing the underlying httpx async transport directly via
+    its sync ``close`` (httpx supports it for both sync and async clients).
+    All errors are swallowed — eviction must not break the calling request.
+    """
+    try:
+        if isinstance(client, AsyncOpenAI):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.create_task(client.close())
+                return
+            inner = getattr(client, "_client", None)
+            closer = getattr(inner, "close", None) if inner is not None else None
+            if callable(closer):
+                closer()
+        else:
+            client.close()
+    except Exception:
+        logger.debug("openai_client_close_failed", exc_info=True)
+
+
 def _cache_get(key: tuple[str, float, str]) -> OpenAI | AsyncOpenAI | None:
     with _client_cache_lock:
         client = _client_cache.get(key)
@@ -48,17 +81,26 @@ def _cache_get(key: tuple[str, float, str]) -> OpenAI | AsyncOpenAI | None:
 
 
 def _cache_put(key: tuple[str, float, str], client: OpenAI | AsyncOpenAI) -> None:
+    evicted: list[OpenAI | AsyncOpenAI] = []
     with _client_cache_lock:
         _client_cache[key] = client
         _client_cache.move_to_end(key)
         while len(_client_cache) > _CLIENT_CACHE_MAX:
-            _client_cache.popitem(last=False)
+            _, evicted_client = _client_cache.popitem(last=False)
+            evicted.append(evicted_client)
+    # Close outside the lock — close() can do I/O / scheduling and we don't
+    # want it to serialise the next cache insertion.
+    for old in evicted:
+        _close_client_best_effort(old)
 
 
 def _reset_cache() -> None:
-    """Test hook: drop all cached clients (call from fixtures, not production)."""
+    """Test hook: drop all cached clients and close their httpx pools."""
     with _client_cache_lock:
+        evicted = list(_client_cache.values())
         _client_cache.clear()
+    for old in evicted:
+        _close_client_best_effort(old)
 
 
 def _decrypt_or_raise(encrypted_key: str | None) -> str:

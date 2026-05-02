@@ -306,6 +306,10 @@ async def _mark_failed(
 
 
 async def _on_worker_startup(_: dict[str, Any]) -> None:
+    # Store the worker's event loop so sync callers (thread-pool code that
+    # runs inside ARQ job executors) can submit coroutines via
+    # asyncio.run_coroutine_threadsafe, exactly as FastAPI lifespan does.
+    set_main_loop(asyncio.get_running_loop())
     logger.info("arq_worker_startup jobs=%d", len(_REGISTERED))
 
 

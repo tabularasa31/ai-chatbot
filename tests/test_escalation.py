@@ -1143,3 +1143,55 @@ def test_delete_escalation_original_clears_legacy_plaintext_when_redacted_missin
     db_session.refresh(ticket)
     assert ticket.primary_question_original_encrypted is None
     assert ticket.primary_question == ""
+
+
+def test_perform_manual_escalation_emits_chat_escalated_event(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict] = []
+
+    def fake_capture(event, **kwargs):
+        captured.append({"event": event, **kwargs})
+
+    monkeypatch.setattr("backend.chat.events.capture_event", fake_capture)
+
+    token = register_and_verify_user(tenant, db_session, email="evt-manual@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Event Manual Escalation"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    set_client_openai_key(tenant, token)
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "user@example.com", "plan_tier": "pro"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    perform_manual_escalation(
+        db_session,
+        cl,
+        chat.session_id,
+        api_key="sk-test",
+        user_note="I need help",
+        trigger=EscalationTrigger.user_request,
+        bot_public_id="bot_abc",
+    )
+
+    escalated_events = [e for e in captured if e["event"] == "chat_escalated"]
+    assert len(escalated_events) == 1
+    props = escalated_events[0]["properties"]
+    assert props["escalation_reason"] == "user_request"
+    assert props["escalation_trigger"] == "user_request"
+    assert escalated_events[0].get("bot_id") == "bot_abc"

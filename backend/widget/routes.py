@@ -665,6 +665,7 @@ def widget_escalate(
             api_key=tenant.openai_api_key,
             user_note=body.user_note,
             trigger=trig,
+            bot_public_id=bot_id,
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found") from None

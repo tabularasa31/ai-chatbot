@@ -358,6 +358,7 @@ def _upsert_page_document(
         if _embedder_mod._url_knowledge_extract_when_unchanged():
             _embedder_mod._run_tenant_knowledge_extraction_best_effort(
                 document_id=existing.id,
+                tenant_id=source.tenant_id,
                 api_key=api_key,
             )
         return existing, len(existing.embeddings)
@@ -413,6 +414,7 @@ def _upsert_page_document(
     invalidate_bm25_cache_for_tenant(source.tenant_id)
     _embedder_mod._run_tenant_knowledge_extraction_best_effort(
         document_id=doc.id,
+        tenant_id=source.tenant_id,
         api_key=api_key,
     )
     try:
@@ -460,6 +462,7 @@ def _upsert_structured_document(
         if _embedder_mod._url_knowledge_extract_when_unchanged():
             _embedder_mod._run_tenant_knowledge_extraction_best_effort(
                 document_id=existing.id,
+                tenant_id=source.tenant_id,
                 api_key=api_key,
             )
         return existing, len(existing.embeddings)
@@ -531,6 +534,7 @@ def _upsert_structured_document(
         invalidate_bm25_cache_for_tenant(source.tenant_id)
         _embedder_mod._run_tenant_knowledge_extraction_best_effort(
             document_id=doc.id,
+            tenant_id=source.tenant_id,
             api_key=api_key,
         )
         try:

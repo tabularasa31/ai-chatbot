@@ -241,37 +241,30 @@ def _url_knowledge_extract_when_unchanged() -> bool:
 def _run_tenant_knowledge_extraction_best_effort(
     *,
     document_id: uuid.UUID,
+    tenant_id: uuid.UUID,
     api_key: str | None,
 ) -> None:
-    """
-    Match file-upload embedding flow: after chunks exist, merge profile + FAQ candidates.
+    """Enqueue knowledge extraction job after URL crawl embedding.
 
-    URL crawls bypass ``run_embeddings_background``; without this hook, GitBook/docs
-    URLs index for RAG but never populate ``tenant_faq`` / profile extraction.
+    Replaces the former inline sync call: enqueues a durable ARQ job so
+    extraction failures retry instead of being silently dropped, and the
+    embed pipeline is no longer blocked on LLM calls.
 
-    Uses a **fresh** DB session from ``backend.core.db`` so ``db.rollback()`` inside
-    ``insert_new_faq_candidates`` / extraction error paths cannot undo the crawler session.
+    Graceful degradation: if Redis is unavailable, logs WARNING and returns
+    without raising so the embed pipeline is never broken by queue issues.
     """
-    if not api_key:
+    if not api_key or not tenant_id:
         return
-    from backend.core import db as core_db
-
-    db_extract = core_db.SessionLocal()
     try:
-        from backend.tenant_knowledge.extract_tenant_knowledge import (
-            run_extract_client_knowledge_for_document,
-        )
+        from backend.jobs.knowledge_extraction import enqueue_knowledge_extraction_sync
 
-        run_extract_client_knowledge_for_document(
+        enqueue_knowledge_extraction_sync(
             document_id=document_id,
-            db=db_extract,
-            api_key=api_key,
+            tenant_id=tenant_id,
         )
     except Exception:
         logger.warning(
-            "Tenant knowledge extraction failed for URL document_id=%s",
+            "knowledge_enqueue_failed document_id=%s",
             document_id,
             exc_info=True,
         )
-    finally:
-        db_extract.close()

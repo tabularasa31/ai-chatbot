@@ -440,25 +440,24 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
-        # Phase 1 (best-effort): update tenant knowledge after successful indexing.
-        # Never break embeddings pipeline if extraction fails.
-        try:
-            from backend.tenant_knowledge.extract_tenant_knowledge import (
-                run_extract_client_knowledge_for_document,
-            )
+        # Enqueue knowledge extraction as a durable ARQ job so failures
+        # retry and the embed pipeline is not blocked on LLM calls.
+        if tenant_id is not None:
+            try:
+                from backend.jobs.knowledge_extraction import (
+                    enqueue_knowledge_extraction_sync,
+                )
 
-            run_extract_client_knowledge_for_document(
-                document_id=document_id,
-                db=db,
-                api_key=api_key,
-            )
-        except Exception:
-            # Extraction is intentionally best-effort.
-            logger.warning(
-                "Tenant knowledge extraction failed for document_id=%s",
-                document_id,
-                exc_info=True,
-            )
+                enqueue_knowledge_extraction_sync(
+                    document_id=document_id,
+                    tenant_id=tenant_id,
+                )
+            except Exception:
+                logger.warning(
+                    "knowledge_enqueue_failed document_id=%s",
+                    document_id,
+                    exc_info=True,
+                )
         if tenant_id is not None:
             try:
                 run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)

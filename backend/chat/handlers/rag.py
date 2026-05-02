@@ -485,8 +485,13 @@ class ThoughtStreamFilter:
     _OPEN_TAG = "<thought>"
     _CLOSE_TAG = "</thought>"
 
-    def __init__(self, emit: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        on_phase_change: Callable[[str], None] | None = None,
+    ) -> None:
         self._emit = emit
+        self._on_phase_change = on_phase_change
         self._buf = ""
         self._inside = False
 
@@ -500,6 +505,14 @@ class ThoughtStreamFilter:
         self._buf = ""
         self._inside = False
 
+    def _notify_phase(self, phase: str) -> None:
+        if self._on_phase_change is None:
+            return
+        try:
+            self._on_phase_change(phase)
+        except Exception:
+            logger.debug("ThoughtStreamFilter phase callback failed", exc_info=True)
+
     def _process(self) -> None:
         while self._buf:
             tag = self._CLOSE_TAG if self._inside else self._OPEN_TAG
@@ -509,6 +522,7 @@ class ThoughtStreamFilter:
                     self._emit(self._buf[:idx])
                 self._buf = self._buf[idx + len(tag):]
                 self._inside = not self._inside
+                self._notify_phase("reasoning" if self._inside else "writing")
             else:
                 # No complete tag found; keep a potential split-boundary prefix in the
                 # buffer so a tag arriving across two chunks is handled correctly.
@@ -968,6 +982,7 @@ def generate_answer(
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
@@ -1088,7 +1103,7 @@ def generate_answer(
             )
             chunks: list[str] = []
             total_tokens = 0
-            _filter = ThoughtStreamFilter(stream_callback)
+            _filter = ThoughtStreamFilter(stream_callback, on_phase_change=status_callback)
             for chunk in stream:
                 if isinstance(getattr(chunk, "model", None), str):
                     actual_model = chunk.model
@@ -1965,6 +1980,7 @@ async def _async_generate_answer_native(
     trace: TraceHandle | None = None,
     retry_bot_id: str | None = None,
     stream_callback: Callable[[str], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
@@ -2079,7 +2095,7 @@ async def _async_generate_answer_native(
             )
             chunks: list[str] = []
             total_tokens = 0
-            _filter = ThoughtStreamFilter(stream_callback)
+            _filter = ThoughtStreamFilter(stream_callback, on_phase_change=status_callback)
             async for chunk in stream:
                 if isinstance(getattr(chunk, "model", None), str):
                     actual_model = chunk.model
@@ -2936,6 +2952,7 @@ async def async_run_chat_pipeline(
             trace=trace,
             retry_bot_id=retry_bot_id,
             stream_callback=stream_callback,
+            status_callback=status_callback,
             metrics_tenant_id=tenant_public_id,
             metrics_bot_id=bot_public_id,
             prior_messages=prior_messages,

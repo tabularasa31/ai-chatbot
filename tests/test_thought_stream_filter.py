@@ -218,3 +218,40 @@ def test_large_thought_block_split() -> None:
     large_chunk = "<thought>" + "x" * 50_000
     result = _collect([large_chunk, "y" * 50_000 + "</thought>end"])
     assert result == "end"
+
+
+def test_phase_callback_fires_on_thought_boundaries() -> None:
+    """on_phase_change emits 'reasoning' on <thought>, 'writing' on </thought>."""
+    phases: list[str] = []
+    received: list[str] = []
+    f = ThoughtStreamFilter(received.append, on_phase_change=phases.append)
+    f.feed("intro <thought>cot</thought>final")
+    f.flush_end()
+    assert phases == ["reasoning", "writing"]
+    assert "".join(received) == "intro final"
+
+
+def test_phase_callback_split_across_chunks() -> None:
+    """Tag split across feed() calls still fires phase change once per transition."""
+    phases: list[str] = []
+    received: list[str] = []
+    f = ThoughtStreamFilter(received.append, on_phase_change=phases.append)
+    f.feed("<tho")
+    f.feed("ught>hidden</tho")
+    f.feed("ught>visible")
+    f.flush_end()
+    assert phases == ["reasoning", "writing"]
+    assert "".join(received) == "visible"
+
+
+def test_phase_callback_failure_does_not_break_stream() -> None:
+    """An exception in on_phase_change must not prevent emit() from running."""
+    received: list[str] = []
+
+    def boom(_: str) -> None:
+        raise RuntimeError("phase callback exploded")
+
+    f = ThoughtStreamFilter(received.append, on_phase_change=boom)
+    f.feed("a<thought>x</thought>b")
+    f.flush_end()
+    assert "".join(received) == "ab"

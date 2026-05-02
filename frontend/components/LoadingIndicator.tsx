@@ -5,19 +5,34 @@ import { useEffect, useState } from "react";
 const PHASE_LABELS: Record<string, string> = {
   thinking: "Looking it up",
   searching: "Reading sources",
+  reasoning: "Thinking it through",
   writing: "Writing answer",
 };
 
 const FALLBACK_LABEL = PHASE_LABELS.thinking;
+const STALLED_LABEL = "Still working on it";
+// Safety-net: if a stage stays the same for this long (and no chunks have
+// arrived to replace the indicator), swap the label so the user doesn't
+// perceive a freeze. Covers reasoning models that go silent before the
+// first <thought> tag arrives, or any other long pre-token gap.
+const STALLED_AFTER_MS = 8000;
 
 export function LoadingIndicator({ stage }: { stage: string | null }) {
+  const [stalled, setStalled] = useState(false);
   // Until the backend yields a stage, show the first phase as a default.
   // When stage changes, retype it (gives a "bot switched step" cue).
-  const target =
+  const phaseLabel =
     (stage && PHASE_LABELS[stage]) ? PHASE_LABELS[stage] : FALLBACK_LABEL;
+  const target = stalled ? STALLED_LABEL : phaseLabel;
 
   const [text, setText] = useState("");
   const [showCaret, setShowCaret] = useState(true);
+
+  useEffect(() => {
+    setStalled(false);
+    const id = setTimeout(() => setStalled(true), STALLED_AFTER_MS);
+    return () => clearTimeout(id);
+  }, [stage]);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;

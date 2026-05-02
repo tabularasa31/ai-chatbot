@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import inspect
 
+from backend.core.config import settings
 from backend.core.db import (
     _build_async_readonly_engine_kwargs,
     async_readonly_engine,
@@ -23,8 +24,8 @@ def test_kwargs_postgres_sets_readonly_server_setting() -> None:
     assert kwargs["connect_args"] == {
         "server_settings": {"default_transaction_read_only": "on"},
     }
-    assert kwargs["pool_size"] == 10
-    assert kwargs["max_overflow"] == 20
+    assert kwargs["pool_size"] == settings.db_pool_size
+    assert kwargs["max_overflow"] == settings.db_max_overflow
 
 
 def test_kwargs_sqlite_skips_pool_and_server_settings() -> None:

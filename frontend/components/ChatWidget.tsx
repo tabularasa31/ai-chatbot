@@ -263,12 +263,6 @@ function hostnameAllowed(hostname: string, allowedDomains: string[]): boolean {
   });
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  thinking: "Reading your question…",
-  searching: "Searching the knowledge base…",
-  writing: "Composing the answer…",
-};
-
 export function ChatWidget({
   botId,
   locale,

@@ -363,7 +363,6 @@ def _emit_retry_scheduled(
                 "operation": operation,
                 "attempt": attempt,
                 "failure_kind": classified.kind.value,
-                "reason": classified.kind.value,
                 "status_code": classified.status_code,
                 "delay_ms": int(delay_seconds * 1000),
                 "elapsed_ms": int(elapsed * 1000),

@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from openai import APIError, RateLimitError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -38,6 +39,7 @@ from backend.chat.service import (
     record_gap_feedback_for_message,
 )
 from backend.core.db import get_async_db, get_db, run_sync
+from backend.core.idempotency import idempotent_section
 from backend.core.limiter import limiter
 from backend.core.openai_client import is_quota_exceeded
 from backend.email.service import send_email
@@ -138,12 +140,15 @@ async def chat(
     db: Annotated[AsyncSession, Depends(get_async_db)],
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
     x_browser_locale: Annotated[str | None, Header(alias="X-Browser-Locale")] = None,
-) -> ChatTurnResponse:
+) -> ChatTurnResponse | JSONResponse:
     """
     Chat endpoint (PUBLIC — no JWT, uses X-API-Key).
 
     Returns RAG-generated answer with source documents.
     Errors: 401 (invalid/missing API key), 422 (invalid question), 503 (OpenAI unavailable).
+
+    Honors the optional `Idempotency-Key` header: a retry within 24h replays
+    the original response instead of re-running the LLM pipeline.
     """
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
@@ -159,42 +164,55 @@ async def chat(
 
     session_id = body.session_id or uuid.uuid4()
 
-    try:
-        outcome = await async_process_chat_message(
-            tenant_id=tenant.id,
-            question=body.question,
-            session_id=session_id,
-            db=db,
-            api_key=tenant.openai_api_key,
-            browser_locale=x_browser_locale,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from None
-    except RateLimitError as exc:
-        if is_quota_exceeded(exc):
-            lang = detect_language(body.question).detected_language
-            raise HTTPException(
-                status_code=402,
-                detail=await run_sync(
-                    db,
-                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
-                ),
-            ) from None
-        raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-    except APIError:
-        raise HTTPException(
-            status_code=503,
-            detail="OpenAI service unavailable",
-        ) from None
+    async with idempotent_section(
+        request, tenant_id=str(tenant.id), scope="chat"
+    ) as section:
+        if section.cached is not None:
+            return JSONResponse(
+                status_code=section.cached.status_code, content=section.cached.body
+            )
 
-    return ChatTurnResponse(
-        text=outcome.text,
-        session_id=session_id,
-        source_documents=outcome.document_ids,
-        tokens_used=outcome.tokens_used,
-        chat_ended=outcome.chat_ended,
-        ticket_number=outcome.ticket_number,
-    )
+        try:
+            outcome = await async_process_chat_message(
+                tenant_id=tenant.id,
+                question=body.question,
+                session_id=session_id,
+                db=db,
+                api_key=tenant.openai_api_key,
+                browser_locale=x_browser_locale,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from None
+        except RateLimitError as exc:
+            if is_quota_exceeded(exc):
+                lang = detect_language(body.question).detected_language
+                raise HTTPException(
+                    status_code=402,
+                    detail=await run_sync(
+                        db,
+                        lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
+                    ),
+                ) from None
+            raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
+        except APIError:
+            raise HTTPException(
+                status_code=503,
+                detail="OpenAI service unavailable",
+            ) from None
+
+        response = ChatTurnResponse(
+            text=outcome.text,
+            session_id=session_id,
+            source_documents=outcome.document_ids,
+            tokens_used=outcome.tokens_used,
+            chat_ended=outcome.chat_ended,
+            ticket_number=outcome.ticket_number,
+        )
+        if section.active:
+            payload = response.model_dump(mode="json")
+            await section.record(status_code=200, body=payload)
+            return JSONResponse(status_code=200, content=payload)
+        return response
 
 
 @chat_router.post("/{session_id}/escalate", response_model=ManualEscalateResponse)

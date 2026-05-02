@@ -2822,6 +2822,7 @@ def _run_candidate_stage(
                 distinct_id=str(tenant_id) if tenant_id else "system",
                 tenant_id=str(tenant_id) if tenant_id else None,
                 properties={
+                    "channel": "entity_overlap",
                     "query_entity_count": len(query_entities),
                     "had_query_entities": bool(query_entities),
                     "candidate_count": len(entity_results),
@@ -4057,6 +4058,7 @@ async def _async_run_candidate_stage(
                 distinct_id=str(tenant_id) if tenant_id else "system",
                 tenant_id=str(tenant_id) if tenant_id else None,
                 properties={
+                    "channel": "entity_overlap",
                     "query_entity_count": len(query_entities),
                     "had_query_entities": bool(query_entities),
                     "candidate_count": len(entity_results),

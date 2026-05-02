@@ -21,7 +21,9 @@ TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
 
 
-def _emit_relevance_guard_metric(*, tenant_id: uuid.UUID, cache_hit: bool) -> None:
+def _emit_relevance_guard_metric(
+    *, tenant_id: uuid.UUID, cache_hit: bool, blocked: bool = False, score: str = ""
+) -> None:
     """Emit relevance_guard.check event to PostHog with cache_hit attribute."""
     try:
         from backend.observability.metrics import capture_event
@@ -29,7 +31,7 @@ def _emit_relevance_guard_metric(*, tenant_id: uuid.UUID, cache_hit: bool) -> No
             "relevance_guard.check",
             distinct_id=str(tenant_id),
             tenant_id=str(tenant_id),
-            properties={"cache_hit": cache_hit},
+            properties={"cache_hit": cache_hit, "blocked": blocked, "score": score},
         )
     except Exception:
         pass
@@ -213,7 +215,7 @@ def check_relevance_with_profile(
                 output={"relevant": relevant, "reason": reason},
                 metadata={"cache_hit": True, "latency_ms": 0},
             )
-        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True)
+        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
         return relevant, reason, profile
 
     system_prompt, user_prompt = _build_prompts(profile, user_question)
@@ -278,7 +280,7 @@ def check_relevance_with_profile(
             metadata={"latency_ms": latency_ms, "cache_hit": False},
         )
 
-    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False)
+    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
     _cache_set(cache_key, relevant, reason)
     return relevant, reason, profile
 
@@ -327,7 +329,7 @@ async def async_check_relevance_with_profile(
                 output={"relevant": relevant, "reason": reason},
                 metadata={"cache_hit": True, "latency_ms": 0},
             )
-        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True)
+        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
         return relevant, reason, profile
 
     system_prompt, user_prompt = _build_prompts(profile, user_question)
@@ -378,7 +380,7 @@ async def async_check_relevance_with_profile(
             metadata={"latency_ms": latency_ms, "cache_hit": False},
         )
 
-    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False)
+    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
     _cache_set(cache_key, relevant, reason)
     return relevant, reason, profile
 

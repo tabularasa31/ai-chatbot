@@ -8,6 +8,7 @@ import "highlight.js/styles/github-dark.css";
 import { MessageCircle, Send, Ticket } from "lucide-react";
 import { cn } from "@/components/ui/utils";
 import { LinkSafetyModal } from "@/components/widget/LinkSafetyModal";
+import { LoadingIndicator } from "./LoadingIndicator";
 import {
   appendSystemMarker,
   createTextMessage,
@@ -261,12 +262,6 @@ function hostnameAllowed(hostname: string, allowedDomains: string[]): boolean {
     return normalized ? host === normalized || host.endsWith(`.${normalized}`) : false;
   });
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  thinking: "Reading your question…",
-  searching: "Searching the knowledge base…",
-  writing: "Composing the answer…",
-};
 
 export function ChatWidget({
   botId,
@@ -916,20 +911,7 @@ export function ChatWidget({
               </div>
             ) : loading ? (
               <div className="flex items-end gap-3">
-                <div className="rounded-2xl bg-gray-100 px-4 py-3">
-                  <span className="flex h-6 items-center gap-2">
-                    <span className="flex items-center gap-1.5">
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.3s]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce [animation-delay:-0.15s]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-gray-300 animate-bounce" />
-                    </span>
-                    {statusStage && STATUS_LABELS[statusStage] ? (
-                      <span className="text-xs text-gray-500">
-                        {STATUS_LABELS[statusStage]}
-                      </span>
-                    ) : null}
-                  </span>
-                </div>
+                <LoadingIndicator stage={statusStage} />
               </div>
             ) : null}
           </div>

@@ -2072,10 +2072,9 @@ async def async_run_chat_pipeline(
 
         base_query_variants = _svc.expand_query(question)
 
-        # All DB reads for this stage are done; release the connection before
-        # awaiting OpenAI guard/embed tasks (2-10 s). Holding it during those
-        # awaits would exhaust the pool under concurrency. The session re-acquires
-        # a connection automatically when _run_retrieval needs pgvector.
+        # Release the connection before the concurrent guard/embed OpenAI tasks.
+        # async_match_faq (stage 3) will re-acquire it briefly; another close()
+        # follows before await rel_task so that 2-10 s wait is also connectionless.
         await db.close()
 
         # Launch guard + embedding tasks concurrently — event loop handles all I/O.
@@ -2345,6 +2344,9 @@ async def async_run_chat_pipeline(
             )
 
         # --- 4. Relevance pre-check ---
+        # async_match_faq re-acquired a connection; release it before awaiting
+        # rel_task (the relevance guard OpenAI call, 2-10 s).
+        await db.close()
         try:
             relevant, _, state.profile = await rel_task
         except asyncio.CancelledError:

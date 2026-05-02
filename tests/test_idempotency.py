@@ -28,15 +28,25 @@ class _FakeRedis:
         self.store: dict[str, str] = {}
         self.locks: dict[str, str] = {}
         self.enabled = True
+        # When False, every Redis call behaves as if the server is unreachable:
+        # cache_get/acquire_lock return None, ping returns False. The helper
+        # should then degrade to no-op rather than 409.
+        self.alive = True
 
     async def cache_get(self, key: str) -> str | None:
+        if not self.alive:
+            return None
         return self.store.get(key)
 
     async def cache_set_with_ttl(self, key: str, value: str, ttl_seconds: int) -> bool:
+        if not self.alive:
+            return False
         self.store[key] = value
         return True
 
     async def acquire_lock(self, key: str, ttl_seconds: int) -> str | None:
+        if not self.alive:
+            return None
         if key in self.locks:
             return None
         token = f"tok-{len(self.locks)}"
@@ -44,10 +54,15 @@ class _FakeRedis:
         return token
 
     async def release_lock(self, key: str, token: str) -> bool:
+        if not self.alive:
+            return False
         if self.locks.get(key) == token:
             del self.locks[key]
             return True
         return False
+
+    async def redis_ping(self) -> bool:
+        return self.alive
 
     def is_enabled(self) -> bool:
         return self.enabled
@@ -60,6 +75,7 @@ def fake_redis(monkeypatch: pytest.MonkeyPatch) -> _FakeRedis:
     monkeypatch.setattr(idempotency.redis_module, "cache_set_with_ttl", fake.cache_set_with_ttl)
     monkeypatch.setattr(idempotency.redis_module, "acquire_lock", fake.acquire_lock)
     monkeypatch.setattr(idempotency.redis_module, "release_lock", fake.release_lock)
+    monkeypatch.setattr(idempotency.redis_module, "redis_ping", fake.redis_ping)
     monkeypatch.setattr(idempotency.redis_module, "is_enabled", fake.is_enabled)
     return fake
 
@@ -254,6 +270,26 @@ async def test_corrupt_cache_value_is_treated_as_miss(
         # Corrupt cache → cache miss → handler runs again.
         assert section.cached is None
         assert section.active is True
+
+
+@pytest.mark.asyncio
+async def test_redis_outage_after_enabled_degrades_to_noop(
+    fake_redis: _FakeRedis,
+) -> None:
+    """When Redis is configured but unreachable, the helper must run the
+    handler unguarded rather than fail keyed requests with 409."""
+    fake_redis.alive = False  # is_enabled stays True; Redis is "down".
+
+    async with idempotent_section(
+        _request("k1"), tenant_id="t1", scope="chat"
+    ) as section:
+        # Degraded mode: no replay, no lock, but we still let the handler run.
+        assert section.cached is None
+        assert section.active is False
+        await section.record(status_code=200, body={"ok": True})
+
+    assert fake_redis.store == {}
+    assert fake_redis.locks == {}
 
 
 @pytest.mark.asyncio

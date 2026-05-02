@@ -44,7 +44,11 @@ from backend.core import redis as redis_module
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESPONSE_TTL_SECONDS = 24 * 60 * 60
-DEFAULT_LOCK_TTL_SECONDS = 30
+# Lock TTL must outlast a realistic handler run. The chat pipeline can take
+# 60s+ on slow OpenAI calls; if the lock expires before the handler stores
+# a response, a retry would acquire a fresh lock and re-execute the work,
+# defeating the dedup guarantee. 120s comfortably covers chat-class handlers.
+DEFAULT_LOCK_TTL_SECONDS = 120
 PARALLEL_POLL_TOTAL_SECONDS = 5.0
 PARALLEL_POLL_INTERVAL_SECONDS = 0.2
 MAX_KEY_LENGTH = 128
@@ -110,12 +114,12 @@ async def _wait_for_sibling_response(
     """
     deadline = asyncio.get_event_loop().time() + total_seconds
     while True:
-        await asyncio.sleep(interval_seconds)
         cached = await _load_cached(cache_key)
         if cached is not None:
             return cached
         if asyncio.get_event_loop().time() >= deadline:
             return None
+        await asyncio.sleep(interval_seconds)
 
 
 class IdempotencySection:
@@ -222,8 +226,22 @@ async def idempotent_section(
 
     lock_token = await redis_module.acquire_lock(lock_key, lock_ttl_seconds)
     if lock_token is None:
-        # Sibling in flight (or Redis hiccup). Poll the response cache; if it
-        # never appears, surface 409 so the client can retry with backoff.
+        # `acquire_lock` returns None for two distinct reasons: (a) a sibling
+        # holds the lock (real in-flight duplicate), or (b) Redis is
+        # unreachable (transient outage). We must not fail keyed requests on
+        # (b) — graceful degradation means running unguarded when the cache
+        # layer is gone. Use redis_ping to disambiguate: alive → treat as
+        # sibling and poll/409; dead → run handler unguarded.
+        if not await redis_module.redis_ping():
+            logger.warning("idempotency_redis_unavailable_degrading_to_noop")
+            yield IdempotencySection(
+                cached=None,
+                response_cache_key=None,
+                lock_cache_key=None,
+                lock_token=None,
+                response_ttl_seconds=response_ttl_seconds,
+            )
+            return
         sibling = await _wait_for_sibling_response(response_key)
         if sibling is not None:
             yield IdempotencySection(

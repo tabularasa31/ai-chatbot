@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 import json
 import os
 import sys
@@ -319,9 +319,31 @@ def mock_openai_client():
         # Call through the mock so tests can override side_effect / return_value.
         return mock_client.embeddings.create(*args, **kwargs)
 
-    async def _async_chat_completions_create(*args: object, **kwargs: object) -> Mock:
+    class _AsyncStreamWrapper:
+        """Wrap the sync-mock list of stream chunks as an async iterator so
+        the async generation path (``async for chunk in stream``) consumes
+        them transparently. Keeps test fakes that configure
+        ``mock_openai_client.chat.completions.create.return_value`` working
+        for both sync and async code paths.
+        """
+
+        def __init__(self, chunks: list[Mock]) -> None:
+            self._chunks = list(chunks)
+
+        def __aiter__(self) -> "_AsyncStreamWrapper":
+            return self
+
+        async def __anext__(self) -> Mock:
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    async def _async_chat_completions_create(*args: object, **kwargs: object) -> Any:
         # Call through the mock so tests can override side_effect / return_value.
-        return mock_client.chat.completions.create(*args, **kwargs)
+        result = mock_client.chat.completions.create(*args, **kwargs)
+        if kwargs.get("stream") and isinstance(result, list):
+            return _AsyncStreamWrapper(result)
+        return result
 
     async_mock_client.embeddings.create.side_effect = _async_embeddings_create
     async_mock_client.chat.completions.create.side_effect = _async_chat_completions_create
@@ -333,6 +355,7 @@ def mock_openai_client():
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
          patch("backend.chat.language.get_openai_client", return_value=mock_client), \
          patch("backend.chat.service.get_openai_client", return_value=mock_client), \
+         patch("backend.chat.service.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.gap_analyzer.prompts.get_openai_client", return_value=mock_client), \
          patch("backend.knowledge.routes.get_openai_client", return_value=mock_client), \

@@ -10,6 +10,21 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     database_url: str = Field(..., alias="DATABASE_URL")
+    # Connection pool sizing — applied to all three engines (sync, async, async_readonly).
+    # Default calculation: floor(PG max_connections / backend_instances / 3 engines).
+    # Railway default: max_connections=100, 1 instance -> 30 per engine (20+10) x 3 = 90 total.
+    db_pool_size: int = Field(
+        20,
+        alias="DB_POOL_SIZE",
+        ge=1,
+        description="SQLAlchemy pool_size for each of the three DB engines.",
+    )
+    db_max_overflow: int = Field(
+        10,
+        alias="DB_MAX_OVERFLOW",
+        ge=0,
+        description="SQLAlchemy max_overflow per engine. Hard cap = db_pool_size + db_max_overflow.",
+    )
     redis_url: str | None = Field(None, alias="REDIS_URL")
     environment: str = Field("development", alias="ENVIRONMENT")
     jwt_secret: str = Field(..., alias="JWT_SECRET")

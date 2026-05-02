@@ -11,12 +11,13 @@ from .config import settings
 
 T = TypeVar("T")
 
-engine = create_engine(
-    settings.database_url,
-    pool_size=10,
-    max_overflow=20,
-    future=True,
-)
+_engine_kwargs: dict = {"future": True}
+if not settings.database_url.startswith("sqlite"):
+    _engine_kwargs.update(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
+engine = create_engine(settings.database_url, **_engine_kwargs)
 
 SessionLocal = sessionmaker(
     autocommit=False,
@@ -56,7 +57,10 @@ def _to_async_url(url: str) -> str:
 _async_url = _to_async_url(settings.database_url)
 _async_engine_kwargs: dict = {"future": True}
 if not _async_url.startswith("sqlite"):
-    _async_engine_kwargs.update(pool_size=10, max_overflow=20)
+    _async_engine_kwargs.update(
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
 
 async_engine = create_async_engine(_async_url, **_async_engine_kwargs)
 
@@ -109,7 +113,10 @@ def _build_async_readonly_engine_kwargs(url: str) -> dict:
             "server_settings": {"default_transaction_read_only": "on"},
         }
     if not url.startswith("sqlite"):
-        kwargs.update(pool_size=10, max_overflow=20)
+        kwargs.update(
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+        )
     return kwargs
 
 

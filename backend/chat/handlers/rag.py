@@ -2655,4 +2655,9 @@ async def async_run_chat_pipeline(
     early = await _run_retrieval()
     if early is not None:
         return early
+    # Release the DB connection before the LLM call. _run_generation does not
+    # touch the DB; holding a connection open for 20-30 s of LLM latency exhausts
+    # the pool under any meaningful concurrency. The session remains valid and will
+    # re-acquire a connection when the handler writes the result after returning.
+    await db.close()
     return await _run_generation()

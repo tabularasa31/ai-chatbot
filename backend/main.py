@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -52,10 +53,24 @@ from backend.search.routes import search_router
 from backend.tenants.routes import tenants_router
 from backend.widget.routes import widget_router
 
+# The default asyncio ThreadPoolExecutor is sized at min(32, cpu_count + 4).
+# On the production 2-vCPU container that's ~6 threads, but a single chat turn
+# fans out 5+ concurrent ``asyncio.to_thread`` consumers (LLM generate/validate,
+# human-request classifier, NER, contradiction adjudication). Under k6 load the
+# default pool was 8x oversubscribed and dominated p95. 128 workers gives ample
+# headroom while staying well below the OS thread limit.
+_DEFAULT_EXECUTOR_WORKERS = 128
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    set_main_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    set_main_loop(loop)
+    default_executor = ThreadPoolExecutor(
+        max_workers=_DEFAULT_EXECUTOR_WORKERS,
+        thread_name_prefix="asyncio-default",
+    )
+    loop.set_default_executor(default_executor)
     await init_redis()
     init_observability()
     init_metrics()
@@ -72,6 +87,7 @@ async def lifespan(_: FastAPI):
         shutdown_observability()
         await close_queue_pool()
         await shutdown_redis()
+        default_executor.shutdown(wait=False)
 
 
 app = FastAPI(title="AI Chatbot API", version="0.1.0", lifespan=lifespan)

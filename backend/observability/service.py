@@ -84,6 +84,27 @@ class GenerationHandle(SpanHandle, ABC):
 class TraceHandle(ABC):
     """Interface for trace-like objects."""
 
+    def record_stage_ms(self, stage: str, duration_ms: float) -> None:
+        """Aggregate a per-stage wall-clock duration on the trace.
+
+        Stage timings are flushed once at the end of the chat turn as a flat
+        ``stage_durations_ms`` dict on the trace metadata, so a single Langfuse
+        view surfaces every stage's wall-clock without span-walking. Repeated
+        recordings for the same stage are summed (e.g. embed across query
+        variants). Reads/writes are not locked: stage timings are diagnostic
+        and a small drift under concurrent ``to_thread`` workers is acceptable.
+        """
+        durations = getattr(self, "_stage_durations_ms", None)
+        if durations is None:
+            durations = {}
+            self._stage_durations_ms = durations
+        durations[stage] = durations.get(stage, 0.0) + float(duration_ms)
+
+    @property
+    def stage_durations_ms(self) -> dict[str, float]:
+        """Snapshot of accumulated stage timings (empty if none recorded)."""
+        return dict(getattr(self, "_stage_durations_ms", None) or {})
+
     @abstractmethod
     def span(
         self,

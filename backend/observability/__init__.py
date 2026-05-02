@@ -20,6 +20,23 @@ from backend.observability.service import (
     shutdown_observability,
 )
 
+
+def record_stage_ms(trace: TraceHandle | None, stage: str, duration_ms: float) -> None:
+    """Best-effort wrapper around :meth:`TraceHandle.record_stage_ms`.
+
+    Tolerates ``trace=None`` and ad-hoc duck-typed traces (test fakes that
+    predate the method) by silently no-op'ing instead of raising. Use this
+    helper at chat-pipeline call sites to keep the new diagnostic non-breaking
+    for existing test doubles.
+    """
+    if trace is None:
+        return
+    fn = getattr(trace, "record_stage_ms", None)
+    if fn is None:
+        return
+    fn(stage, duration_ms)
+
+
 __all__ = [
     "GenerationHandle",
     "MetricsService",
@@ -34,6 +51,7 @@ __all__ = [
     "init_metrics",
     "init_observability",
     "init_sentry",
+    "record_stage_ms",
     "shutdown_metrics",
     "shutdown_observability",
     "shutdown_sentry",

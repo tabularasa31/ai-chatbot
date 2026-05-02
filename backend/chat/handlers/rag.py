@@ -65,7 +65,7 @@ from backend.guards.reject_response import (
     async_build_reject_response_result,
 )
 from backend.models import Chat, MessageRole, TenantProfile
-from backend.observability import TraceHandle
+from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.formatters import truncate_text
 from backend.search.service import (
     RetrievalReliability,
@@ -1143,6 +1143,7 @@ def generate_answer(
         _cached_tokens = _safe_int(cached_tokens_raw)
         _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
         _duration_s = perf_counter() - started_at
+        _gen_duration_ms = round(_duration_s * 1000, 2)
         if generation is not None:
             _cost_rates = settings.openai_model_costs.get(
                 actual_model,
@@ -1163,11 +1164,13 @@ def generate_answer(
                     "thought_truncated": _thought_truncated,
                     "cost_usd": _cost_usd,
                     "cost_rate_usd_per_1m": _cost_rates,
-                    "duration_ms": round(_duration_s * 1000, 2),
+                    "duration_ms": _gen_duration_ms,
                     "prompt_cache_cached_tokens": _cached_tokens,
                     "prompt_cache_hit": _cached_tokens > 0,
                 },
             )
+        if trace is not None:
+            record_stage_ms(trace, "llm_generate_ms", _gen_duration_ms)
         if metrics_tenant_id is not None or metrics_bot_id is not None:
             from backend.chat.events import _emit_ai_generation_event
             _emit_ai_generation_event(
@@ -1361,13 +1364,16 @@ def validate_answer(
             "reason": str(result.get("reason", "")),
         }
         _val_duration_s = perf_counter() - started_at
+        _val_duration_ms = round(_val_duration_s * 1000, 2)
         if validation_span is not None:
             validation_span.end(
                 output=result,
                 metadata={
-                    "duration_ms": round(_val_duration_s * 1000, 2),
+                    "duration_ms": _val_duration_ms,
                 },
             )
+        if trace is not None:
+            record_stage_ms(trace, "llm_validate_ms", _val_duration_ms)
         if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
             _val_input = getattr(response.usage, "prompt_tokens", 0) or 0
             _val_output = getattr(response.usage, "completion_tokens", 0) or 0
@@ -1677,6 +1683,7 @@ class RagHandler(PipelineHandler):
                 # back to the loop via ``await_only`` + ``asyncio.to_thread``: the
                 # greenlet suspends, the OpenAI call runs in a worker thread, and
                 # other coroutines progress in the meantime.
+                _esc_openai_start = perf_counter()
                 esc = await_only(
                     asyncio.to_thread(
                         complete_escalation_openai_turn,
@@ -1687,6 +1694,11 @@ class RagHandler(PipelineHandler):
                         api_key=ctx.api_key,
                         response_language=ctx.language_context.response_language,
                     )
+                )
+                record_stage_ms(
+                    ctx.trace,
+                    "escalation_openai_ms",
+                    round((perf_counter() - _esc_openai_start) * 1000, 2),
                 )
                 answer = answer + "\n\n" + esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
@@ -2272,6 +2284,7 @@ async def async_run_chat_pipeline(
             state.query_variants = query_variants
             state.variant_vectors = base_variant_vectors
 
+        embed_ms = round((perf_counter() - embed_start) * 1000, 2)
         if embed_span is not None:
             embed_span.end(
                 output={
@@ -2279,13 +2292,16 @@ async def async_run_chat_pipeline(
                     "extra_embedded_queries": max(len(state.variant_vectors) - 1, 0),
                     "embedding_api_request_count": state.embed_api_request_count,
                     "extra_embedding_api_requests": max(state.embed_api_request_count - 1, 0),
-                    "duration_ms": round((perf_counter() - embed_start) * 1000, 2),
+                    "duration_ms": embed_ms,
                     "upstream_precomputed": True,
                 }
             )
+        if trace is not None:
+            record_stage_ms(trace, "embed_ms", embed_ms)
         base_question_embedding = state.variant_vectors[0] if state.variant_vectors else []
 
         # --- 3. FAQ matching ---
+        faq_start = perf_counter()
         try:
             state.faq_match = await _svc.async_match_faq(
                 tenant_id=tenant_id,
@@ -2305,6 +2321,7 @@ async def async_run_chat_pipeline(
                 decision_reason="faq_match_error_degraded_to_rag_only",
             )
 
+        faq_ms = round((perf_counter() - faq_start) * 1000, 2)
         if trace is not None:
             faq_span = trace.span(name="faq_match", input={"question_preview": question[:80]})
             retrieval_skipped = state.faq_match.strategy == "faq_direct"
@@ -2321,8 +2338,10 @@ async def async_run_chat_pipeline(
                     "decision_reason": state.faq_match.decision_reason,
                     "retrieval_skipped": retrieval_skipped,
                     "generation_skipped": retrieval_skipped,
+                    "duration_ms": faq_ms,
                 },
             )
+            record_stage_ms(trace, "faq_match_ms", faq_ms)
 
         if state.faq_match.strategy == "faq_direct":
             if not rel_task.done():
@@ -2452,6 +2471,12 @@ async def async_run_chat_pipeline(
                 top_k=5,
                 trace=trace,
                 **retrieve_kwargs,
+            )
+        if state.retrieval is not None:
+            record_stage_ms(
+                trace,
+                "retrieval_ms",
+                state.retrieval.retrieval_duration_ms or 0.0,
             )
 
         # --- 6. Low-retrieval guard ---

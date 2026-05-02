@@ -765,6 +765,7 @@ def perform_manual_escalation(
     api_key: str,
     user_note: str | None,
     trigger: EscalationTrigger,
+    bot_public_id: str | None = None,
 ) -> tuple[str, str]:
     """
     Create ticket + OpenAI handoff; persist assistant message only (no user bubble).
@@ -852,6 +853,18 @@ def perform_manual_escalation(
     chat.tokens_used = int(chat.tokens_used or 0) + out.tokens_used
     db.add(chat)
     db.commit()
+
+    from backend.chat.events import _emit_chat_escalated_event
+    _emit_chat_escalated_event(
+        tenant_public_id=getattr(tenant, "public_id", None),
+        bot_public_id=bot_public_id,
+        chat_id=str(chat.id),
+        escalation_reason=trigger.value,
+        escalation_trigger=trigger.value,
+        plan_tier=effective.get("plan_tier"),
+        priority=ticket.priority if ticket is not None else None,
+    )
+
     return (out.message_to_user, ticket.ticket_number)
 
 

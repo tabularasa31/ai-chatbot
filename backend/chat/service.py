@@ -682,7 +682,16 @@ async def async_process_chat_message(
     optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
 
-    explicit_human_request = detect_human_request(redacted_question, api_key)
+    # Release the pooled connection before the human-request classifier:
+    # detect_human_request makes a sync OpenAI call (up to 3s) and there are
+    # no DB operations until _ensure_chat_async below.
+    await db.close()
+
+    # Run the sync classifier off the event loop so other coroutines can
+    # progress during its OpenAI call.
+    explicit_human_request = await asyncio.to_thread(
+        detect_human_request, redacted_question, api_key
+    )
 
     trace = begin_trace(
         name="rag-query",
@@ -702,6 +711,11 @@ async def async_process_chat_message(
     chat, effective_user_ctx = await _ensure_chat_async(
         db, tenant_id, session_id, bot_id, user_context, browser_locale
     )
+    # Re-attach tenant_row to the now-active session: db.close() above detached
+    # it. Today only loaded scalar columns are read downstream, but merging
+    # protects future lazy-loaded relationships from DetachedInstanceError.
+    if tenant_row is not None:
+        tenant_row = await db.merge(tenant_row, load=False)
     tenant_profile = (
         await db.get(TenantProfile, tenant_id) if tenant_row is not None else None
     )

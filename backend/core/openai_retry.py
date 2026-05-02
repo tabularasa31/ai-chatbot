@@ -40,6 +40,7 @@ def call_openai_with_retry(
     max_attempts = settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds
     last_exc: Exception | None = None
+    last_classified: ClassifiedError | None = None
 
     for attempt in range(1, max_attempts + 1):
         _emit_call_attempt(
@@ -49,6 +50,8 @@ def call_openai_with_retry(
             tenant_id=tenant_id,
             bot_id=bot_id,
             call_type=call_type,
+            prev_exc=last_exc,
+            prev_classified=last_classified,
         )
         try:
             return fn()
@@ -133,12 +136,14 @@ def call_openai_with_retry(
                 elapsed=elapsed,
                 remaining=remaining,
                 classified=classified,
+                exc=exc,
                 tenant_id=tenant_id,
                 bot_id=bot_id,
                 call_type=call_type,
             )
             time.sleep(delay)
             last_exc = exc
+            last_classified = classified
 
     if last_exc is not None:  # pragma: no cover
         raise last_exc
@@ -164,6 +169,7 @@ async def async_call_openai_with_retry(
     max_attempts = settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds
     last_exc: Exception | None = None
+    last_classified: ClassifiedError | None = None
 
     for attempt in range(1, max_attempts + 1):
         _emit_call_attempt(
@@ -173,6 +179,8 @@ async def async_call_openai_with_retry(
             tenant_id=tenant_id,
             bot_id=bot_id,
             call_type=call_type,
+            prev_exc=last_exc,
+            prev_classified=last_classified,
         )
         try:
             return await fn()
@@ -257,12 +265,14 @@ async def async_call_openai_with_retry(
                 elapsed=elapsed,
                 remaining=remaining,
                 classified=classified,
+                exc=exc,
                 tenant_id=tenant_id,
                 bot_id=bot_id,
                 call_type=call_type,
             )
             await asyncio.sleep(delay)
             last_exc = exc
+            last_classified = classified
 
     if last_exc is not None:  # pragma: no cover
         raise last_exc
@@ -320,8 +330,13 @@ def _emit_call_attempt(
     tenant_id: str | None,
     bot_id: str | None,
     call_type: str,
+    prev_exc: Exception | None = None,
+    prev_classified: ClassifiedError | None = None,
 ) -> None:
-    """Fired once per API call attempt (before fn() executes)."""
+    """Fired once per API call attempt (before fn() executes).
+
+    For attempt > 1, prev_exc and prev_classified describe what triggered the retry.
+    """
     try:
         capture_event(
             "openai_retry.attempt",
@@ -333,6 +348,8 @@ def _emit_call_attempt(
                 "attempt": attempt,
                 "elapsed_ms": int(elapsed * 1000),
                 "call_type": call_type,
+                "error_type": type(prev_exc).__name__ if prev_exc is not None else None,
+                "failure_kind": prev_classified.kind.value if prev_classified is not None else None,
             },
             groups={"tenant": tenant_id} if tenant_id else None,
         )
@@ -348,6 +365,7 @@ def _emit_retry_scheduled(
     elapsed: float,
     remaining: float,
     classified: ClassifiedError,
+    exc: Exception,
     tenant_id: str | None,
     bot_id: str | None,
     call_type: str,
@@ -363,6 +381,7 @@ def _emit_retry_scheduled(
                 "operation": operation,
                 "attempt": attempt,
                 "failure_kind": classified.kind.value,
+                "error_type": type(exc).__name__,
                 "status_code": classified.status_code,
                 "delay_ms": int(delay_seconds * 1000),
                 "elapsed_ms": int(elapsed * 1000),

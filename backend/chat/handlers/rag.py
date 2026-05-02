@@ -2072,6 +2072,12 @@ async def async_run_chat_pipeline(
 
         base_query_variants = _svc.expand_query(question)
 
+        # All DB reads for this stage are done; release the connection before
+        # awaiting OpenAI guard/embed tasks (2-10 s). Holding it during those
+        # awaits would exhaust the pool under concurrency. The session re-acquires
+        # a connection automatically when _run_retrieval needs pgvector.
+        await db.close()
+
         # Launch guard + embedding tasks concurrently — event loop handles all I/O.
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
             async_check_relevance_with_profile(

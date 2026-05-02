@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import posthog from "posthog-js";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -514,9 +513,6 @@ export function ChatWidget({
     });
     if (attemptSessionId) params.set("session_id", attemptSessionId);
 
-    const turnStartedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
-    let firstTokenCaptured = false;
-
     const res = await fetch(`/widget/chat?${params}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -559,21 +555,6 @@ export function ChatWidget({
         return;
       }
       if (parsed.type === "chunk" && typeof parsed.text === "string") {
-        if (!firstTokenCaptured && parsed.text.length > 0) {
-          firstTokenCaptured = true;
-          const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-          const ms = Math.max(0, Math.round(now - turnStartedAt));
-          try {
-            posthog.capture("chat_first_token_ms", {
-              ms,
-              bot_id: botId,
-              session_id: attemptSessionId ?? null,
-              is_greeting: message === "",
-            });
-          } catch {
-            // posthog not initialized (e.g. NEXT_PUBLIC_POSTHOG_KEY missing) — ignore
-          }
-        }
         fullText += parsed.text;
         onChunk?.(fullText);
       } else if (parsed.type === "status" && typeof parsed.stage === "string") {

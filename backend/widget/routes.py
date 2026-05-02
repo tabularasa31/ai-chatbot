@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Annotated, Any, Literal
 
@@ -40,6 +41,7 @@ from backend.models import (
     Tenant,
     UserContext,
 )
+from backend.observability.metrics import capture_event
 from backend.tenants.service import (
     get_kyc_decrypted_keys_for_validation,
 )
@@ -422,20 +424,63 @@ def widget_chat(
         bot_public_id=getattr(_bot, "public_id", None),
     )
 
-    return _widget_chat_stream(sid, process_kwargs)
+    return _widget_chat_stream(
+        sid,
+        process_kwargs,
+        tenant_public_id=getattr(tenant, "public_id", None),
+        bot_public_id=getattr(_bot, "public_id", None),
+        is_greeting=resolved_message == "",
+    )
 
 
 _STREAM_SENTINEL = object()
 
 
+def _emit_first_token_metric(
+    *,
+    sid: uuid.UUID,
+    t_start: float,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    is_greeting: bool,
+) -> None:
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    ms = round((time.monotonic() - t_start) * 1000)
+    try:
+        capture_event(
+            "chat_first_token_ms",
+            distinct_id=str(sid),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "ms": ms,
+                "session_id": str(sid),
+                "is_greeting": is_greeting,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("first_token_metric_emit_failed", exc_info=True)
+
+
 def _widget_chat_stream(
     sid: uuid.UUID,
     process_kwargs: dict,
+    *,
+    tenant_public_id: str | None = None,
+    bot_public_id: str | None = None,
+    is_greeting: bool = False,
 ) -> StreamingResponse:
     async def event_stream():
         loop = asyncio.get_running_loop()
         q: asyncio.Queue[Any] = asyncio.Queue()
         result_holder: dict[str, Any] = {}
+        # Server-side TTFB: time from request entry to the first chunk we
+        # actually emit downstream. Client-side posthog.capture is unreliable
+        # in the embedded iframe (storage partitioning / extensions silently
+        # block /ingest), so we measure here and emit via the backend SDK.
+        t_start = time.monotonic()
 
         # The async pipeline delegates LLM generation to ``asyncio.to_thread``,
         # so ``stream_callback`` fires from a worker thread. Bridge each token
@@ -501,6 +546,14 @@ def _widget_chat_stream(
                     break
                 kind, text = item
                 if kind == "chunk":
+                    if not streamed_any:
+                        _emit_first_token_metric(
+                            sid=sid,
+                            t_start=t_start,
+                            tenant_public_id=tenant_public_id,
+                            bot_public_id=bot_public_id,
+                            is_greeting=is_greeting,
+                        )
                     streamed_any = True
                     yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
                 elif kind == "status":
@@ -528,6 +581,13 @@ def _widget_chat_stream(
         outcome = result_holder.get("outcome")
         final_text = outcome.text if outcome is not None else ""
         if not streamed_any and final_text:
+            _emit_first_token_metric(
+                sid=sid,
+                t_start=t_start,
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                is_greeting=is_greeting,
+            )
             yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
         turn_response = WidgetChatTurnResponse(
             text=final_text,

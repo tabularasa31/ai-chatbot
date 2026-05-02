@@ -106,10 +106,11 @@ def run_extract_client_knowledge_for_document(
     db: Session,
     api_key: str,
 ) -> None:
-    """
-    Extract structured tenant knowledge after successful document embedding.
+    """Extract structured tenant knowledge after successful document embedding.
 
-    Important: this job must be best-effort; exceptions should not break embedding runs.
+    Exceptions propagate to the caller. When invoked from an ARQ job the
+    @register_job wrapper handles retry bookkeeping and re-raises so ARQ can
+    schedule the next attempt or move the row to dead_letter.
     """
     try:
         doc = db.query(Document).filter(Document.id == document_id).first()
@@ -386,7 +387,6 @@ def run_extract_client_knowledge_for_document(
             )
 
     except Exception:
-        # Best-effort job: never fail embeddings pipeline.
         logger.exception("Tenant knowledge extraction failed for document_id=%s", document_id)
         try:
             profile = db.get(TenantProfile, tenant_id)
@@ -396,4 +396,4 @@ def run_extract_client_knowledge_for_document(
                 db.commit()
         except Exception:
             db.rollback()
-        return
+        raise

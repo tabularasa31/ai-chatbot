@@ -13,7 +13,7 @@ import logging
 import uuid
 from typing import Any
 
-from backend.core.queue import _CRON_JOBS, enqueue, get_main_loop, register_job  # noqa: F401
+from backend.core.queue import enqueue, get_main_loop, register_job
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def extract_tenant_knowledge_job(
         finally:
             db.close()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, _run)
 
 

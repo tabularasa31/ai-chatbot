@@ -440,15 +440,13 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
         if doc:
             doc.status = DocumentStatus.ready
             db.commit()
-        # Enqueue knowledge extraction as a durable ARQ job so failures
-        # retry and the embed pipeline is not blocked on LLM calls.
         if tenant_id is not None:
+            # Enqueue knowledge extraction as a durable ARQ job so failures
+            # retry and the embed pipeline is not blocked on LLM calls.
             try:
-                from backend.jobs.knowledge_extraction import (
-                    enqueue_knowledge_extraction_sync,
-                )
+                import backend.jobs.knowledge_extraction
 
-                enqueue_knowledge_extraction_sync(
+                backend.jobs.knowledge_extraction.enqueue_knowledge_extraction_sync(
                     document_id=document_id,
                     tenant_id=tenant_id,
                 )
@@ -458,7 +456,6 @@ def run_embeddings_background(document_id: uuid.UUID, api_key: str) -> None:
                     document_id,
                     exc_info=True,
                 )
-        if tenant_id is not None:
             try:
                 run_mode_a_for_tenant_when_queue_empty_best_effort(tenant_id)
             except Exception:

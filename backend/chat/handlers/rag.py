@@ -511,7 +511,11 @@ class ThoughtStreamFilter:
         try:
             self._on_phase_change(phase)
         except Exception:
-            logger.debug("ThoughtStreamFilter phase callback failed", exc_info=True)
+            logger.debug(
+                "ThoughtStreamFilter phase callback failed for phase: %s",
+                phase,
+                exc_info=True,
+            )
 
     def _process(self) -> None:
         while self._buf:

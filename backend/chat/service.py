@@ -682,7 +682,16 @@ async def async_process_chat_message(
     optional_entity_types = _tenant_optional_entity_types(tenant_row)
     redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
 
-    explicit_human_request = detect_human_request(redacted_question, api_key)
+    # Release the pooled connection before the human-request classifier:
+    # detect_human_request makes a sync OpenAI call (up to 3s) and there are
+    # no DB operations until _ensure_chat_async below.
+    await db.close()
+
+    # Run the sync classifier off the event loop so other coroutines can
+    # progress during its OpenAI call.
+    explicit_human_request = await asyncio.to_thread(
+        detect_human_request, redacted_question, api_key
+    )
 
     trace = begin_trace(
         name="rag-query",

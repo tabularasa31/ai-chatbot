@@ -129,7 +129,7 @@ from backend.models import (
     Tenant,
     TenantProfile,
 )
-from backend.observability import TraceHandle, begin_trace
+from backend.observability import TraceHandle, begin_trace, record_stage_ms
 from backend.observability.metrics import capture_event  # noqa: F401  (re-export for monkeypatch)
 from backend.search.service import (
     async_detect_tenant_kb_scripts,  # noqa: F401
@@ -689,9 +689,11 @@ async def async_process_chat_message(
 
     # Run the sync classifier off the event loop so other coroutines can
     # progress during its OpenAI call.
+    _hrc_start = perf_counter()
     explicit_human_request = await asyncio.to_thread(
         detect_human_request, redacted_question, api_key
     )
+    _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 
     trace = begin_trace(
         name="rag-query",
@@ -719,10 +721,13 @@ async def async_process_chat_message(
     tenant_profile = (
         await db.get(TenantProfile, tenant_id) if tenant_row is not None else None
     )
+    _setup_ms = round((perf_counter() - _setup_start) * 1000, 2)
     _setup_span.end(
         output={"is_new_session": not chat.messages, "chat_id": str(chat.id)},
-        metadata={"duration_ms": round((perf_counter() - _setup_start) * 1000, 2)},
+        metadata={"duration_ms": _setup_ms},
     )
+    record_stage_ms(trace, "chat_setup_ms", _setup_ms)
+    record_stage_ms(trace, "human_request_classifier_ms", _human_request_classifier_ms)
 
     question_text = question.strip()
     is_new_session = not chat.messages
@@ -745,6 +750,7 @@ async def async_process_chat_message(
             db=s,
         ),
     )
+    _lang_ms = round((perf_counter() - _lang_start) * 1000, 2)
     _lang_span.end(
         output={
             "detected_language": language_context.detected_language,
@@ -752,8 +758,9 @@ async def async_process_chat_message(
             "confidence": language_context.confidence,
             "is_reliable": language_context.is_reliable,
         },
-        metadata={"duration_ms": round((perf_counter() - _lang_start) * 1000, 2)},
+        metadata={"duration_ms": _lang_ms},
     )
+    record_stage_ms(trace, "language_detect_ms", _lang_ms)
 
     trace.update(
         metadata={
@@ -804,7 +811,17 @@ async def async_process_chat_message(
         turn_started_at=_turn_started_at,
     )
 
-    outcome = await _async_dispatch(handler_ctx, db)
-    if outcome is None:
-        raise RuntimeError("Pipeline router produced no outcome for chat turn")
-    return outcome
+    try:
+        outcome = await _async_dispatch(handler_ctx, db)
+        if outcome is None:
+            raise RuntimeError("Pipeline router produced no outcome for chat turn")
+        return outcome
+    finally:
+        # Flush the per-stage wall-clock dict onto the trace so a single
+        # Langfuse view surfaces every stage's duration without span-walking.
+        # See TraceHandle.record_stage_ms for the aggregation contract. The
+        # ``getattr`` guard tolerates ad-hoc test traces that don't subclass
+        # TraceHandle (matching the helper used at the recording call sites).
+        stage_durations = getattr(trace, "stage_durations_ms", None) or {}
+        if stage_durations:
+            trace.update(metadata={"stage_durations_ms": stage_durations})

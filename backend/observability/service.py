@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
@@ -83,6 +84,37 @@ class GenerationHandle(SpanHandle, ABC):
 
 class TraceHandle(ABC):
     """Interface for trace-like objects."""
+
+    def record_stage_ms(self, stage: str, duration_ms: float) -> None:
+        """Aggregate a per-stage wall-clock duration on the trace.
+
+        Stage timings are flushed once at the end of the chat turn as a flat
+        ``stage_durations_ms`` dict on the trace metadata, so a single Langfuse
+        view surfaces every stage's wall-clock without span-walking. Repeated
+        recordings for the same stage are summed (e.g. embed across query
+        variants). A short-lived ``threading.Lock`` serialises updates so the
+        read-modify-write under concurrent ``to_thread`` workers cannot lose
+        increments or race against the final ``stage_durations_ms`` snapshot.
+        """
+        lock = self.__dict__.get("_stage_durations_lock")
+        if lock is None:
+            # First write on this trace — initialise dict + lock.
+            lock = threading.Lock()
+            self.__dict__.setdefault("_stage_durations_lock", lock)
+            lock = self.__dict__["_stage_durations_lock"]
+        with lock:
+            durations = self.__dict__.setdefault("_stage_durations_ms", {})
+            durations[stage] = durations.get(stage, 0.0) + float(duration_ms)
+
+    @property
+    def stage_durations_ms(self) -> dict[str, float]:
+        """Snapshot of accumulated stage timings (empty if none recorded)."""
+        lock = self.__dict__.get("_stage_durations_lock")
+        durations = self.__dict__.get("_stage_durations_ms") or {}
+        if lock is None:
+            return dict(durations)
+        with lock:
+            return dict(durations)
 
     @abstractmethod
     def span(

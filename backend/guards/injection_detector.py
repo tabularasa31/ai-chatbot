@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from time import perf_counter
 
 from backend.core.config import settings
-from backend.observability import TraceHandle
+from backend.observability import TraceHandle, record_stage_ms
 from backend.search.service import (
     async_embed_queries,
     async_embed_query,
@@ -294,6 +294,7 @@ def detect_injection(
             output={"detected": result.detected, "pattern": result.pattern},
             metadata={"duration_ms": _l1_ms, "method": "structural"},
         )
+        record_stage_ms(trace, "injection_guard_ms", _l1_ms)
     if result.detected:
         _log_detection(tenant_id, result)
         return result
@@ -314,6 +315,7 @@ def detect_injection(
                 output={"detected": result.detected, "score": result.score},
                 metadata={"duration_ms": _l2_ms, "method": "semantic"},
             )
+            record_stage_ms(trace, "injection_guard_ms", _l2_ms)
         if result.detected:
             _log_detection(tenant_id, result)
             return result
@@ -348,6 +350,7 @@ async def async_detect_injection(
             output={"detected": result.detected, "pattern": result.pattern},
             metadata={"duration_ms": _l1_ms, "method": "structural"},
         )
+        record_stage_ms(trace, "injection_guard_ms", _l1_ms)
     if result.detected:
         _log_detection(tenant_id, result)
         return result
@@ -368,6 +371,7 @@ async def async_detect_injection(
                 output={"detected": result.detected, "score": result.score},
                 metadata={"duration_ms": _l2_ms, "method": "semantic"},
             )
+            record_stage_ms(trace, "injection_guard_ms", _l2_ms)
         if result.detected:
             _log_detection(tenant_id, result)
             return result

@@ -15,7 +15,7 @@ from backend.core.config import settings
 from backend.core.openai_client import get_async_openai_client, get_openai_client
 from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.models import TenantProfile as TenantProfileModel
-from backend.observability import TraceHandle
+from backend.observability import TraceHandle, record_stage_ms
 
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
@@ -279,6 +279,8 @@ def check_relevance_with_profile(
             output={"relevant": relevant, "reason": reason},
             metadata={"latency_ms": latency_ms, "cache_hit": False},
         )
+    if trace is not None:
+        record_stage_ms(trace, "relevance_guard_ms", latency_ms)
 
     _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
     _cache_set(cache_key, relevant, reason)
@@ -379,6 +381,8 @@ async def async_check_relevance_with_profile(
             output={"relevant": relevant, "reason": reason},
             metadata={"latency_ms": latency_ms, "cache_hit": False},
         )
+    if trace is not None:
+        record_stage_ms(trace, "relevance_guard_ms", latency_ms)
 
     _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
     _cache_set(cache_key, relevant, reason)

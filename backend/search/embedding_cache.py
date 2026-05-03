@@ -45,17 +45,16 @@ def get(text: str) -> list[float] | None:
     return vector
 
 
-def set(text: str, vector: list[float]) -> None:
+def put(text: str, vector: list[float]) -> None:
     """Store an embedding vector with a fixed TTL."""
     key = _make_key(text)
     if len(_cache) >= _MAX_CACHE_SIZE and key not in _cache:
-        expired = [k for k, v in _cache.items() if time.monotonic() > v[0]]
-        if expired:
-            for k in expired[:max(1, len(expired))]:
-                _cache.pop(k, None)
+        # Dict preserves insertion order; oldest entry is first → O(1) eviction.
+        now = time.monotonic()
+        while _cache and next(iter(_cache.values()))[0] < now:
+            _cache.pop(next(iter(_cache)))
         if len(_cache) >= _MAX_CACHE_SIZE:
-            oldest = min(_cache.items(), key=lambda item: item[1][0])[0]
-            _cache.pop(oldest, None)
+            _cache.pop(next(iter(_cache)))
     _cache[key] = (time.monotonic() + _CACHE_TTL_SECONDS, vector)
 
 

@@ -1536,7 +1536,7 @@ def embed_query(
         max_attempts=max_attempts,
     )
     vector = response.data[0].embedding
-    _emb_cache.set(query, vector)
+    _emb_cache.put(query, vector)
     return vector
 
 
@@ -1549,7 +1549,7 @@ def embed_queries(
     """Embed multiple search queries in one OpenAI API round-trip.
 
     Vectors for texts already in the in-process cache are returned without
-    an API call; only cache misses are sent to OpenAI as a single batch.
+    an API call; only unique cache misses are sent to OpenAI as a single batch.
     """
     if not queries:
         return []
@@ -1557,17 +1557,18 @@ def embed_queries(
     misses = [q for q in queries if cached_map[q] is None]
     if not misses:
         return [cached_map[q] for q in queries]  # type: ignore[return-value]
+    unique_misses = list(dict.fromkeys(misses))
     openai_client = get_openai_client(api_key, timeout=timeout)
     response = call_openai_with_retry(
         "search_embed_queries",
         lambda: openai_client.embeddings.create(
             model=settings.embedding_model,
-            input=misses,
+            input=unique_misses,
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data, strict=False):
-        _emb_cache.set(text, item.embedding)
+    for text, item in zip(unique_misses, response.data, strict=True):
+        _emb_cache.put(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
 
@@ -3308,7 +3309,7 @@ async def async_embed_query(
         max_attempts=max_attempts,
     )
     vector = response.data[0].embedding
-    _emb_cache.set(query, vector)
+    _emb_cache.put(query, vector)
     return vector
 
 
@@ -3321,7 +3322,7 @@ async def async_embed_queries(
     """Async counterpart of :func:`embed_queries`.
 
     Vectors for texts already in the in-process cache are returned without
-    an API call; only cache misses are sent to OpenAI as a single batch.
+    an API call; only unique cache misses are sent to OpenAI as a single batch.
     """
     if not queries:
         return []
@@ -3329,17 +3330,18 @@ async def async_embed_queries(
     misses = [q for q in queries if cached_map[q] is None]
     if not misses:
         return [cached_map[q] for q in queries]  # type: ignore[return-value]
+    unique_misses = list(dict.fromkeys(misses))
     client = get_async_openai_client(api_key, timeout=timeout)
     response = await async_call_openai_with_retry(
         "search_embed_queries",
         lambda: client.embeddings.create(
             model=settings.embedding_model,
-            input=misses,
+            input=unique_misses,
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data, strict=False):
-        _emb_cache.set(text, item.embedding)
+    for text, item in zip(unique_misses, response.data, strict=True):
+        _emb_cache.put(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
 

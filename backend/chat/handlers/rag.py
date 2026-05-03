@@ -3010,50 +3010,22 @@ async def async_run_chat_pipeline(
                     output={"regenerated": True, "forced_language": q_lang.detected_language}
                 )
 
-        # Check for LLM-emitted source citations before stripping them — used to
-        # decide whether the model actually grounded its answer in retrieved context.
-        _answer_has_citations = bool(_INLINE_CITATION_RE.search(raw_answer))
         raw_answer = _strip_inline_citations(raw_answer)
 
-        # --- 8. Validate answer ---
-        validation_context = retrieval.chunk_texts + state.quick_answer_items
-        _retrieval_confidence = retrieval.best_confidence_score or 0.0
-        _skip_validation = (
-            not settings.validation_always_on
-            and _retrieval_confidence >= settings.validation_confidence_threshold
-            and _answer_has_citations
-        )
-        if _skip_validation:
-            validation: dict = {
-                "is_valid": True,
-                "confidence": 1.0,
-                "reason": "skipped_high_confidence",
-            }
-            validation_applied_flag = False
-        else:
-            validation = await async_validate_answer(
-                question,
-                raw_answer,
-                validation_context,
-                api_key=api_key,
-                trace=trace,
-                metrics_tenant_id=tenant_public_id,
-                metrics_bot_id=bot_public_id,
-            )
-            validation_applied_flag = True
+        # --- 8. Answer validation: disabled ---
+        # Self-check via a weaker model (gpt-4.1-mini) added ~1.3s to ~74% of
+        # turns and stripped the answer in only ~0.5% of them on real traffic
+        # — not a useful trade. Keep the downstream contract intact (validation
+        # dict + outcome flag) so observability, gap-signal ingestion, and the
+        # escalation decision continue to work unchanged.
+        validation: dict = {
+            "is_valid": True,
+            "confidence": 1.0,
+            "reason": "validation_disabled",
+        }
+        validation_applied_flag = False
         validation_outcome: Literal["valid", "fallback"] = "valid"
         final_answer = raw_answer
-
-        if not validation["is_valid"]:
-            reject_result = await async_build_reject_response_result(
-                reason=RejectReason.INSUFFICIENT_CONFIDENCE,
-                profile=state.profile,
-                response_language=language_context.response_language,
-                api_key=api_key,
-            )
-            final_answer = reject_result.text
-            tokens_used += reject_result.tokens_used
-            validation_outcome = "fallback"
 
         # --- 9. Escalation decision ---
         escalate, esc_trigger = _svc.should_escalate(

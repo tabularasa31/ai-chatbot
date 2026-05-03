@@ -534,6 +534,21 @@ def _reset_escalation_rate_window() -> Generator[None, None, None]:
     yield
 
 
+@pytest.fixture(autouse=True)
+def _clear_embedding_cache() -> Generator[None, None, None]:
+    """Flush the in-process embedding vector cache before and after each test.
+
+    The cache is a module-level dict that persists across tests in the same
+    process.  Without this reset, a test that populates the cache can cause
+    subsequent tests to skip the OpenAI API call entirely, breaking assertions
+    on mock call counts and request_count return values.
+    """
+    from backend.search import embedding_cache
+    embedding_cache.clear()
+    yield
+    embedding_cache.clear()
+
+
 @pytest_asyncio.fixture(scope="function")
 async def async_db_session(async_engine_fx) -> "AsyncSession":  # type: ignore[name-defined]
     """AsyncSession bound to the per-test async engine."""

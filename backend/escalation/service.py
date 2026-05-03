@@ -103,7 +103,6 @@ def should_escalate(
     best_similarity_score: float | None,
     chunk_count: int,
     *,
-    validation: dict[str, Any] | None = None,
     trigger_override: EscalationTrigger | None = None,
     best_rank_score: float | None = None,
 ) -> tuple[bool, EscalationTrigger | None]:
@@ -111,8 +110,6 @@ def should_escalate(
         return True, trigger_override
     if chunk_count == 0:
         return True, EscalationTrigger.no_documents
-    if validation and validation.get("is_valid") is True:
-        return False, None
     # Use the stronger of vector similarity and hybrid rank score.
     # A high rank score (driven by BM25) indicates relevant content even when
     # the vector similarity is below the threshold — prevents false escalation

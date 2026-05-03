@@ -1,7 +1,7 @@
 """RAG handler module.
 
 Owns the async RAG pipeline (``async_run_chat_pipeline``) plus its direct
-collaborators (``retrieve_context``, ``generate_answer``, ``validate_answer``,
+collaborators (``retrieve_context``, ``generate_answer``,
 ``build_rag_prompt``, ``build_rag_messages``) and the dataclasses they hand
 back to the caller (``RetrievalContext``, ``ChatPipelineResult``).
 
@@ -22,7 +22,6 @@ the call sites that now live here.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import re
 import uuid
@@ -158,24 +157,6 @@ DISCLOSURE_LEVEL_INSTRUCTIONS: dict[str, str] = {
     ),
 }
 
-VALIDATION_PROMPT = """You are a fact-checker for a support chatbot.
-
-Context (retrieved from documentation):
-{context}
-
-Question: {question}
-
-Answer to validate: {answer}
-
-Check if the answer is:
-1. Grounded in the provided context (not hallucinated)
-2. Actually answers the question, OR explicitly asks exactly one short clarifying question when one missing detail materially blocks a correct answer
-3. If it asks a clarifying question, it should still be helpful and not invent facts beyond the context
-4. It does not introduce unsupported core facts. The main factual claim must be grounded in the context. Navigation breadcrumbs, section-path labels (e.g. "Getting Started → Step 3"), and format or limit enumerations are acceptable if the underlying fact they reference is present in the context — even if the exact label or list item is not verbatim in the retrieved chunks.
-
-Respond ONLY with JSON (no markdown, no explanation):
-{{"is_valid": true/false, "confidence": 0.0-1.0, "reason": "short explanation"}}"""
-
 _PRICING_QUESTION_RE = re.compile(
     r"\b(price|pricing|plan|plans|billing|subscription|cost|trial)\b"
 )
@@ -225,9 +206,8 @@ class ChatPipelineResult:
 
     Blocks:
       user_output  — raw_answer, final_answer, tokens_used
-      decision     — strategy, reject_reason, flags, validation outcome
+      decision     — strategy, reject_reason, flags
       retrieval    — full RetrievalContext (None for guard_reject / faq_direct)
-      validation   — raw dict from validate_answer (None if skipped)
       escalation   — recommended flag + trigger (compute only, no ticket created)
       debug        — faq_match result for diagnostic use
     """
@@ -238,15 +218,11 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "insufficient_confidence"] | None
+    reject_reason: Literal["injection", "not_relevant", "low_retrieval"] | None
     is_reject: bool
     is_faq_direct: bool
-    validation_applied: bool
-    validation_outcome: Literal["valid", "fallback"] | None
     # retrieval
     retrieval: RetrievalContext | None
-    # validation
-    validation: dict | None
     # escalation (pure computation, no side effects)
     escalation_recommended: bool
     escalation_trigger: Any  # EscalationTrigger | None
@@ -1282,148 +1258,6 @@ def _enforce_response_language(
     return translated, int(result.tokens_used or 0)
 
 
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.DOTALL)
-_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
-def _parse_validation_json(raw: str) -> dict:
-    """Parse LLM JSON response, stripping markdown fences if present."""
-    text = raw.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Level 1: strip markdown fences (```json ... ``` or ``` ... ```)
-    stripped = _FENCE_RE.sub("", text).strip()
-    try:
-        result = json.loads(stripped)
-        logger.warning("validate_answer: JSON wrapped in markdown fences — stripped successfully")
-        return result
-    except json.JSONDecodeError:
-        pass
-
-    # Level 2: extract first {...} block from surrounding text
-    m = _JSON_BLOCK_RE.search(text)
-    if m:
-        try:
-            result = json.loads(m.group())
-            logger.warning("validate_answer: JSON extracted via brace-search fallback")
-            return result
-        except json.JSONDecodeError:
-            pass
-
-    raise json.JSONDecodeError("No valid JSON found in validation response", text, 0)
-
-
-def validate_answer(
-    question: str,
-    answer: str,
-    context_chunks: list[str],
-    *,
-    api_key: str,
-    trace: TraceHandle | None = None,
-    metrics_tenant_id: str | None = None,
-    metrics_bot_id: str | None = None,
-) -> dict:
-    """
-    Ask LLM to validate if the answer is grounded in context.
-    Returns {"is_valid": bool, "confidence": float, "reason": str}.
-    On validation errors, returns an invalid low-confidence result so the chat
-    pipeline falls back instead of silently approving an unverified answer.
-    """
-    # Look up get_openai_client via service module so test monkeypatches
-    # against backend.chat.service.get_openai_client take effect here.
-    from backend.chat import service as _svc
-
-    if not context_chunks:
-        return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
-
-    context = "\n\n---\n\n".join(context_chunks[:5])
-    prompt = VALIDATION_PROMPT.format(
-        context=context,
-        question=question,
-        answer=answer,
-    )
-
-    validation_span = None
-    if trace is not None:
-        validation_span = trace.span(
-            name="answer-validation",
-            input={
-                "question": question,
-                "answer_preview": truncate_text(answer),
-                "context_chunk_count": len(context_chunks),
-            },
-        )
-
-    try:
-        openai_client = _svc.get_openai_client(api_key)
-        started_at = perf_counter()
-        _val_reasoning = is_reasoning_model(settings.answer_validation_model)
-        _val_max_tokens = (
-            settings.chat_response_max_tokens_reasoning
-            if _val_reasoning
-            else settings.answer_validation_max_completion_tokens
-        )
-        response = call_openai_with_retry(
-            "chat_validate_answer",
-            lambda: openai_client.chat.completions.create(
-                model=settings.answer_validation_model,
-                messages=[{"role": "user", "content": prompt}],
-                **({} if _val_reasoning else {"temperature": 0}),
-                max_completion_tokens=_val_max_tokens,
-            ),
-        )
-        raw = response.choices[0].message.content or ""
-        result = _parse_validation_json(raw)
-        result = {
-            "is_valid": bool(result.get("is_valid", True)),
-            "confidence": float(result.get("confidence", 1.0)),
-            "reason": str(result.get("reason", "")),
-        }
-        _val_duration_s = perf_counter() - started_at
-        _val_duration_ms = round(_val_duration_s * 1000, 2)
-        if validation_span is not None:
-            validation_span.end(
-                output=result,
-                metadata={
-                    "duration_ms": _val_duration_ms,
-                },
-            )
-        if trace is not None:
-            record_stage_ms(trace, "llm_validate_ms", _val_duration_ms)
-        if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
-            _val_input = getattr(response.usage, "prompt_tokens", 0) or 0
-            _val_output = getattr(response.usage, "completion_tokens", 0) or 0
-            from backend.chat.events import _emit_ai_generation_event
-            _emit_ai_generation_event(
-                tenant_public_id=metrics_tenant_id,
-                bot_public_id=metrics_bot_id,
-                model=settings.answer_validation_model,
-                input_tokens=_safe_int(_val_input),
-                output_tokens=_safe_int(_val_output),
-                cost_usd=settings.compute_cost_usd(
-                    settings.answer_validation_model,
-                    _safe_int(_val_input),
-                    _safe_int(_val_output),
-                ),
-                latency_s=_val_duration_s,
-                operation="chat/validate",
-            )
-        return result
-    except Exception as e:
-        logger.exception("Answer validation failed")
-        result = {"is_valid": False, "confidence": 0.0, "reason": "validation_error"}
-        if validation_span is not None:
-            validation_span.end(
-                output=result,
-                level="ERROR",
-                status_message=str(e),
-            )
-        return result
-
-
 # ---------------------------------------------------------------------------
 # RagHandler — runs the RAG pipeline then converts the result into a turn
 # outcome, including post-RAG escalation side effects.
@@ -1536,7 +1370,7 @@ class RagHandler(PipelineHandler):
                     result.retrieval.best_confidence_score if result.retrieval is not None else None
                 ),
                 was_rejected=result.is_reject,
-                had_fallback=result.validation_outcome == "fallback",
+                had_fallback=False,
                 was_escalated=False,
                 language=ctx.language_context.response_language,
             )
@@ -1597,13 +1431,9 @@ class RagHandler(PipelineHandler):
         chunk_texts = retrieval.chunk_texts
         answer = result.final_answer
         tokens_used = result.tokens_used
-        validation = result.validation or {}
         escalate = result.escalation_recommended
         esc_trigger = result.escalation_trigger
-        reliability_score = (
-            "low" if result.validation_outcome == "fallback"
-            else retrieval.reliability.score
-        )
+        reliability_score = retrieval.reliability.score
 
         # Build TurnContext and call decide() to get the formal policy decision.
         # This is the single authoritative classification of what this turn produced.
@@ -1657,7 +1487,6 @@ class RagHandler(PipelineHandler):
                 input={
                     "best_confidence_score": retrieval.best_confidence_score,
                     "chunk_count": len(chunk_texts),
-                    "validation": validation,
                     "reliability_score": reliability_score,
                 },
             )
@@ -1772,7 +1601,7 @@ class RagHandler(PipelineHandler):
             question_text=ctx.redacted_question,
             answer_confidence=retrieval.best_confidence_score,
             was_rejected=False,
-            had_fallback=result.validation_outcome == "fallback",
+            had_fallback=False,
             was_escalated=bool(escalate),
             language=ctx.language_context.response_language,
         )
@@ -1793,11 +1622,9 @@ class RagHandler(PipelineHandler):
                     "escalation_language": ctx.language_context.escalation_language,
                     "escalation_language_source": ctx.language_context.escalation_language_source,
                     "strategy": result.strategy,
-                    "validation_outcome": result.validation_outcome,
                     "retrieval_mode": retrieval.mode,
                     "best_rank_score": retrieval.best_rank_score,
                     "best_confidence_score": retrieval.best_confidence_score,
-                    "validation": validation,
                     "source_document_ids": [str(document_id) for document_id in document_ids],
                     "tokens_used": int(tokens_used),
                     **(
@@ -2255,128 +2082,6 @@ async def async_generate_answer(
     return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
-async def async_validate_answer(
-    question: str,
-    answer: str,
-    context_chunks: list[str],
-    **kwargs: Any,
-) -> dict:
-    """Native-async validation entry point. Same monkeypatch fallback as
-    :func:`async_generate_answer` — see that docstring for the rationale.
-    """
-    from backend.chat import service as _svc
-
-    if _svc.validate_answer is not validate_answer:
-        return await asyncio.to_thread(_svc.validate_answer, question, answer, context_chunks, **kwargs)
-    return await _async_validate_answer_native(question, answer, context_chunks, **kwargs)
-
-
-async def _async_validate_answer_native(
-    question: str,
-    answer: str,
-    context_chunks: list[str],
-    *,
-    api_key: str,
-    trace: TraceHandle | None = None,
-    metrics_tenant_id: str | None = None,
-    metrics_bot_id: str | None = None,
-) -> dict:
-    """Native async port of :func:`validate_answer`.
-
-    Mirrors the sync function's behaviour exactly (same prompt, same return
-    shape, same fallback semantics on error) but uses ``AsyncOpenAI`` +
-    ``async_call_openai_with_retry`` so the call does not occupy a worker
-    thread. Telemetry helpers stay sync — they're cheap and avoiding another
-    pair of awaits keeps the diff small.
-    """
-    from backend.chat import service as _svc
-
-    if not context_chunks:
-        return {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
-
-    context = "\n\n---\n\n".join(context_chunks[:5])
-    prompt = VALIDATION_PROMPT.format(
-        context=context,
-        question=question,
-        answer=answer,
-    )
-
-    validation_span = None
-    if trace is not None:
-        validation_span = trace.span(
-            name="answer-validation",
-            input={
-                "question": question,
-                "answer_preview": truncate_text(answer),
-                "context_chunk_count": len(context_chunks),
-            },
-        )
-
-    try:
-        openai_client = _svc.get_async_openai_client(api_key)
-        started_at = perf_counter()
-        _val_reasoning = is_reasoning_model(settings.answer_validation_model)
-        _val_max_tokens = (
-            settings.chat_response_max_tokens_reasoning
-            if _val_reasoning
-            else settings.answer_validation_max_completion_tokens
-        )
-        response = await async_call_openai_with_retry(
-            "chat_validate_answer",
-            lambda: openai_client.chat.completions.create(
-                model=settings.answer_validation_model,
-                messages=[{"role": "user", "content": prompt}],
-                **({} if _val_reasoning else {"temperature": 0}),
-                max_completion_tokens=_val_max_tokens,
-            ),
-        )
-        raw = response.choices[0].message.content or ""
-        result = _parse_validation_json(raw)
-        result = {
-            "is_valid": bool(result.get("is_valid", True)),
-            "confidence": float(result.get("confidence", 1.0)),
-            "reason": str(result.get("reason", "")),
-        }
-        _val_duration_s = perf_counter() - started_at
-        _val_duration_ms = round(_val_duration_s * 1000, 2)
-        if validation_span is not None:
-            validation_span.end(
-                output=result,
-                metadata={"duration_ms": _val_duration_ms},
-            )
-        if trace is not None:
-            record_stage_ms(trace, "llm_validate_ms", _val_duration_ms)
-        if (metrics_tenant_id is not None or metrics_bot_id is not None) and response.usage:
-            _val_input = getattr(response.usage, "prompt_tokens", 0) or 0
-            _val_output = getattr(response.usage, "completion_tokens", 0) or 0
-            from backend.chat.events import _emit_ai_generation_event
-            _emit_ai_generation_event(
-                tenant_public_id=metrics_tenant_id,
-                bot_public_id=metrics_bot_id,
-                model=settings.answer_validation_model,
-                input_tokens=_safe_int(_val_input),
-                output_tokens=_safe_int(_val_output),
-                cost_usd=settings.compute_cost_usd(
-                    settings.answer_validation_model,
-                    _safe_int(_val_input),
-                    _safe_int(_val_output),
-                ),
-                latency_s=_val_duration_s,
-                operation="chat/validate",
-            )
-        return result
-    except Exception as e:
-        logger.exception("Answer validation failed")
-        result = {"is_valid": False, "confidence": 0.0, "reason": "validation_error"}
-        if validation_span is not None:
-            validation_span.end(
-                output=result,
-                level="ERROR",
-                status_message=str(e),
-            )
-        return result
-
-
 @dataclass
 class _PipelineState:
     """Mutable state shared across the three pipeline stages.
@@ -2587,10 +2292,7 @@ async def async_run_chat_pipeline(
                 reject_reason="injection",
                 is_reject=True,
                 is_faq_direct=False,
-                validation_applied=False,
-                validation_outcome=None,
                 retrieval=None,
-                validation=None,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 language_context=language_context,
@@ -2762,10 +2464,7 @@ async def async_run_chat_pipeline(
                 reject_reason=None,
                 is_reject=False,
                 is_faq_direct=True,
-                validation_applied=False,
-                validation_outcome=None,
                 retrieval=None,
-                validation=None,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 faq_match=state.faq_match,
@@ -2796,10 +2495,7 @@ async def async_run_chat_pipeline(
                 reject_reason="not_relevant",
                 is_reject=True,
                 is_faq_direct=False,
-                validation_applied=False,
-                validation_outcome=None,
                 retrieval=None,
-                validation=None,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 faq_match=state.faq_match,
@@ -2910,10 +2606,7 @@ async def async_run_chat_pipeline(
                 reject_reason="low_retrieval",
                 is_reject=True,
                 is_faq_direct=False,
-                validation_applied=False,
-                validation_outcome=None,
                 retrieval=retrieval,
-                validation=None,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 faq_match=state.faq_match,
@@ -3012,26 +2705,12 @@ async def async_run_chat_pipeline(
 
         raw_answer = _strip_inline_citations(raw_answer)
 
-        # --- 8. Answer validation: disabled ---
-        # Self-check via a weaker model (gpt-4.1-mini) added ~1.3s to ~74% of
-        # turns and stripped the answer in only ~0.5% of them on real traffic
-        # — not a useful trade. Keep the downstream contract intact (validation
-        # dict + outcome flag) so observability, gap-signal ingestion, and the
-        # escalation decision continue to work unchanged.
-        validation: dict = {
-            "is_valid": True,
-            "confidence": 1.0,
-            "reason": "validation_disabled",
-        }
-        validation_applied_flag = False
-        validation_outcome: Literal["valid", "fallback"] = "valid"
         final_answer = raw_answer
 
-        # --- 9. Escalation decision ---
+        # --- 8. Escalation decision ---
         escalate, esc_trigger = _svc.should_escalate(
             retrieval.best_confidence_score,
             len(retrieval.chunk_texts),
-            validation=validation,
             best_rank_score=retrieval.best_rank_score,
         )
 
@@ -3043,10 +2722,7 @@ async def async_run_chat_pipeline(
             reject_reason=None,
             is_reject=False,
             is_faq_direct=False,
-            validation_applied=validation_applied_flag,
-            validation_outcome=validation_outcome,
             retrieval=retrieval,
-            validation=validation if validation_applied_flag else None,
             escalation_recommended=escalate,
             escalation_trigger=esc_trigger,
             retrieval_ms=int(retrieval.retrieval_duration_ms),

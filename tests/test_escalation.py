@@ -57,16 +57,6 @@ def test_should_escalate_ok() -> None:
     assert trig is None
 
 
-def test_should_not_escalate_when_answer_is_valid() -> None:
-    esc, trig = should_escalate(
-        0.03,
-        2,
-        validation={"is_valid": True, "confidence": 0.98, "reason": "grounded"},
-    )
-    assert esc is False
-    assert trig is None
-
-
 def _mock_llm_human_request(result: bool):
     """Patch the OpenAI call inside detect_human_request to return a fixed result."""
     import json

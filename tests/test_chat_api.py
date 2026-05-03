@@ -399,10 +399,6 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
         "backend.chat.service.generate_answer",
         lambda *args, **kwargs: ("Максимум 100 документов можно загрузить на аккаунт.", 8),
     )
-    monkeypatch.setattr(
-        "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: {"is_valid": True, "confidence": 0.99, "reason": "grounded"},
-    )
 
     def _unexpected_ticket(*args, **kwargs):
         raise AssertionError("create_escalation_ticket should not be called for grounded hybrid answers")

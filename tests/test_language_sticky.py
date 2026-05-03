@@ -353,10 +353,7 @@ def _make_pipeline_result_for_language(response_language: str) -> ChatPipelineRe
         reject_reason=None,
         is_reject=False,
         is_faq_direct=False,
-        validation_applied=True,
-        validation_outcome="valid",
         retrieval=retrieval,
-        validation={"is_valid": True, "confidence": 0.95, "reason": "valid"},
         escalation_recommended=False,
         escalation_trigger=None,
     )
@@ -547,10 +544,7 @@ def test_chat_escalation_uses_user_response_language(
             reject_reason=result.reject_reason,
             is_reject=result.is_reject,
             is_faq_direct=result.is_faq_direct,
-            validation_applied=result.validation_applied,
-            validation_outcome=result.validation_outcome,
             retrieval=result.retrieval,
-            validation=result.validation,
             escalation_recommended=True,
             escalation_trigger=type("Trigger", (), {"value": "user_request"})(),
         )

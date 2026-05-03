@@ -1507,6 +1507,7 @@ def embed_query(
     *,
     api_key: str,
     timeout: float | None = None,
+    max_attempts: int | None = None,
 ) -> list[float]:
     """
     Embed a search query using OpenAI embeddings API.
@@ -1515,6 +1516,7 @@ def embed_query(
         query: Text to embed.
         api_key: OpenAI API key.
         timeout: Optional HTTP timeout (seconds); defaults to global OpenAI timeout.
+        max_attempts: Override retry attempts (pass 1 to disable retries).
 
     Returns:
         1536-dimensional embedding vector.
@@ -1527,6 +1529,7 @@ def embed_query(
             input=query,
         ),
         call_type="embedding",
+        max_attempts=max_attempts,
     )
     return response.data[0].embedding
 
@@ -3270,6 +3273,7 @@ async def async_embed_query(
     *,
     api_key: str,
     timeout: float | None = None,
+    max_attempts: int | None = None,
 ) -> list[float]:
     """Async counterpart of :func:`embed_query`."""
     client = get_async_openai_client(api_key, timeout=timeout)
@@ -3280,6 +3284,7 @@ async def async_embed_query(
             input=query,
         ),
         call_type="embedding",
+        max_attempts=max_attempts,
     )
     return response.data[0].embedding
 

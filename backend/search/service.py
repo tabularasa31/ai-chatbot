@@ -1566,7 +1566,7 @@ def embed_queries(
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data):
+    for text, item in zip(misses, response.data, strict=False):
         _emb_cache.set(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
@@ -1578,8 +1578,9 @@ def embed_queries_with_stats(
     """Embed multiple queries and return the actual API request count used."""
     if not queries:
         return [], 0
+    any_miss = any(_emb_cache.get(q) is None for q in queries)
     vectors = embed_queries(queries, api_key=api_key, timeout=timeout)
-    return vectors, 1
+    return vectors, (1 if any_miss else 0)
 
 
 def _bm25_score_candidates_with_signal(
@@ -3337,7 +3338,7 @@ async def async_embed_queries(
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data):
+    for text, item in zip(misses, response.data, strict=False):
         _emb_cache.set(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
@@ -3349,8 +3350,9 @@ async def async_embed_queries_with_stats(
     """Async counterpart of :func:`embed_queries_with_stats`."""
     if not queries:
         return [], 0
+    any_miss = any(_emb_cache.get(q) is None for q in queries)
     vectors = await async_embed_queries(queries, api_key=api_key, timeout=timeout)
-    return vectors, 1
+    return vectors, (1 if any_miss else 0)
 
 
 async def async_semantic_query_rewrite(

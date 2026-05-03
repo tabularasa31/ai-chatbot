@@ -5,13 +5,13 @@ a bounded dict with per-entry TTL and LRU-ish eviction.  Embedding vectors are
 deterministic for a given text, so cached results are always correct.
 
 Thread safety: Python's GIL makes individual dict reads/writes atomic.
-The eviction block in ``set`` is not atomic but is idempotent — a race
+The eviction block in ``put`` is not atomic but is idempotent — a race
 between two writers produces a consistent cache, just with a slightly
 different eviction order.
 
 Memory budget: 1 536 floats x 8 bytes x 2 048 entries ~ 24 MB worst-case.
-In practice entries are much smaller and the 5-minute TTL keeps the working
-set close to the hot queries from the last few minutes.
+In practice entries are much smaller and the 60-minute TTL keeps the working
+set warm across a full support session.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import time
 
-_CACHE_TTL_SECONDS = 300       # 5 minutes — matches relevance guard
+_CACHE_TTL_SECONDS = 3600      # 60 minutes — vectors are deterministic per model
 _MAX_CACHE_SIZE    = 2048
 
 # key → (expires_at, vector)

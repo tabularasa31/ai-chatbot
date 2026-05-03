@@ -37,6 +37,10 @@ def call_openai_with_retry(
     call_type: str = "chat_completion",
     max_attempts: int | None = None,
 ) -> T:
+    """Retry ``fn`` with exponential backoff on transient OpenAI errors.
+
+    Pass ``max_attempts=1`` to disable retries (fail fast on first error).
+    """
     started = time.monotonic()
     max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds

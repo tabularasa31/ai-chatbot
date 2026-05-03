@@ -172,6 +172,7 @@ def detect_injection_semantic(
             text,
             api_key=api_key,
             timeout=settings.injection_semantic_timeout_sec,
+            max_attempts=1,
         )
         ref_embeddings = _get_reference_embeddings(api_key)
         max_score = max(
@@ -227,6 +228,7 @@ async def async_detect_injection_semantic(
             text,
             api_key=api_key,
             timeout=settings.injection_semantic_timeout_sec,
+            max_attempts=1,
         )
         ref_embeddings = await _get_reference_embeddings_async(api_key)
         max_score = max(

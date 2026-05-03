@@ -35,9 +35,10 @@ def call_openai_with_retry(
     bot_id: str | None = None,
     endpoint: str | None = None,
     call_type: str = "chat_completion",
+    max_attempts: int | None = None,
 ) -> T:
     started = time.monotonic()
-    max_attempts = settings.openai_user_retry_max_attempts
+    max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds
     last_exc: Exception | None = None
     last_classified: ClassifiedError | None = None
@@ -158,15 +159,17 @@ async def async_call_openai_with_retry(
     bot_id: str | None = None,
     endpoint: str | None = None,
     call_type: str = "chat_completion",
+    max_attempts: int | None = None,
 ) -> T:
     """Async counterpart of :func:`call_openai_with_retry`.
 
     ``fn`` must be a zero-argument async callable (e.g. a coroutine factory).
     Same retry policy and budget as the sync version; retries use
     ``asyncio.sleep`` so the event loop is not blocked during back-off.
+    Pass ``max_attempts=1`` to disable retries (fail fast on first error).
     """
     started = time.monotonic()
-    max_attempts = settings.openai_user_retry_max_attempts
+    max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
     total_budget = settings.openai_user_retry_budget_seconds
     last_exc: Exception | None = None
     last_classified: ClassifiedError | None = None

@@ -127,7 +127,13 @@ def pg_db_session(pg_engine: sa.engine.Engine) -> Generator[Session, None, None]
 def mock_openai_client() -> Generator[Mock, None, None]:
     """Mock OpenAI client — no real API calls during pgvector tests."""
     mock_client = Mock()
-    mock_client.embeddings.create.return_value = Mock(data=[Mock(embedding=[0.1] * 1536)])
+
+    def _embeddings_create_response(*args: object, **kwargs: object) -> Mock:
+        input_val = kwargs.get("input", "")
+        count = 1 if isinstance(input_val, str) else len(input_val)
+        return Mock(data=[Mock(embedding=[0.1] * 1536) for _ in range(count)])
+
+    mock_client.embeddings.create.side_effect = _embeddings_create_response
     mock_client.chat.completions.create.return_value = Mock(
         choices=[Mock(message=Mock(content="AI response"))],
         usage=Mock(total_tokens=100),
@@ -186,6 +192,15 @@ def _reset_widget_rate_limit_key_override() -> Generator[None, None, None]:
     from backend.core.limiter import set_widget_public_rate_limit_key_override
 
     set_widget_public_rate_limit_key_override(None)
+
+
+@pytest.fixture(autouse=True)
+def _clear_embedding_cache() -> Generator[None, None, None]:
+    """Flush the in-process embedding cache before each test."""
+    from backend.search import embedding_cache
+    embedding_cache.clear()
+    yield
+    embedding_cache.clear()
 
 
 @pytest.fixture(scope="function")

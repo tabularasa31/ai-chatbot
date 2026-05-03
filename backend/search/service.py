@@ -1566,7 +1566,7 @@ def embed_queries(
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data, strict=True):
+    for text, item in zip(misses, response.data):
         _emb_cache.set(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
@@ -3337,7 +3337,7 @@ async def async_embed_queries(
         ),
         call_type="embedding",
     )
-    for text, item in zip(misses, response.data, strict=True):
+    for text, item in zip(misses, response.data):
         _emb_cache.set(text, item.embedding)
         cached_map[text] = item.embedding
     return [cached_map[q] for q in queries]  # type: ignore[return-value]

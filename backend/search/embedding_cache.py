@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import time
 
-_CACHE_TTL_SECONDS = 300       # 5 minutes — matches relevance guard
+_CACHE_TTL_SECONDS = 3600      # 60 minutes — vectors are deterministic per model
 _MAX_CACHE_SIZE    = 2048
 
 # key → (expires_at, vector)

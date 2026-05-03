@@ -31,6 +31,7 @@ from backend.observability.formatters import (
     truncate_text,
 )
 from backend.observability.metrics import capture_event
+from backend.search import embedding_cache as _emb_cache
 from backend.search.contradiction_adjudication import (
     ContradictionAdjudication,
     ContradictionAdjudicationCandidate,
@@ -1521,6 +1522,9 @@ def embed_query(
     Returns:
         1536-dimensional embedding vector.
     """
+    cached = _emb_cache.get(query)
+    if cached is not None:
+        return cached
     openai_client = get_openai_client(api_key, timeout=timeout)
     response = call_openai_with_retry(
         "search_embed_query",
@@ -1531,7 +1535,9 @@ def embed_query(
         call_type="embedding",
         max_attempts=max_attempts,
     )
-    return response.data[0].embedding
+    vector = response.data[0].embedding
+    _emb_cache.set(query, vector)
+    return vector
 
 
 def embed_queries(
@@ -1540,19 +1546,30 @@ def embed_queries(
     api_key: str,
     timeout: float | None = None,
 ) -> list[list[float]]:
-    """Embed multiple search queries in one OpenAI API round-trip."""
+    """Embed multiple search queries in one OpenAI API round-trip.
+
+    Vectors for texts already in the in-process cache are returned without
+    an API call; only cache misses are sent to OpenAI as a single batch.
+    """
     if not queries:
         return []
+    cached_map: dict[str, list[float] | None] = {q: _emb_cache.get(q) for q in queries}
+    misses = [q for q in queries if cached_map[q] is None]
+    if not misses:
+        return [cached_map[q] for q in queries]  # type: ignore[return-value]
     openai_client = get_openai_client(api_key, timeout=timeout)
     response = call_openai_with_retry(
         "search_embed_queries",
         lambda: openai_client.embeddings.create(
             model=settings.embedding_model,
-            input=queries,
+            input=misses,
         ),
         call_type="embedding",
     )
-    return [item.embedding for item in response.data]
+    for text, item in zip(misses, response.data, strict=True):
+        _emb_cache.set(text, item.embedding)
+        cached_map[text] = item.embedding
+    return [cached_map[q] for q in queries]  # type: ignore[return-value]
 
 
 def embed_queries_with_stats(
@@ -3276,6 +3293,9 @@ async def async_embed_query(
     max_attempts: int | None = None,
 ) -> list[float]:
     """Async counterpart of :func:`embed_query`."""
+    cached = _emb_cache.get(query)
+    if cached is not None:
+        return cached
     client = get_async_openai_client(api_key, timeout=timeout)
     response = await async_call_openai_with_retry(
         "search_embed_query",
@@ -3286,7 +3306,9 @@ async def async_embed_query(
         call_type="embedding",
         max_attempts=max_attempts,
     )
-    return response.data[0].embedding
+    vector = response.data[0].embedding
+    _emb_cache.set(query, vector)
+    return vector
 
 
 async def async_embed_queries(
@@ -3295,19 +3317,30 @@ async def async_embed_queries(
     api_key: str,
     timeout: float | None = None,
 ) -> list[list[float]]:
-    """Async counterpart of :func:`embed_queries`."""
+    """Async counterpart of :func:`embed_queries`.
+
+    Vectors for texts already in the in-process cache are returned without
+    an API call; only cache misses are sent to OpenAI as a single batch.
+    """
     if not queries:
         return []
+    cached_map: dict[str, list[float] | None] = {q: _emb_cache.get(q) for q in queries}
+    misses = [q for q in queries if cached_map[q] is None]
+    if not misses:
+        return [cached_map[q] for q in queries]  # type: ignore[return-value]
     client = get_async_openai_client(api_key, timeout=timeout)
     response = await async_call_openai_with_retry(
         "search_embed_queries",
         lambda: client.embeddings.create(
             model=settings.embedding_model,
-            input=queries,
+            input=misses,
         ),
         call_type="embedding",
     )
-    return [item.embedding for item in response.data]
+    for text, item in zip(misses, response.data, strict=True):
+        _emb_cache.set(text, item.embedding)
+        cached_map[text] = item.embedding
+    return [cached_map[q] for q in queries]  # type: ignore[return-value]
 
 
 async def async_embed_queries_with_stats(

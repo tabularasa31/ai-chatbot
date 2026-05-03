@@ -16,7 +16,6 @@ from backend.chat.service import (
     process_chat_message,
 )
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
-from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
 from backend.search.service import build_reliability_assessment
 from tests._async_utils import as_async as _as_async
 from tests.conftest import register_and_verify_user, set_client_openai_key
@@ -191,10 +190,6 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         lambda *args, **kwargs: ("Use the reset link in settings.", 17),
     )
     monkeypatch.setattr(
-        "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: {"is_valid": True, "confidence": 0.95},
-    )
-    monkeypatch.setattr(
         "backend.chat.service.should_escalate",
         lambda *args, **kwargs: (False, None),
     )
@@ -282,7 +277,6 @@ def test_process_chat_message_returns_plain_answer_when_model_asks_to_clarify(
     async def _fake_async_pipeline(*args, **kwargs):
         return _make_pipeline_result(
             final_answer="Which domain provider are you trying to configure?",
-            validation_outcome="valid",
             reliability_score="medium",
         )
 
@@ -393,14 +387,10 @@ def _make_retrieval_context(*, reliability_score: str = "medium") -> RetrievalCo
 def _make_pipeline_result(
     *,
     final_answer: str,
-    validation_outcome: str,
     reliability_score: str = "medium",
     is_reject: bool = False,
     reject_reason: str | None = None,
 ) -> ChatPipelineResult:
-    # Clarification tests intentionally use medium reliability + skipped validation
-    # to model "not rejected, but not sufficiently answerable yet" under the
-    # production `_is_sufficiently_answerable()` rule.
     retrieval = None if is_reject and reject_reason == "not_relevant" else _make_retrieval_context(
         reliability_score=reliability_score
     )
@@ -412,10 +402,7 @@ def _make_pipeline_result(
         reject_reason=reject_reason,  # type: ignore[arg-type]
         is_reject=is_reject,
         is_faq_direct=False,
-        validation_applied=not is_reject,
-        validation_outcome=validation_outcome,  # type: ignore[arg-type]
         retrieval=retrieval,
-        validation={"is_valid": validation_outcome == "valid", "confidence": 0.9, "reason": validation_outcome},
         escalation_recommended=False,
         escalation_trigger=None,
     )

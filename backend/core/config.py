@@ -131,28 +131,6 @@ class Settings(BaseSettings):
         ge=60,
         description="Sliding window length (seconds) for the escalation rate alert.",
     )
-    answer_validation_model: str = Field(
-        "gpt-4.1-mini",
-        alias="VALIDATION_MODEL",
-        description="OpenAI model for answer grounding validation.",
-    )
-    answer_validation_max_completion_tokens: int = Field(
-        150,
-        alias="ANSWER_VALIDATION_MAX_COMPLETION_TOKENS",
-        ge=1,
-    )
-    validation_always_on: bool = Field(
-        False,
-        alias="VALIDATION_ALWAYS_ON",
-        description="Force answer validation on every turn, bypassing confidence gating.",
-    )
-    validation_confidence_threshold: float = Field(
-        0.75,
-        alias="VALIDATION_CONFIDENCE_THRESHOLD",
-        ge=0.0,
-        le=1.0,
-        description="Minimum retrieval confidence to skip answer validation when answer has citations.",
-    )
     query_rewrite_model: str = Field(
         "gpt-4.1-mini",
         alias="QUERY_REWRITE_MODEL",

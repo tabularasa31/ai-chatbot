@@ -17,7 +17,6 @@ from backend.chat.service import (
     build_rag_messages,
     build_rag_prompt,
     generate_answer,
-    validate_answer,
 )
 from backend.core.config import settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
@@ -85,13 +84,6 @@ def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
     assert answer == "Documentation: https://docs.example.com/"
     assert tokens == 42
     mock_openai_client.chat.completions.create.assert_called_once()
-
-
-def test_validate_answer_no_context(mock_openai_client: Mock) -> None:
-    """Empty context → invalid + no_context; no OpenAI call."""
-    result = validate_answer("q", "a", [], api_key="sk-test")
-    assert result == {"is_valid": False, "confidence": 0.0, "reason": "no_context"}
-    mock_openai_client.chat.completions.create.assert_not_called()
 
 
 def test_quick_answers_context_returns_structured_lines(
@@ -272,57 +264,6 @@ def test_build_rag_prompt_handles_conflicting_sources_conservatively() -> None:
 
     assert "If sources in the provided context appear inconsistent" in prompt
     assert "answer conservatively from the clearest supported part only" in prompt
-
-
-def test_validate_answer_openai_error_returns_invalid(
-    mock_openai_client: Mock,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """OpenAI/JSON errors are logged and treated as validation failures."""
-    mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
-    with caplog.at_level("ERROR", logger="backend.chat.handlers.rag"):
-        result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
-    assert result["is_valid"] is False
-    assert result["confidence"] == 0.0
-    assert result["reason"] == "validation_error"
-    assert "Answer validation failed" in caplog.text
-
-
-def test_validate_answer_prompt_allows_single_clarifying_question(
-    mock_openai_client: Mock,
-) -> None:
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content='{"is_valid": true, "confidence": 0.9, "reason": "clarifying_question_allowed"}'))
-    ]
-
-    result = validate_answer(
-        "How do I connect this?",
-        "Which integration are you trying to connect?",
-        ["Integration setup depends on the integration type."],
-        api_key="sk-test",
-    )
-
-    assert result["is_valid"] is True
-    prompt = mock_openai_client.chat.completions.create.call_args.kwargs["messages"][0]["content"]
-    assert "asks exactly one short clarifying question" in prompt
-    assert "materially blocks a correct answer" in prompt
-    assert "unsupported core facts" in prompt
-    assert "section-path labels" in prompt
-
-
-def test_validate_answer_uses_validation_model(
-    mock_openai_client: Mock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "answer_validation_model", "gpt-test-validation")
-    mock_openai_client.chat.completions.create.return_value.choices = [
-        Mock(message=Mock(content='{"is_valid": true, "confidence": 0.95, "reason": "grounded"}'))
-    ]
-
-    result = validate_answer("q", "a", ["chunk"], api_key="sk-test")
-
-    assert result["is_valid"] is True
-    assert mock_openai_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-validation"
 
 
 def test_generate_answer_with_context(mock_openai_client: Mock) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
 
 import backend.chat.language as language_module
 from backend.chat.language import (
@@ -21,7 +20,6 @@ from backend.chat.language import (
 )
 from backend.chat.service import (
     _resolve_fallback_locale,
-    generate_answer,
 )
 from backend.core.config import Settings, settings
 from backend.guards.reject_response import RejectReason, build_reject_response

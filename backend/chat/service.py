@@ -49,7 +49,6 @@ from backend.chat.handlers.rag import (
     build_rag_prompt,
     generate_answer,
     retrieve_context,
-    validate_answer,
 )
 from backend.chat.history_service import (
     PREVIEW_MAX_LEN,  # noqa: F401  (re-export)
@@ -166,7 +165,6 @@ __all__ = (
     "build_rag_prompt",
     "generate_answer",
     "retrieve_context",
-    "validate_answer",
 )
 
 _HANDLER_ROUTER: HandlerRouter = default_router()

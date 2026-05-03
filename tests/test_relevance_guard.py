@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -127,10 +127,6 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
         lambda *args, **kwargs: ("OK", 5),
     )
     monkeypatch.setattr(
-        "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: {"is_valid": True, "confidence": 1.0, "reason": "grounded"},
-    )
-    monkeypatch.setattr(
         "backend.chat.service.should_escalate",
         lambda *args, **kwargs: (False, None),
     )
@@ -193,10 +189,6 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     monkeypatch.setattr(
         "backend.chat.service.generate_answer",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not generate")),
-    )
-    monkeypatch.setattr(
-        "backend.chat.service.validate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not validate")),
     )
 
     outcome = process_chat_message(

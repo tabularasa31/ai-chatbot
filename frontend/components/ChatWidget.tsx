@@ -157,7 +157,11 @@ function extractUserIdFromIdentityToken(token: string | null | undefined): strin
     const b64 = parts.length === 3 ? parts[1] : parts[0];
     if (!b64) return null;
     const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-    const json = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const bytes = Uint8Array.from(
+      atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad),
+      (c) => c.charCodeAt(0),
+    );
+    const json = new TextDecoder().decode(bytes);
     const data = JSON.parse(json) as Record<string, unknown>;
     if (typeof data?.user_id === "string" && data.user_id.trim()) return data.user_id.trim();
   } catch {

@@ -50,8 +50,8 @@ The widget keeps a `session_id` so the bot can maintain context across follow-up
 
 Current behavior:
 
-- anonymous sessions are stored in the browser and can continue in the same browser for up to 24 hours
-- identified sessions can also be resumed by Chat9 on `POST /widget/session/init` for the same `user_id` if the previous chat is still open and was active within 24 hours
+- anonymous sessions are stored in the browser (`localStorage`) and can continue in the same browser for up to 24 hours, rehydrated from `GET /widget/history`
+- identified sessions are also keyed by `user_id` in the same browser storage, so reopening the widget on the same device for the same identified user resumes the previous chat (still subject to the 24-hour window) — `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the standard widget today
 - closed chats are not resumed
 
 If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
@@ -93,7 +93,7 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
 
 The token is HMAC-signed. Any tampering is detected. The payload is encoded, not encrypted — do not put passwords, card data, or other secrets inside it.
 
-If the same identified user returns later, Chat9 may resume the previous chat if it is still open and was active within the last 24 hours.
+If the same identified user reopens the widget on the same browser/device, the standard widget resumes the previous chat from local storage (subject to the 24-hour window). `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the stock widget.
 
 ### Step 1 — Get a signing secret
 
@@ -222,10 +222,18 @@ If the token is missing or invalid, Chat9 still returns a session but with:
 Use the `session_id` from `session/init` in later chat requests:
 
 ```bash
-curl -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
+curl -N -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
   -H "Content-Type: application/json" \
   -d '{"message":"Hello"}'
 ```
+
+`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events), not a single JSON body. Frame sequence:
+
+1. one or more `data: {"type":"status","stage":"…"}` frames signalling progress (e.g. `"thinking"`) — safe to ignore if you only want the answer text
+2. one or more `data: {"type":"chunk","text":"…"}` frames as the model streams; concatenate `text` to render the answer as it arrives
+3. exactly one terminal `data: {"type":"done","text":"<full reply>","session_id":"…","chat_ended":false}` frame; the `done` payload may also include `ticket_number` (when the turn opened a support ticket) and `sources` (when the answer cited URL-backed documents)
+
+On a server-side error you may instead receive a single `data: {"type":"error","code":…,"message":"…"}` frame before the stream closes. See [API → POST /widget/chat](/docs/api#post-widgetchat) for the full contract.
 
 Public widget responses may include:
 
@@ -235,7 +243,7 @@ Public widget responses may include:
 - a single clarifying question (embedded in the same text reply) when the bot needs one missing detail to answer reliably
 - an escalation handoff message when the bot cannot answer safely
 
-The reply is a JSON object whose message content lives in a single `text` field (alongside `session_id`, `chat_ended` and an optional `ticket_number`). There is no structured clarification payload and the widget does not render quick-reply buttons.
+There is no structured clarification payload and the widget does not render quick-reply buttons — the message text always lives in the `done` frame's `text` field.
 
 ### Token field reference
 

@@ -21,10 +21,13 @@
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
+<script
+  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  data-bot-id="ch_YOUR_PUBLIC_ID">
+</script>
 ```
 
-`clientId` is your client **`public_id`** (`ch_…`) from the Dashboard. If the frontend and API share the same origin (self‑hosted), you can omit `Chat9Config` and use a single script tag with `?clientId=…` only.
+`data-bot-id` is your bot's **`public_id`** (`ch_…`) from the Dashboard. It is safe to ship in page HTML — no secrets. If the frontend and API share the same origin (self-hosted), you can omit the `Chat9Config` line.
 
 ---
 
@@ -268,7 +271,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 | GET | `/health` | Health check |
 | GET | `/embed.js` | Widget script |
 | POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
-| POST | `/widget/chat` | Public widget chat by `clientId`; streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |
+| POST | `/widget/chat` | Public widget chat by bot `public_id` (query param `bot_id`); streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |
 | POST | `/widget/escalate` | Public widget manual escalation |
 
 ---
@@ -277,10 +280,13 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
-<script src="https://ai-chatbot-production-6531.up.railway.app/embed.js?clientId=ch_YOUR_PUBLIC_ID"></script>
+<script
+  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  data-bot-id="ch_YOUR_PUBLIC_ID">
+</script>
 ```
 
-Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (optional query `locale`; the SSE stream ends with a `done` event that includes `text`, `session_id`, `chat_ended`, and optional `ticket_number` / `sources`). Optional identified sessions: `POST /widget/session/init` with `locale` and optional signed `identity_token`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
+Copy the exact snippet from the Dashboard (it fills in your `public_id` and URLs). The loader adds a floating iframe; users chat against your uploaded documents via `POST /widget/chat` (query `bot_id` required, optional `session_id` / `locale`; the SSE stream ends with a `done` event that includes `text`, `session_id`, `chat_ended`, and optional `ticket_number` / `sources`). Optional identified sessions: `POST /widget/session/init` with `bot_id` and optional signed `identity_token` / `locale`. Manual escalation from the widget UI uses `POST /widget/escalate` (proxied on the Next app as `/widget/escalate`).
 
 ---
 

@@ -1,14 +1,21 @@
 ---
 title: Rotating your API key
-description: How to rotate your widget API key without breaking the embedded chat on your site.
+description: How to rotate the `ck_…` API key used for server-to-server `/chat` calls.
 ---
 
-Your widget uses a `ck_…` API key to talk to Chat9. If that key is ever
-exposed (committed to a public repo, sent over email, captured in a
-screenshot), you should rotate it. Rotation gives you a new key
-immediately while keeping the old one valid for a 24-hour grace window
-— enough time to update the embed snippet on your site without the
-widget breaking for users mid-session.
+`ck_…` API keys authenticate **server-to-server** calls against
+`POST /chat` (custom backend integrations and bots driven from your own
+server). The standard embedded chat widget on your site does **not**
+use a `ck_…` key — it loads via `embed.js` with a public
+`data-bot-id` and goes through the unauthenticated `/widget/*`
+endpoints. See [Embedding the widget](/docs/embedding-the-widget) for
+the embed contract.
+
+If a `ck_…` key is ever exposed (committed to a public repo, sent
+over email, captured in a screenshot), rotate it. Rotation gives you a
+new key immediately while keeping the old one valid for a 24-hour
+grace window — enough time to roll out the new value across your
+backend without taking server-side `/chat` traffic offline.
 
 ## When to rotate
 
@@ -26,8 +33,9 @@ widget breaking for users mid-session.
 4. Copy the new key from the green confirmation panel. **You will not
    see the plaintext again** — only the last 4 characters of any key
    are shown after this.
-5. Update your embed snippet (or any other place the key is used) with
-   the new value.
+5. Update every server that calls `/chat` with the new value (env
+   vars, secret managers, CI). The browser embed snippet does **not**
+   need to change — it doesn't carry a `ck_…` key.
 
 ## What the grace window does
 

@@ -170,14 +170,27 @@ Example payload:
 
 ### Step 3 — Pass the token to the embed script
 
-In your server-rendered page template, inject the token before the embed script:
+In your server-rendered page template, inject the token before the embed script. **For logged-in users**, render a quoted string; **for anonymous visitors**, render the bare JS literal `null` (no quotes) — a string `"null"` would be sent as a token and fail validation.
+
+For an identified visitor:
 
 ```html
-<!-- Server renders the token for logged-in users, null for anonymous -->
 <script>
   window.Chat9Config = {
     widgetUrl: "https://getchat9.live",
-    identityToken: "{{ identity_token_or_null }}"
+    identityToken: "eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…"
+  };
+</script>
+<script src="https://YOUR_API_HOST/embed.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+```
+
+For an anonymous visitor (omit the field, or set it to `null` — never the string `"null"`):
+
+```html
+<script>
+  window.Chat9Config = {
+    widgetUrl: "https://getchat9.live",
+    identityToken: null
   };
 </script>
 <script src="https://YOUR_API_HOST/embed.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>

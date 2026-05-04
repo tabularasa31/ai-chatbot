@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,7 +37,11 @@ class Settings(BaseSettings):
     posthog_api_key: str | None = Field(None, alias="POSTHOG_API_KEY")
     posthog_host: str = Field("https://eu.i.posthog.com", alias="POSTHOG_HOST")
     sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
-    git_sha: str | None = Field(None, alias="GIT_SHA")
+    git_sha: str | None = Field(
+        None,
+        alias="GIT_SHA",
+        validation_alias=AliasChoices("GIT_SHA", "RAILWAY_GIT_COMMIT_SHA"),
+    )
     pipeline_release: str | None = Field(None, alias="PIPELINE_RELEASE")
     observability_capture_full_prompts: bool = Field(
         False,

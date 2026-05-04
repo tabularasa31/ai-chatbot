@@ -4,10 +4,11 @@ import { Suspense, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
   (typeof window !== "undefined" ? window.location.origin : "");
+const WIDGET_LOADER_URL =
+  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
 
 type Mode = "bubble" | "inline";
 
@@ -31,45 +32,34 @@ function EmbedContent() {
       .finally(() => setLoading(false));
   }, []);
 
-  function getScriptSrc() {
-    const base = API_URL || APP_URL;
-    return `${base}/embed.js`;
-  }
-
-  function getWidgetUrlLine() {
-    if (APP_URL && APP_URL !== API_URL) {
-      return `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n`;
-    }
-    return "";
-  }
+  // The dashboard origin where /widget/* and /api/widget-* live; only emitted
+  // when it differs from the production default the loader bakes in.
+  const apiBaseAttr =
+    APP_URL && APP_URL !== "https://getchat9.live"
+      ? `  data-api-base="${APP_URL}"`
+      : null;
 
   function getBubbleSnippet() {
-    const lines: string[] = [];
-    const extra = getWidgetUrlLine();
-    if (extra) lines.push(extra.trimEnd());
     const attrs = [
-      `  src="${getScriptSrc()}"`,
+      `  src="${WIDGET_LOADER_URL}"`,
       `  data-bot-id="${publicId ?? "YOUR_BOT_ID"}"`,
+      ...(apiBaseAttr ? [apiBaseAttr] : []),
       ...(color !== "#a855f7" ? [`  data-color="${color}"`] : []),
       ...(position !== "right" ? [`  data-position="${position}"`] : []),
     ];
-    lines.push(`<script\n${attrs.join("\n")}>\n</script>`);
-    return lines.join("\n");
+    return `<script\n${attrs.join("\n")}>\n</script>`;
   }
 
   function getInlineSnippet() {
-    const extra = getWidgetUrlLine();
     const divPart = `<div id="${targetId}"></div>`;
     const attrs = [
-      `  src="${getScriptSrc()}"`,
+      `  src="${WIDGET_LOADER_URL}"`,
       `  data-bot-id="${publicId ?? "YOUR_BOT_ID"}"`,
+      ...(apiBaseAttr ? [apiBaseAttr] : []),
       `  data-mode="inline"`,
       `  data-target="${targetId}"`,
     ];
-    const scriptPart = `<script\n${attrs.join("\n")}>\n</script>`;
-    return extra
-      ? `${extra.trimEnd()}\n${divPart}\n${scriptPart}`
-      : `${divPart}\n${scriptPart}`;
+    return `${divPart}\n<script\n${attrs.join("\n")}>\n</script>`;
   }
 
   if (loading) {

@@ -7,10 +7,11 @@ import { clearSession, api } from "@/lib/api";
 import { CodeBlockWithCopy } from "@/components/ui/code-block-with-copy";
 import { useClientMe, useBots } from "@/hooks/useApi";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL ||
   (typeof window !== "undefined" ? window.location.origin : "");
+const WIDGET_LOADER_URL =
+  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
 
 function DashboardContent() {
   const searchParams = useSearchParams();
@@ -34,13 +35,14 @@ function DashboardContent() {
   }, [clientError, router]);
 
   function getEmbedSnippet() {
-    const base = API_URL || APP_URL;
-    const scriptUrl = `${base}/embed.js`;
-    const configLine =
-      APP_URL && APP_URL !== API_URL
-        ? `<script>window.Chat9Config={widgetUrl:"${APP_URL}"};</script>\n`
-        : "";
-    return `${configLine}<script\n  src="${scriptUrl}"\n  data-bot-id="${botPublicId ?? ""}">\n</script>`;
+    // Loader lives on a CDN-style domain (widget.getchat9.live), separate from
+    // the dashboard. apiBase tells the widget where to send /widget/chat etc.
+    // — defaults to the production dashboard, override on staging via
+    // NEXT_PUBLIC_APP_URL during snippet rendering.
+    const apiAttr = APP_URL && APP_URL !== "https://getchat9.live"
+      ? `\n  data-api-base="${APP_URL}"`
+      : "";
+    return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botPublicId ?? ""}"${apiAttr}>\n</script>`;
   }
 
   if (clientLoading || botsLoading) {

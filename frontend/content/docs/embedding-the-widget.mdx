@@ -12,7 +12,7 @@ Example (placeholders — the Dashboard fills in your real bot public ID and URL
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
-  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
 </script>
 ```
@@ -181,7 +181,7 @@ For an identified visitor:
     identityToken: "eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…"
   };
 </script>
-<script src="https://YOUR_API_HOST/embed.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 ```
 
 For an anonymous visitor (omit the field, or set it to `null` — never the string `"null"`):
@@ -193,7 +193,7 @@ For an anonymous visitor (omit the field, or set it to `null` — never the stri
     identityToken: null
   };
 </script>
-<script src="https://YOUR_API_HOST/embed.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 ```
 
 The widget automatically calls `POST /widget/session/init` with your `bot_id` and `identity_token`. No private API key is ever sent from the browser.

@@ -39,7 +39,7 @@ Example shape (the Dashboard fills in your real values):
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
-  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
 </script>
 ```

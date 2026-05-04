@@ -48,7 +48,6 @@ from backend.observability import (
     shutdown_observability,
     shutdown_sentry,
 )
-from backend.routes.public import public_router
 from backend.search.routes import search_router
 from backend.tenants.routes import tenants_router
 from backend.widget.routes import widget_router
@@ -187,7 +186,6 @@ app.include_router(chat_router, prefix="/chat")
 app.include_router(escalation_router)
 app.include_router(gap_analyzer_router, prefix="/gap-analyzer")
 app.include_router(knowledge_router)
-app.include_router(public_router)
 app.include_router(widget_router)
 
 

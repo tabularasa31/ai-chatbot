@@ -2666,19 +2666,20 @@ async def async_run_chat_pipeline(
         record_stage_ms(trace, "llm_ms", llm_ms)
 
         # --- 7b. Language check ---
-        # Use the pre-resolved response_language as the expected output language instead of
-        # re-detecting from the question. detect_language on short clarifying questions (the
-        # clarify branch) is unreliable when the text mixes product terms from the English KB
-        # with the user's language, causing false-positive retries that add ~8-10 s.
-        # language_context.response_language is computed from conversation history + user locale
-        # + KB language and is a strictly better signal than a post-hoc langdetect on the question.
-        _expected_lang: str | None = (
-            language_context.response_language
-            if language_context is not None
-            else None
-        )
-        # Fall back to question detection only when response_language is unknown/unset.
-        if not _expected_lang or _expected_lang in ("auto",):
+        # Use the pre-resolved response_language as the expected output language for confirmed
+        # non-English conversations. For "en" (often a resolution fallback, not a confirmed
+        # detection) and unset/auto cases, fall back to detect_language(question) to preserve
+        # the original mismatch-detection behaviour.
+        # Motivation: detect_language on short clarifying questions (the clarify branch) is
+        # unreliable when the text mixes product terms from the English KB with the user's
+        # language, causing false-positive retries. language_context.response_language is
+        # computed from conversation history + user locale + KB language and is a better signal
+        # for confirmed non-English sessions.
+        _expected_lang: str | None = language_context.response_language if language_context else None
+        # "en" may be a default fallback rather than a confirmed detection, so re-verify via
+        # the question itself. For any other confirmed non-English language, trust the
+        # pre-resolved value and skip the extra detect_language call on the question.
+        if not _expected_lang or _expected_lang in ("auto", "en"):
             _q_lang = detect_language(question)
             _expected_lang = (
                 _q_lang.detected_language

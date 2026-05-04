@@ -105,6 +105,9 @@ importers:
 
   apps/widget-app:
     dependencies:
+      '@chat9/widget-loader':
+        specifier: workspace:*
+        version: link:../widget-loader
       '@chat9/widget-shared':
         specifier: workspace:*
         version: link:../../packages/widget-shared
@@ -145,6 +148,15 @@ importers:
       tailwindcss:
         specifier: ^3.4.19
         version: 3.4.19(tsx@4.21.0)
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vite:
+        specifier: ^5.4.19
+        version: 5.4.21(@types/node@20.19.39)
+
+  apps/widget-loader:
+    devDependencies:
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

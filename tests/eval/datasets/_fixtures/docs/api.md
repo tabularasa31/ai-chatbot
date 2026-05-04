@@ -142,7 +142,7 @@ The widget loader script. Embed it on your site with:
 
 ```html
 <script
-  src="https://api.getchat9.live/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="ch_...">
 </script>
 ```

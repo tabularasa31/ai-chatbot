@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "vite build && pnpm --filter @chat9/widget-loader build && node scripts/copy-loader.mjs",
     "dev": "vite",
     "preview": "vite preview",
     "check-bundle-size": "node scripts/check-bundle-size.mjs"
   },
   "dependencies": {
+    "@chat9/widget-loader": "workspace:*",
     "@chat9/widget-shared": "workspace:*",
     "clsx": "^2.1.1",
     "highlight.js": "^11.11.1",

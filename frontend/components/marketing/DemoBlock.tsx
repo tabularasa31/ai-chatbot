@@ -5,38 +5,30 @@ import { motion } from "framer-motion";
 
 const LANDING_DEMO_BOT_ID = process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim();
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL?.trim() || "").replace(/\/$/, "");
+const WIDGET_LOADER_URL =
+  process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
 
 const TARGET_ID = "chat9-landing-demo";
 
 function DemoWidget() {
   useEffect(() => {
-    // Widget iframe is served by Next.js at /widget on this origin,
-    // not by the API host that serves embed.js.
-    const w = window as typeof window & {
-      Chat9Config?: { widgetUrl?: string };
-    };
-    const hadPriorConfig = Object.prototype.hasOwnProperty.call(w, "Chat9Config");
-    const priorConfig = w.Chat9Config;
-    w.Chat9Config = { ...(priorConfig ?? {}), widgetUrl: window.location.origin };
-
+    // Loader's hardcoded apiBase points at production getchat9.live, but the
+    // landing page may run on a preview/staging host — point the embedded
+    // widget back at *this* origin so /widget/* requests land on the dashboard
+    // serving the page.
     const script = document.createElement("script");
-    script.src = `${API_URL}/embed.js`;
+    script.src = WIDGET_LOADER_URL;
     script.async = true;
     script.setAttribute("data-bot-id", LANDING_DEMO_BOT_ID!);
     script.setAttribute("data-mode", "inline");
     script.setAttribute("data-target", TARGET_ID);
+    script.setAttribute("data-api-base", window.location.origin);
     document.body.appendChild(script);
 
     return () => {
       script.remove();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";
-      if (hadPriorConfig) {
-        w.Chat9Config = priorConfig;
-      } else {
-        delete w.Chat9Config;
-      }
     };
   }, []);
 
@@ -44,7 +36,7 @@ function DemoWidget() {
 }
 
 export function DemoBlock() {
-  const ready = Boolean(LANDING_DEMO_BOT_ID && API_URL);
+  const ready = Boolean(LANDING_DEMO_BOT_ID);
 
   return (
     <section id="demo" className="max-w-7xl mx-auto px-6 py-20">
@@ -77,10 +69,6 @@ export function DemoBlock() {
             <div className="h-[600px] flex items-center justify-center px-6">
               <p className="text-nd-text/40 text-sm text-center leading-relaxed max-w-sm">
                 Live demo unavailable — set{" "}
-                <code className="text-nd-text/60 text-xs">
-                  NEXT_PUBLIC_API_URL
-                </code>{" "}
-                and{" "}
                 <code className="text-nd-text/60 text-xs">
                   NEXT_PUBLIC_LANDING_DEMO_BOT_ID
                 </code>

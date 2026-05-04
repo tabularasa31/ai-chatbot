@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
-import { ChatWidget } from "./ChatWidget";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
+const WIDGET_BASE_URL =
+  process.env.NEXT_PUBLIC_WIDGET_BASE_URL ?? "https://widget.getchat9.live/v1/";
 
 const MIN_W = 300;
 const MAX_W = 700;
@@ -18,20 +19,50 @@ const BOTTOM_CLEARANCE = 100; // bottom-6 (24) + button h-14 (56) + gap-3 (12) +
 const TOP_CLEARANCE = 56;     // fixed navbar h-12 (48) + margin (8)
 const SIDE_CLEARANCE = 32;    // right-6 (24) + margin (8)
 
+// Reduce a URL to its origin (`protocol://host`). Returns null for non-http(s)
+// or unparseable input. Used to derive the postMessage targetOrigin from
+// WIDGET_BASE_URL so we never broadcast identity tokens to a wildcard.
+function originOf(raw: string): string | null {
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
 export function DashboardSupportWidget() {
   const [open, setOpen] = useState(false);
   const [everOpened, setEverOpened] = useState(false);
-  // undefined = fetch in-flight; null = fetch done, no token; string = token ready.
-  // ChatWidget must not mount until this is resolved to avoid reading stale localStorage
-  // before the user-scoped key cleanup can run.
-  const [identityToken, setIdentityToken] = useState<string | null | undefined>(undefined);
   const [size, setSize] = useState({ w: DEFAULT_W, h: DEFAULT_H });
   const panelRef = useRef<HTMLDivElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const dragStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
+  const widgetOrigin = useMemo(() => originOf(WIDGET_BASE_URL), []);
+
+  const iframeSrc = useMemo(() => {
+    if (!BOT_ID) return null;
+    if (typeof window === "undefined") return null;
+    const url = new URL(WIDGET_BASE_URL);
+    url.searchParams.set("botId", BOT_ID);
+    url.searchParams.set("parentOrigin", window.location.origin);
+    // The widget-app calls /widget/* and /api/widget-* on the dashboard origin;
+    // CORS allowlist on dashboard middleware lets the cross-origin call through.
+    url.searchParams.set("apiBase", window.location.origin);
+    if (typeof navigator !== "undefined" && navigator.language) {
+      url.searchParams.set("locale", navigator.language);
+    }
+    return url.toString();
+  }, []);
+
+  // Fetch identity once on mount so it's ready when the iframe sends
+  // chat9:ready (avoids a visible "Loading…" while we round-trip the cookie).
+  // undefined = fetch in-flight; null = no token; string = token ready.
+  const [identityToken, setIdentityToken] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     if (!BOT_ID) return;
-
     fetch(`/api/widget-identity?bot_id=${encodeURIComponent(BOT_ID)}`, { credentials: "include" })
       .then((r) => r.json())
       .then((data: { identity_token?: string }) => {
@@ -39,6 +70,30 @@ export function DashboardSupportWidget() {
       })
       .catch(() => { setIdentityToken(null); });
   }, []);
+
+  // Reply to chat9:ready handshakes from the iframe with the resolved identity.
+  // The iframe lives on widget.getchat9.live (cross-origin), so we must use an
+  // explicit targetOrigin — never "*" — to avoid leaking the bearer token.
+  useEffect(() => {
+    if (!widgetOrigin) return;
+    if (identityToken === undefined) return;
+
+    function handleMessage(event: MessageEvent) {
+      if (event.origin !== widgetOrigin) return;
+      if (event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type !== "chat9:ready") return;
+
+      const payload =
+        identityToken
+          ? { type: "chat9:identity", identityToken }
+          : { type: "chat9:no-identity" };
+      iframeRef.current?.contentWindow?.postMessage(payload, widgetOrigin);
+    }
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [widgetOrigin, identityToken]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragStart.current) return;
@@ -90,11 +145,11 @@ export function DashboardSupportWidget() {
     setOpen((v) => !v);
   };
 
-  if (!BOT_ID) return null;
+  if (!BOT_ID || !iframeSrc) return null;
 
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
-      {everOpened && identityToken !== undefined && (
+      {everOpened && (
         <div
           ref={panelRef}
           style={{ display: open ? undefined : "none", width: size.w, height: size.h }}
@@ -116,10 +171,12 @@ export function DashboardSupportWidget() {
             </svg>
           </button>
 
-          <ChatWidget
-            botId={BOT_ID}
-            identityToken={identityToken}
-            isOpen={open}
+          <iframe
+            ref={iframeRef}
+            src={iframeSrc}
+            title="Chat9 support"
+            allow="clipboard-write"
+            className="block w-full h-full border-0"
           />
         </div>
       )}

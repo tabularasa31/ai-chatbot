@@ -24,7 +24,7 @@ const WIDGET_ALLOWED_ORIGINS = (process.env.WIDGET_ALLOWED_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const WIDGET_CORS_PATH_PREFIXES = ["/widget/", "/api/widget-session/", "/api/widget-identity"];
+const WIDGET_CORS_PATH_PREFIXES = ["/widget/", "/api/widget-session/", "/api/widget-identity/"];
 
 function isWidgetCorsPath(pathname: string): boolean {
   return WIDGET_CORS_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -47,17 +47,30 @@ export function middleware(request: NextRequest) {
   // CORS handling for widget cross-origin calls (runs before auth checks
   // because widget paths are not in PROTECTED_PATHS and need preflight to
   // succeed even for unauthenticated visitors).
-  if (origin && isWidgetCorsPath(pathname) && WIDGET_ALLOWED_ORIGINS.includes(origin)) {
+  if (origin && isWidgetCorsPath(pathname)) {
+    const allowed = WIDGET_ALLOWED_ORIGINS.includes(origin);
+
     if (request.method === "OPTIONS") {
+      // Reject disallowed origins with an explicit 403 instead of letting
+      // the request fall through to a CORS-headerless 200 — browsers would
+      // block either way, but this makes loader/env misconfiguration loud
+      // in dev tools instead of producing silent "fetch failed" errors.
+      if (!allowed) {
+        return new NextResponse(null, { status: 403 });
+      }
       return new NextResponse(null, { status: 204, headers: buildCorsHeaders(origin) });
     }
 
-    const res = NextResponse.next();
-    const corsHeaders = buildCorsHeaders(origin);
-    for (const [key, value] of Object.entries(corsHeaders)) {
-      res.headers.set(key, value);
+    if (allowed) {
+      const res = NextResponse.next();
+      for (const [key, value] of Object.entries(buildCorsHeaders(origin))) {
+        res.headers.set(key, value);
+      }
+      return res;
     }
-    return res;
+    // Disallowed origin on a non-OPTIONS widget request: let the response
+    // through without CORS headers; the browser will refuse to expose it
+    // to the caller. Same behavior as before, just made explicit.
   }
 
   const token = request.cookies.get("chat9_token")?.value;

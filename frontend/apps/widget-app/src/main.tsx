@@ -2,9 +2,16 @@ import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import "./styles.css";
 import { ChatWidget } from "./ChatWidget";
+import { t } from "./strings";
 
 // undefined = waiting for parent handshake; null = anonymous resolved; string = identified.
 type IdentityState = string | null | undefined;
+
+// If the loader doesn't respond to chat9:ready within this window, fall back
+// to anonymous mode rather than leaving the user staring at a loading frame.
+// Picked to be noticeably longer than a sane handshake (sub-100ms) but well
+// under user-perceived "is this broken" threshold.
+const IDENTITY_HANDSHAKE_TIMEOUT_MS = 2500;
 
 /**
  * Validates a full http(s) URL (path/query allowed) for use as a non-fetch
@@ -66,15 +73,22 @@ function App() {
       return;
     }
 
+    let resolved = false;
+    const resolve = (value: string | null) => {
+      if (resolved) return;
+      resolved = true;
+      setIdentityToken(value);
+    };
+
     function handleMessage(event: MessageEvent) {
       if (event.source !== window.parent) return;
       if (event.origin !== parentOrigin) return;
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "chat9:identity" && typeof data.identityToken === "string") {
-        setIdentityToken(data.identityToken);
+        resolve(data.identityToken);
       } else if (data.type === "chat9:no-identity") {
-        setIdentityToken(null);
+        resolve(null);
       }
     }
     window.addEventListener("message", handleMessage);
@@ -83,17 +97,22 @@ function App() {
     // or chat9:no-identity (anonymous).
     window.parent.postMessage({ type: "chat9:ready" }, parentOrigin);
 
-    return () => window.removeEventListener("message", handleMessage);
+    // Fail-safe: if the loader is broken or never sends a response, don't
+    // hang on "Loading…" forever — degrade to anonymous after a short delay.
+    const timer = window.setTimeout(() => resolve(null), IDENTITY_HANDSHAKE_TIMEOUT_MS);
+
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      window.clearTimeout(timer);
+    };
   }, [parentOrigin]);
 
   if (!botId || !apiBase) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 font-['Inter']">
         <div className="max-w-md rounded-[28px] border border-[#DCE5F2] bg-white px-6 py-7 text-center shadow-[0_24px_80px_rgba(15,23,42,0.12)]">
-          <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#0F172A]">Widget misconfigured</h1>
-          <p className="mt-3 text-sm leading-6 text-[#64748B]">
-            Missing required loader parameters: botId and apiBase.
-          </p>
+          <h1 className="text-xl font-semibold tracking-[-0.03em] text-[#0F172A]">{t(locale, "misconfigured_title")}</h1>
+          <p className="mt-3 text-sm leading-6 text-[#64748B]">{t(locale, "misconfigured_body")}</p>
         </div>
       </div>
     );
@@ -102,7 +121,7 @@ function App() {
   if (identityToken === undefined) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-[linear-gradient(180deg,#F8FBFF_0%,#F1F5F9_100%)] px-4 text-sm text-[#64748B] font-['Inter']">
-        Loading...
+        {t(locale, "loading")}
       </div>
     );
   }

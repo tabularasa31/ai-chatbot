@@ -172,12 +172,15 @@ def test_widget_session_init_identified_and_anonymous(
     assert init_anon.status_code == 200
     assert init_anon.json()["mode"] == "anonymous"
     sid_anon = uuid.UUID(init_anon.json()["session_id"])
-    assert (
+    anon_chat = (
         db_session.query(Chat)
         .filter(Chat.session_id == sid_anon)
         .first()
-        is None
     )
+    # Anonymous init must persist the row so the returned session_id can be
+    # used in the next /widget/chat without hitting session_not_found.
+    assert anon_chat is not None
+    assert anon_chat.user_context in (None, {}, {"browser_locale": None})
 
     bad_token = generate_kyc_token(
         {"user_id": "x"},

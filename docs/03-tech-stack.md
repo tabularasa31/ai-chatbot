@@ -253,10 +253,15 @@ The Knowledge Hub profile view exposes **extracted topics** rather than strict p
 
 ### Chat output contract (v1)
 
-The `/widget/chat` and `/chat` responses return a JSON object with a
-canonical `text` field, `session_id`, `chat_ended` and an optional
-`ticket_number`; the private `/chat` endpoint also includes
-`source_documents` and `tokens_used` for trace use. Structured outcome
+`POST /chat` returns a JSON object with a canonical `text` field,
+`session_id`, `chat_ended`, optional `ticket_number`, and (for trace
+use) `source_documents` and `tokens_used`. `POST /widget/chat`
+**streams** the same logical answer as Server-Sent Events
+(`Content-Type: text/event-stream`): `status` frames signalling
+progress (e.g. `"thinking"`), `chunk` frames with incremental `text`,
+and exactly one terminal `done` frame with the same `text` /
+`session_id` / `chat_ended` / optional `ticket_number` /
+optional `sources` payload. Structured outcome
 typing (`message_type=clarification`, `partial_with_clarification`,
 structured `clarification` payload, quick-reply options) is **not
 implemented** — the relevant flow was removed in PR #287 and replaced

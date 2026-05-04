@@ -253,39 +253,41 @@ def widget_session_init(
     locale = sanitize_locale(body.locale)
 
     ctx, fail_reason = _resolve_widget_identity(tenant, body.identity_token)
+    user_context: dict | None = None
     if ctx is not None:
-        merged = apply_identity_context_patch(
+        user_context = apply_identity_context_patch(
             {"user_id": ctx["user_id"]},
             ctx,
             browser_locale=locale,
         )
-        chat = Chat(
-            tenant_id=tenant.id,
-            session_id=session_id,
-            user_context=merged,
-        )
-        db.add(chat)
-        db.flush()
+        mode = "identified"
+    else:
+        if body.identity_token and body.identity_token.strip():
+            reason = fail_reason or "invalid_token"
+            logger.info("kyc_validation_failed: reason=%s", reason)
+        if locale is not None:
+            user_context = {"browser_locale": locale}
+
+    # Always persist the session row so the returned session_id can be used
+    # in the next /widget/chat call without hitting session_not_found.
+    # Stamp bot_id up front to skip the lazy backfill in widget_chat.
+    chat = Chat(
+        tenant_id=tenant.id,
+        bot_id=_bot.id,
+        session_id=session_id,
+        user_context=user_context,
+    )
+    db.add(chat)
+    db.flush()
+    if mode == "identified":
         start_user_session(
             db,
             tenant_id=tenant.id,
-            user_context=merged,
+            user_context=user_context,
             started_at=chat.created_at,
         )
-        db.commit()
         logger.info("kyc_session_created: tenant_id=%s", tenant.id)
-        mode = "identified"
-    elif body.identity_token and body.identity_token.strip():
-        reason = fail_reason or "invalid_token"
-        logger.info("kyc_validation_failed: reason=%s", reason)
-    elif locale is not None:
-        chat = Chat(
-            tenant_id=tenant.id,
-            session_id=session_id,
-            user_context={"browser_locale": locale},
-        )
-        db.add(chat)
-        db.commit()
+    db.commit()
 
     return WidgetSessionInitResponse(session_id=session_id, mode=mode)
 

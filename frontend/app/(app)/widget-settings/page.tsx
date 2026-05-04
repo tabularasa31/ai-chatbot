@@ -168,7 +168,7 @@ function makeWidgetIdentityToken({
         <div>
           <h2 className="text-base font-semibold text-slate-800">Bot ID</h2>
           <p className="text-slate-500 text-sm mt-1">
-            Use this public client ID in widget session init and integration payloads.
+            Use this public bot ID in widget session init and integration payloads.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

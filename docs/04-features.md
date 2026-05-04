@@ -369,8 +369,9 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 Public response contracts:
 
-- `POST /chat` and `POST /widget/chat` return `text` (canonical) plus legacy aliases (`answer` / `response` respectively)
-- both channels may return the localized default greeting as a normal `answer` when a brand-new empty conversation starts
+- `POST /chat` returns a JSON body with a canonical `text` field (plus `session_id`, `chat_ended`, optional `ticket_number`, and trace fields)
+- `POST /widget/chat` streams Server-Sent Events: `status` → `chunk`* → exactly one terminal `done` frame whose payload carries the same `text` / `session_id` / `chat_ended` / optional `ticket_number` / optional `sources`
+- both channels may return the localized default greeting as a normal `text` reply when a brand-new empty conversation starts
 
 v1 note: structured `clarification` payload (`message_type`, `options`, `option_id`, quick-reply buttons) is **not implemented**. The bot may embed a clarifying question in plain text as part of the normal answer, but no structured clarification object is returned and the widget does not render quick-reply buttons.
 
@@ -800,7 +801,7 @@ If the frontend and API share the same origin, you can omit `Chat9Config`.
 - **Inline**: renders inside an existing container. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
 `embed.js` (vanilla JS, served from the API):
-- Reads the bot `public_id` from `data-bot-id` (legacy `?botId=` URL param still supported)
+- Reads the bot `public_id` from `data-bot-id` on the script tag (no other source — the legacy `?botId=` URL param fallback was removed)
 - Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script's origin, as the **iframe base URL**
 - Injects an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>&parentOrigin=<page origin>`
 - KYC `identityToken` (when configured via `window.Chat9Config.identityToken`) is **not** put in the iframe URL — it is delivered by a `postMessage` handshake (widget posts `chat9:ready`, `embed.js` replies with `chat9:identity` or `chat9:no-identity`) so signed tokens never leak into browser history, server logs, or `Referer` headers. `parentOrigin` is the explicit `targetOrigin` for that handshake; `widgetBase` is the explicit `targetOrigin` for the identity reply.

@@ -6,10 +6,35 @@ import { ChatWidget } from "./ChatWidget";
 // undefined = waiting for parent handshake; null = anonymous resolved; string = identified.
 type IdentityState = string | null | undefined;
 
-function safeParseOrigin(raw: string | null): string | null {
+/**
+ * Validates a full http(s) URL (path/query allowed) for use as a non-fetch
+ * link target. Returns undefined if invalid so the consuming prop falls
+ * back to its default rather than rendering an attacker-controlled href
+ * (e.g. `javascript:` payloads).
+ */
+function safeMarketingUrl(raw: string | null | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return undefined;
+    return u.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Parse a URL and reduce it to `protocol://host` (origin). Returns null
+ * unless the input is an absolute http(s) URL — blocks `javascript:`,
+ * `data:`, relative paths, and unparseable junk. Use for any URL coming
+ * from an untrusted source (loader query params) before it reaches a
+ * `fetch` base or a postMessage `targetOrigin`.
+ */
+function safeOrigin(raw: string | null | undefined): string | null {
   if (!raw) return null;
   try {
     const u = new URL(raw);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
     return `${u.protocol}//${u.host}`;
   } catch {
     return null;
@@ -18,11 +43,12 @@ function safeParseOrigin(raw: string | null): string | null {
 
 function App() {
   const params = new URLSearchParams(window.location.search);
-  const botId = params.get("botId");
+  const botId = (params.get("botId") ?? "").trim() || null;
   const locale = params.get("locale") || (typeof navigator !== "undefined" ? navigator.language : null);
-  const apiBase = (params.get("apiBase") || "").replace(/\/+$/, "");
-  const parentOrigin = safeParseOrigin(params.get("parentOrigin"));
-  const siteUrl = params.get("siteUrl") || undefined;
+  const apiBase = safeOrigin((params.get("apiBase") ?? "").trim());
+  const parentOrigin = safeOrigin(params.get("parentOrigin"));
+  // siteUrl can be any http(s) URL (path/query allowed for marketing links).
+  const siteUrl = safeMarketingUrl(params.get("siteUrl"));
 
   const [identityToken, setIdentityToken] = useState<IdentityState>(undefined);
 

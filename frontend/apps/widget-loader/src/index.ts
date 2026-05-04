@@ -162,12 +162,13 @@ declare global {
   let resizeStartW = 0;
   let resizeStartH = 0;
 
-  // Convert #RRGGBB → rgba; returns null for named colors / shorthand / rgb()
+  // Convert #RGB or #RRGGBB → rgba; returns null for named colors / rgb() etc.
+  // Shorthand digits expand by repetition (#abc → #aabbcc) per CSS spec.
   function hexToRgba(hex: string | null, a: number): string | null {
-    const m = hex && hex.match(/^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})$/);
-    return m
-      ? `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${a})`
-      : null;
+    const m = hex && hex.match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+    if (!m) return null;
+    const full = m[1].length === 3 ? m[1].split("").map((c) => c + c).join("") : m[1];
+    return `rgba(${parseInt(full.slice(0, 2), 16)},${parseInt(full.slice(2, 4), 16)},${parseInt(full.slice(4, 6), 16)},${a})`;
   }
   const fabBg = color || "linear-gradient(135deg,#e879f9,#a855f7)";
   const colorRgba1 = hexToRgba(color, 0.4);

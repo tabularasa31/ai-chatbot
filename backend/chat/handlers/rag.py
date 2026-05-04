@@ -2655,23 +2655,42 @@ async def async_run_chat_pipeline(
             prior_messages=prior_messages,
         )
         llm_ms = int((perf_counter() - llm_start) * 1000)
+        record_stage_ms(trace, "llm_ms", llm_ms)
 
         # --- 7b. Language check ---
-        q_lang = detect_language(question)
+        # Use the pre-resolved response_language as the expected output language instead of
+        # re-detecting from the question. detect_language on short clarifying questions (the
+        # clarify branch) is unreliable when the text mixes product terms from the English KB
+        # with the user's language, causing false-positive retries that add ~8-10 s.
+        # language_context.response_language is computed from conversation history + user locale
+        # + KB language and is a strictly better signal than a post-hoc langdetect on the question.
+        _expected_lang: str | None = (
+            language_context.response_language
+            if language_context is not None
+            else None
+        )
+        # Fall back to question detection only when response_language is unknown/unset.
+        if not _expected_lang or _expected_lang in ("auto",):
+            _q_lang = detect_language(question)
+            _expected_lang = (
+                _q_lang.detected_language
+                if _q_lang.is_reliable and _q_lang.detected_language not in ("unknown", "en")
+                else None
+            )
         a_lang = detect_language(raw_answer)
         if (
-            q_lang.is_reliable
+            _expected_lang
+            and _expected_lang not in ("en",)
             and a_lang.is_reliable
-            and q_lang.detected_language not in ("unknown", "en")
-            and a_lang.detected_language != "unknown"
-            and q_lang.detected_language != a_lang.detected_language
+            and a_lang.detected_language not in ("unknown", _expected_lang)
         ):
+            _lang_retry_start = perf_counter()
             lang_span = None
             if trace is not None:
                 lang_span = trace.span(
                     name="language-check",
                     input={
-                        "question_lang": q_lang.detected_language,
+                        "expected_lang": _expected_lang,
                         "answer_lang": a_lang.detected_language,
                     },
                 )
@@ -2679,7 +2698,7 @@ async def async_run_chat_pipeline(
                 question,
                 retrieval.chunk_texts,
                 api_key=api_key,
-                response_language=q_lang.detected_language,
+                response_language=_expected_lang,
                 user_context_line=user_context_line,
                 disclosure_config=disclosure_config,
                 client_product_name=state.client_product_name,
@@ -2698,9 +2717,15 @@ async def async_run_chat_pipeline(
             )
             raw_answer = retry_answer
             tokens_used += retry_tokens
+            _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
+            record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
             if lang_span is not None:
                 lang_span.end(
-                    output={"regenerated": True, "forced_language": q_lang.detected_language}
+                    output={
+                        "regenerated": True,
+                        "forced_language": _expected_lang,
+                        "retry_ms": _lang_retry_ms,
+                    }
                 )
 
         raw_answer = _strip_inline_citations(raw_answer)

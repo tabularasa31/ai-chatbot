@@ -229,6 +229,8 @@ class ChatPipelineResult:
     # pipeline timing (ms); 0 means the stage was skipped
     retrieval_ms: int = 0
     llm_ms: int = 0
+    tokens_input: int = 0
+    tokens_output: int = 0
     # debug extras
     faq_match: Any = None  # FAQMatchResult | None
     # language_context is always populated by async_run_chat_pipeline; None
@@ -1407,6 +1409,8 @@ class RagHandler(PipelineHandler):
                 latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
                 retrieval_ms=result.retrieval_ms,
                 llm_ms=result.llm_ms,
+                tokens_input=result.tokens_input,
+                tokens_output=result.tokens_output,
                 query_script=result.query_script,
                 kb_scripts=result.kb_scripts,
                 cross_lingual_triggered=result.cross_lingual_triggered,
@@ -1661,6 +1665,8 @@ class RagHandler(PipelineHandler):
             latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
             retrieval_ms=result.retrieval_ms,
             llm_ms=result.llm_ms,
+            tokens_input=result.tokens_input,
+            tokens_output=result.tokens_output,
             reliability_score=reliability_score,
             best_confidence_score=retrieval.best_confidence_score,
             decision=_decision,
@@ -1815,7 +1821,7 @@ async def _async_generate_answer_native(
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
-) -> tuple[str, int]:
+) -> tuple[str, int, int, int]:
     """Native async port of :func:`generate_answer`.
 
     Same behaviour and telemetry shape as the sync version, but uses
@@ -1840,7 +1846,7 @@ async def _async_generate_answer_native(
             target_language=response_language,
             api_key=api_key,
         )
-        return (result.text, 0)
+        return (result.text, 0, 0, 0)
 
     system_prompt, user_message = build_rag_messages(
         question,
@@ -2037,9 +2043,10 @@ async def _async_generate_answer_native(
                 api_key=api_key,
             )
             total_tokens = (total_tokens or 0) + extra_tokens
+            _output_tokens += extra_tokens
         else:
             final_text = answer_text.strip()
-        return (final_text, total_tokens)
+        return (final_text, total_tokens, _input_tokens, _output_tokens)
     except Exception as exc:
         log_llm_tokens(
             operation="generate",
@@ -2062,7 +2069,7 @@ async def async_generate_answer(
     question: str,
     context_chunks: list[str],
     **kwargs: Any,
-) -> tuple[str, int]:
+) -> tuple[str, int, int, int]:
     """Native-async generation entry point.
 
     Production path uses :func:`_async_generate_answer_native` to avoid the
@@ -2078,7 +2085,8 @@ async def async_generate_answer(
     # native async path so the LLM hop no longer occupies a default-executor
     # thread for ~5-15 s per turn.
     if _svc.generate_answer is not generate_answer:
-        return await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
+        text, total = await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
+        return (text, total, 0, 0)
     return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
@@ -2632,7 +2640,7 @@ async def async_run_chat_pipeline(
                 logger.debug("status_callback(writing) failed", exc_info=True)
 
         llm_start = perf_counter()
-        raw_answer, tokens_used = await async_generate_answer(
+        raw_answer, tokens_used, _input_toks, _output_toks = await async_generate_answer(
             question,
             retrieval.chunk_texts,
             api_key=api_key,
@@ -2675,7 +2683,7 @@ async def async_run_chat_pipeline(
                         "answer_lang": a_lang.detected_language,
                     },
                 )
-            retry_answer, retry_tokens = await async_generate_answer(
+            retry_answer, retry_tokens, retry_in, retry_out = await async_generate_answer(
                 question,
                 retrieval.chunk_texts,
                 api_key=api_key,
@@ -2698,6 +2706,8 @@ async def async_run_chat_pipeline(
             )
             raw_answer = retry_answer
             tokens_used += retry_tokens
+            _input_toks += retry_in
+            _output_toks += retry_out
             if lang_span is not None:
                 lang_span.end(
                     output={"regenerated": True, "forced_language": q_lang.detected_language}
@@ -2718,6 +2728,8 @@ async def async_run_chat_pipeline(
             raw_answer=raw_answer,
             final_answer=final_answer,
             tokens_used=int(tokens_used),
+            tokens_input=_input_toks,
+            tokens_output=_output_toks,
             strategy=state.strategy,
             reject_reason=None,
             is_reject=False,

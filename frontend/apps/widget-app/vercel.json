@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
-      "source": "/v1/:path*",
+      "source": "/v1",
       "headers": [
         {
           "key": "Cache-Control",
@@ -15,7 +15,20 @@
       ]
     },
     {
-      "source": "/v1/assets/:path*",
+      "source": "/v1/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=300, s-maxage=300, must-revalidate"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "frame-ancestors *"
+        }
+      ]
+    },
+    {
+      "source": "/v1/assets/(.*)",
       "headers": [
         {
           "key": "Cache-Control",

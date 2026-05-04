@@ -4,6 +4,7 @@ const withMDX = createMDX();
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  transpilePackages: ["@chat9/widget-shared"],
   async rewrites() {
     return [
       {

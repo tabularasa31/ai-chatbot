@@ -33,11 +33,8 @@ backend/
 ├─ email/                  # transactional email (Brevo)
 │
 ├─ routes/                 # cross-cutting public HTTP
-│  ├─ public.py            # e.g. GET /embed.js
 │  └─ widget.py            # public widget: POST /widget/session/init, POST /widget/chat (rate limited)
 │
-├─ static/
-│  └─ embed.js             # loader served by backend (see public.py)
 ├─ widget/
 │  ├─ routes.py            # stub health only; real widget HTTP API is `backend/routes/widget.py`
 │  └─ __init__.py
@@ -359,21 +356,23 @@ Visit https://app.yourdomain.com
 - Can view chat logs
 ```
 
-### Widget (served from API)
+### Widget (separate Vercel project)
 
-**Script:** `GET /embed.js` — loader injects an iframe pointing at `/widget?botId=…`.
+**Loader:** `GET https://widget.getchat9.live/widget.js` — IIFE built from `frontend/apps/widget-loader/`. Injects an iframe pointing at `https://widget.getchat9.live/v1/?botId=…&apiBase=…&parentOrigin=…`.
+
+**Widget UI:** `GET https://widget.getchat9.live/v1/` — Vite + Preact bundle from `frontend/apps/widget-app/`. The widget calls `${apiBase}/widget/{chat,escalate,history,config}` and `${apiBase}/api/widget-{session/init,identity}` cross-origin, where `apiBase` defaults to the dashboard origin (`https://getchat9.live`) and is overridable via `data-api-base`. CORS for the widget paths is wired through `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
 
 **Typical snippet (bot's `public_id` from the dashboard, passed via `data-bot-id`):**
 ```html
 <script
-  src="https://api.getchat9.live/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
 </script>
 ```
 
-When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashboard “Copy embed code” may add `window.Chat9Config = { widgetUrl: "…" }` before the script tag.
+The loader and widget UI deploy together from a single Vercel project (`chat9-widget`, root `frontend/apps/widget-app`); the dashboard project (`getchat9.live`) deploys independently. Cache rules live in `frontend/apps/widget-app/vercel.json` — short TTL on `/widget.js` and `/v1/index.html`, year-long immutable on `/v1/assets/*`.
 
-**Smoke test:** paste the snippet into a static HTML page with a real bot `public_id` and open in the browser.
+**Smoke test:** `.github/workflows/widget-smoke.yml` polls `widget.getchat9.live` after merges that touch widget paths and asserts cache headers, CSP, and the loader IIFE shape.
 
 ---
 
@@ -393,7 +392,7 @@ When frontend and API hosts differ (e.g. getchat9.live + Railway API), the dashb
   - All show "ready" status
 
 ✅ Embed widget
-  - Copy embed code from dashboard (`embed.js` + `data-bot-id="…"`)
+  - Copy embed code from dashboard (`widget.getchat9.live/widget.js` + `data-bot-id="…"`)
   - Paste into test.html
   - Open in browser → iframe widget visible
 

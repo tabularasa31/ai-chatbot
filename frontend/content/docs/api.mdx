@@ -6,10 +6,11 @@ description: Chat9 HTTP API — public widget endpoints documented inline, full 
 Chat9 exposes its HTTP API at **`https://api.getchat9.live`**. There
 are two surfaces:
 
-- **Public widget endpoints** (`/widget/*`, `/embed.js`,
-  `/widget/config`) — unauthenticated, identified by your bot's
-  `public_id`. This is what the embedded chat widget on your site
-  calls. Documented in detail below.
+- **Public widget endpoints** (`/widget/*`, `/widget/config`) —
+  unauthenticated, identified by your bot's `public_id`. This is what
+  the embedded chat widget on your site calls. The loader script
+  itself is served from `widget.getchat9.live/widget.js`, separate
+  from the API host. Documented in detail below.
 - **Authenticated dashboard / management endpoints** — JWT-bearer
   authenticated. Sign-up, tenant settings, bot CRUD, document upload,
   chat logs, gap analyzer, escalations, FAQ workflow, etc. Catalogued
@@ -24,8 +25,8 @@ When this page and the live spec ever disagree, the live spec wins.
 ## Public widget endpoints
 
 The widget on your site talks to Chat9 over a small set of public
-HTTP endpoints. You don't normally call them yourself — `embed.js`
-handles everything — but they're documented here for custom
+HTTP endpoints. You don't normally call them yourself — the loader
+script handles everything — but they're documented here for custom
 integrations, debugging, or signing identified-session tokens from
 your own backend.
 
@@ -145,9 +146,11 @@ you can show as confirmation.
 
 **Rate limit:** 20 requests per minute per IP.
 
-### `GET /embed.js`
+### Loader script
 
-The widget loader script. Embed it on your site with:
+The loader is **not** served from the API host. It lives at
+`https://widget.getchat9.live/widget.js` (a separate Vercel
+project). Embed it on your site with:
 
 ```html
 <script
@@ -156,7 +159,9 @@ The widget loader script. Embed it on your site with:
 </script>
 ```
 
-You don't normally fetch this directly — the script tag does it.
+You don't normally fetch this directly — the script tag does it. See
+[Embedding the Widget](/docs/embedding-the-widget) for the full
+attribute reference.
 
 ### `GET /widget/config`
 

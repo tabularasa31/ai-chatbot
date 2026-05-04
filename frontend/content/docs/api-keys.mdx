@@ -6,7 +6,7 @@ description: How to rotate the `ck_…` API key used for server-to-server `/chat
 `ck_…` API keys authenticate **server-to-server** calls against
 `POST /chat` (custom backend integrations and bots driven from your own
 server). The standard embedded chat widget on your site does **not**
-use a `ck_…` key — it loads via `embed.js` with a public
+use a `ck_…` key — it loads via the public widget loader with a
 `data-bot-id` and goes through the unauthenticated `/widget/*`
 endpoints. See [Embedding the widget](/docs/embedding-the-widget) for
 the embed contract.

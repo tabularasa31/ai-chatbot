@@ -37,7 +37,6 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 Example shape (the Dashboard fills in your real values):
 
 ```html
-<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
   src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">

@@ -5,12 +5,11 @@ description: How to add the Chat9 chat widget to your site, plus identified sess
 
 ## Basic embed
 
-Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. It loads a small script from your API host and points the iframe UI at the Chat9 app.
+Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. The loader is a tiny (~3 KB gzipped) script served from a CDN-style domain (`widget.getchat9.live`) — it injects an iframe pointing at the hosted widget UI on the same origin and forwards postMessage events between your page and the chat.
 
-Example (placeholders — the Dashboard fills in your real bot public ID and URLs):
+Example (placeholders — the Dashboard fills in your real bot public ID):
 
 ```html
-<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
   src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
@@ -23,6 +22,34 @@ You can choose between two modes on the [Embed page](https://getchat9.live/embed
 
 - **Bubble** (default) — floating chat button in the bottom-right corner.
 - **Inline** — renders the widget inside an existing container on your page. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
+
+### Loader options
+
+All options are set as `data-*` attributes on the `<script>` tag. None except `data-bot-id` are required.
+
+| Attribute | Default | Notes |
+|---|---|---|
+| `data-bot-id` | — | **required.** Your bot's `public_id`. |
+| `data-mode` | `bubble` | `bubble` or `inline`. |
+| `data-target` | — | DOM element ID for inline mode. Ignored in bubble mode. |
+| `data-color` | violet gradient | Bubble background. Accepts `#RGB`, `#RRGGBB`, or any CSS color. |
+| `data-position` | `right` | `right` or `left`. Where the bubble sits. |
+| `data-locale` | browser locale | BCP-47 tag like `en-US`. |
+| `data-identity` | — | Signed identity token (see below). |
+| `data-api-base` | `https://getchat9.live` | Override only for staging or self-hosted dashboards. |
+| `data-widget-base` | derived from script src | Override only for testing a non-prod widget build. |
+
+### CSP allowlist
+
+If your site sets a Content Security Policy, allow Chat9 in the relevant directives:
+
+```
+script-src https://widget.getchat9.live;
+frame-src  https://widget.getchat9.live;
+connect-src https://getchat9.live;
+```
+
+The loader runs from `widget.getchat9.live`, the iframe is hosted there too, and the widget's API calls go to `getchat9.live` (or whatever `data-api-base` you set).
 
 ## What the widget does
 
@@ -86,7 +113,7 @@ By default the standard widget embed is anonymous. Chat9 knows which bot should 
 1. In **Dashboard → Settings → Widget API**, generate a signing secret.
 2. Store that secret on your server — never in client-side code.
 3. Your server generates a short-lived signed `identity_token` for each logged-in user.
-4. Your page sets `window.Chat9Config.identityToken` before the embed script loads. For anonymous visitors, set it to `null`.
+4. Your page passes the token to the loader either via the `data-identity` attribute on the `<script>` tag or via `window.Chat9Config.identityToken` set before the script runs. For anonymous visitors, omit both (or set the config field to `null`).
 5. The widget calls `POST /widget/session/init` with `bot_id` + `identity_token`.
 6. Chat9 validates the token and returns `session_id` + `mode` (`identified` or `anonymous`).
 7. All subsequent `POST /widget/chat` requests use that `session_id`.
@@ -172,35 +199,34 @@ Example payload:
 
 In your server-rendered page template, inject the token before the embed script. **For logged-in users**, render a quoted string; **for anonymous visitors**, render the bare JS literal `null` (no quotes) — a string `"null"` would be sent as a token and fail validation.
 
-For an identified visitor:
+For an identified visitor — the simplest form passes the token straight on the script tag:
+
+```html
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID"
+  data-identity="eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…">
+</script>
+```
+
+If you'd rather keep the token out of the markup (e.g. you're rendering the script tag from a static template and assembling the token from a separate JS context), use the legacy `window.Chat9Config` form before the loader runs:
 
 ```html
 <script>
   window.Chat9Config = {
-    widgetUrl: "https://getchat9.live",
     identityToken: "eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…"
   };
 </script>
 <script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 ```
 
-For an anonymous visitor (omit the field, or set it to `null` — never the string `"null"`):
-
-```html
-<script>
-  window.Chat9Config = {
-    widgetUrl: "https://getchat9.live",
-    identityToken: null
-  };
-</script>
-<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
-```
+For an anonymous visitor — omit `data-identity` and `Chat9Config.identityToken` entirely (do not pass the string `"null"`; the widget treats any non-empty string as a candidate token).
 
 The widget automatically calls `POST /widget/session/init` with your `bot_id` and `identity_token`. No private API key is ever sent from the browser.
 
-The token is delivered to the widget iframe over an internal `postMessage` handshake — never via URL parameters — so signed tokens never appear in browser history, server access logs, or `Referer` headers. You don't need to do anything for this; it's how `embed.js` and the hosted widget talk to each other.
+The token is delivered to the widget iframe over an internal `postMessage` handshake — never via URL parameters — so signed tokens never appear in browser history, server access logs, or `Referer` headers. You don't need to do anything for this; it's how the loader and the hosted widget talk to each other.
 
-If you prefer to call `session/init` directly (e.g. from a custom integration without `embed.js`):
+If you prefer to call `session/init` directly (e.g. from a custom integration without the loader):
 
 ```bash
 curl -X POST "https://YOUR_API_HOST/widget/session/init" \

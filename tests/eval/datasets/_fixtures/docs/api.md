@@ -6,7 +6,7 @@ description: Chat9 HTTP API — public widget endpoints documented inline, full 
 Chat9 exposes its HTTP API at **`https://api.getchat9.live`**. There
 are two surfaces:
 
-- **Public widget endpoints** (`/widget/*`, `/embed.js`,
+- **Public widget endpoints** (`/widget/*`,
   `/widget/config`) — unauthenticated, identified by your bot's
   `public_id`. This is what the embedded chat widget on your site
   calls. Documented in detail below.
@@ -24,7 +24,7 @@ When this page and the live spec ever disagree, the live spec wins.
 ## Public widget endpoints
 
 The widget on your site talks to Chat9 over a small set of public
-HTTP endpoints. You don't normally call them yourself — `embed.js`
+HTTP endpoints. You don't normally call them yourself — the widget loader
 handles everything — but they're documented here for custom
 integrations, debugging, or signing identified-session tokens from
 your own backend.
@@ -136,9 +136,10 @@ you can show as confirmation.
 
 **Rate limit:** 20 requests per minute per IP.
 
-### `GET /embed.js`
+### Loader script
 
-The widget loader script. Embed it on your site with:
+The widget loader is **not** served from the API host. It lives at
+`https://widget.getchat9.live/widget.js`. Embed it on your site with:
 
 ```html
 <script

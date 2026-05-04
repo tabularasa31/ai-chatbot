@@ -16,7 +16,7 @@ This file defines the stack, repository layout, and conventions. Keep it updated
 | Auth | JWT, bcrypt, email verification (Brevo HTTP API); successful `/auth/verify-email` provisions the user's single tenant/workspace; dashboard / tenant JWT APIs require a verified user via `require_verified_user` |
 | LLM | OpenAI API (per-tenant key; see `backend/core/openai_client.py`) |
 | Frontend | Next.js 14 (App Router), React 18, TypeScript, TailwindCSS, Radix Slot, framer-motion, fumadocs-ui for content |
-| Widget | Dedicated Next.js routes (`/widget`), API calls; public endpoints in `backend/routes/widget.py` and `backend/widget/` |
+| Widget | Standalone Vite + Preact build at `frontend/apps/widget-app`, deployed to `widget.getchat9.live/v1/` on its own Vercel project. Loader at `frontend/apps/widget-loader` (TS → IIFE) is co-deployed at `widget.getchat9.live/widget.js`. The dashboard exposes `/widget/{chat,escalate,history,config}` API proxy routes that the widget-app calls cross-origin via the CORS middleware in `frontend/middleware.ts`. |
 | Observability | Langfuse (LLM tracing), PostHog (product analytics), Sentry (errors) — see `backend/observability/` |
 
 Gap Analyzer is implemented as a bounded backend module under `backend/gap_analyzer/` with a dashboard page at `/gap-analyzer`. It has two pipelines:
@@ -243,15 +243,22 @@ ai-chatbot/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
-│   ├── routes/               # cross-cutting public routes: embed.js loader, widget
 │   └── migrations/           # Alembic: versions/, env.py (43+ migrations)
-├── frontend/                 # Next.js app
-│   └── app/                  # App Router: (marketing), (auth), (app), widget/, layout.tsx
-│       └── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
-│                             #   escalations/, gap-analyzer/, knowledge/, logs/,
-│                             #   review/, settings/, widget-settings/
+├── frontend/                 # pnpm workspace; root package is the Next.js dashboard
+│   ├── app/                  # dashboard App Router: (marketing), (auth), (app), layout.tsx
+│   │   ├── (app)/            # dashboard routes: admin/, dashboard/, debug/, embed/,
+│   │   │                     #   escalations/, gap-analyzer/, knowledge/, logs/,
+│   │   │                     #   review/, settings/, widget-settings/
+│   │   └── widget/           # API proxy ROUTES ONLY (chat/, escalate/, history/, config/) —
+│   │                         # called cross-origin by the standalone widget-app
+│   ├── apps/
+│   │   ├── widget-app/       # Vite + Preact standalone widget UI; deploy → widget.getchat9.live/v1/
+│   │   └── widget-loader/    # Vite IIFE loader script; co-deployed → widget.getchat9.live/widget.js
+│   ├── packages/
+│   │   └── widget-shared/    # types/helpers shared between dashboard and widget-app
+│   └── middleware.ts         # CORS for /widget/* and /api/widget-* (allowlist via WIDGET_ALLOWED_ORIGINS)
 ├── docs/                     # product and technical docs (no need to copy the full stack here)
-└── …                         # other assets (widget scripts, etc.)
+└── …
 ```
 
 Notable non-obvious modules:

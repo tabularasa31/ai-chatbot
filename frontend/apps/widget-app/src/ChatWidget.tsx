@@ -51,6 +51,10 @@ interface ChatWidgetProps {
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
   /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
   isOpen?: boolean;
+  /** Origin for API calls (e.g. "https://getchat9.live"). No trailing slash. */
+  apiBase: string;
+  /** Marketing site URL for the "Powered by Chat9" footer link. */
+  siteUrl?: string;
 }
 
 /** Recursively extract plain text from a hast node (works after rehype-highlight). */
@@ -126,7 +130,7 @@ const MD_COMPONENTS: Components = {
   },
 };
 
-const CHAT9_SITE_URL = process.env.NEXT_PUBLIC_APP_URL || "https://getchat9.live";
+const DEFAULT_SITE_URL = "https://getchat9.live";
 const SESSION_STORAGE_TTL_MS = 24 * 60 * 60 * 1000;
 const RETRYABLE_SESSION_ERROR_CODES = new Set([
   "session_invalid",
@@ -157,7 +161,11 @@ function extractUserIdFromIdentityToken(token: string | null | undefined): strin
     const b64 = parts.length === 3 ? parts[1] : parts[0];
     if (!b64) return null;
     const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-    const json = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    const binary = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
+    // atob returns a binary string (one byte per JS char). Multi-byte UTF-8
+    // (Cyrillic, CJK, emoji in identity claims) requires TextDecoder.
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const json = new TextDecoder().decode(bytes);
     const data = JSON.parse(json) as Record<string, unknown>;
     if (typeof data?.user_id === "string" && data.user_id.trim()) return data.user_id.trim();
   } catch {
@@ -270,6 +278,8 @@ export function ChatWidget({
   identityToken,
   renderBelowAssistant,
   isOpen = true,
+  apiBase,
+  siteUrl = DEFAULT_SITE_URL,
 }: ChatWidgetProps) {
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [input, setInput] = useState("");
@@ -359,7 +369,7 @@ export function ChatWidget({
     const stored = readStoredSession(botId, userId);
 
     if (identityToken && !stored) {
-      fetch("/api/widget-session/init", {
+      fetch(`${apiBase}/api/widget-session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bot_id: botId, identity_token: identityToken }),
@@ -379,14 +389,14 @@ export function ChatWidget({
       setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, identityToken]);
+  }, [botId, identityToken, apiBase]);
 
   useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams({ botId });
     if (localeParam) params.set("locale", localeParam);
 
-    fetch(`/widget/config?${params}`)
+    fetch(`${apiBase}/widget/config?${params}`)
       .then(async (r) => {
         if (!r.ok) return null;
         return r.json() as Promise<WidgetConfig>;
@@ -401,14 +411,14 @@ export function ChatWidget({
     return () => {
       cancelled = true;
     };
-  }, [botId, localeParam]);
+  }, [botId, localeParam, apiBase]);
 
   useEffect(() => {
     if (!sessionHydrated || !sessionId || historyLoaded) return;
     let cancelled = false;
     setLoading(true);
     const params = new URLSearchParams({ botId, session_id: sessionId });
-    fetch(`/widget/history?${params}`)
+    fetch(`${apiBase}/widget/history?${params}`)
       .then(async (r) => {
         if (r.status === 404) {
           // Session no longer exists on the backend — start fresh
@@ -452,7 +462,7 @@ export function ChatWidget({
         }
       });
     return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId]);
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -508,7 +518,7 @@ export function ChatWidget({
     });
     if (attemptSessionId) params.set("session_id", attemptSessionId);
 
-    const res = await fetch(`/widget/chat?${params}`, {
+    const res = await fetch(`${apiBase}/widget/chat?${params}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -595,7 +605,7 @@ export function ChatWidget({
     }
 
     return { res, payload };
-  }, [botId, localeParam]);
+  }, [botId, localeParam, apiBase]);
 
   const fetchGreeting = useCallback(async () => {
     const { res, payload } = await requestWidgetTurn({
@@ -948,7 +958,7 @@ export function ChatWidget({
 
         <div className="mt-2 text-center">
           <a
-            href={CHAT9_SITE_URL}
+            href={siteUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 transition hover:text-gray-600"

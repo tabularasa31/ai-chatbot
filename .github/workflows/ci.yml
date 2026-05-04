@@ -179,6 +179,10 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: https://ci.invalid
 
-      - name: Build widget-app spike
+      - name: Build widget-app
         working-directory: frontend
         run: pnpm --filter @chat9/widget-app build
+
+      - name: Check widget-app bundle size budget
+        working-directory: frontend
+        run: pnpm --filter @chat9/widget-app check-bundle-size

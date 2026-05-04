@@ -1,32 +1,71 @@
-# @chat9/widget-app — spike
+# @chat9/widget-app
 
-**Status: PoC. Do not edit `src/ChatWidget.tsx`, `src/LinkSafetyModal.tsx`, `src/LoadingIndicator.tsx`, or `src/utils.ts` directly.**
+Standalone build of the embeddable chat widget. Designed to run inside a cross-origin iframe (target: `widget.chat9.live`) loaded by `widget-loader`. Replaces the dashboard's `/widget` Next.js route once PR 2b cuts over.
 
-Until PR 2 of the [widget extraction](https://app.clickup.com/t/86exevzyy) lands, the canonical source for these files is the dashboard:
+## Status
 
-| spike file | source of truth |
-|---|---|
-| `src/ChatWidget.tsx` | `frontend/components/ChatWidget.tsx` |
-| `src/LinkSafetyModal.tsx` | `frontend/components/widget/LinkSafetyModal.tsx` |
-| `src/LoadingIndicator.tsx` | `frontend/components/LoadingIndicator.tsx` |
-| `src/utils.ts` (cn helper) | `frontend/components/ui/utils.ts` |
+Production-ready code path. After PR 2b lands, this is the **only** source of truth for the widget UI — `frontend/components/ChatWidget.tsx` and `frontend/app/widget/page.tsx` will be deleted.
 
-Bug fixes go to the dashboard copies; this spike will be re-synced or replaced during PR 2.
+Until PR 2b ships, the dashboard still serves its own copy at `/widget`. They are not auto-synced; the dashboard copy is now considered legacy.
 
-The only files that are spike-original and OK to edit:
-- `src/main.tsx` — entry point. Currently mounts `ChatWidget` with hardcoded `botId="ch_POC"`. PR 2 will replace this with query-param / postMessage handshake parsing.
-- `vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`, `postcss.config.mjs`, `index.html`, `src/styles.css`, `package.json` — build config.
+## Runtime contract
 
-## Purpose
+The loader passes everything via URL query params on the iframe's `src`:
 
-Validate that:
-1. `react-markdown@10` + `remark-gfm` + `rehype-highlight` + `lucide-react` build cleanly under Preact via `preact/compat` aliasing.
-2. The realistic gzipped bundle stays under the 150 kB fallback budget.
+| Param | Required | Purpose |
+|---|---|---|
+| `botId` | yes | Public bot identifier (`ch_…`) |
+| `apiBase` | yes | Origin of the dashboard API (e.g. `https://getchat9.live`). No trailing slash. All `/widget/*` and `/api/widget-*` calls are prefixed with this. |
+| `parentOrigin` | recommended | Origin of the embedding page; required for postMessage identity handshake. Without it the widget falls back to anonymous mode. |
+| `locale` | optional | BCP-47 locale for UI strings; defaults to `navigator.language`. |
+| `siteUrl` | optional | Marketing-site URL for the "Powered by Chat9" footer link. Defaults to `https://getchat9.live`. |
+
+If `botId` or `apiBase` are missing, the widget shows a "misconfigured" notice instead of mounting.
+
+### postMessage identity handshake
+
+```
+widget-app  →  chat9:ready                        (sent on mount)
+loader      →  chat9:identity { identityToken }   (identified mode)
+            or chat9:no-identity                  (anonymous mode)
+```
+
+While waiting for the loader's response, the widget shows a "Loading…" frame. If the page is opened directly (no iframe parent) it resolves to anonymous immediately.
 
 ## Build / measure
 
 ```bash
-pnpm --filter @chat9/widget-app build
+pnpm --filter @chat9/widget-app build   # production build
+pnpm --filter @chat9/widget-app dev     # local dev server (no backend wiring)
 ```
 
-Current measurement: **122.52 kB gzipped JS** (394.84 kB raw) + 4.09 kB gzip CSS. `highlight.js` (387 languages auto-detected) dominates — lazy-loading or a language subset is a tracked PR 2 optimization.
+Current bundle (production, gzipped):
+
+| Asset | Raw | Gzip |
+|---|---|---|
+| JS | ~395 kB | ~123 kB |
+| CSS | ~15 kB | ~4 kB |
+
+Most of the JS is `highlight.js` with all 387 languages bundled by auto-detect. Lazy-loading or a language subset is a tracked optimization.
+
+## Source layout
+
+| File | Purpose |
+|---|---|
+| `src/main.tsx` | Entry: parses query params, runs the postMessage handshake, mounts `ChatWidget`. |
+| `src/ChatWidget.tsx` | The widget itself. Receives `apiBase` / `siteUrl` as props; no env-var reads. |
+| `src/LinkSafetyModal.tsx`, `src/LoadingIndicator.tsx`, `src/utils.ts` | Supporting UI / helpers. |
+| `src/styles.css` | Tailwind directives. |
+| `vite.config.ts`, `tsconfig.json`, `tailwind.config.ts`, `postcss.config.mjs`, `index.html` | Build config. |
+
+## Environment variables (dashboard side)
+
+For widget-app to call the dashboard cross-origin, the dashboard's
+`WIDGET_ALLOWED_ORIGINS` env var must include the widget-app origin
+(comma-separated):
+
+```
+WIDGET_ALLOWED_ORIGINS=https://widget.chat9.live,http://localhost:5173
+```
+
+CORS is enforced in `frontend/middleware.ts`; identity is carried via Bearer token in the postMessage handshake, so cookies are never sent cross-origin and `Access-Control-Allow-Credentials` is never set.

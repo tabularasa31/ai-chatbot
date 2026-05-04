@@ -65,33 +65,42 @@ KYC is sent during **session initialization**, not during regular chat turns.
 - It does **not** happen on `POST /widget/chat`.
 - It happens when `POST /widget/session/init` is called with an `identity_token`.
 
-### How the stock `embed.js` handles KYC
+### How the stock loader handles KYC
 
-The standard `embed.js` supports KYC via `window.Chat9Config.identityToken`:
+The loader (`frontend/apps/widget-loader/`, served as `widget.getchat9.live/widget.js`) supports KYC two ways — pick whichever fits your templating model:
 
 ```html
+<!-- Option A: pass the token directly on the script tag -->
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_ID"
+  data-identity="{{ server_generated_token }}">
+</script>
+```
+
+```html
+<!-- Option B: legacy global, set before the loader runs -->
 <script>
   window.Chat9Config = {
-    widgetUrl: "https://getchat9.live",
     identityToken: "{{ server_generated_token_or_null }}"
   };
 </script>
-<script src="https://.../embed.js" data-bot-id="YOUR_BOT_ID"></script>
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_ID"></script>
 ```
 
 The token is delivered to the widget iframe via a deterministic two-step
 `postMessage` handshake — never via the URL (which would leak signed tokens
 into browser history, server access logs and `Referer` headers):
 
-1. `embed.js` creates the iframe, stamping `?parentOrigin=<page origin>` so
-   the iframe knows where to send messages back.
-2. Inside the iframe, `frontend/app/widget/page.tsx` mounts, registers a
+1. The loader creates the iframe, stamping `?parentOrigin=<page origin>&apiBase=<dashboard origin>` so
+   the iframe knows where to send messages back and where to call the API.
+2. Inside the iframe, `frontend/apps/widget-app/src/main.tsx` mounts, registers a
    `message` listener, then posts `{type: "chat9:ready"}` to `window.parent`
    with the explicit `parentOrigin` as `targetOrigin`.
-3. `embed.js` receives `chat9:ready`, removes its listener (no leak across
+3. The loader receives `chat9:ready`, removes its listener (no leak across
    re-init / HMR cycles), and posts back either:
    - `{type: "chat9:identity", identityToken: "<...>"}` if a token was
-     configured, **only** to the known `widgetBase` origin — never `*`; or
+     configured, **only** to the known widget origin — never `*`; or
    - `{type: "chat9:no-identity"}` if no token was configured — explicit
      anonymous signal so the widget proceeds without waiting.
 4. The widget reads the message, sets state, and only then mounts
@@ -100,13 +109,16 @@ into browser history, server access logs and `Referer` headers):
 
 If the page is opened directly in a tab (`window.parent === window`, no
 embedding iframe), the widget skips the handshake and resolves to anonymous
-synchronously.
+synchronously. There's also a fail-safe timeout in the widget
+(`IDENTITY_HANDSHAKE_TIMEOUT_MS` in `frontend/apps/widget-app/src/main.tsx`,
+currently 2500 ms) so a misbehaving loader can never deadlock the UI on
+"Loading…".
 
-This contract is **internal between `embed.js` and the widget** — customers
-never see it. Their integration is just: set `window.Chat9Config.identityToken`
-to a server-rendered token (or `null` for anonymous visitors) and load
-`embed.js`. A single embed snippet handles both anonymous and identified
-visitors on the same page.
+This contract is **internal between the loader and the widget** — customers
+never see it. Their integration is just: set `data-identity` (or
+`window.Chat9Config.identityToken`) to a server-rendered token (or omit it
+for anonymous visitors) and load the script. A single embed snippet handles
+both anonymous and identified visitors on the same page.
 
 ## Token format
 

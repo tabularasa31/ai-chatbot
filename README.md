@@ -22,7 +22,7 @@
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
-  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="ch_YOUR_PUBLIC_ID">
 </script>
 ```
@@ -42,7 +42,7 @@
 - **Retrieval reliability policy** — canonical reliability includes overlap/contradiction evidence; a single contradiction fact stays evidence-only, while corroborated contradiction caps to `low`
 - **Clarification-first behavior** — when one missing detail blocks a grounded answer, the bot asks a focused follow-up question in the normal `text` reply flow
 - **Localized default greeting** — new empty chats can start with a product-aware greeting localized from locale hints before the first real question
-- **Embeddable widget** — vanilla loader (`/embed.js`) + iframe UI on Next.js (`/widget`), no dependencies on the host page
+- **Embeddable widget** — TS-built loader (`widget.getchat9.live/widget.js`) + standalone Vite + Preact iframe UI (`widget.getchat9.live/v1/`), no dependencies on the host page
 - **Response controls (FI-DISC v1)** — tenant-wide answer detail level (Detailed / Standard / Corporate); dashboard **Response controls**; `GET`/`PUT /clients/me/disclosure`
 - **Optional identified sessions (FI-KYC)** — HMAC-signed identity token + `POST /widget/session/init`; dashboard **Widget API** page for signing secrets
 - **Gap Analyzer** — bounded docs-gap + user-signal backlog with Mode A/Mode B pipelines, linking/dedupe, archive lifecycle, draft generation, weekly reclustering, and lightweight badge summary endpoint
@@ -269,7 +269,6 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 |--------|------|-------------|
 | POST | `/search` | Vector search (JWT); returns `503` when OpenAI is unavailable |
 | GET | `/health` | Health check |
-| GET | `/embed.js` | Widget script |
 | POST | `/widget/session/init` | Public widget session bootstrap; optional identified mode via signed `identity_token` |
 | POST | `/widget/chat` | Public widget chat by bot `public_id` (query param `bot_id`); streams SSE `chunk` events and finishes with a `done` event containing `text`, `session_id`, `chat_ended`, optional `ticket_number`, and optional `sources` |
 | POST | `/widget/escalate` | Public widget manual escalation |
@@ -281,7 +280,7 @@ PG_USER=user PG_PASSWORD=password pytest -m pgvector tests/pgvector_tests/ -q
 ```html
 <script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
-  src="https://ai-chatbot-production-6531.up.railway.app/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="ch_YOUR_PUBLIC_ID">
 </script>
 ```
@@ -310,7 +309,7 @@ Gap Analyzer is the operator-facing backlog for documentation gaps and repeated 
 | Database | PostgreSQL 15 + pgvector | Railway |
 | AI | OpenAI `text-embedding-3-small`, `gpt-5-mini`, lightweight `gpt-4o-mini` guards | OpenAI API |
 | Frontend | Next.js 14 + TailwindCSS | Vercel |
-| Widget | Vanilla loader + Next.js `/widget` (iframe) | Vercel + Railway (`/embed.js`) |
+| Widget | TS loader (`widget.getchat9.live/widget.js`) + Vite + Preact iframe UI (`widget.getchat9.live/v1/`) | Vercel (separate `chat9-widget` project) |
 | Email | Brevo HTTP API | Brevo |
 
 ---

@@ -1,0 +1,129 @@
+name: Widget post-deploy smoke
+
+# Runs after widget-app changes land on main. Vercel auto-deploys the
+# `chat9-widget` project from the same push (root: frontend/apps/widget-app);
+# this workflow waits for the deploy to settle, then verifies that the public
+# loader and widget UI are reachable with the cache headers vercel.json sets.
+#
+# This is a smoke test, not a build. The actual Vite/pnpm build happens both
+# in CI (frontend job in ci.yml) and on Vercel — duplicating it here would
+# only race the Vercel deploy and produce confusing failures.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/apps/widget-app/**"
+      - "frontend/apps/widget-loader/**"
+      - "frontend/packages/widget-shared/**"
+      - "frontend/pnpm-lock.yaml"
+
+concurrency:
+  group: widget-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Public endpoints reachable
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    env:
+      LOADER_URL: https://widget.getchat9.live/widget.js
+      WIDGET_URL: https://widget.getchat9.live/v1/
+
+    steps:
+      - name: Wait for /widget.js to reflect this commit
+        run: |
+          # Vercel typically finishes the chat9-widget build within ~60s of
+          # push. Poll for up to 5 minutes; once /widget.js returns 200 we
+          # assume the deploy is at least live (we don't try to match commit
+          # hash, since /widget.js is mutable).
+          for attempt in $(seq 1 30); do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "$LOADER_URL")
+            if [ "$status" = "200" ]; then
+              echo "loader live after $attempt attempts"
+              break
+            fi
+            echo "[$attempt/30] loader $LOADER_URL → $status — sleeping 10s"
+            sleep 10
+          done
+          if [ "$status" != "200" ]; then
+            echo "::error::loader never returned 200 within 5 minutes"
+            exit 1
+          fi
+
+      - name: Loader headers (cache + CORS)
+        run: |
+          headers=$(curl -sI "$LOADER_URL")
+          echo "$headers"
+          echo "$headers" | grep -i '^cache-control:' | grep -qi 'max-age=300' \
+            || { echo "::error::loader cache-control missing max-age=300"; exit 1; }
+          echo "$headers" | grep -i '^access-control-allow-origin:' | grep -q '\*' \
+            || { echo "::error::loader missing Access-Control-Allow-Origin: *"; exit 1; }
+          ctype=$(echo "$headers" | grep -i '^content-type:' || true)
+          echo "$ctype" | grep -qi 'javascript' \
+            || { echo "::error::loader content-type is not javascript: $ctype"; exit 1; }
+
+      - name: Widget UI headers (cache + CSP frame-ancestors)
+        run: |
+          headers=$(curl -sI "$WIDGET_URL")
+          echo "$headers"
+          echo "$headers" | grep -i '^cache-control:' | grep -qi 'max-age=300' \
+            || { echo "::error::widget UI cache-control missing max-age=300"; exit 1; }
+          echo "$headers" | grep -i '^content-security-policy:' | grep -qi 'frame-ancestors' \
+            || { echo "::error::widget UI missing CSP frame-ancestors"; exit 1; }
+
+      - name: Hashed assets are immutable
+        run: |
+          # Pull index.html, find the hashed JS bundle URL, hit it with curl
+          # and assert the year-long immutable cache header is in place. This
+          # catches the case where vercel.json's source pattern stops matching
+          # after a path-rename refactor.
+          html=$(curl -s "$WIDGET_URL")
+          asset=$(echo "$html" | grep -oE '/v1/assets/[^"'\'' ]*\.js' | head -n1)
+          if [ -z "$asset" ]; then
+            echo "::error::could not find /v1/assets/*.js in widget index.html"
+            echo "$html"
+            exit 1
+          fi
+          asset_url="https://widget.getchat9.live$asset"
+          echo "Probing $asset_url"
+          headers=$(curl -sI "$asset_url")
+          echo "$headers"
+          echo "$headers" | grep -i '^cache-control:' | grep -qi 'immutable' \
+            || { echo "::error::hashed asset cache-control missing immutable"; exit 1; }
+          echo "$headers" | grep -i '^cache-control:' | grep -qi 'max-age=31536000' \
+            || { echo "::error::hashed asset cache-control missing max-age=31536000"; exit 1; }
+
+      - name: Loader script body sanity
+        run: |
+          # The loader is a tiny IIFE; pull it and check that key public-API
+          # tokens are present. Catches accidental regressions where a future
+          # build strips or renames a documented attribute.
+          body=$(curl -s "$LOADER_URL")
+          for needle in "data-bot-id" "Chat9" "chat9:ready"; do
+            if ! printf '%s' "$body" | grep -q "$needle"; then
+              echo "::error::loader missing expected token: $needle"
+              exit 1
+            fi
+          done
+          # Check the loader stays under its gzip budget on the wire. We send
+          # Accept-Encoding: gzip and omit --compressed so curl writes the raw
+          # (still-gzipped) bytes; %{size_download} reports the on-wire size.
+          # Confirm the server actually honored the header — otherwise we'd
+          # measure the uncompressed body and the budget would be meaningless.
+          gzip_bytes=$(curl -sf -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download}' "$LOADER_URL")
+          encoding=$(curl -sIf -H 'Accept-Encoding: gzip' "$LOADER_URL" | tr -d '\r' | grep -i '^content-encoding:' || true)
+          if ! printf '%s' "$encoding" | grep -qi 'gzip'; then
+            echo "::error::server did not return gzip-encoded loader; cannot verify on-wire budget. Got: $encoding"
+            exit 1
+          fi
+          if [ "$gzip_bytes" -gt 30720 ]; then
+            echo "::error::loader gzip on wire ${gzip_bytes} bytes exceeds 30 KB budget"
+            exit 1
+          fi
+          echo "loader gzip on wire: ${gzip_bytes} bytes (budget 30720)"

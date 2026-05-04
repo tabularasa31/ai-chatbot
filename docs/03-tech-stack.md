@@ -111,7 +111,7 @@
 │                   (Client's Website)                     │
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
-│  <script src="https://api/embed.js" data-bot-id="…">    │
+│  <script src="https://widget.getchat9.live/widget.js" data-bot-id="…">    │
 │  optional: window.Chat9Config.widgetUrl → Next.js origin   │
 │                                                           │
 │  ↓                                                        │
@@ -322,7 +322,7 @@ Decision-level metadata (`decision`, `decision_reason`, `clarify_type`,
 
 ### Frontend
 - Static site generation where possible
-- CDN for embed.js (Cloudflare)
+- Loader + widget UI hosted on Vercel CDN at `widget.getchat9.live`
 - Lazy loading for large document lists
 
 ---

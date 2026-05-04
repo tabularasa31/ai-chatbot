@@ -782,32 +782,30 @@ By default the widget is **anonymous** — no information about the end user is 
 
 ### How embedding works
 
-Users copy a snippet from the **Dashboard**. The snippet passes the bot's `public_id` via the `data-bot-id` attribute on the script tag. If the chat app (Next.js) is hosted on a **different origin** than the API that serves `embed.js`, set `window.Chat9Config.widgetUrl` to the app origin so the iframe loads the widget UI from the correct host.
+Users copy a snippet from the **Dashboard**. The snippet passes the bot's `public_id` via the `data-bot-id` attribute on the loader script tag. The loader and widget UI are served from a separate Vercel project (`chat9-widget`) at `widget.getchat9.live` — the dashboard project doesn't serve any widget assets.
 
-Example (placeholders — the Dashboard fills in your real bot public ID and URLs):
+Example (placeholders — the Dashboard fills in your real bot public ID):
 
 ```html
-<script>window.Chat9Config={widgetUrl:"https://getchat9.live"};</script>
 <script
-  src="https://<your-api-host>/embed.js"
+  src="https://widget.getchat9.live/widget.js"
   data-bot-id="YOUR_BOT_PUBLIC_ID">
 </script>
 ```
 
-If the frontend and API share the same origin, you can omit `Chat9Config`.
-
-`embed.js` supports two modes:
+The loader supports two modes:
 - **Bubble** (default): floating chat button in the bottom-right corner.
 - **Inline**: renders inside an existing container. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
-`embed.js` (vanilla JS, served from the API):
-- Reads the bot `public_id` from `data-bot-id` on the script tag (no other source — the legacy `?botId=` URL param fallback was removed)
-- Uses `window.Chat9Config?.widgetUrl` if set, otherwise the script's origin, as the **iframe base URL**
-- Injects an `<iframe>` pointing to `/widget?botId=…&locale=<navigator.language>&parentOrigin=<page origin>`
-- KYC `identityToken` (when configured via `window.Chat9Config.identityToken`) is **not** put in the iframe URL — it is delivered by a `postMessage` handshake (widget posts `chat9:ready`, `embed.js` replies with `chat9:identity` or `chat9:no-identity`) so signed tokens never leak into browser history, server logs, or `Referer` headers. `parentOrigin` is the explicit `targetOrigin` for that handshake; `widgetBase` is the explicit `targetOrigin` for the identity reply.
-- The iframe renders the full `ChatWidget` React component
+Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~2.7 KB gzip):
+- Reads the bot `public_id` from `data-bot-id` on the script tag.
+- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `data-widget-base` for staging.
+- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `data-api-base` for staging or self-hosted dashboards.
+- Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<navigator.language>&apiBase=…&parentOrigin=<page origin>`.
+- KYC `identityToken` (passed via `data-identity` or `window.Chat9Config.identityToken`) is **not** put in the iframe URL — it is delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:identity` or `chat9:no-identity`) so signed tokens never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`).
+- The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).
 
-The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk.
+The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk. Cross-origin calls from the iframe to the dashboard API go through the CORS middleware in `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
 
 ### Widget features
 

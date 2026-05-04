@@ -6,14 +6,7 @@
       return scripts[scripts.length - 1];
     })();
 
-  // Support data-bot-id attribute (preferred) or legacy ?botId= URL param
-  var botId =
-    (currentScript.dataset && currentScript.dataset.botId) ||
-    (function () {
-      var src = currentScript.src || "";
-      var m = src.match(/[?&]botId=([^&]*)/);
-      return m ? decodeURIComponent(m[1]) : null;
-    })();
+  var botId = currentScript.dataset && currentScript.dataset.botId;
 
   if (!botId) {
     console.error("Chat9: botId not found. Set data-bot-id attribute on the script tag.");

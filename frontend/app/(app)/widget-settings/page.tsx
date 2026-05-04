@@ -326,10 +326,10 @@ function makeWidgetIdentityToken({
         <h2 className="text-base font-semibold text-slate-800">Server-side token (Node.js)</h2>
         <p className="text-slate-500 text-sm">
           Call <code className="text-slate-800">POST /widget/session/init</code> with{" "}
-          <code className="text-slate-800">api_key</code> and optional{" "}
-          <code className="text-slate-800">identity_token</code>. Use your{" "}
-          <code className="text-slate-800">Bot ID</code> as{" "}
-          <code className="text-slate-800">tenant_id</code> in the payload.
+          <code className="text-slate-800">bot_id</code> (use the Bot ID above) and an optional{" "}
+          <code className="text-slate-800">identity_token</code> signed with your secret. The
+          standard embed snippet does this automatically — only call it directly from your own
+          server-side integration.
         </p>
         <CodeBlockWithCopy code={nodeSnippet} />
       </section>

@@ -111,9 +111,19 @@ jobs:
               exit 1
             fi
           done
-          # And check the loader stays under its gzip budget on the wire.
-          gzip_bytes=$(curl -s -H 'Accept-Encoding: gzip' --compressed-no-auto -o /tmp/widget.js.gz -w '%{size_download}' "$LOADER_URL" || true)
-          if [ -n "$gzip_bytes" ] && [ "$gzip_bytes" -gt 30720 ]; then
+          # Check the loader stays under its gzip budget on the wire. We send
+          # Accept-Encoding: gzip and omit --compressed so curl writes the raw
+          # (still-gzipped) bytes; %{size_download} reports the on-wire size.
+          # Confirm the server actually honored the header — otherwise we'd
+          # measure the uncompressed body and the budget would be meaningless.
+          gzip_bytes=$(curl -sf -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download}' "$LOADER_URL")
+          encoding=$(curl -sIf -H 'Accept-Encoding: gzip' "$LOADER_URL" | tr -d '\r' | grep -i '^content-encoding:' || true)
+          if ! printf '%s' "$encoding" | grep -qi 'gzip'; then
+            echo "::error::server did not return gzip-encoded loader; cannot verify on-wire budget. Got: $encoding"
+            exit 1
+          fi
+          if [ "$gzip_bytes" -gt 30720 ]; then
             echo "::error::loader gzip on wire ${gzip_bytes} bytes exceeds 30 KB budget"
             exit 1
           fi
+          echo "loader gzip on wire: ${gzip_bytes} bytes (budget 30720)"

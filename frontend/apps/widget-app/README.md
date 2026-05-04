@@ -28,7 +28,7 @@ loader      →  chat9:identity { identityToken }   (identified mode)
             or chat9:no-identity                  (anonymous mode)
 ```
 
-While waiting for the loader's response, the widget shows a "Loading…" frame. After ~2.5s with no response it falls back to anonymous so it never deadlocks. If the page is opened directly (no iframe parent) it resolves to anonymous immediately.
+While waiting for the loader's response, the widget shows a "Loading…" frame. If the loader doesn't respond within `IDENTITY_HANDSHAKE_TIMEOUT_MS` (2500 ms by default; see `src/main.tsx`) it falls back to anonymous so the UI never deadlocks. If the page is opened directly (no iframe parent) it resolves to anonymous immediately.
 
 ## Build / measure
 

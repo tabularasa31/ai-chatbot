@@ -109,8 +109,10 @@ into browser history, server access logs and `Referer` headers):
 
 If the page is opened directly in a tab (`window.parent === window`, no
 embedding iframe), the widget skips the handshake and resolves to anonymous
-synchronously. There's also a 2.5s timeout in the widget so a misbehaving
-loader can never deadlock the UI on "Loading…".
+synchronously. There's also a fail-safe timeout in the widget
+(`IDENTITY_HANDSHAKE_TIMEOUT_MS` in `frontend/apps/widget-app/src/main.tsx`,
+currently 2500 ms) so a misbehaving loader can never deadlock the UI on
+"Loading…".
 
 This contract is **internal between the loader and the widget** — customers
 never see it. Their integration is just: set `data-identity` (or

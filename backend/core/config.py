@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     sentry_dsn: str | None = Field(None, alias="SENTRY_DSN")
     git_sha: str | None = Field(
         None,
+        alias="GIT_SHA",
         validation_alias=AliasChoices("GIT_SHA", "RAILWAY_GIT_COMMIT_SHA"),
     )
     pipeline_release: str | None = Field(None, alias="PIPELINE_RELEASE")

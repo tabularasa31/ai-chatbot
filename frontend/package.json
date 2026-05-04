@@ -2,6 +2,7 @@
   "name": "frontend",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -28,9 +29,11 @@
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
     "swr": "^2.4.1",
-    "tailwind-merge": "^2"
+    "tailwind-merge": "^2",
+    "@chat9/widget-shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/mdx": "^2.0.13",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

@@ -20,8 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
-      frontend: ${{ steps.filter.outputs.frontend }}
       pgvector: ${{ steps.filter.outputs.pgvector }}
+      frontend-dashboard: ${{ steps.filter.outputs.frontend-dashboard }}
+      frontend-widget: ${{ steps.filter.outputs.frontend-widget }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -33,8 +34,6 @@ jobs:
               - 'tests/**'
               - 'requirements.txt'
               - 'alembic/**'
-            frontend:
-              - 'frontend/**'
             pgvector:
               - 'backend/search/**'
               - 'backend/embeddings/**'
@@ -44,6 +43,40 @@ jobs:
               - 'alembic/**'
               - 'tests/pgvector_tests/**'
               - 'tests/eval/multi_hop/**'
+            # Next.js dashboard surface — anything that affects `next lint` or
+            # `next build`. Root package.json + lockfile + workspace manifest land
+            # here too so dependency bumps still rebuild the dashboard.
+            frontend-dashboard:
+              - 'frontend/app/**'
+              - 'frontend/components/**'
+              - 'frontend/lib/**'
+              - 'frontend/hooks/**'
+              - 'frontend/content/**'
+              - 'frontend/public/**'
+              - 'frontend/middleware.ts'
+              - 'frontend/mdx-components.tsx'
+              - 'frontend/next.config.mjs'
+              - 'frontend/next-env.d.ts'
+              - 'frontend/source.config.ts'
+              - 'frontend/tailwind.config.ts'
+              - 'frontend/postcss.config.mjs'
+              - 'frontend/tsconfig.json'
+              - 'frontend/.eslintrc.json'
+              - 'frontend/package.json'
+              - 'frontend/pnpm-lock.yaml'
+              - 'frontend/pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
+            # Standalone widget surface — Vite + Preact widget-app, IIFE
+            # widget-loader, shared types. Lockfile and workspace manifest overlap
+            # with dashboard on purpose: a dependency bump forces both jobs to
+            # verify the build still works.
+            frontend-widget:
+              - 'frontend/apps/**'
+              - 'frontend/packages/**'
+              - 'frontend/package.json'
+              - 'frontend/pnpm-lock.yaml'
+              - 'frontend/pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
 
   backend:
     name: Backend (pytest + ruff)
@@ -134,10 +167,10 @@ jobs:
       - name: Run pgvector tests (PostgreSQL)
         run: pytest tests/pgvector_tests/ tests/eval/multi_hop/ -m pgvector -q
 
-  frontend:
-    name: Frontend (eslint + build)
+  frontend-dashboard:
+    name: Frontend dashboard (eslint + next build)
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: needs.changes.outputs.frontend-dashboard == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -179,7 +212,35 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: https://ci.invalid
 
-      - name: Build widget-app
+  frontend-widget:
+    name: Frontend widget (build + bundle budget)
+    needs: changes
+    if: needs.changes.outputs.frontend-widget == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        # Widget-app depends on @chat9/widget-shared and @chat9/widget-loader, both
+        # workspace packages — the full install is required, but `--filter` would
+        # skip the dashboard's own dependencies, which we don't need here.
+        run: pnpm install --frozen-lockfile
+
+      - name: Build widget-app (also builds widget-loader and copies dist/widget.js)
         working-directory: frontend
         run: pnpm --filter @chat9/widget-app build
 

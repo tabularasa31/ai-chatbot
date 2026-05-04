@@ -88,8 +88,11 @@ The `message` field is **capped at 1000 characters** — longer
 messages are rejected before reaching the bot.
 
 **Response:** the response uses `Content-Type: text/event-stream`. The
-server emits two kinds of events while it works:
+server emits three kinds of events while it works:
 
+- `data: {"type":"status","stage":"..."}` — progress signal (e.g.
+  `"thinking"`), emitted before and during answer generation. Safe to
+  ignore if you only want the answer text.
 - `data: {"type":"chunk","text":"..."}` — partial reply text, emitted as
   the model streams. Concatenate `text` from successive chunks to
   display the answer as it arrives.
@@ -102,8 +105,8 @@ server emits two kinds of events while it works:
   URL-backed documents.
 
 If something goes wrong server-side you may instead get one
-`{"type":"error","code":...,"message":"..."}` event before the stream
-closes.
+`data: {"type":"error","code":...,"message":"..."}` event before the
+stream closes.
 
 **Errors before the stream starts:** `404` (bot not found), `422`
 (invalid `session_id` or empty message).

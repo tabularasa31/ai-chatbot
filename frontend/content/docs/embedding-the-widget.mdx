@@ -227,7 +227,13 @@ curl -N -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&ses
   -d '{"message":"Hello"}'
 ```
 
-`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events), not a single JSON body. The server emits one or more `data: {"type":"chunk","text":"…"}` frames as the model streams, then exactly one terminal `data: {"type":"done", "text":"<full reply>", "session_id":"…", "chat_ended":false}` frame. The `done` payload may also include `ticket_number` (when the turn opened a support ticket) and `sources` (when the answer cited URL-backed documents). On a server-side error you may instead receive a single `{"type":"error","code":…,"message":"…"}` frame before the stream closes. See [API → POST /widget/chat](/docs/api#post-widgetchat) for the full contract.
+`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events), not a single JSON body. Frame sequence:
+
+1. one or more `data: {"type":"status","stage":"…"}` frames signalling progress (e.g. `"thinking"`) — safe to ignore if you only want the answer text
+2. one or more `data: {"type":"chunk","text":"…"}` frames as the model streams; concatenate `text` to render the answer as it arrives
+3. exactly one terminal `data: {"type":"done","text":"<full reply>","session_id":"…","chat_ended":false}` frame; the `done` payload may also include `ticket_number` (when the turn opened a support ticket) and `sources` (when the answer cited URL-backed documents)
+
+On a server-side error you may instead receive a single `data: {"type":"error","code":…,"message":"…"}` frame before the stream closes. See [API → POST /widget/chat](/docs/api#post-widgetchat) for the full contract.
 
 Public widget responses may include:
 

@@ -26,7 +26,7 @@ function originOf(raw: string): string | null {
   try {
     const u = new URL(raw);
     if (u.protocol !== "https:" && u.protocol !== "http:") return null;
-    return `${u.protocol}//${u.host}`;
+    return u.origin;
   } catch {
     return null;
   }
@@ -39,6 +39,10 @@ export function DashboardSupportWidget() {
   const panelRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const dragStart = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Tracks whether the iframe has already announced chat9:ready. The handshake
+  // is one-shot — if identity arrives after readiness, we replay it from this
+  // ref instead of missing the window.
+  const iframeReadyRef = useRef(false);
 
   const widgetOrigin = useMemo(() => originOf(WIDGET_BASE_URL), []);
 
@@ -74,9 +78,22 @@ export function DashboardSupportWidget() {
   // Reply to chat9:ready handshakes from the iframe with the resolved identity.
   // The iframe lives on widget.getchat9.live (cross-origin), so we must use an
   // explicit targetOrigin — never "*" — to avoid leaking the bearer token.
+  //
+  // The two events (iframe ready / identity fetched) can land in either order:
+  // register the listener as soon as we know widgetOrigin, and re-attempt
+  // delivery whenever identity transitions to a defined value.
   useEffect(() => {
     if (!widgetOrigin) return;
-    if (identityToken === undefined) return;
+
+    const sendIdentity = (token: string | null | undefined) => {
+      if (token === undefined) return;
+      const target = iframeRef.current?.contentWindow;
+      if (!target) return;
+      const payload = token
+        ? { type: "chat9:identity", identityToken: token }
+        : { type: "chat9:no-identity" };
+      target.postMessage(payload, widgetOrigin);
+    };
 
     function handleMessage(event: MessageEvent) {
       if (event.origin !== widgetOrigin) return;
@@ -84,14 +101,17 @@ export function DashboardSupportWidget() {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type !== "chat9:ready") return;
-
-      const payload =
-        identityToken
-          ? { type: "chat9:identity", identityToken }
-          : { type: "chat9:no-identity" };
-      iframeRef.current?.contentWindow?.postMessage(payload, widgetOrigin);
+      iframeReadyRef.current = true;
+      sendIdentity(identityToken);
     }
     window.addEventListener("message", handleMessage);
+
+    // If the iframe announced readiness during a previous render (before
+    // identity resolved), replay the response now that we have a token.
+    if (iframeReadyRef.current) {
+      sendIdentity(identityToken);
+    }
+
     return () => window.removeEventListener("message", handleMessage);
   }, [widgetOrigin, identityToken]);
 

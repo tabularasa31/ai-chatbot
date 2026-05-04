@@ -1409,8 +1409,8 @@ class RagHandler(PipelineHandler):
                 latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
                 retrieval_ms=result.retrieval_ms,
                 llm_ms=result.llm_ms,
-                tokens_input=result.tokens_input or None,
-                tokens_output=result.tokens_output or None,
+                tokens_input=result.tokens_input,
+                tokens_output=result.tokens_output,
                 query_script=result.query_script,
                 kb_scripts=result.kb_scripts,
                 cross_lingual_triggered=result.cross_lingual_triggered,
@@ -1665,8 +1665,8 @@ class RagHandler(PipelineHandler):
             latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
             retrieval_ms=result.retrieval_ms,
             llm_ms=result.llm_ms,
-            tokens_input=result.tokens_input or None,
-            tokens_output=result.tokens_output or None,
+            tokens_input=result.tokens_input,
+            tokens_output=result.tokens_output,
             reliability_score=reliability_score,
             best_confidence_score=retrieval.best_confidence_score,
             decision=_decision,
@@ -2043,6 +2043,7 @@ async def _async_generate_answer_native(
                 api_key=api_key,
             )
             total_tokens = (total_tokens or 0) + extra_tokens
+            _output_tokens += extra_tokens
         else:
             final_text = answer_text.strip()
         return (final_text, total_tokens, _input_tokens, _output_tokens)

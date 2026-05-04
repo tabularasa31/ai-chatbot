@@ -15,8 +15,8 @@
     "strict": true,
     "esModuleInterop": true,
     "paths": {
-      "react": ["./node_modules/preact/compat"],
-      "react-dom": ["./node_modules/preact/compat"]
+      "react": ["preact/compat"],
+      "react-dom": ["preact/compat"]
     }
   },
   "include": ["src"]

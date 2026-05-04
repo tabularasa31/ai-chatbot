@@ -136,12 +136,6 @@ importers:
       '@preact/preset-vite':
         specifier: ^2.10.1
         version: 2.10.5(@babel/core@7.29.0)(preact@10.29.1)(rollup@4.60.2)(vite@5.4.21(@types/node@20.19.39))
-      '@types/react':
-        specifier: ^18.3.12
-        version: 18.3.28
-      '@types/react-dom':
-        specifier: ^18.3.1
-        version: 18.3.7(@types/react@18.3.28)
       autoprefixer:
         specifier: ^10.4.20
         version: 10.5.0(postcss@8.5.13)

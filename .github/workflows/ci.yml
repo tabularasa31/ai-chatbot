@@ -178,3 +178,7 @@ jobs:
         run: pnpm build
         env:
           NEXT_PUBLIC_API_URL: https://ci.invalid
+
+      - name: Build widget-app spike
+        working-directory: frontend
+        run: pnpm --filter @chat9/widget-app build

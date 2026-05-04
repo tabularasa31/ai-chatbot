@@ -270,8 +270,10 @@ def widget_session_init(
 
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
+    # Stamp bot_id up front to skip the lazy backfill in widget_chat.
     chat = Chat(
         tenant_id=tenant.id,
+        bot_id=_bot.id,
         session_id=session_id,
         user_context=user_context,
     )

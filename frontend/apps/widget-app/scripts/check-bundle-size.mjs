@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // Asserts that the widget-app's gzipped JS bundle stays within budget.
-// Run after `vite build`. Reads dist/assets/*.js, gzips, sums.
+// Run after `vite build`. Reads dist/v1/assets/*.js, gzips, sums.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
-const DIST = "dist/assets";
+const DIST = "dist/v1/assets";
 const BUDGET_GZIP_BYTES = 150 * 1024; // 150 KB hard ceiling per PR 2 plan
 const WARN_GZIP_BYTES = 130 * 1024; // ~7% headroom over current 123 KB
 

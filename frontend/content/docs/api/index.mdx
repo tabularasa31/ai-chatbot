@@ -1,0 +1,82 @@
+---
+title: API
+description: Chat9 HTTP API — schema-accurate reference auto-generated from the live OpenAPI spec.
+---
+
+Chat9 exposes its HTTP API at **`https://api.getchat9.live`**. The pages
+below are generated directly from the live OpenAPI spec, so they stay
+in sync with the running service. Two authentication models are in
+use; the rest of this page explains them, then the sidebar takes over.
+
+## Hosts
+
+- **API host**: `api.getchat9.live` — every endpoint documented here.
+- **Widget loader**: `widget.getchat9.live/widget.js` — a separate Vercel
+  project, served as a static script. You don't call it from your code;
+  the `<script>` tag does.
+
+## Authentication
+
+Two surfaces, two credentials:
+
+- **Public widget endpoints** (under the `widget` tag in the sidebar:
+  `POST /widget/session/init`, `POST /widget/chat`,
+  `GET /widget/history`, `POST /widget/escalate`,
+  `GET /widget/config`) — **unauthenticated** in the HTTP-headers
+  sense. Each request is identified by the bot's `public_id` (starts
+  with `ch_`, same value as your widget's `data-bot-id`). Each endpoint
+  has its own per-IP rate limit. Optional [identified sessions](/docs/embedding-the-widget)
+  attach an HMAC-SHA256 token signed by your backend.
+
+- **Dashboard / management endpoints** (everything else: Auth, Tenants,
+  Bots, Documents, Chat, Escalations, Gap Analyzer, Knowledge) —
+  **JWT bearer** authenticated. Get a token once via `POST /auth/login`
+  with `{ "email": "...", "password": "..." }`, then send
+  `Authorization: Bearer <access_token>` on subsequent requests.
+
+The bot's `ck_...` widget API key (issued in
+[Settings → API keys](/docs/api-keys)) is a **separate** credential
+used for direct programmatic widget access (e.g. server-side `POST /chat`).
+It does not authenticate dashboard routes.
+
+## Streaming responses
+
+`POST /widget/chat` returns a `text/event-stream` (Server-Sent Events).
+The stream emits three event kinds while it works:
+
+- `{"type":"status","stage":"..."}` — progress signal (e.g. `"thinking"`).
+  Safe to ignore if you only want the answer text.
+- `{"type":"chunk","text":"..."}` — partial reply text. Concatenate
+  successive chunks to render the answer as it arrives.
+- `{"type":"done","text":"<full reply>","session_id":"...","chat_ended":false}` —
+  emitted exactly once at the end with the complete reply, the
+  `session_id`, and a `chat_ended` flag. May also include
+  `ticket_number` (turn opened a support ticket) and `sources` (URL-backed
+  citations).
+
+If something goes wrong server-side you may instead get one
+`{"type":"error","code":...,"message":"..."}` event before the stream
+closes.
+
+The OpenAPI schema describes the server's accepted request shape;
+SSE event payloads are documented above (OpenAPI doesn't model SSE
+event bodies natively).
+
+## Models used by the chat pipeline
+
+`POST /widget/chat` and `POST /chat` generate answers with
+`gpt-5-mini` and run lightweight guard / validation checks with
+`gpt-4o-mini` by default. See [Pricing and limits](/docs/pricing-and-limits)
+for cost guidance.
+
+## Source of truth
+
+These pages are regenerated on every docs build from
+[api.getchat9.live/openapi.json](https://api.getchat9.live/openapi.json).
+If a page here ever disagrees with the live API, the live spec wins —
+file an issue and we'll regenerate.
+
+## Need help?
+
+Email **support@getchat9.live** if you hit something this section
+doesn't cover.

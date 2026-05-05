@@ -13,6 +13,10 @@ export default async function Page({ params }: PageProps) {
   if (!page) notFound();
 
   const MDX = page.data.body;
+  // fumadocs-openapi adds an `_openapi` frontmatter block to every generated
+  // operation page. Detect it and lift the `.prose` 65 ch max-width so the
+  // two-column docs/code-samples layout has room to breathe.
+  const isOpenApi = Boolean(page.data._openapi);
 
   return (
     <DocsPage toc={page.data.toc} full={page.data.full}>
@@ -20,7 +24,7 @@ export default async function Page({ params }: PageProps) {
       {page.data.description ? (
         <DocsDescription>{page.data.description}</DocsDescription>
       ) : null}
-      <DocsBody>
+      <DocsBody className={isOpenApi ? 'max-w-none' : undefined}>
         <MDX components={getMDXComponents()} />
       </DocsBody>
     </DocsPage>

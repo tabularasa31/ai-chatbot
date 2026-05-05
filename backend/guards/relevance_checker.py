@@ -24,14 +24,14 @@ CACHE_TTL_SECONDS = 5 * 60
 def _emit_relevance_guard_metric(
     *, tenant_id: uuid.UUID, cache_hit: bool, blocked: bool = False, score: str = ""
 ) -> None:
-    """Emit relevance_guard.check event to PostHog with cache_hit attribute."""
+    """Emit relevance_guard.check event to PostHog (cache_hit, blocked, reason)."""
     try:
         from backend.observability.metrics import capture_event
         capture_event(
             "relevance_guard.check",
             distinct_id=str(tenant_id),
             tenant_id=str(tenant_id),
-            properties={"cache_hit": cache_hit, "blocked": blocked, "score": score},
+            properties={"cache_hit": cache_hit, "blocked": blocked, "reason": score},
         )
     except Exception:
         pass

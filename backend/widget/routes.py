@@ -456,7 +456,7 @@ def _emit_first_token_metric(
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
             properties={
-                "ms": ms,
+                "chat_first_token_ms": ms,
                 "session_id": str(sid),
                 "is_greeting": is_greeting,
             },

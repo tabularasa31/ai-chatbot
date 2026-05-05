@@ -3,6 +3,12 @@
    We override fumadocs-ui --fd-* CSS variables after the preset sets them.
    ──────────────────────────────────────────────────────────────────────── */
 
+/* OpenAPI pages: let fumadocs-openapi's two-column layout span the full
+   article width instead of being clamped to .prose's 65ch max-width. */
+.prose:has(> .flex.flex-col.gap-24) {
+  max-width: none;
+}
+
 /* 1. Light content area (override the dark brand preset for the page body) */
 :root {
   --fd-background:         220 14% 97% !important;   /* ≈ #F4F5F7 */

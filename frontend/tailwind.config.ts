@@ -8,6 +8,7 @@ const config: Config = {
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./content/**/*.{md,mdx}",
     "./node_modules/fumadocs-ui/dist/**/*.js",
+    "./node_modules/fumadocs-openapi/dist/**/*.js",
   ],
   presets: [
     (() => {

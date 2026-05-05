@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { RootProvider } from 'fumadocs-ui/provider';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { source } from '@/lib/source';
-import 'fumadocs-ui/style.css';
 import './docs.css';
 
 export default function DocsSectionLayout({ children }: { children: ReactNode }) {

@@ -8,9 +8,6 @@ const OUTPUT_PATH = resolve(process.cwd(), 'openapi.public.json');
 
 const PUBLIC_TAGS = new Set([
   'widget',
-  'auth',
-  'tenants',
-  'bots',
   'documents',
   'chat',
   'escalations',

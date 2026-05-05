@@ -3,9 +3,6 @@
   "pages": [
     "index",
     "widget",
-    "auth",
-    "tenants",
-    "bots",
     "documents",
     "chat",
     "escalations",

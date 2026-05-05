@@ -28,16 +28,13 @@ Two surfaces, two credentials:
   has its own per-IP rate limit. Optional [identified sessions](/docs/embedding-the-widget)
   attach an HMAC-SHA256 token signed by your backend.
 
-- **Dashboard / management endpoints** (everything else: Auth, Tenants,
-  Bots, Documents, Chat, Escalations, Gap Analyzer, Knowledge) —
-  **JWT bearer** authenticated. Get a token once via `POST /auth/login`
-  with `{ "email": "...", "password": "..." }`, then send
-  `Authorization: Bearer <access_token>` on subsequent requests.
-
-The bot's `ck_...` widget API key (issued in
-[Settings → API keys](/docs/api-keys)) is a **separate** credential
-used for direct programmatic widget access (e.g. server-side `POST /chat`).
-It does not authenticate dashboard routes.
+- **Dashboard / management endpoints** (Documents, Chat, Escalations,
+  Gap Analyzer, Knowledge) — authenticated with the bot's `ck_...`
+  widget API key issued in [Settings → API keys](/docs/api-keys).
+  Send `Authorization: Bearer <ck_...>` on each request. Account-level
+  endpoints (sign-up, login, tenant settings, bot CRUD) are not part
+  of the public surface — they live behind the dashboard at
+  [getchat9.live](https://getchat9.live).
 
 ## Streaming responses
 

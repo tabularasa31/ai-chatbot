@@ -42,3 +42,10 @@ next-env.d.ts
 
 # fumadocs-mdx generated output
 /.source/
+
+# fumadocs-openapi: filtered spec + generated MDX (regenerated each build)
+/openapi.public.json
+/content/docs/api/**/*.mdx
+!/content/docs/api/index.mdx
+/content/docs/api/**/meta.json
+!/content/docs/api/meta.json

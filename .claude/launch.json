@@ -14,6 +14,13 @@
       "runtimeExecutable": "uvicorn",
       "runtimeArgs": ["backend.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "Widget App (Vite)",
+      "runtimeExecutable": "node_modules/.bin/vite",
+      "runtimeArgs": [],
+      "port": 5173,
+      "cwd": "frontend/apps/widget-app"
     }
   ]
 }

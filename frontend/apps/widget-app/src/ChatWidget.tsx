@@ -783,7 +783,7 @@ export function ChatWidget({
             <p className={cn("text-gray-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
           </div>
         ) : (
-          <div className="space-y-5">
+          <div className="space-y-5 text-sm">
             {messages.map((msg, i) => {
                 if (msg.type === "system") {
                   const isEnded = msg.subtype === "conversation_ended";
@@ -810,7 +810,7 @@ export function ChatWidget({
                   return (
                     <div key={msg.id} className="flex justify-end">
                       <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
-                        <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
                       </div>
                     </div>
                   );
@@ -830,7 +830,7 @@ export function ChatWidget({
                         )}
                       >
                         {isError ? (
-                          <p className="whitespace-pre-wrap text-sm">{msg.text}</p>
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
                         ) : (
                           <div className="prose prose-sm max-w-none text-gray-800 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
                             <ReactMarkdown

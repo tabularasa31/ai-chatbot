@@ -26,7 +26,7 @@ from backend.knowledge.schemas import (
 from backend.models import Tenant, TenantFaq, TenantProfile, User
 from backend.tenants.service import get_tenant_by_user
 
-knowledge_router = APIRouter(tags=["knowledge"])
+knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 
 logger = logging.getLogger(__name__)
 
@@ -59,25 +59,10 @@ def _faq_or_404(db: Session, *, tenant_id: uuid.UUID, faq_id: uuid.UUID) -> Tena
     return faq
 
 
-def _resolve_tenant_for_knowledge(
-    *,
-    db: Session,
-    current_user: User,
-    tenant_id: str | None,
-) -> Tenant:
-    if tenant_id is None:
-        tenant = get_tenant_by_user(current_user.id, db)
-        if not tenant:
-            raise HTTPException(status_code=404, detail="Tenant not found")
-        return tenant
-
-    tenant = (
-        db.query(Tenant)
-        .filter(Tenant.public_id == tenant_id, Tenant.id == current_user.tenant_id)
-        .first()
-    )
+def _get_tenant(db: Session, current_user: User) -> Tenant:
+    tenant = get_tenant_by_user(current_user.id, db)
     if not tenant:
-        raise HTTPException(status_code=404, detail="Bot not found")
+        raise HTTPException(status_code=404, detail="Tenant not found")
     return tenant
 
 
@@ -110,16 +95,12 @@ def _generate_faq_embedding_background(
         db.close()
 
 
-@knowledge_router.get("/knowledge/profile", response_model=KnowledgeProfileResponse)
-@knowledge_router.get(
-    "/api/v1/tenants/{tenant_id}/knowledge/profile", response_model=KnowledgeProfileResponse
-)
+@knowledge_router.get("/profile", response_model=KnowledgeProfileResponse)
 def get_knowledge_profile(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
 ) -> KnowledgeProfileResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
     profile = _get_or_create_profile(db, tenant.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
@@ -133,17 +114,13 @@ def get_knowledge_profile(
     )
 
 
-@knowledge_router.patch("/knowledge/profile", response_model=KnowledgeProfileResponse)
-@knowledge_router.patch(
-    "/api/v1/tenants/{tenant_id}/knowledge/profile", response_model=KnowledgeProfileResponse
-)
+@knowledge_router.patch("/profile", response_model=KnowledgeProfileResponse)
 def patch_knowledge_profile(
     payload: KnowledgeProfilePatchRequest,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
 ) -> KnowledgeProfileResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
     profile = _profile_or_404(db, tenant.id)
 
     if "product_name" in payload.model_fields_set:
@@ -172,8 +149,7 @@ def patch_knowledge_profile(
     )
 
 
-@knowledge_router.get("/knowledge/faq", response_model=KnowledgeFaqListResponse)
-@knowledge_router.get("/api/v1/tenants/{tenant_id}/knowledge/faq", response_model=KnowledgeFaqListResponse)
+@knowledge_router.get("/faq", response_model=KnowledgeFaqListResponse)
 def list_knowledge_faq(
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
@@ -181,9 +157,8 @@ def list_knowledge_faq(
     source: Literal["docs", "logs", "swagger", "all"] = Query("all"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    tenant_id: str | None = None,
 ) -> KnowledgeFaqListResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
 
     query = db.query(TenantFaq).filter(TenantFaq.tenant_id == tenant.id)
     if approved == "true":
@@ -225,65 +200,13 @@ def list_knowledge_faq(
     )
 
 
-@knowledge_router.post("/knowledge/faq/{faq_id}/approve", response_model=KnowledgeFaqApproveResponse)
-@knowledge_router.post(
-    "/api/v1/tenants/{tenant_id}/knowledge/faq/{faq_id}/approve",
-    response_model=KnowledgeFaqApproveResponse,
-)
-def approve_faq(
-    faq_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
-) -> KnowledgeFaqApproveResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
-    faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
-    faq.approved = True
-    db.add(faq)
-    db.commit()
-
-    if faq.question_embedding is None and tenant.openai_api_key:
-        background_tasks.add_task(
-            _generate_faq_embedding_background,
-            faq_id=faq.id,
-            question=faq.question,
-            encrypted_api_key=tenant.openai_api_key,
-        )
-
-    return KnowledgeFaqApproveResponse(id=faq.id, approved=True)
-
-
-@knowledge_router.post("/knowledge/faq/{faq_id}/reject", response_model=KnowledgeFaqRejectResponse)
-@knowledge_router.post(
-    "/api/v1/tenants/{tenant_id}/knowledge/faq/{faq_id}/reject",
-    response_model=KnowledgeFaqRejectResponse,
-)
-def reject_faq(
-    faq_id: uuid.UUID,
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
-) -> KnowledgeFaqRejectResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
-    faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
-    db.delete(faq)
-    db.commit()
-    return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
-
-
-@knowledge_router.post("/knowledge/faq/approve-all", response_model=KnowledgeFaqApproveAllResponse)
-@knowledge_router.post(
-    "/api/v1/tenants/{tenant_id}/knowledge/faq/approve-all",
-    response_model=KnowledgeFaqApproveAllResponse,
-)
+@knowledge_router.post("/faq/approve-all", response_model=KnowledgeFaqApproveAllResponse)
 def approve_all_faq(
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
 ) -> KnowledgeFaqApproveAllResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
     missing_embedding = (
         db.query(TenantFaq.id, TenantFaq.question)
         .filter(
@@ -310,26 +233,59 @@ def approve_all_faq(
     return KnowledgeFaqApproveAllResponse(approved_count=int(updated))
 
 
-@knowledge_router.put("/knowledge/faq/{faq_id}", response_model=KnowledgeFaqItemResponse)
-@knowledge_router.put(
-    "/api/v1/tenants/{tenant_id}/knowledge/faq/{faq_id}",
-    response_model=KnowledgeFaqItemResponse,
-)
+@knowledge_router.post("/faq/{faq_id}/approve", response_model=KnowledgeFaqApproveResponse)
+def approve_faq(
+    faq_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeFaqApproveResponse:
+    tenant = _get_tenant(db, current_user)
+    faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
+    faq.approved = True
+    db.add(faq)
+    db.commit()
+
+    if faq.question_embedding is None and tenant.openai_api_key:
+        background_tasks.add_task(
+            _generate_faq_embedding_background,
+            faq_id=faq.id,
+            question=faq.question,
+            encrypted_api_key=tenant.openai_api_key,
+        )
+
+    return KnowledgeFaqApproveResponse(id=faq.id, approved=True)
+
+
+@knowledge_router.post("/faq/{faq_id}/reject", response_model=KnowledgeFaqRejectResponse)
+def reject_faq(
+    faq_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> KnowledgeFaqRejectResponse:
+    tenant = _get_tenant(db, current_user)
+    faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
+    db.delete(faq)
+    db.commit()
+    return KnowledgeFaqRejectResponse(id=faq_id, deleted=True)
+
+
+@knowledge_router.put("/faq/{faq_id}", response_model=KnowledgeFaqItemResponse)
 def update_faq(
     faq_id: uuid.UUID,
     payload: KnowledgeFaqUpdateRequest,
     background_tasks: BackgroundTasks,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
 ) -> KnowledgeFaqItemResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
 
     question_changed = payload.question.strip() != faq.question.strip()
+    answer_changed = payload.answer.strip() != faq.answer.strip()
     faq.question = payload.question.strip()
     faq.answer = payload.answer.strip()
-    if question_changed:
+    if question_changed or answer_changed:
         faq.approved = False
     if question_changed:
         faq.question_embedding = None
@@ -356,18 +312,13 @@ def update_faq(
     )
 
 
-@knowledge_router.delete("/knowledge/faq/{faq_id}", response_model=KnowledgeFaqRejectResponse)
-@knowledge_router.delete(
-    "/api/v1/tenants/{tenant_id}/knowledge/faq/{faq_id}",
-    response_model=KnowledgeFaqRejectResponse,
-)
+@knowledge_router.delete("/faq/{faq_id}", response_model=KnowledgeFaqRejectResponse)
 def delete_faq(
     faq_id: uuid.UUID,
     current_user: Annotated[User, Depends(require_verified_user)],
     db: Annotated[Session, Depends(get_db)],
-    tenant_id: str | None = None,
 ) -> KnowledgeFaqRejectResponse:
-    tenant = _resolve_tenant_for_knowledge(db=db, current_user=current_user, tenant_id=tenant_id)
+    tenant = _get_tenant(db, current_user)
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
     db.delete(faq)
     db.commit()

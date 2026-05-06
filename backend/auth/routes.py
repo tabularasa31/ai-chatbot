@@ -4,8 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from chat9 import Chat9Error, generateToken
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_verified_user
@@ -36,12 +35,6 @@ from backend.email.service import send_email
 from backend.models import User
 from backend.tenants.service import (
     ensure_tenant_for_user,
-    get_kyc_decrypted_keys_for_validation,
-    get_tenant_by_user,
-)
-from backend.tenants.widget_chat_gate import (
-    WidgetChatTenantGateError,
-    get_bot_and_tenant_for_widget_session,
 )
 
 auth_router = APIRouter(tags=["auth"])
@@ -276,62 +269,6 @@ def reset_password_endpoint(
     return ResetPasswordResponse(
         message="Password updated successfully. You can now log in."
     )
-
-
-@auth_router.get("/me/widget-token")
-def get_widget_token(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-    bot_id: Annotated[
-        str | None,
-        Query(description="Public bot ID. When set, the token is signed with the bot owner's KYC secret so cross-tenant widgets (e.g. Chat9's own dogfood support chat) can validate it."),
-    ] = None,
-) -> dict:
-    """
-    Generate a short-lived widget identity token for the authenticated user.
-
-    Returns a signed token that can be passed to the widget session init
-    so the bot knows who the user is (identified mode).
-
-    The token is signed with the **bot owner's** KYC secret, not the user's
-    own tenant's secret. This is what makes cross-tenant flows like the
-    Chat9 dogfood support chat work: an ACME-tenant user gets a token signed
-    by Chat9-tenant's secret, which Chat9-tenant's widget validates.
-
-    For backward compatibility, when `bot_id` is omitted the token is signed
-    with the caller's own tenant's secret (legacy single-tenant flow).
-    """
-    if bot_id:
-        try:
-            _bot, tenant = get_bot_and_tenant_for_widget_session(db, bot_id)
-        except WidgetChatTenantGateError as exc:
-            if exc.reason == WidgetChatTenantGateError.NOT_FOUND:
-                raise HTTPException(status_code=404, detail="Bot not found") from exc
-            if exc.reason == WidgetChatTenantGateError.INACTIVE:
-                raise HTTPException(status_code=403, detail="Bot owner is not active") from exc
-            raise HTTPException(status_code=400, detail="Bot not available") from exc
-    else:
-        tenant = get_tenant_by_user(current_user.id, db)
-        if not tenant:
-            raise HTTPException(status_code=404, detail="Tenant not found")
-
-    keys = get_kyc_decrypted_keys_for_validation(tenant)
-    if not keys:
-        raise HTTPException(
-            status_code=404,
-            detail="No identity secret configured. Generate one in Settings → Widget.",
-        )
-
-    secret = keys[0][0]
-    try:
-        token = generateToken({
-            "secret": secret,
-            "user": {"user_id": str(current_user.id), "email": current_user.email},
-            "options": {"ttl": 300},
-        })
-    except Chat9Error as exc:
-        raise HTTPException(status_code=500, detail=f"Token generation failed: {exc.code}") from exc
-    return {"identity_token": token}
 
 
 @auth_router.post("/logout")

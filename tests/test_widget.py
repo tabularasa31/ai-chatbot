@@ -527,13 +527,11 @@ def test_widget_chat_closed_session_returns_controlled_error(
     assert r.json()["detail"]["code"] == "session_closed"
 
 
-def test_widget_chat_identified_session_increments_user_session_turns(
+def test_widget_chat_hints_session_increments_user_session_turns(
     mock_openai_client: Mock,
     tenant: TestClient,
     db_session: Session,
 ) -> None:
-    from backend.core.security import generate_kyc_token
-
     token = register_and_verify_user(tenant, db_session, email="widget-user-session-turns@example.com")
     cl_resp = tenant.post(
         "/tenants",
@@ -547,21 +545,15 @@ def test_widget_chat_identified_session_increments_user_session_turns(
     bot_public_id = _create_bot(tenant, token)
     _seed_rag_chunk(db_session, client_uuid)
 
-    sk_resp = tenant.post(
-        "/tenants/me/kyc/secret",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert sk_resp.status_code == 200
-    secret_hex = sk_resp.json()["secret_key"]
-    identity_token = generate_kyc_token(
-        {"user_id": "ext-42", "email": "user@example.com"},
-        secret_hex,
-    )
     init_resp = tenant.post(
         "/widget/session/init",
-        json={"bot_id": bot_public_id, "identity_token": identity_token},
+        json={
+            "bot_id": bot_public_id,
+            "user_hints": {"user_id": "ext-42", "email": "user@example.com"},
+        },
     )
     assert init_resp.status_code == 200
+    assert init_resp.json()["mode"] == "hints"
     session_id = init_resp.json()["session_id"]
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]

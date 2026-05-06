@@ -3,7 +3,6 @@ from __future__ import annotations
 import datetime as dt
 
 from pgvector.sqlalchemy import Vector
-from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.compiler import compiles
@@ -37,18 +36,3 @@ def _utcnow() -> dt.datetime:
     return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
-class UserContext(BaseModel):
-    """Identity fields from a signed KYC token; stored on Chat and used in the pipeline."""
-
-    model_config = {"extra": "ignore"}
-
-    user_id: str = Field(..., min_length=1)
-    email: str | None = None
-    name: str | None = None
-    plan_tier: str | None = Field(
-        default=None,
-        description='e.g. "free" | "starter" | "growth" | "pro" | "enterprise"',
-    )
-    audience_tag: str | None = None
-    company: str | None = None
-    locale: str | None = None

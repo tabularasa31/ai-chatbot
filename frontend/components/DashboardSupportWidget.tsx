@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
+import { api } from "@/lib/api";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
 const WIDGET_BASE_URL =
@@ -21,7 +22,7 @@ const SIDE_CLEARANCE = 32;    // right-6 (24) + margin (8)
 
 // Reduce a URL to its origin (`protocol://host`). Returns null for non-http(s)
 // or unparseable input. Used to derive the postMessage targetOrigin from
-// WIDGET_BASE_URL so we never broadcast identity tokens to a wildcard.
+// WIDGET_BASE_URL so we always pin handshake messages to the iframe's origin.
 function originOf(raw: string): string | null {
   try {
     const u = new URL(raw);
@@ -61,37 +62,36 @@ export function DashboardSupportWidget() {
     return url.toString();
   }, []);
 
-  // Fetch identity once on mount so it's ready when the iframe sends
-  // chat9:ready (avoids a visible "Loading…" while we round-trip the cookie).
-  // undefined = fetch in-flight; null = no token; string = token ready.
-  const [identityToken, setIdentityToken] = useState<string | null | undefined>(undefined);
+  // Fetch the logged-in user's email so we can pass it as a userHint when the
+  // iframe handshakes. undefined = fetch in-flight; null = no email available;
+  // object = hints ready.
+  type Hints = { email?: string };
+  const [hints, setHints] = useState<Hints | null | undefined>(undefined);
   useEffect(() => {
     if (!BOT_ID) return;
-    fetch(`/api/widget-identity?bot_id=${encodeURIComponent(BOT_ID)}`, { credentials: "include" })
-      .then((r) => r.json())
-      .then((data: { identity_token?: string }) => {
-        setIdentityToken(data.identity_token ?? null);
+    api.auth
+      .getMe()
+      .then((user) => {
+        setHints(user.email ? { email: user.email } : null);
       })
-      .catch(() => { setIdentityToken(null); });
+      .catch(() => setHints(null));
   }, []);
 
-  // Reply to chat9:ready handshakes from the iframe with the resolved identity.
-  // The iframe lives on widget.getchat9.live (cross-origin), so we must use an
-  // explicit targetOrigin — never "*" — to avoid leaking the bearer token.
-  //
-  // The two events (iframe ready / identity fetched) can land in either order:
-  // register the listener as soon as we know widgetOrigin, and re-attempt
-  // delivery whenever identity transitions to a defined value.
+  // Reply to chat9:ready handshakes from the iframe with userHints. The iframe
+  // lives on widget.getchat9.live (cross-origin), so we use an explicit
+  // targetOrigin. The two events (iframe ready / hints fetched) can land in
+  // either order: register the listener as soon as we know widgetOrigin, and
+  // re-attempt delivery whenever hints transition to a defined value.
   useEffect(() => {
     if (!widgetOrigin) return;
 
-    const sendIdentity = (token: string | null | undefined) => {
-      if (token === undefined) return;
+    const sendHints = (resolved: Hints | null | undefined) => {
+      if (resolved === undefined) return;
       const target = iframeRef.current?.contentWindow;
       if (!target) return;
-      const payload = token
-        ? { type: "chat9:identity", identityToken: token }
-        : { type: "chat9:no-identity" };
+      const payload = resolved
+        ? { type: "chat9:hints", userHints: resolved }
+        : { type: "chat9:no-hints" };
       target.postMessage(payload, widgetOrigin);
     };
 
@@ -102,18 +102,18 @@ export function DashboardSupportWidget() {
       if (!data || typeof data !== "object") return;
       if (data.type !== "chat9:ready") return;
       iframeReadyRef.current = true;
-      sendIdentity(identityToken);
+      sendHints(hints);
     }
     window.addEventListener("message", handleMessage);
 
-    // If the iframe announced readiness during a previous render (before
-    // identity resolved), replay the response now that we have a token.
+    // If the iframe announced readiness during a previous render (before hints
+    // resolved), replay the response now that we have them.
     if (iframeReadyRef.current) {
-      sendIdentity(identityToken);
+      sendHints(hints);
     }
 
     return () => window.removeEventListener("message", handleMessage);
-  }, [widgetOrigin, identityToken]);
+  }, [widgetOrigin, hints]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragStart.current) return;

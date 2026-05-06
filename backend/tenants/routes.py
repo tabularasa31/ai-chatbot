@@ -20,8 +20,6 @@ from backend.tenants.api_keys_service import (
 from backend.tenants.schemas import (
     CreateTenantRequest,
     CreateTenantResponse,
-    KycSecretGeneratedResponse,
-    KycStatusResponse,
     PrivacyConfigResponse,
     RotateTenantApiKeyRequest,
     RotateTenantApiKeyResponse,
@@ -37,14 +35,11 @@ from backend.tenants.schemas import (
 from backend.tenants.service import (
     create_tenant,
     delete_tenant,
-    generate_kyc_secret_for_tenant,
-    get_kyc_status,
     get_primary_api_key_hint,
     get_redaction_config_for_user,
     get_support_settings_for_user,
     get_tenant_by_id,
     get_tenant_by_user,
-    rotate_kyc_secret,
     update_redaction_config_for_user,
     update_support_settings_for_user,
     update_tenant,
@@ -113,35 +108,6 @@ def get_my_client(
         is_admin=current_user.is_admin,
         is_verified=current_user.is_verified,
     )
-
-
-@tenants_router.post("/me/kyc/secret", response_model=KycSecretGeneratedResponse)
-def create_kyc_secret_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> KycSecretGeneratedResponse:
-    """Generate and store KYC signing secret (returned once)."""
-    _client, raw = generate_kyc_secret_for_tenant(current_user.id, db)
-    try:
-        tenant = get_tenant_by_user(current_user.id, db)
-        capture_event(
-            "kyc.configured",
-            distinct_id=str(tenant.public_id) if tenant else str(current_user.id),
-            tenant_id=str(tenant.public_id) if tenant else None,
-        )
-    except Exception:
-        pass
-    return KycSecretGeneratedResponse(secret_key=raw)
-
-
-@tenants_router.post("/me/kyc/rotate", response_model=KycSecretGeneratedResponse)
-def rotate_kyc_secret_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> KycSecretGeneratedResponse:
-    """Rotate signing secret; previous key remains valid for 1 hour."""
-    _client, raw = rotate_kyc_secret(current_user.id, db)
-    return KycSecretGeneratedResponse(secret_key=raw)
 
 
 @tenants_router.get(
@@ -233,16 +199,6 @@ def revoke_api_key_route(
     except Exception:
         pass
     return TenantApiKeyResponse.model_validate(row)
-
-
-@tenants_router.get("/me/kyc/status", response_model=KycStatusResponse)
-def kyc_status_route(
-    current_user: Annotated[User, Depends(require_verified_user)],
-    db: Annotated[Session, Depends(get_db)],
-) -> KycStatusResponse:
-    """Return KYC secret presence and identified-session metrics."""
-    data = get_kyc_status(current_user.id, db)
-    return KycStatusResponse(**data)
 
 
 @tenants_router.get("/me/privacy", response_model=PrivacyConfigResponse)

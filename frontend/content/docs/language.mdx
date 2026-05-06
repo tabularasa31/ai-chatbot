@@ -1,13 +1,13 @@
 ---
 title: Language Support
-description: How Chat9 chooses the language to reply in, and how to control it via browser locale, KYC, and dashboard settings.
+description: How Chat9 chooses the language to reply in, and how to control it via browser locale, userHints, and dashboard settings.
 ---
 
 Chat9 is language-agnostic. End users can write in any language and the bot replies in the same language. This page explains exactly how the language is determined and what knobs you have to influence it.
 
 ## TL;DR
 
-- **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via the identity token → the browser's reported locale → English.
+- **The default greeting (shown before the user types anything)** comes out in the language picked by this chain, in order: the `locale` you passed via `userHints` → the browser's reported locale → English.
 - **As soon as the user sends a message, the bot replies in the language of that message.** This is the default and covers the vast majority of cases.
 - **Once the conversation has settled on a language, it stays in that language for the rest of the session.** A clearly non-English first message locks the language right away; an English first message locks once a second turn confirms it. After lock, off-language turns don't change the bot's reply language. To switch languages mid-conversation, end users start a new chat.
 - **Tickets and support-team artifacts** can be pinned to a fixed language from your dashboard, independent of what language end users write in.
@@ -18,11 +18,11 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 When the widget opens a fresh session, Chat9 can show a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
 
-1. **KYC `locale`** — if your integration is using identified sessions and you passed `locale` inside the signed `identity_token`, that wins. This is the strongest signal because your own system told us about this specific user.
+1. **`userHints.locale`** — if you set `userHints` on `window.Chat9Config` and included a `locale`, that wins. It's the strongest signal because your own system told us about this specific visitor.
 2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
 3. **English** — final fallback when no signal is available.
 
-The greeting itself is rendered in the language picked from this chain. For example, if you pass `locale: "es-ES"` via KYC, the greeting opens in Spanish; if you pass nothing and the user's browser is in `de-DE`, the greeting opens in German; if neither is available, the greeting opens in English.
+The greeting itself is rendered in the language picked from this chain. For example, if you pass `userHints.locale: "es-ES"`, the greeting opens in Spanish; if you pass nothing and the user's browser is in `de-DE`, the greeting opens in German; if neither is available, the greeting opens in English.
 
 This chain is a fixed product contract. It is documented internally and will not be reordered.
 
@@ -39,7 +39,7 @@ As soon as an end user sends a real message, Chat9 detects the language of that 
 
 You don't need to do anything to enable this. It works for any language Chat9's detection model recognizes — Spanish, German, French, Italian, Portuguese, Russian, Polish, Turkish, Dutch, Japanese, Chinese, Korean, Arabic, and more.
 
-The detected language of the user's first real message overrides whatever language was used for the greeting. So if the greeting opened in English (because no KYC or browser hint was available) and the user types their first message in French, the bot's reply to that message — and every subsequent reply — is in French.
+The detected language of the user's first real message overrides whatever language was used for the greeting. So if the greeting opened in English (because no hint or browser locale was available) and the user types their first message in French, the bot's reply to that message — and every subsequent reply — is in French.
 
 ### 3. The language locks once it's clear
 
@@ -72,9 +72,9 @@ This separation lets one bot serve a multilingual audience without forcing your 
 
 If you don't set an override, escalation artifacts default to English.
 
-### From the widget integration — KYC `locale`
+### From the widget integration — `userHints.locale`
 
-If you use identified sessions and have a clear language preference for the user from your own system (for example, a registered locale in your account profile), pass it as `locale` inside the signed `identity_token`. Chat9 will use it as the bootstrap greeting language and as a stronger initial language signal than the browser default. See [Embedding the Widget → Identified sessions](/docs/embedding-the-widget#identified-sessions-optional).
+If your tenant frontend already knows the visitor's preferred language (for example, a registered locale on their account profile), pass it via `userHints.locale` on `window.Chat9Config`. Chat9 will use it as the bootstrap greeting language and as a stronger initial signal than the browser default. See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints-optional).
 
 ### From the widget integration — `Accept-Language` / `locale` query
 
@@ -91,4 +91,4 @@ For anonymous sessions, the widget passes the browser's locale automatically. Yo
 
 - Open your widget on a test page with a non-English browser locale set, send a message in that language, and confirm the bot replies in the same language.
 - Use **Dashboard → Chat Logs** to see the language each turn was answered in. The conversation transcript shows the actual reply text, which is the easiest signal to verify quickly.
-- For identified sessions, sanity-check the `locale` field you're putting into the `identity_token` — Chat9 normalizes locale tags such as `es-MX`, `pt-BR`, `de-AT` automatically.
+- If you're passing `userHints.locale`, sanity-check the value — Chat9 normalizes locale tags such as `es-MX`, `pt-BR`, `de-AT` automatically.

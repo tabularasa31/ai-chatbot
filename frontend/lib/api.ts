@@ -69,18 +69,6 @@ export type RotateTenantApiKeyResponse = {
   message: string;
 };
 
-export type KycStatusResponse = {
-  has_secret: boolean;
-  identified_session_rate_7d: number;
-  last_identified_session: string | null;
-  masked_secret_hint: string | null;
-};
-
-export type KycSecretResponse = {
-  secret_key: string;
-  message: string;
-};
-
 export type DisclosureLevel = "detailed" | "standard" | "corporate";
 
 export type DisclosureConfigResponse = {
@@ -584,30 +572,6 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to revoke API key"));
       return data as TenantApiKeyResponse;
-    },
-  },
-  kyc: {
-    async generateSecret(): Promise<KycSecretResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/secret`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate KYC secret"));
-      return data as KycSecretResponse;
-    },
-    async getStatus(): Promise<KycStatusResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/status`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get KYC status"));
-      return data as KycStatusResponse;
-    },
-    async rotateSecret(): Promise<KycSecretResponse> {
-      const res = await apiFetch(`${BASE_URL}/tenants/me/kyc/rotate`, {
-        method: "POST",
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to rotate KYC secret"));
-      return data as KycSecretResponse;
     },
   },
   support: {

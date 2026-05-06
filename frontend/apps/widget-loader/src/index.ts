@@ -1,27 +1,41 @@
 // Chat9 widget loader — minimal IIFE drop-in for tenant pages.
 //
 // Public surface (kept stable across versions):
-//   <script
-//     src="https://widget.getchat9.live/widget.js"
-//     data-bot-id="ch_..."
-//     data-mode="bubble|inline"
-//     data-color="#a855f7"
-//     data-position="right|left"
-//     data-target="<elementId>"        (inline mode only)
-//     data-locale="ru-RU"               (otherwise navigator.language)
-//     data-identity="<signed-token>"
-//     data-api-base="https://..."       (override for staging/dev)
-//     data-widget-base="https://..."    (override for staging/dev; default = origin of this script)
-//   ></script>
+//   <script>
+//     window.Chat9Config = {
+//       userHints: { name: "Anna", email: "anna@example.com", locale: "ru-RU" },
+//       mode: "bubble",        // "bubble" | "inline"
+//       color: "#a855f7",
+//       position: "right",      // "right" | "left"
+//       target: "<elementId>", // for mode: "inline"
+//       apiBase: "https://...",
+//       widgetBase: "https://..."
+//     };
+//   </script>
+//   <script src="https://widget.getchat9.live/widget.js" data-bot-id="ch_..."></script>
 //
-//   window.Chat9Config = { identityToken, apiBase, widgetBase }  (legacy alternative)
+// `data-bot-id` is the only data-attribute on the loader script (it identifies
+// the bot before any config is read). Everything else lives on Chat9Config.
 
 // Marks this file as a module so `declare global` is allowed under TS's
 // stricter rules; the IIFE wrapper still produces a side-effect-only bundle.
 export {};
 
+type UserHints = {
+  user_id?: string;
+  email?: string;
+  name?: string;
+  locale?: string;
+  plan_tier?: string;
+  audience_tag?: string;
+};
+
 type Chat9Config = {
-  identityToken?: string;
+  userHints?: UserHints;
+  mode?: "bubble" | "inline";
+  color?: string;
+  position?: "right" | "left";
+  target?: string;
   apiBase?: string;
   widgetBase?: string;
 };
@@ -34,7 +48,7 @@ declare global {
 
 (function () {
   // Default API origin (the dashboard, where /widget/* and /api/widget-* proxy
-  // to the backend). Tenants on staging override via data-api-base.
+  // to the backend). Tenants on staging override via Chat9Config.apiBase.
   const DEFAULT_API_BASE = "https://getchat9.live";
 
   const currentScript: HTMLScriptElement | null =
@@ -49,21 +63,19 @@ declare global {
     return;
   }
 
-  const data = currentScript.dataset;
   const config = window.Chat9Config ?? {};
 
-  const botId = (data.botId ?? "").trim();
+  const botId = (currentScript.dataset.botId ?? "").trim();
   if (!botId) {
     console.error("Chat9: data-bot-id is required on the loader script tag.");
     return;
   }
 
-  const mode = (data.mode || "bubble").toLowerCase();
-  const color = data.color || null;
-  const position = (data.position || "right").toLowerCase();
-  const targetId = data.target || null;
-  const explicitLocale = data.locale || null;
-  const identityToken = data.identity || config.identityToken || null;
+  const mode = (config.mode || "bubble").toLowerCase();
+  const color = config.color || null;
+  const position = (config.position || "right").toLowerCase();
+  const targetId = config.target || null;
+  const userHints = sanitizeHints(config.userHints);
 
   // Widget UI base: defaults to the script's own origin + /v1/. Strip trailing
   // slashes from any override so we can append "/v1/?…" predictably.
@@ -74,7 +86,7 @@ declare global {
       return "";
     }
   })();
-  const rawWidgetBase = (data.widgetBase || config.widgetBase || `${scriptOrigin}/v1/`).replace(/\/+$/, "/");
+  const rawWidgetBase = (config.widgetBase || `${scriptOrigin}/v1/`).replace(/\/+$/, "/");
   const widgetBaseUrl = rawWidgetBase.endsWith("/") ? rawWidgetBase : rawWidgetBase + "/";
   const widgetOrigin = (() => {
     try {
@@ -86,12 +98,33 @@ declare global {
 
   // API origin (where the iframe will fetch /widget/chat etc.). Trim trailing
   // slashes so widget-app can append paths cleanly.
-  const apiBase = (data.apiBase || config.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  const apiBase = (config.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
 
   const browserLocale =
-    explicitLocale ||
+    userHints?.locale ||
     (typeof navigator !== "undefined" && (navigator.language || (navigator as Navigator & { userLanguage?: string }).userLanguage)) ||
     null;
+
+  // Drop unknown keys, empty/non-string values. Length capping happens server-side.
+  function sanitizeHints(raw: UserHints | undefined): UserHints | null {
+    if (!raw || typeof raw !== "object") return null;
+    const allowed: (keyof UserHints)[] = [
+      "user_id",
+      "email",
+      "name",
+      "locale",
+      "plan_tier",
+      "audience_tag",
+    ];
+    const out: UserHints = {};
+    for (const key of allowed) {
+      const value = raw[key];
+      if (typeof value === "string" && value.trim()) {
+        out[key] = value.trim();
+      }
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
 
   function buildIframeSrc(): string {
     const params = new URLSearchParams();
@@ -111,9 +144,8 @@ declare global {
     f.style.cssText = "width:100%;height:100%;border:none;display:block;";
     f.allow = "microphone; camera";
 
-    // Handshake: widget-app posts {type:"chat9:ready"} on mount. Reply with the
-    // identity token (or a no-identity sentinel) using an explicit targetOrigin
-    // so a signed token is never broadcast to a wildcard.
+    // Handshake: widget-app posts {type:"chat9:ready"} on mount. Reply with
+    // userHints (or a no-hints sentinel) using an explicit targetOrigin.
     function onReady(event: MessageEvent) {
       if (event.source !== f.contentWindow) return;
       const payload = event.data as { type?: string } | null;
@@ -124,13 +156,13 @@ declare global {
       window.removeEventListener("message", onReady);
 
       if (!widgetOrigin) {
-        console.error("Chat9: cannot determine widget origin — set data-widget-base or window.Chat9Config.widgetBase. Aborting handshake.");
+        console.error("Chat9: cannot determine widget origin — set Chat9Config.widgetBase. Aborting handshake.");
         return;
       }
 
-      const message = identityToken
-        ? { type: "chat9:identity", identityToken }
-        : { type: "chat9:no-identity" };
+      const message = userHints
+        ? { type: "chat9:hints", userHints }
+        : { type: "chat9:no-hints" };
       f.contentWindow?.postMessage(message, widgetOrigin);
     }
     window.addEventListener("message", onReady);
@@ -142,7 +174,7 @@ declare global {
     const targetEl = targetId ? document.getElementById(targetId) : null;
     if (!targetEl) {
       console.error(
-        "Chat9 inline: target element not found. Add data-target=\"<elementId>\" to the script tag and ensure the element exists."
+        "Chat9 inline: target element not found. Set Chat9Config.target = \"<elementId>\" and ensure the element exists."
       );
       return;
     }

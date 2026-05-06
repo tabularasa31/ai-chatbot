@@ -1,43 +1,64 @@
 ---
 title: Embedding the Widget
-description: How to add the Chat9 chat widget to your site, plus identified sessions for advanced integrations.
+description: How to add the Chat9 chat widget to your site, with optional userHints for personalization.
 ---
 
 ## Basic embed
 
 Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. The loader is a tiny (~3 KB gzipped) script served from a CDN-style domain (`widget.getchat9.live`) — it injects an iframe pointing at the hosted widget UI on the same origin and forwards postMessage events between your page and the chat.
 
-Example (placeholders — the Dashboard fills in your real bot public ID):
-
 ```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
-</script>
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 ```
 
-`data-bot-id` carries your bot's `public_id`, not the secret API key. It is safe to ship in page HTML.
+`data-bot-id` carries your bot's `public_id`, not a secret. It is safe to ship in page HTML.
+
+That single line is the only required snippet — the widget works anonymously out of the box. Everything else (mode, color, position, personalization) is optional and lives on `window.Chat9Config`, which you set **before** the loader script runs.
+
+## One canonical snippet
+
+There is exactly one shape for the embed code. `data-bot-id` is the only attribute on the `<script>` tag; all other configuration goes through `window.Chat9Config`.
+
+```html
+<script>
+  window.Chat9Config = {
+    // optional UI tweaks
+    mode: "bubble",          // "bubble" | "inline"
+    color: "#a855f7",
+    position: "right",        // "right" | "left"
+    target: "chat9-widget",  // for mode: "inline" — id of the host element
+
+    // optional personalization (untrusted; see "userHints" below)
+    userHints: {
+      name: "Anna",
+      email: "anna@example.com",
+      locale: "ru-RU"
+    },
+
+    // override only on staging or self-hosted dashboards
+    apiBase: "https://getchat9.live",
+    widgetBase: "https://widget.getchat9.live/v1/"
+  };
+</script>
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+```
 
 You can choose between two modes on the [Embed page](https://getchat9.live/embed):
 
 - **Bubble** (default) — floating chat button in the bottom-right corner.
-- **Inline** — renders the widget inside an existing container on your page. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
+- **Inline** — renders the widget inside an existing container on your page. Set `Chat9Config.mode = "inline"` and `Chat9Config.target = "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
-### Loader options
+### Config reference
 
-All options are set as `data-*` attributes on the `<script>` tag. None except `data-bot-id` are required.
-
-| Attribute | Default | Notes |
+| Field | Default | Notes |
 |---|---|---|
-| `data-bot-id` | — | **required.** Your bot's `public_id`. |
-| `data-mode` | `bubble` | `bubble` or `inline`. |
-| `data-target` | — | DOM element ID for inline mode. Ignored in bubble mode. |
-| `data-color` | violet gradient | Bubble background. Accepts `#RGB`, `#RRGGBB`, or any CSS color. |
-| `data-position` | `right` | `right` or `left`. Where the bubble sits. |
-| `data-locale` | browser locale | BCP-47 tag like `en-US`. |
-| `data-identity` | — | Signed identity token (see below). |
-| `data-api-base` | `https://getchat9.live` | Override only for staging or self-hosted dashboards. |
-| `data-widget-base` | derived from script src | Override only for testing a non-prod widget build. |
+| `mode` | `"bubble"` | `"bubble"` or `"inline"`. |
+| `target` | — | DOM element id for inline mode. Ignored in bubble mode. |
+| `color` | violet gradient | Bubble background. Accepts `#RGB`, `#RRGGBB`, or any CSS color. |
+| `position` | `"right"` | `"right"` or `"left"`. Bubble corner. |
+| `userHints` | — | See [userHints](#userhints-optional). |
+| `apiBase` | `https://getchat9.live` | Override only for staging/self-hosted dashboards. |
+| `widgetBase` | derived from script src | Override only for testing a non-prod widget build. |
 
 ### CSP allowlist
 
@@ -49,7 +70,7 @@ frame-src  https://widget.getchat9.live;
 connect-src https://getchat9.live;
 ```
 
-The loader runs from `widget.getchat9.live`, the iframe is hosted there too, and the widget's API calls go to `getchat9.live` (or whatever `data-api-base` you set).
+The loader runs from `widget.getchat9.live`, the iframe is hosted there too, and the widget's API calls go to `getchat9.live` (or whatever `apiBase` you set).
 
 ## What the widget does
 
@@ -60,16 +81,12 @@ The loader runs from `widget.getchat9.live`, the iframe is hosted there too, and
 - If the bot needs one missing detail, it can ask a single follow-up question (embedded in the same text reply) instead of guessing.
 - The widget works in any language.
 
-Language behavior — short version: the bot replies in the language of the user's question once they've typed one; before that, it uses your KYC `locale` if provided, then the browser locale, then English. See [Language Support](/docs/language) for the full contract, including sticky retention and the dashboard escalation-language override.
+Language behavior — short version: the bot replies in the language of the user's question once they've typed one; before that, it uses `userHints.locale` if you set it, then the browser locale, then English. See [Language Support](/docs/language) for the full contract, including sticky retention and the dashboard escalation-language override.
 
 ## Where to get the embed code
 
 1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the **Dashboard** home (`/dashboard`). The widget loads your bot's `public_id` from the `data-bot-id` attribute on the script tag.
-
-## CORS
-
-The widget is designed to work on arbitrary sites because the public loader injects an iframe hosted by Chat9. You do not need to expose your private API key in page HTML.
+2. Copy the embed block from the **Dashboard** home (`/dashboard`) or the **Embed** page (`/embed`).
 
 ## Session continuity
 
@@ -77,8 +94,8 @@ The widget keeps a `session_id` so the bot can maintain context across follow-up
 
 Current behavior:
 
-- anonymous sessions are stored in the browser (`localStorage`) and can continue in the same browser for up to 24 hours, rehydrated from `GET /widget/history`
-- identified sessions are also keyed by `user_id` in the same browser storage, so reopening the widget on the same device for the same identified user resumes the previous chat (still subject to the 24-hour window) — `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the standard widget today
+- sessions are stored in the browser (`localStorage`) and can continue in the same browser for up to 24 hours, rehydrated from `GET /widget/history`
+- when `userHints` includes a `user_id` (or `email`), browser storage is keyed off it, so reopening the widget on the same device for the same visitor resumes the previous chat (still subject to the 24-hour window) — `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the standard widget today
 - closed chats are not resumed
 
 If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
@@ -96,158 +113,112 @@ Clarification behavior:
 - Clarification replies are treated as part of the same conversation context, not as a brand-new standalone question.
 - Empty follow-up turns after the conversation has already started are still rejected as invalid input.
 
-## Security
-
-The bot `public_id` in the `data-bot-id` attribute identifies which bot to load; it is intended to appear in page HTML. Keep your **signing secret** (used to generate identity tokens server-side) and your **API key** (for dashboard/API use) secret — do not expose them in client-side code or commit them to public repos.
-
 ---
 
-## Identified sessions (optional)
+## userHints (optional)
 
-By default the standard widget embed is anonymous. Chat9 knows which bot should answer, but does not know who the end user is.
-
-**Identified sessions** are an advanced integration path that lets you attach verified user context to a widget session.
-
-### How it works
-
-1. In **Dashboard → Settings → Widget API**, generate a signing secret.
-2. Store that secret on your server — never in client-side code.
-3. Your server generates a short-lived signed `identity_token` for each logged-in user.
-4. Your page passes the token to the loader either via the `data-identity` attribute on the `<script>` tag or via `window.Chat9Config.identityToken` set before the script runs. For anonymous visitors, omit both (or set the config field to `null`).
-5. The widget calls `POST /widget/session/init` with `bot_id` + `identity_token`.
-6. Chat9 validates the token and returns `session_id` + `mode` (`identified` or `anonymous`).
-7. All subsequent `POST /widget/chat` requests use that `session_id`.
-
-The token is HMAC-signed. Any tampering is detected. The payload is encoded, not encrypted — do not put passwords, card data, or other secrets inside it.
-
-If the same identified user reopens the widget on the same browser/device, the standard widget resumes the previous chat from local storage (subject to the 24-hour window). `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the stock widget.
-
-### Step 1 — Get a signing secret
-
-Go to **Dashboard → Settings → Widget API** and click **Generate secret**. Copy the value and store it in your server environment (e.g. `CHAT9_SIGNING_SECRET`). Never expose it in client-side code or commit it to a repository.
-
-### Step 2 — Generate a token server-side
-
-```js
-const crypto = require("crypto");
-
-function makeWidgetIdentityToken({
-  secret,
-  userId,
-  extras = {},
-  ttlSeconds = 300,
-}) {
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    user_id: userId,
-    exp: now + ttlSeconds,
-    iat: now,
-    ...extras,
-  };
-
-  const sorted = {};
-  for (const key of Object.keys(payload).sort()) {
-    sorted[key] = payload[key];
-  }
-
-  const json = JSON.stringify(sorted);
-  const b64 = Buffer.from(json, "utf8")
-    .toString("base64")
-    .replace(/[+]/g, "-")
-    .replace(/[/]/g, "_")
-    .replace(/=+$/, "");
-
-  const sig = crypto
-    .createHmac("sha256", Buffer.from(secret, "utf8"))
-    .update(b64)
-    .digest("hex");
-
-  return `${b64}.${sig}`;
-}
-```
-
-Required payload fields:
-
-- `user_id` — any non-empty string
-- `exp` — expiry time, Unix timestamp in seconds
-- `iat` — issued-at time, Unix timestamp in seconds
-
-Optional payload fields currently supported by Chat9:
-
-- `email`
-- `name`
-- `plan_tier`
-- `audience_tag`
-- `company`
-- `locale`
-
-Example payload:
-
-```json
-{
-  "user_id": "cust_12345",
-  "email": "user@example.com",
-  "plan_tier": "growth",
-  "audience_tag": "b2b",
-  "locale": "en-US",
-  "exp": 1775399700,
-  "iat": 1775399400
-}
-```
-
-### Step 3 — Pass the token to the embed script
-
-In your server-rendered page template, inject the token before the embed script. **For logged-in users**, render a quoted string; **for anonymous visitors**, render the bare JS literal `null` (no quotes) — a string `"null"` would be sent as a token and fail validation.
-
-For an identified visitor — the simplest form passes the token straight on the script tag:
-
-```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID"
-  data-identity="eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…">
-</script>
-```
-
-If you'd rather keep the token out of the markup (e.g. you're rendering the script tag from a static template and assembling the token from a separate JS context), use the legacy `window.Chat9Config` form before the loader runs:
+The default embed is anonymous: Chat9 knows which bot to load, but does not know who the visitor is. If your tenant frontend already has user info and wants the widget to use it for personalization, set `userHints` on `window.Chat9Config`.
 
 ```html
 <script>
   window.Chat9Config = {
-    identityToken: "eyJ1c2VyX2lkIjoiY3VzdF8xMjM0NSIsImV4cCI6MTc3NTM5OTcwMH0.abcdef…"
+    userHints: {
+      name: "Anna",
+      email: "anna@example.com",
+      locale: "ru-RU",
+      plan_tier: "growth"
+    }
   };
 </script>
 <script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 ```
 
-For an anonymous visitor — omit `data-identity` and `Chat9Config.identityToken` entirely (do not pass the string `"null"`; the widget treats any non-empty string as a candidate token).
+When the widget mounts, it calls `POST /widget/session/init` with `bot_id` and `user_hints`. Hints land on the chat session and are used for:
 
-The widget automatically calls `POST /widget/session/init` with your `bot_id` and `identity_token`. No private API key is ever sent from the browser.
+- greeting personalization (e.g. "Hi Anna")
+- the language Chat9 picks before the user types
+- escalation email metadata so your support team sees `Email: anna@…` and `Name: Anna` directly in the inbox notification
 
-The token is delivered to the widget iframe over an internal `postMessage` handshake — never via URL parameters — so signed tokens never appear in browser history, server access logs, or `Referer` headers. You don't need to do anything for this; it's how the loader and the hosted widget talk to each other.
+### Important — these hints are untrusted
 
-If you prefer to call `session/init` directly (e.g. from a custom integration without the loader):
+`userHints` are passed straight from the browser. Anyone inspecting the page can change them. **Do not** use them for:
+
+- access control, paid-tier gating, or routing that relies on the visitor really being who they say they are
+- audit logs that imply "user X said Y" with verification semantics
+- anything where impersonation matters
+
+Hints are honest *suggestions* from your frontend to the bot ("this visitor's display name is Anna, their preferred language is Russian"), not verified identity claims. A future verified-identity path is on the roadmap; until then, treat hints as personalization only.
+
+### Allowed fields
+
+Unknown keys are dropped server-side; oversized values are truncated.
+
+| Field | Notes |
+|---|---|
+| `user_id` | Optional stable identifier from your system. Used as the contact key for grouping a visitor's sessions. If absent, Chat9 falls back to `hint:<email>`. |
+| `email` | Plausible email address. Empty/malformed values are dropped. Used in escalation notifications. |
+| `name` | Display name. |
+| `plan_tier` | E.g. `"free" | "starter" | "growth" | "pro" | "enterprise"`. Influences escalation priority — see below. |
+| `audience_tag` | Free-form segment label. |
+| `locale` | BCP-47 (e.g. `"en-US"`, `"ru-RU"`). Used as the bootstrap language for the greeting and as a stronger signal than browser locale. |
+
+### `plan_tier` and escalation priority
+
+When the bot escalates a conversation to a human, Chat9 uses `plan_tier` from the hints to set the ticket priority:
+
+| Trigger | `plan_tier` not set | `plan_tier: "pro"` or `"enterprise"` |
+|---|---|---|
+| User explicitly requests a human | High | **Critical** |
+| Bot can't find a relevant answer | Medium | **High** |
+| Answer rejected by quality check | Medium | Medium |
+
+Because hints are untrusted, this is a personalization heuristic, not enforcement. Anyone could set `plan_tier: "enterprise"` from devtools — that's fine for the current "premium tickets surface first" use case, not fine for "premium users get free credits" use cases.
+
+### What Chat9 stores from hints
+
+Stored on the chat session:
+
+- `user_id` (or synthetic `hint:<email>` when only email was provided)
+- `email`
+- `name`
+- `plan_tier`
+- `audience_tag`
+- `locale`
+
+Used in the LLM prompt: `plan_tier`, `locale`, `audience_tag`.
+
+Used in escalation email metadata: `user_id`, `email`, `name`, `plan_tier`.
+
+### Calling `/widget/session/init` directly
+
+If you've built a custom integration without the loader, you can call session init yourself:
 
 ```bash
-curl -X POST "https://YOUR_API_HOST/widget/session/init" \
+curl -X POST "https://getchat9.live/widget/session/init" \
   -H "Content-Type: application/json" \
   -d '{
     "bot_id": "YOUR_BOT_PUBLIC_ID",
-    "identity_token": "YOUR_SIGNED_TOKEN",
-    "locale": "en-US"
+    "user_hints": {
+      "user_id": "cust_12345",
+      "email": "anna@example.com",
+      "name": "Anna",
+      "plan_tier": "growth",
+      "locale": "ru-RU"
+    },
+    "locale": "ru-RU"
   }'
 ```
 
-Successful response:
+Response:
 
 ```json
 {
   "session_id": "1c576fd8-cf10-4b58-a4e7-460ea0d19dbe",
-  "mode": "identified"
+  "mode": "hints"
 }
 ```
 
-If the token is missing or invalid, Chat9 still returns a session but with:
+When no hints are sent (or all of them get dropped during sanitization), the response is:
 
 ```json
 {
@@ -256,17 +227,15 @@ If the token is missing or invalid, Chat9 still returns a session but with:
 }
 ```
 
-### Step 4 — Send chat messages with the returned session
-
-Use the `session_id` from `session/init` in later chat requests:
+Then send chat messages with the returned `session_id`:
 
 ```bash
-curl -N -X POST "https://YOUR_API_HOST/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
+curl -N -X POST "https://getchat9.live/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
   -H "Content-Type: application/json" \
   -d '{"message":"Hello"}'
 ```
 
-`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events), not a single JSON body. Frame sequence:
+`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events). Frame sequence:
 
 1. one or more `data: {"type":"status","stage":"…"}` frames signalling progress (e.g. `"thinking"`) — safe to ignore if you only want the answer text
 2. one or more `data: {"type":"chunk","text":"…"}` frames as the model streams; concatenate `text` to render the answer as it arrives
@@ -283,70 +252,3 @@ Public widget responses may include:
 - an escalation handoff message when the bot cannot answer safely
 
 There is no structured clarification payload and the widget does not render quick-reply buttons — the message text always lives in the `done` frame's `text` field.
-
-### Token field reference
-
-| Field | Required | Type | Constraints |
-|---|---|---|---|
-| `user_id` | yes | string | non-empty, non-whitespace |
-| `exp` | yes | integer | Unix timestamp in seconds |
-| `iat` | yes | integer | Unix timestamp in seconds |
-| `email` | — | string | optional |
-| `name` | — | string | optional |
-| `plan_tier` | — | string | optional |
-| `audience_tag` | — | string | optional free-form segment label |
-| `company` | — | string | optional |
-| `locale` | — | string | optional, e.g. `en`, `en-US`, `ru-RU` |
-
-### What `mode` means
-
-| `mode` | Meaning |
-|---|---|
-| `identified` | The token was valid and Chat9 attached the user context to the session |
-| `anonymous` | No token was provided, or validation failed, so the widget continues without KYC context |
-
-### `plan_tier` and escalation priority
-
-When the bot escalates a conversation to a human, Chat9 uses `plan_tier` from the token to set the ticket priority:
-
-| Trigger | `plan_tier` not set | `plan_tier: "pro"` or `"enterprise"` |
-|---|---|---|
-| User explicitly requests a human | High | **Critical** |
-| Bot can't find a relevant answer | Medium | **High** |
-| Answer rejected by quality check | Medium | Medium |
-
-Pass `plan_tier` in the identity token to make sure premium users' escalation tickets surface first in your Escalations inbox.
-
-### What Chat9 uses from KYC
-
-Stored in chat context:
-
-- `user_id`
-- `email`
-- `name`
-- `plan_tier`
-- `audience_tag`
-- `company`
-- `locale`
-
-Used in the LLM prompt:
-
-- `plan_tier`
-- `locale`
-- `audience_tag`
-
-Used for richer escalation metadata:
-
-- `user_id`
-- `email`
-- `name`
-- `plan_tier`
-
-### Security checklist
-
-- Generate the token **on your server**, never in browser JavaScript
-- Store the signing secret in an environment variable, not in source code
-- Use a short TTL (300 s is a reasonable default)
-- Rotate the secret from the Dashboard if it is ever exposed
-- Treat invalid tokens as a fallback to anonymous mode, not as a widget outage
-- Do NOT put passwords, card numbers, or other secrets in the token payload

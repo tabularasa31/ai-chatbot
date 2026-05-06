@@ -16,6 +16,7 @@ import {
   type ChatWidgetMessage,
   type WidgetSource,
 } from "@chat9/widget-shared";
+import type { UserHints } from "./main";
 
 export type ChatWidgetBelowAssistantContext = {
   messageIndex: number;
@@ -45,8 +46,9 @@ interface ChatWidgetProps {
   botId: string;
   locale?: string | null;
   compact?: boolean;
-  /** When provided, session init is called first to enable identified mode. */
-  identityToken?: string | null;
+  /** Untrusted personalization hints from the tenant frontend. Triggers
+   *  a session-init call so the backend can attach them to the chat. */
+  hints?: UserHints | null;
   /** Optional UI rendered below each assistant bubble (e.g. eval rating). */
   renderBelowAssistant?: (ctx: ChatWidgetBelowAssistantContext) => ReactNode;
   /** Whether the widget panel is currently visible. Used to trigger scroll-to-bottom on reopen. */
@@ -151,26 +153,13 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-// Decode user_id from identity token payload for localStorage namespacing.
-// Supports both our custom 2-part format (base64payload.sig) and standard 3-part JWTs (header.payload.sig).
-// No signature verification needed — this is only used as a storage key discriminator.
-function extractUserIdFromIdentityToken(token: string | null | undefined): string | null {
-  if (!token) return null;
-  try {
-    const parts = token.split(".");
-    const b64 = parts.length === 3 ? parts[1] : parts[0];
-    if (!b64) return null;
-    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-    const binary = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + pad);
-    // atob returns a binary string (one byte per JS char). Multi-byte UTF-8
-    // (Cyrillic, CJK, emoji in identity claims) requires TextDecoder.
-    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
-    const json = new TextDecoder().decode(bytes);
-    const data = JSON.parse(json) as Record<string, unknown>;
-    if (typeof data?.user_id === "string" && data.user_id.trim()) return data.user_id.trim();
-  } catch {
-    // Ignore malformed tokens — fall back to anonymous key
-  }
+// Storage-key discriminator derived from hints. Lets us namespace localStorage
+// per visitor so one browser shared between accounts doesn't bleed history
+// across them. Falls back to email-based synthetic id matching the backend.
+function deriveStorageUserId(hints: UserHints | null | undefined): string | null {
+  if (!hints) return null;
+  if (hints.user_id && hints.user_id.trim()) return hints.user_id.trim();
+  if (hints.email && hints.email.trim()) return `hint:${hints.email.trim()}`;
   return null;
 }
 
@@ -275,7 +264,7 @@ export function ChatWidget({
   botId,
   locale,
   compact = false,
-  identityToken,
+  hints,
   renderBelowAssistant,
   isOpen = true,
   apiBase,
@@ -295,7 +284,7 @@ export function ChatWidget({
   const [pendingExternalLink, setPendingExternalLink] = useState<PendingExternalLink | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Tracks the user_id derived from the current identityToken so other effects can use it.
+  // Tracks the storage user_id derived from the current hints so other effects can use it.
   const userIdRef = useRef<string | null>(null);
 
   const localeParam = locale && locale.trim() ? locale.trim() : undefined;
@@ -354,7 +343,7 @@ export function ChatWidget({
   }), [maybeOpenLinkSafety]);
 
   useEffect(() => {
-    const userId = extractUserIdFromIdentityToken(identityToken);
+    const userId = deriveStorageUserId(hints);
     userIdRef.current = userId;
 
     setSessionHydrated(false);
@@ -368,11 +357,11 @@ export function ChatWidget({
 
     const stored = readStoredSession(botId, userId);
 
-    if (identityToken && !stored) {
+    if (hints && !stored) {
       fetch(`${apiBase}/api/widget-session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ bot_id: botId, identity_token: identityToken }),
+        body: JSON.stringify({ bot_id: botId, user_hints: hints }),
       })
         .then((r) => r.json())
         .then((data: { session_id?: string }) => {
@@ -389,7 +378,7 @@ export function ChatWidget({
       setSessionId(stored);
       setSessionHydrated(true);
     }
-  }, [botId, identityToken, apiBase]);
+  }, [botId, hints, apiBase]);
 
   useEffect(() => {
     let cancelled = false;

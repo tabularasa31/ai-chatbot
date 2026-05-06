@@ -7,7 +7,7 @@ from backend.gap_analyzer.enums import (
     GapSource,
 )
 from backend.models.auth import User
-from backend.models.base import Base, UserContext
+from backend.models.base import Base
 from backend.models.chat import Chat, EscalationTicket, Message, MessageEmbedding
 from backend.models.contact import ContactSession
 from backend.models.enums import (
@@ -82,5 +82,4 @@ __all__ = [
     "UrlSource",
     "UrlSourceRun",
     "User",
-    "UserContext",
 ]

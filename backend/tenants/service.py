@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import datetime as dt
-import secrets
 import uuid
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from backend.core.crypto import decrypt_value, encrypt_value
-from backend.models import Bot, Chat, Tenant, User
+from backend.core.crypto import encrypt_value
+from backend.models import Bot, Tenant, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
@@ -23,14 +20,6 @@ from backend.tenants.api_keys_service import (
 )
 
 DEFAULT_TENANT_NAME = "My Workspace"
-
-
-def _dt_utc_aware(d: dt.datetime | None) -> dt.datetime | None:
-    if d is None:
-        return None
-    if d.tzinfo is None:
-        return d.replace(tzinfo=dt.UTC)
-    return d.astimezone(dt.UTC)
 
 
 def create_tenant(
@@ -236,122 +225,6 @@ def update_tenant(
     return tenant
 
 
-def _decrypt_kyc_secret(enc: str | None) -> str | None:
-    if not enc:
-        return None
-    try:
-        return decrypt_value(enc)
-    except RuntimeError:
-        return None
-
-
-def generate_kyc_secret_for_tenant(user_id: uuid.UUID, db: Session) -> tuple[Tenant, str]:
-    """
-    Create a new KYC signing secret (first time only). Returns (tenant, plaintext_secret_once).
-    Raises 404 if no tenant, 409 if secret already exists.
-    """
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    if tenant.kyc_secret_key:
-        raise HTTPException(
-            status_code=409,
-            detail="KYC signing secret already exists; use rotate to replace it",
-        )
-    raw = secrets.token_hex(32)
-    tenant.kyc_secret_key = encrypt_value(raw)
-    tenant.kyc_secret_key_hint = raw[-4:]
-    db.commit()
-    db.refresh(tenant)
-    return tenant, raw
-
-
-def rotate_kyc_secret(user_id: uuid.UUID, db: Session) -> tuple[Tenant, str]:
-    """
-    Rotate KYC secret; previous ciphertext kept until overlap window expires.
-    """
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    if not tenant.kyc_secret_key:
-        raise HTTPException(
-            status_code=400,
-            detail="No KYC signing secret configured; generate one first",
-        )
-    overlap_until = dt.datetime.now(dt.UTC) + dt.timedelta(hours=1)
-    tenant.kyc_secret_key_previous = tenant.kyc_secret_key
-    tenant.kyc_secret_previous_expires_at = overlap_until
-    raw = secrets.token_hex(32)
-    tenant.kyc_secret_key = encrypt_value(raw)
-    tenant.kyc_secret_key_hint = raw[-4:]
-    db.commit()
-    db.refresh(tenant)
-    return tenant, raw
-
-
-def get_kyc_status(user_id: uuid.UUID, db: Session) -> dict[str, Any]:
-    tenant = get_tenant_by_user(user_id, db)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-
-    now = dt.datetime.now(dt.UTC)
-    week_ago = now - dt.timedelta(days=7)
-
-    total_7d = (
-        db.query(func.count(Chat.id))
-        .filter(Chat.tenant_id == tenant.id, Chat.created_at >= week_ago)
-        .scalar()
-    ) or 0
-    identified_7d = (
-        db.query(func.count(Chat.id))
-        .filter(
-            Chat.tenant_id == tenant.id,
-            Chat.created_at >= week_ago,
-            Chat.user_context.isnot(None),
-        )
-        .scalar()
-    ) or 0
-
-    rate = (identified_7d / total_7d) if total_7d else 0.0
-
-    last_row = (
-        db.query(Chat)
-        .filter(Chat.tenant_id == tenant.id, Chat.user_context.isnot(None))
-        .order_by(Chat.created_at.desc())
-        .first()
-    )
-    last_identified = last_row.created_at if last_row else None
-
-    return {
-        "has_secret": bool(tenant.kyc_secret_key),
-        "identified_session_rate_7d": rate,
-        "last_identified_session": last_identified,
-        "masked_secret_hint": _masked_kyc_hint(tenant),
-    }
-
-
-def _masked_kyc_hint(tenant: Tenant) -> str | None:
-    if not tenant.kyc_secret_key or not tenant.kyc_secret_key_hint:
-        return None
-    return f"••••••••••••••••••••••••••••••••...{tenant.kyc_secret_key_hint}"
-
-
-def get_kyc_decrypted_keys_for_validation(tenant: Tenant) -> list[tuple[str, str | None]]:
-    """
-    Return list of (plaintext_secret, label) to try when validating a token.
-    label is None for current, 'previous' for overlap key.
-    """
-    keys: list[tuple[str, str | None]] = []
-    cur = _decrypt_kyc_secret(tenant.kyc_secret_key)
-    if cur:
-        keys.append((cur, None))
-    now = dt.datetime.now(dt.UTC)
-    prev_exp = _dt_utc_aware(tenant.kyc_secret_previous_expires_at)
-    if tenant.kyc_secret_key_previous and prev_exp and prev_exp > now:
-        prev = _decrypt_kyc_secret(tenant.kyc_secret_key_previous)
-        if prev:
-            keys.append((prev, "previous"))
-    return keys
 
 
 def delete_tenant(

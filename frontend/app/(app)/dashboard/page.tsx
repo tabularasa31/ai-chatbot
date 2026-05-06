@@ -39,10 +39,11 @@ function DashboardContent() {
     // the dashboard. apiBase tells the widget where to send /widget/chat etc.
     // — defaults to the production dashboard, override on staging via
     // NEXT_PUBLIC_APP_URL during snippet rendering.
-    const apiAttr = APP_URL && APP_URL !== "https://getchat9.live"
-      ? `\n  data-api-base="${APP_URL}"`
-      : "";
-    return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botPublicId ?? ""}"${apiAttr}>\n</script>`;
+    const configBlock =
+      APP_URL && APP_URL !== "https://getchat9.live"
+        ? `<script>\n  window.Chat9Config = { apiBase: ${JSON.stringify(APP_URL)} };\n</script>\n`
+        : "";
+    return `${configBlock}<script src="${WIDGET_LOADER_URL}" data-bot-id="${botPublicId ?? ""}"></script>`;
   }
 
   if (clientLoading || botsLoading) {

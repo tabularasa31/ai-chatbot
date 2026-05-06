@@ -24,7 +24,7 @@ const WIDGET_ALLOWED_ORIGINS = (process.env.WIDGET_ALLOWED_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
-const WIDGET_CORS_PATH_PREFIXES = ["/widget/", "/api/widget-session/", "/api/widget-identity/"];
+const WIDGET_CORS_PATH_PREFIXES = ["/widget/", "/api/widget-session/"];
 
 function isWidgetCorsPath(pathname: string): boolean {
   return WIDGET_CORS_PATH_PREFIXES.some((prefix) => pathname.startsWith(prefix));
@@ -116,6 +116,5 @@ export const config = {
     // Widget CORS — must be in the matcher for middleware to run.
     "/widget/:path*",
     "/api/widget-session/:path*",
-    "/api/widget-identity/:path*",
   ],
 };

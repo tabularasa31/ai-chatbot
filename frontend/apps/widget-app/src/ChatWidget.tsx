@@ -783,7 +783,7 @@ export function ChatWidget({
             <p className={cn("text-gray-400", compact ? "text-[13px]" : "text-sm")}>Ask anything about Chat9…</p>
           </div>
         ) : (
-          <div className="space-y-5 text-sm">
+          <div className={cn("space-y-5", compact ? "text-[13px]" : "text-sm")}>
             {messages.map((msg, i) => {
                 if (msg.type === "system") {
                   const isEnded = msg.subtype === "conversation_ended";

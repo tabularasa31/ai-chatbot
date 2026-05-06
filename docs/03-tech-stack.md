@@ -144,7 +144,7 @@
 │    4. Embed redacted question when retrieval is needed   │
 │       (OpenAI, client's key)                             │
 │    5. Search embeddings (pgvector)                       │
-│    6. Build prompt (+ safe user context line if FI-KYC)  │
+│    6. Build prompt (+ safe user context line from hints) │
 │    7. Call OpenAI (client's key); optional validation    │
 │       call (FI-034) also uses redacted text              │
 │    8. Build TurnContext + call decide() (block-rules     │

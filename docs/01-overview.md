@@ -123,7 +123,7 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 ✅ Hybrid retrieval with pgvector on PostgreSQL and SQLite test-path parity for downstream BM25/RRF/reranking orchestration  
 ✅ Retrieval reliability signals and contradiction policy
 ✅ Zero-config embeddable widget (iframe, no CORS issues)
-✅ Optional widget user identification (FI-KYC): HMAC token + session init
+✅ Optional widget personalization via untrusted `userHints` (name/email/locale/plan_tier from tenant frontend)
 ✅ Chat history & session logging
 ✅ Feedback system (👍/👎 + ideal answer)  
 ✅ Token usage tracking  

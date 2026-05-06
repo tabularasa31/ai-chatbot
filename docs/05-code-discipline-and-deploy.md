@@ -53,7 +53,7 @@ tests/
 ├─ test_embeddings.py
 ├─ test_search.py
 ├─ test_widget.py
-├─ test_kyc.py             # FI-KYC token + session init + KYC API
+├─ test_widget_hints.py    # sanitize_user_hints unit cases (whitelist/cap/email/locale)
 ├─ test_admin_metrics.py
 ├─ test_models.py
 └─ …

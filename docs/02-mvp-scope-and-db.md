@@ -211,7 +211,7 @@ Indexes:
 contact_sessions   -- cross-session history when userHints carry user_id or email
 ├─ id (PK, UUID)
 ├─ workspace_id (FK → workspaces ON DELETE CASCADE, NOT NULL)
-├─ contact_id (VARCHAR(255), NOT NULL — userHints.user_id or "hint:<email>")
+├─ contact_id (VARCHAR(255), NOT NULL — userHints.user_id or "hint:<email>"; truncated to 200 chars by _USER_ID_CAP in apply_identity_context_patch before insert, so always fits the column)
 ├─ email, name, plan_tier, audience_tag (nullable)
 ├─ session_started_at, session_ended_at (nullable)
 ├─ conversation_turns (INTEGER, default 0)

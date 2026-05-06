@@ -807,7 +807,7 @@ Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~2.9 KB
 - Reads everything else from `window.Chat9Config`: `mode`, `color`, `position`, `target`, `apiBase`, `widgetBase`, `userHints`. There is no fallback to `data-*` attributes — the snippet is canonical.
 - Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `Chat9Config.widgetBase`.
 - Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `Chat9Config.apiBase` for staging or self-hosted dashboards.
-- Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<navigator.language|userHints.locale>&apiBase=…&parentOrigin=<page origin>`.
+- Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<userHints.locale|navigator.language>&apiBase=…&parentOrigin=<page origin>`.
 - `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`).
 - The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).
 

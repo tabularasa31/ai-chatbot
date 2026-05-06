@@ -282,10 +282,12 @@ def update_faq(
     faq = _faq_or_404(db, tenant_id=tenant.id, faq_id=faq_id)
 
     question_changed = payload.question.strip() != faq.question.strip()
+    answer_changed = payload.answer.strip() != faq.answer.strip()
     faq.question = payload.question.strip()
     faq.answer = payload.answer.strip()
-    if question_changed:
+    if question_changed or answer_changed:
         faq.approved = False
+    if question_changed:
         faq.question_embedding = None
     db.add(faq)
     db.commit()

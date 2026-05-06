@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import { createPreset } from "fumadocs-ui/tailwind-plugin";
+import { ND_BRAND_COLORS } from "./tailwind-brand";
 
 const config: Config = {
   content: [
@@ -39,18 +40,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        nd: {
-          base: "#0A0A0F",
-          "base-alt": "#12121A",
-          surface: "#1E1E2E",
-          border: "#2E2E3E",
-          text: "#FAF5FF",
-          accent: "#E879F9",
-          "accent-hover": "#f099fb",
-          info: "#38BDF8",
-          success: "#4ADE80",
-          danger: "#F87171",
-        },
+        nd: ND_BRAND_COLORS,
       },
     },
   },

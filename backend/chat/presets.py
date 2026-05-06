@@ -33,6 +33,8 @@ the question. If none qualify, the answer is "I don't have that information."
 4. Synthesize: which chunks are most relevant and why?
 </thought>
 
-After </thought>, write ONLY the final answer. No step numbers, no headers, \
-no reasoning text outside the tags.\
+After </thought>, write ONLY the final answer — no chain-of-thought, no \
+"Step 1/2/3" prefixes, no reasoning text outside the tags. Format the \
+answer itself with markdown (headings, lists, code blocks) whenever it \
+adds clarity.\
 """

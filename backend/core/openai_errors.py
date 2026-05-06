@@ -24,6 +24,7 @@ from openai import (
 
 class OpenAIFailureKind(str, Enum):
     TRANSIENT = "transient"
+    TIMEOUT = "timeout"
     RATE_LIMIT = "rate_limit"
     PERMANENT = "permanent"
     UNKNOWN = "unknown"
@@ -44,7 +45,9 @@ def classify_openai_error(exc: Exception) -> ClassifiedError:
 
     if isinstance(exc, RateLimitError) or status == 429:
         return ClassifiedError(OpenAIFailureKind.RATE_LIMIT, retry_after, status, message)
-    if isinstance(exc, (APIConnectionError, APITimeoutError, InternalServerError)):
+    if isinstance(exc, APITimeoutError):
+        return ClassifiedError(OpenAIFailureKind.TIMEOUT, None, status, message)
+    if isinstance(exc, (APIConnectionError, InternalServerError)):
         return ClassifiedError(OpenAIFailureKind.TRANSIENT, retry_after, status, message)
     if isinstance(exc, APIError) and status in {500, 502, 503, 504}:
         return ClassifiedError(OpenAIFailureKind.TRANSIENT, retry_after, status, message)

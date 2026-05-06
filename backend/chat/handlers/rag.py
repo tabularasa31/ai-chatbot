@@ -1082,6 +1082,7 @@ def generate_answer(
                     stream_options={"include_usage": True},
                 ),
                 bot_id=retry_bot_id,
+                emit_chat_failed=True,
             )
             chunks: list[str] = []
             total_tokens = 0
@@ -1117,6 +1118,7 @@ def generate_answer(
                     max_completion_tokens=_max_completion_tokens,
                 ),
                 bot_id=retry_bot_id,
+                emit_chat_failed=True,
             )
             actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
             _raw_content = response.choices[0].message.content or ""
@@ -1929,6 +1931,7 @@ async def _async_generate_answer_native(
                     stream_options={"include_usage": True},
                 ),
                 bot_id=retry_bot_id,
+                emit_chat_failed=True,
             )
             chunks: list[str] = []
             total_tokens = 0
@@ -1964,6 +1967,7 @@ async def _async_generate_answer_native(
                     max_completion_tokens=_max_completion_tokens,
                 ),
                 bot_id=retry_bot_id,
+                emit_chat_failed=True,
             )
             actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
             _raw_content = response.choices[0].message.content or ""

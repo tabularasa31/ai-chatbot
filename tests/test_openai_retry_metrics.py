@@ -40,7 +40,7 @@ def test_emits_attempt_on_every_call(captured_events):
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise APITimeoutError(request=_request())
+            raise InternalServerError("boom", response=_response(500), body=None)
         return "ok"
 
     result = call_openai_with_retry("chat_generate", _fn, tenant_id="tnt_test")
@@ -64,7 +64,7 @@ def test_emits_retry_scheduled_when_retrying(captured_events):
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise APITimeoutError(request=_request())
+            raise InternalServerError("boom", response=_response(500), body=None)
         return "ok"
 
     call_openai_with_retry("chat_generate", _fn, tenant_id="tnt_test")
@@ -233,8 +233,86 @@ def test_capture_event_failure_does_not_break_retry(monkeypatch):
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise APITimeoutError(request=_request())
+            raise InternalServerError("boom", response=_response(500), body=None)
         return "ok"
 
     # Telemetry failure must not break the retry loop or the result.
     assert call_openai_with_retry("chat_generate", _fn, tenant_id="tnt") == "ok"
+
+
+def test_no_emit_retry_scheduled_on_timeout(captured_events):
+    """APITimeoutError emits exhausted but NOT retry_scheduled."""
+    with pytest.raises(APITimeoutError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
+            tenant_id="tnt_test",
+        )
+
+    assert _named(captured_events, "openai_retry.retry_scheduled") == []
+    exhausted = _named(captured_events, "openai_retry.exhausted")
+    assert len(exhausted) == 1
+    assert exhausted[0]["properties"]["reason"] == "timeout_no_retry"
+    assert exhausted[0]["properties"]["failure_kind"] == "timeout"
+
+
+def test_chat_failed_emitted_on_exhausted_chat_completion(captured_events):
+    """chat.failed fires when emit_chat_failed=True and retries are exhausted."""
+    with pytest.raises(InternalServerError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(
+                InternalServerError("boom", response=_response(500), body=None)
+            ),
+            tenant_id="tnt_test",
+            bot_id="bot_xyz",
+            emit_chat_failed=True,
+        )
+
+    chat_failed = _named(captured_events, "chat.failed")
+    assert len(chat_failed) == 1
+    e = chat_failed[0]
+    assert e["tenant_id"] == "tnt_test"
+    assert e["bot_id"] == "bot_xyz"
+    props = e["properties"]
+    assert props["operation"] == "chat_generate"
+    assert props["failure_kind"] == "transient"
+    assert props["error_type"] == "InternalServerError"
+    assert props["call_type"] == "chat_completion"
+    assert props["reason"] in {"max_attempts", "budget_exhausted", "delay_over_remaining"}
+    assert isinstance(props["attempt_count"], int)
+    assert isinstance(props["elapsed_ms"], int)
+
+
+def test_chat_failed_not_emitted_without_flag(captured_events):
+    """chat.failed must not fire when emit_chat_failed is not set (default False)."""
+    with pytest.raises(InternalServerError):
+        call_openai_with_retry(
+            "search_embed_query",
+            lambda: (_ for _ in ()).throw(
+                InternalServerError("boom", response=_response(500), body=None)
+            ),
+            tenant_id="tnt_test",
+        )
+
+    assert _named(captured_events, "chat.failed") == []
+
+
+def test_chat_failed_emitted_on_timeout(captured_events):
+    """chat.failed fires on first-attempt APITimeoutError when emit_chat_failed=True."""
+    with pytest.raises(APITimeoutError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
+            tenant_id="tnt_test",
+            emit_chat_failed=True,
+        )
+
+    chat_failed = _named(captured_events, "chat.failed")
+    assert len(chat_failed) == 1
+    props = chat_failed[0]["properties"]
+    assert props["failure_kind"] == "timeout"
+    assert props["error_type"] == "APITimeoutError"
+    assert props["reason"] == "timeout_no_retry"
+    assert isinstance(props["attempt_count"], int)
+    assert isinstance(props["elapsed_ms"], int)

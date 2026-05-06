@@ -38,12 +38,19 @@ def test_classify_rate_limit_error() -> None:
     assert classified.status_code == 429
 
 
-def test_classify_timeout_connection_transient() -> None:
+def test_classify_timeout_as_timeout_kind() -> None:
     timeout_exc = APITimeoutError(request=_request())
+
+    classified = classify_openai_error(timeout_exc)
+
+    assert classified.kind == OpenAIFailureKind.TIMEOUT
+    assert classified.retry_after_seconds is None
+
+
+def test_classify_connection_and_server_as_transient() -> None:
     connection_exc = APIConnectionError(request=_request())
     internal_exc = InternalServerError("boom", response=_response(500), body=None)
 
-    assert classify_openai_error(timeout_exc).kind == OpenAIFailureKind.TRANSIENT
     assert classify_openai_error(connection_exc).kind == OpenAIFailureKind.TRANSIENT
     assert classify_openai_error(internal_exc).kind == OpenAIFailureKind.TRANSIENT
 

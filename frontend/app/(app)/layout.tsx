@@ -1,6 +1,6 @@
 import { Navbar } from "@/components/Navbar";
 import { Sidebar } from "@/components/Sidebar";
-import { DashboardSupportWidget } from "@/components/DashboardSupportWidget";
+import { DashboardWidgetLoader } from "@/components/DashboardWidgetLoader";
 
 export default function AppLayout({
   children,
@@ -14,7 +14,7 @@ export default function AppLayout({
       <main className="ml-[200px] pt-[calc(48px+32px)] pb-8 px-8 min-h-screen">
         {children}
       </main>
-      <DashboardSupportWidget />
+      <DashboardWidgetLoader />
     </div>
   );
 }

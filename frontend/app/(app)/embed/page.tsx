@@ -34,32 +34,31 @@ function EmbedContent() {
 
   // The dashboard origin where /widget/* and /api/widget-* live; only emitted
   // when it differs from the production default the loader bakes in.
-  const apiBaseAttr =
-    APP_URL && APP_URL !== "https://getchat9.live"
-      ? `  data-api-base="${APP_URL}"`
-      : null;
+  const apiBaseOverride =
+    APP_URL && APP_URL !== "https://getchat9.live" ? APP_URL : null;
+
+  function buildConfigBlock(extras: Record<string, string>): string | null {
+    const entries = Object.entries(extras).filter(([, v]) => v !== "");
+    if (apiBaseOverride) entries.push(["apiBase", apiBaseOverride]);
+    if (entries.length === 0) return null;
+    const lines = entries.map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`);
+    return `<script>\n  window.Chat9Config = {\n${lines.join(",\n")}\n  };\n</script>\n`;
+  }
 
   function getBubbleSnippet() {
-    const attrs = [
-      `  src="${WIDGET_LOADER_URL}"`,
-      `  data-bot-id="${publicId ?? "YOUR_BOT_ID"}"`,
-      ...(apiBaseAttr ? [apiBaseAttr] : []),
-      ...(color !== "#a855f7" ? [`  data-color="${color}"`] : []),
-      ...(position !== "right" ? [`  data-position="${position}"`] : []),
-    ];
-    return `<script\n${attrs.join("\n")}>\n</script>`;
+    const config = buildConfigBlock({
+      ...(color !== "#a855f7" ? { color } : {}),
+      ...(position !== "right" ? { position } : {}),
+    });
+    const scriptTag = `<script src="${WIDGET_LOADER_URL}" data-bot-id="${publicId ?? "YOUR_BOT_ID"}"></script>`;
+    return `${config ?? ""}${scriptTag}`;
   }
 
   function getInlineSnippet() {
     const divPart = `<div id="${targetId}"></div>`;
-    const attrs = [
-      `  src="${WIDGET_LOADER_URL}"`,
-      `  data-bot-id="${publicId ?? "YOUR_BOT_ID"}"`,
-      ...(apiBaseAttr ? [apiBaseAttr] : []),
-      `  data-mode="inline"`,
-      `  data-target="${targetId}"`,
-    ];
-    return `${divPart}\n<script\n${attrs.join("\n")}>\n</script>`;
+    const config = buildConfigBlock({ mode: "inline", target: targetId });
+    const scriptTag = `<script src="${WIDGET_LOADER_URL}" data-bot-id="${publicId ?? "YOUR_BOT_ID"}"></script>`;
+    return `${divPart}\n${config ?? ""}${scriptTag}`;
   }
 
   if (loading) {
@@ -220,22 +219,26 @@ function EmbedContent() {
         {/* Attribute reference */}
         <div className="mt-5 border-t border-slate-100 pt-4">
           <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
-            Available attributes
+            Configuration
           </p>
           <div className="space-y-1.5 text-xs text-slate-500">
+            <div><code className="font-mono text-slate-700">data-bot-id</code> on the script tag — your bot&apos;s public ID (required)</div>
             {mode === "bubble" ? (
               <>
-                <div><code className="font-mono text-slate-700">data-bot-id</code> — your bot&apos;s public ID (required)</div>
-                <div><code className="font-mono text-slate-700">data-color</code> — button color, e.g. <code className="font-mono">#a855f7</code> (optional)</div>
-                <div><code className="font-mono text-slate-700">data-position</code> — <code className="font-mono">right</code> or <code className="font-mono">left</code> (default: right)</div>
+                <div><code className="font-mono text-slate-700">Chat9Config.color</code> — button color, e.g. <code className="font-mono">#a855f7</code></div>
+                <div><code className="font-mono text-slate-700">Chat9Config.position</code> — <code className="font-mono">right</code> or <code className="font-mono">left</code> (default: right)</div>
               </>
             ) : (
               <>
-                <div><code className="font-mono text-slate-700">data-bot-id</code> — your bot&apos;s public ID (required)</div>
-                <div><code className="font-mono text-slate-700">data-mode</code> — must be <code className="font-mono">inline</code></div>
-                <div><code className="font-mono text-slate-700">data-target</code> — ID of the container element (required)</div>
+                <div><code className="font-mono text-slate-700">Chat9Config.mode</code> — must be <code className="font-mono">inline</code></div>
+                <div><code className="font-mono text-slate-700">Chat9Config.target</code> — ID of the container element (required)</div>
               </>
             )}
+            <div>
+              <code className="font-mono text-slate-700">Chat9Config.userHints</code> — optional personalization (
+              <code className="font-mono">name</code>, <code className="font-mono">email</code>, <code className="font-mono">locale</code>, <code className="font-mono">plan_tier</code>).
+              Untrusted: use for greetings and escalation routing only.
+            </div>
           </div>
         </div>
       </div>

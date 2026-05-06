@@ -16,19 +16,22 @@ function DemoWidget() {
     // landing page may run on a preview/staging host — point the embedded
     // widget back at *this* origin so /widget/* requests land on the dashboard
     // serving the page.
+    (window as unknown as { Chat9Config?: Record<string, unknown> }).Chat9Config = {
+      mode: "inline",
+      target: TARGET_ID,
+      apiBase: window.location.origin,
+    };
     const script = document.createElement("script");
     script.src = WIDGET_LOADER_URL;
     script.async = true;
     script.setAttribute("data-bot-id", LANDING_DEMO_BOT_ID!);
-    script.setAttribute("data-mode", "inline");
-    script.setAttribute("data-target", TARGET_ID);
-    script.setAttribute("data-api-base", window.location.origin);
     document.body.appendChild(script);
 
     return () => {
       script.remove();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";
+      delete (window as unknown as { Chat9Config?: unknown }).Chat9Config;
     };
   }, []);
 

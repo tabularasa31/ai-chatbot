@@ -12,7 +12,6 @@ _IDENTITY_FIELD_CAPS = {
     "name": 200,
     "plan_tier": 64,
     "audience_tag": 64,
-    "company": 200,
     "locale": 35,
 }
 _PATCHABLE_USER_CONTEXT_FIELDS = tuple(_IDENTITY_FIELD_CAPS.keys())
@@ -104,3 +103,44 @@ def apply_identity_context_patch(
 
 def widget_session_error_detail(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
+
+
+_HINTS_ALLOWED_KEYS = ("user_id", *_IDENTITY_FIELD_CAPS.keys())
+
+
+def _is_plausible_email(value: str) -> bool:
+    if "@" not in value:
+        return False
+    local, _, domain = value.rpartition("@")
+    if not local or "." not in domain:
+        return False
+    return True
+
+
+def sanitize_user_hints(raw: Any) -> dict[str, str]:
+    """Coerce/cap untrusted userHints from the browser.
+
+    Whitelist: user_id, email, name, plan_tier, audience_tag, locale.
+    Drops unknown keys, empty strings, oversized values (capped, not rejected),
+    and emails that fail a basic structural check. Returns {} if nothing valid.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in _HINTS_ALLOWED_KEYS:
+        if key not in raw:
+            continue
+        cap = _USER_ID_CAP if key == "user_id" else _IDENTITY_FIELD_CAPS[key]
+        cleaned = _clean_capped_text(raw.get(key), cap)
+        if cleaned is None:
+            continue
+        if key == "email" and not _is_plausible_email(cleaned):
+            logger.info("widget_hint_email_rejected", extra={"length": len(cleaned)})
+            continue
+        if key == "locale":
+            valid = sanitize_locale(cleaned)
+            if valid is None:
+                continue
+            cleaned = valid
+        out[key] = cleaned
+    return out

@@ -103,22 +103,6 @@ class TenantListResponse(BaseModel):
     clients: list[TenantResponse]
 
 
-class KycSecretGeneratedResponse(BaseModel):
-    """One-time plaintext signing secret after generate or rotate."""
-
-    secret_key: str
-    message: str = "Store this securely. It will not be shown again."
-
-
-class KycStatusResponse(BaseModel):
-    """KYC / widget identity configuration status."""
-
-    has_secret: bool
-    identified_session_rate_7d: float
-    last_identified_session: datetime | None = None
-    masked_secret_hint: str | None = None
-
-
 RedactionEntityLiteral = Literal["ID_DOC", "IP", "URL_TOKEN"]
 
 

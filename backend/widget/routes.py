@@ -28,7 +28,6 @@ from backend.core.limiter import (
     widget_init_rate_limit_key,
     widget_public_rate_limit_key,
 )
-from backend.core.security import validate_kyc_token_detail
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
@@ -38,13 +37,8 @@ from backend.models import (
     EscalationTrigger,
     Message,
     MessageRole,
-    Tenant,
-    UserContext,
 )
 from backend.observability.metrics import capture_event
-from backend.tenants.service import (
-    get_kyc_decrypted_keys_for_validation,
-)
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_bot_and_tenant_for_widget_chat,
@@ -56,6 +50,7 @@ from backend.widget.service import (
     SESSION_NOT_FOUND_CODE,
     apply_identity_context_patch,
     sanitize_locale,
+    sanitize_user_hints,
     widget_session_error_detail,
 )
 
@@ -67,13 +62,13 @@ _WIDGET_MESSAGE_MAX_CHARS = settings.widget_message_max_chars
 
 class WidgetSessionInitRequest(BaseModel):
     bot_id: str = Field(..., min_length=1)
-    identity_token: str | None = None
+    user_hints: dict[str, Any] | None = None
     locale: str | None = Field(default=None, max_length=64)
 
 
 class WidgetSessionInitResponse(BaseModel):
     session_id: uuid.UUID
-    mode: Literal["identified", "anonymous"]
+    mode: Literal["hints", "anonymous"]
 
 
 class WidgetChatRequest(BaseModel):
@@ -199,35 +194,6 @@ def widget_config(
     )
 
 
-def _resolve_widget_identity(
-    tenant: Tenant,
-    identity_token: str | None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """
-    Returns (stored_user_context dict, None) on success, or (None, failure_reason).
-    Never logs PII.
-    """
-    if not identity_token or not identity_token.strip():
-        return None, None
-    keys = get_kyc_decrypted_keys_for_validation(tenant)
-    if not keys:
-        return None, "no_secret_configured"
-    last_reason = "bad_signature"
-    for sk, _label in keys:
-        raw_ctx, err = validate_kyc_token_detail(
-            identity_token.strip(), sk
-        )
-        if raw_ctx is not None:
-            try:
-                validated = UserContext.model_validate(raw_ctx)
-                return validated.model_dump(), None
-            except Exception:
-                return None, "malformed_context"
-        if err:
-            last_reason = err
-    return None, last_reason
-
-
 @widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
 @limiter.limit("10/minute", key_func=widget_init_rate_limit_key)
 def widget_session_init(
@@ -236,7 +202,9 @@ def widget_session_init(
     db: Session = Depends(get_db),
 ) -> WidgetSessionInitResponse:
     """
-    Start a widget session. Optional signed identity_token enables identified mode.
+    Start a widget session. Optional `user_hints` attaches untrusted
+    personalization fields (name/email/locale/...) supplied by the tenant
+    frontend; sessions still work without them.
     """
     try:
         _bot, tenant = get_bot_and_tenant_for_widget_session(db, body.bot_id)
@@ -249,24 +217,30 @@ def widget_session_init(
         raise HTTPException(status_code=400, detail="Bot not available") from e
 
     session_id = uuid.uuid4()
-    mode: Literal["identified", "anonymous"] = "anonymous"
+    mode: Literal["hints", "anonymous"] = "anonymous"
     locale = sanitize_locale(body.locale)
-
-    ctx, fail_reason = _resolve_widget_identity(tenant, body.identity_token)
     user_context: dict | None = None
-    if ctx is not None:
-        user_context = apply_identity_context_patch(
-            {"user_id": ctx["user_id"]},
-            ctx,
-            browser_locale=locale,
-        )
-        mode = "identified"
-    else:
-        if body.identity_token and body.identity_token.strip():
-            reason = fail_reason or "invalid_token"
-            logger.info("kyc_validation_failed: reason=%s", reason)
-        if locale is not None:
-            user_context = {"browser_locale": locale}
+
+    if body.user_hints:
+        hints = sanitize_user_hints(body.user_hints)
+        if hints:
+            # Synthesize a stable user_id when hints carry only an email so
+            # ContactSession keying works (its contact_id == user_context.user_id).
+            if "user_id" not in hints and "email" in hints:
+                hints["user_id"] = f"hint:{hints['email']}"
+            user_context = apply_identity_context_patch(
+                {"user_id": hints["user_id"]} if "user_id" in hints else {},
+                hints,
+                browser_locale=locale,
+            )
+            mode = "hints"
+            logger.info(
+                "widget_session_init_hints",
+                extra={"hint_field_count": len(hints)},
+            )
+
+    if user_context is None and locale is not None:
+        user_context = {"browser_locale": locale}
 
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
@@ -279,14 +253,13 @@ def widget_session_init(
     )
     db.add(chat)
     db.flush()
-    if mode == "identified":
+    if mode == "hints" and user_context and user_context.get("user_id"):
         start_user_session(
             db,
             tenant_id=tenant.id,
             user_context=user_context,
             started_at=chat.created_at,
         )
-        logger.info("kyc_session_created: tenant_id=%s", tenant.id)
     db.commit()
 
     return WidgetSessionInitResponse(session_id=session_id, mode=mode)

@@ -8,6 +8,7 @@
 //       color: "#a855f7",
 //       position: "right",      // "right" | "left"
 //       target: "<elementId>", // for mode: "inline"
+//       topClearance: 56,      // px reserved at viewport top (e.g. fixed navbar height)
 //       apiBase: "https://...",
 //       widgetBase: "https://..."
 //     };
@@ -16,6 +17,9 @@
 //
 // `data-bot-id` is the only data-attribute on the loader script (it identifies
 // the bot before any config is read). Everything else lives on Chat9Config.
+//
+// window.Chat9Widget.destroy() removes all DOM elements and event listeners
+// created by the loader — useful for SPA cleanup.
 
 // Marks this file as a module so `declare global` is allowed under TS's
 // stricter rules; the IIFE wrapper still produces a side-effect-only bundle.
@@ -36,6 +40,7 @@ type Chat9Config = {
   color?: string;
   position?: "right" | "left";
   target?: string;
+  topClearance?: number;
   apiBase?: string;
   widgetBase?: string;
 };
@@ -43,6 +48,7 @@ type Chat9Config = {
 declare global {
   interface Window {
     Chat9Config?: Chat9Config;
+    Chat9Widget?: { destroy: () => void };
   }
 }
 
@@ -76,6 +82,9 @@ declare global {
   const position = (config.position || "right").toLowerCase();
   const targetId = config.target || null;
   const userHints = sanitizeHints(config.userHints);
+  const topClearance = typeof config.topClearance === "number" && config.topClearance > 0
+    ? Math.round(config.topClearance)
+    : 0;
 
   // Widget UI base: defaults to the script's own origin + /v1/. Strip trailing
   // slashes from any override so we can append "/v1/?…" predictably.
@@ -137,6 +146,10 @@ declare global {
     return widgetBaseUrl + "?" + params.toString();
   }
 
+  // Tracks the pending chat9:ready listener so destroy() can remove it if the
+  // widget is torn down before the handshake completes.
+  let pendingOnReady: ((e: MessageEvent) => void) | null = null;
+
   function makeIframe(): HTMLIFrameElement {
     const f = document.createElement("iframe");
     f.src = buildIframeSrc();
@@ -154,6 +167,7 @@ declare global {
       // The widget never sends a second chat9:ready, so unhook to avoid
       // accumulating dead listeners across HMR / re-init cycles.
       window.removeEventListener("message", onReady);
+      pendingOnReady = null;
 
       if (!widgetOrigin) {
         console.error("Chat9: cannot determine widget origin — set Chat9Config.widgetBase. Aborting handshake.");
@@ -165,6 +179,7 @@ declare global {
         : { type: "chat9:no-hints" };
       f.contentWindow?.postMessage(message, widgetOrigin);
     }
+    pendingOnReady = onReady;
     window.addEventListener("message", onReady);
     return f;
   }
@@ -183,6 +198,17 @@ declare global {
       "width:100%;height:600px;border:none;display:block;border-radius:12px;overflow:hidden;";
     targetEl.innerHTML = "";
     targetEl.appendChild(inlineFrame);
+
+    window.Chat9Widget = {
+      destroy() {
+        if (pendingOnReady) {
+          window.removeEventListener("message", pendingOnReady);
+          pendingOnReady = null;
+        }
+        inlineFrame.remove();
+        delete window.Chat9Widget;
+      },
+    };
     return;
   }
 
@@ -249,7 +275,7 @@ declare global {
   chatWindow.style.cssText =
     "display:none;width:400px;height:600px;min-width:280px;min-height:360px;" +
     "max-width:min(700px, calc(100vw - 40px));" +
-    "max-height:min(820px, calc(100vh - 100px));" +
+    `max-height:min(820px, calc(100vh - 100px - ${topClearance}px));` +
     "position:relative;border-radius:16px;overflow:hidden;" +
     "box-shadow:0 8px 40px rgba(0,0,0,0.20);" +
     "opacity:0;transform:scale(0.93) translateY(10px);" +
@@ -344,7 +370,7 @@ declare global {
     e.preventDefault();
   });
 
-  document.addEventListener("mousemove", (e) => {
+  function onMouseMove(e: MouseEvent) {
     if (!isResizing) return;
     const dx = isLeft ? e.clientX - resizeStartX : resizeStartX - e.clientX;
     const dy = resizeStartY - e.clientY;
@@ -353,13 +379,16 @@ declare global {
     chatWindow.style.width = newW + "px";
     chatWindow.style.height = newH + "px";
     e.preventDefault();
-  });
+  }
 
-  document.addEventListener("mouseup", () => {
+  function onMouseUp() {
     if (!isResizing) return;
     isResizing = false;
     resizeOverlay.style.display = "none";
-  });
+  }
+
+  document.addEventListener("mousemove", onMouseMove);
+  document.addEventListener("mouseup", onMouseUp);
 
   // ── Assemble ───────────────────────────────────────────────────────────────
   chatWindow.appendChild(resizeHandle);
@@ -367,4 +396,19 @@ declare global {
   container.appendChild(chatWindow);
   container.appendChild(fab);
   document.body.appendChild(resizeOverlay);
+
+  // ── Destroy API ────────────────────────────────────────────────────────────
+  window.Chat9Widget = {
+    destroy() {
+      if (pendingOnReady) {
+        window.removeEventListener("message", pendingOnReady);
+        pendingOnReady = null;
+      }
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      container.remove();
+      resizeOverlay.remove();
+      delete window.Chat9Widget;
+    },
+  };
 })();

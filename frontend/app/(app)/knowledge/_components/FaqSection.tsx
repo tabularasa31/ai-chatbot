@@ -78,7 +78,7 @@ export function FaqSection({
           onClick={async () => {
             setApprovingAll(true);
             try {
-              await api.knowledge.approveAll(botId);
+              await api.knowledge.approveAll();
               setFaqSaved("All pending FAQ accepted.");
               await loadFaq();
             } catch (err) {
@@ -137,7 +137,7 @@ export function FaqSection({
                         onClick={async () => {
                           try {
                             setUpdatingFaqId(item.id);
-                            await api.knowledge.updateFaq(item.id, { question: editingFaqQuestion, answer: editingFaqAnswer }, botId);
+                            await api.knowledge.updateFaq(item.id, { question: editingFaqQuestion, answer: editingFaqAnswer });
                             setEditingFaqId(null);
                             setFaqSaved(item.approved ? "Saved. Re-approval required." : "Saved.");
                             await loadFaq();
@@ -175,7 +175,7 @@ export function FaqSection({
                               onClick={async () => {
                                 try {
                                   setUpdatingFaqId(item.id);
-                                  await api.knowledge.approveFaq(item.id, botId);
+                                  await api.knowledge.approveFaq(item.id);
                                   await loadFaq();
                                 } catch (err) {
                                   setFaqError(err instanceof Error ? err.message : "Failed to approve FAQ");
@@ -198,7 +198,7 @@ export function FaqSection({
                                 }, 200);
                                 try {
                                   setUpdatingFaqId(item.id);
-                                  await api.knowledge.rejectFaq(item.id, botId);
+                                  await api.knowledge.rejectFaq(item.id);
                                   await loadFaq();
                                 } catch (err) {
                                   setFaqItems(snapshot);

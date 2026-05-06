@@ -720,9 +720,8 @@ export const api = {
     },
   },
   knowledge: {
-    async getProfile(botId?: string): Promise<KnowledgeProfile> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/profile`);
+    async getProfile(): Promise<KnowledgeProfile> {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/profile`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load knowledge profile"));
       return {
@@ -731,11 +730,9 @@ export const api = {
       } as KnowledgeProfile;
     },
     async patchProfile(
-      payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>,
-      botId?: string
+      payload: Partial<Pick<KnowledgeProfile, "product_name" | "topics" | "support_email" | "support_urls">>
     ): Promise<KnowledgeProfile> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/profile`, {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/profile`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -749,40 +746,36 @@ export const api = {
       source?: "docs" | "logs" | "swagger" | "all";
       limit?: number;
       offset?: number;
-    }, botId?: string): Promise<KnowledgeFaqListResponse> {
+    }): Promise<KnowledgeFaqListResponse> {
       const search = new URLSearchParams();
       if (params?.approved) search.set("approved", params.approved);
       if (params?.source) search.set("source", params.source);
       if (typeof params?.limit === "number") search.set("limit", String(params.limit));
       if (typeof params?.offset === "number") search.set("offset", String(params.offset));
       const suffix = search.toString() ? `?${search.toString()}` : "";
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq${suffix}`);
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq${suffix}`);
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load FAQ"));
       return data as KnowledgeFaqListResponse;
     },
-    async approveFaq(id: string, botId?: string): Promise<{ id: string; approved: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq/${id}/approve`, {
+    async approveFaq(id: string): Promise<{ id: string; approved: boolean }> {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}/approve`, {
         method: "POST",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to approve FAQ"));
       return data as { id: string; approved: boolean };
     },
-    async rejectFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq/${id}/reject`, {
+    async rejectFaq(id: string): Promise<{ id: string; deleted: boolean }> {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}/reject`, {
         method: "POST",
       });
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to reject FAQ"));
       return data as { id: string; deleted: boolean };
     },
-    async approveAll(botId?: string): Promise<{ approved_count: number }> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq/approve-all`, {
+    async approveAll(): Promise<{ approved_count: number }> {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/approve-all`, {
         method: "POST",
       });
       const data = await res.json();
@@ -791,11 +784,9 @@ export const api = {
     },
     async updateFaq(
       id: string,
-      payload: { question: string; answer: string },
-      botId?: string
+      payload: { question: string; answer: string }
     ): Promise<KnowledgeFaqItem> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq/${id}`, {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -804,9 +795,8 @@ export const api = {
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to update FAQ"));
       return data as KnowledgeFaqItem;
     },
-    async deleteFaq(id: string, botId?: string): Promise<{ id: string; deleted: boolean }> {
-      const base = botId ? `${BASE_URL}/api/v1/tenants/${encodeURIComponent(botId)}/knowledge` : `${BASE_URL}/knowledge`;
-      const res = await apiFetch(`${base}/faq/${id}`, {
+    async deleteFaq(id: string): Promise<{ id: string; deleted: boolean }> {
+      const res = await apiFetch(`${BASE_URL}/api/v1/knowledge/faq/${id}`, {
         method: "DELETE",
       });
       const data = await res.json();

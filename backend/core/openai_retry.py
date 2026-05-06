@@ -36,10 +36,14 @@ def call_openai_with_retry(
     endpoint: str | None = None,
     call_type: str = "chat_completion",
     max_attempts: int | None = None,
+    emit_chat_failed: bool = False,
 ) -> T:
     """Retry ``fn`` with exponential backoff on transient OpenAI errors.
 
     Pass ``max_attempts=1`` to disable retries (fail fast on first error).
+    Pass ``emit_chat_failed=True`` at call sites where exhaustion means the
+    user-visible chat turn failed (e.g. the main LLM generate call). Helper
+    paths that catch and recover from OpenAI errors should leave it False.
     """
     started = time.monotonic()
     max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
@@ -79,6 +83,7 @@ def call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -100,6 +105,7 @@ def call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
             if attempt >= max_attempts or remaining <= 0:
@@ -115,6 +121,7 @@ def call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -136,6 +143,7 @@ def call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -180,6 +188,7 @@ async def async_call_openai_with_retry(
     endpoint: str | None = None,
     call_type: str = "chat_completion",
     max_attempts: int | None = None,
+    emit_chat_failed: bool = False,
 ) -> T:
     """Async counterpart of :func:`call_openai_with_retry`.
 
@@ -187,6 +196,8 @@ async def async_call_openai_with_retry(
     Same retry policy and budget as the sync version; retries use
     ``asyncio.sleep`` so the event loop is not blocked during back-off.
     Pass ``max_attempts=1`` to disable retries (fail fast on first error).
+    Pass ``emit_chat_failed=True`` at call sites where exhaustion means the
+    user-visible chat turn failed. See :func:`call_openai_with_retry`.
     """
     started = time.monotonic()
     max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
@@ -226,6 +237,7 @@ async def async_call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -247,6 +259,7 @@ async def async_call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
             if attempt >= max_attempts or remaining <= 0:
@@ -262,6 +275,7 @@ async def async_call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -283,6 +297,7 @@ async def async_call_openai_with_retry(
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
+                    emit_chat_failed=emit_chat_failed,
                 )
                 raise
 
@@ -445,6 +460,7 @@ def _emit_retry_exhausted(
     exc: Exception | None = None,
     endpoint: str | None = None,
     call_type: str,
+    emit_chat_failed: bool = False,
 ) -> None:
     try:
         capture_event(
@@ -468,7 +484,7 @@ def _emit_retry_exhausted(
         )
     except Exception:
         logger.warning("Failed to emit openai_retry.exhausted event", exc_info=True)
-    if call_type == "chat_completion":
+    if emit_chat_failed:
         try:
             capture_event(
                 "chat.failed",
@@ -481,6 +497,10 @@ def _emit_retry_exhausted(
                     "error_type": type(exc).__name__ if exc is not None else classified.kind.value,
                     "call_type": call_type,
                     "reason": reason,
+                    "attempt_count": attempt,
+                    "status_code": classified.status_code,
+                    "elapsed_ms": int(elapsed * 1000),
+                    "endpoint": endpoint,
                 },
                 groups={"tenant": tenant_id} if tenant_id else None,
             )

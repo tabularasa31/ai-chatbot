@@ -257,7 +257,7 @@ def test_no_emit_retry_scheduled_on_timeout(captured_events):
 
 
 def test_chat_failed_emitted_on_exhausted_chat_completion(captured_events):
-    """chat.failed fires when a chat_completion call exhausts retries."""
+    """chat.failed fires when emit_chat_failed=True and retries are exhausted."""
     with pytest.raises(InternalServerError):
         call_openai_with_retry(
             "chat_generate",
@@ -266,7 +266,7 @@ def test_chat_failed_emitted_on_exhausted_chat_completion(captured_events):
             ),
             tenant_id="tnt_test",
             bot_id="bot_xyz",
-            call_type="chat_completion",
+            emit_chat_failed=True,
         )
 
     chat_failed = _named(captured_events, "chat.failed")
@@ -280,10 +280,12 @@ def test_chat_failed_emitted_on_exhausted_chat_completion(captured_events):
     assert props["error_type"] == "InternalServerError"
     assert props["call_type"] == "chat_completion"
     assert props["reason"] in {"max_attempts", "budget_exhausted", "delay_over_remaining"}
+    assert isinstance(props["attempt_count"], int)
+    assert isinstance(props["elapsed_ms"], int)
 
 
-def test_chat_failed_not_emitted_for_embedding(captured_events):
-    """chat.failed must not fire for call_type='embedding'."""
+def test_chat_failed_not_emitted_without_flag(captured_events):
+    """chat.failed must not fire when emit_chat_failed is not set (default False)."""
     with pytest.raises(InternalServerError):
         call_openai_with_retry(
             "search_embed_query",
@@ -291,20 +293,19 @@ def test_chat_failed_not_emitted_for_embedding(captured_events):
                 InternalServerError("boom", response=_response(500), body=None)
             ),
             tenant_id="tnt_test",
-            call_type="embedding",
         )
 
     assert _named(captured_events, "chat.failed") == []
 
 
 def test_chat_failed_emitted_on_timeout(captured_events):
-    """chat.failed fires on first-attempt APITimeoutError for chat calls."""
+    """chat.failed fires on first-attempt APITimeoutError when emit_chat_failed=True."""
     with pytest.raises(APITimeoutError):
         call_openai_with_retry(
             "chat_generate",
             lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
             tenant_id="tnt_test",
-            call_type="chat_completion",
+            emit_chat_failed=True,
         )
 
     chat_failed = _named(captured_events, "chat.failed")
@@ -313,3 +314,5 @@ def test_chat_failed_emitted_on_timeout(captured_events):
     assert props["failure_kind"] == "timeout"
     assert props["error_type"] == "APITimeoutError"
     assert props["reason"] == "timeout_no_retry"
+    assert isinstance(props["attempt_count"], int)
+    assert isinstance(props["elapsed_ms"], int)

@@ -1,4 +1,4 @@
-"""Drop legacy KYC columns from clients (replaced by widget userHints).
+"""Drop legacy KYC columns from tenants (replaced by widget userHints).
 
 Revision ID: drop_kyc_columns_v1
 Revises: arq_background_jobs_v1
@@ -26,10 +26,10 @@ _KYC_COLUMNS = (
 
 def upgrade() -> None:
     bind = op.get_bind()
-    existing = {col["name"] for col in inspect(bind).get_columns("clients")}
+    existing = {col["name"] for col in inspect(bind).get_columns("tenants")}
     for column in _KYC_COLUMNS:
         if column in existing:
-            op.drop_column("clients", column)
+            op.drop_column("tenants", column)
 
 
 def downgrade() -> None:

@@ -24,8 +24,8 @@ def _create_client(http: TestClient, db: Session, *, email: str) -> tuple[str, T
     return token, client_row
 
 
-def _kbase(client_row: Tenant) -> str:
-    return f"/api/v1/tenants/{client_row.public_id}/knowledge"
+def _kbase(_client_row: Tenant) -> str:
+    return "/api/v1/knowledge"
 
 
 def test_get_profile(tenant: TestClient, db_session: Session) -> None:
@@ -165,7 +165,7 @@ def test_edit_resets_approved(tenant: TestClient, db_session: Session) -> None:
     assert resp.json()["approved"] is False
 
 
-def test_edit_answer_only_keeps_approved(tenant: TestClient, db_session: Session) -> None:
+def test_edit_answer_only_resets_approved(tenant: TestClient, db_session: Session) -> None:
     token, client_row = _create_client(tenant, db_session, email="kapi-edit-answer@example.com")
     faq = TenantFaq(
         tenant_id=client_row.id,
@@ -185,7 +185,7 @@ def test_edit_answer_only_keeps_approved(tenant: TestClient, db_session: Session
         json={"question": "How exactly?", "answer": "New answer"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["approved"] is True
+    assert resp.json()["approved"] is False
 
 
 def test_approve_all_generates_embedding_for_missing(tenant: TestClient, db_session: Session) -> None:
@@ -236,12 +236,26 @@ def test_approve_generates_embedding(tenant: TestClient, db_session: Session) ->
     assert faq.question_embedding is not None
 
 
-def test_wrong_tenant_404(tenant: TestClient, db_session: Session) -> None:
+def test_tenant_isolation(tenant: TestClient, db_session: Session) -> None:
     token1, client1 = _create_client(tenant, db_session, email="kapi-owner-1@example.com")
-    _token2, client2 = _create_client(tenant, db_session, email="kapi-owner-2@example.com")
+    token2, client2 = _create_client(tenant, db_session, email="kapi-owner-2@example.com")
 
-    resp = tenant.get(
-        f"/api/v1/tenants/{client2.public_id}/knowledge/profile",
-        headers={"Authorization": f"Bearer {token1}"},
+    profile1 = TenantProfile(
+        tenant_id=client1.id,
+        product_name="Tenant One Product",
+        topics=[],
+        glossary=[],
+        aliases=[],
+        support_urls=[],
+        extraction_status="done",
+        updated_at=datetime.now(timezone.utc),
     )
-    assert resp.status_code == 404, resp.text
+    db_session.add(profile1)
+    db_session.commit()
+
+    resp1 = tenant.get("/api/v1/knowledge/profile", headers={"Authorization": f"Bearer {token1}"})
+    resp2 = tenant.get("/api/v1/knowledge/profile", headers={"Authorization": f"Bearer {token2}"})
+    assert resp1.status_code == 200
+    assert resp2.status_code == 200
+    assert resp1.json()["product_name"] == "Tenant One Product"
+    assert resp2.json()["product_name"] != "Tenant One Product"

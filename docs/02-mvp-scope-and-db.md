@@ -8,7 +8,7 @@
 
 **Backend:**
 - User authentication (email/password + JWT + email verification via Brevo)
-- Tenant → Workspace → Bot hierarchy: tenant owns billing/API key/OpenAI key; workspace scopes knowledge and KYC secret; bot is the per‑channel behavior unit
+- Tenant → Workspace → Bot hierarchy: tenant owns billing/API key/OpenAI key; workspace scopes knowledge; bot is the per‑channel behavior unit
 - Bot management (per‑workspace bots with disclosure / response‑detail config)
 - Document upload (PDF, Markdown, Swagger/OpenAPI)
 - URL knowledge sources (crawl + refresh)
@@ -16,7 +16,7 @@
 - Embedding creation (OpenAI API, via tenant's own key)
 - Hybrid retrieval (pgvector + BM25 + RRF + reranking, contradiction adjudication)
 - RAG chat endpoint (Q&A generation with clarification outcomes)
-- Chat history logging with sessions; optional identified (KYC) sessions
+- Chat history logging with sessions; optional `userHints` personalization (untrusted)
 - Feedback system (👍/👎 + optional ideal answer)
 - Manual escalation → tickets dashboard
 - Gap Analyzer (Mode A docs-gap + Mode B user-signal clustering)
@@ -34,7 +34,7 @@
 **Widget:**
 - Embeddable chat widget (iframe)
 - Send question → get answer
-- Optional **identified sessions** (FI-KYC): server-signed token at `POST /widget/session/init`; context on `chats.user_context`
+- Optional **`userHints`**: tenant frontend passes plain-JSON personalization (name/email/locale/plan_tier/audience_tag) at `POST /widget/session/init`; context lands on `chats.user_context`. Untrusted — used only for personalization and escalation metadata, not access control.
 - Basic styling (no customization)
 
 **Database:**
@@ -72,18 +72,15 @@ User            Tenant              Workspace             Bot
 id              id                  id                    id
 email           name                tenant_id (FK)        workspace_id (FK)
 password_hash   api_key             name                  public_id  ← widget access
-tenant_id (FK)  openai_api_key      kyc_secret_key        name
-                is_active           kyc_secret_previous   disclosure_config
-                                    kyc_secret_expires    is_active
-                                    kyc_secret_hint
-                                    settings
-                                    is_active
+tenant_id (FK)  openai_api_key      settings              name
+                is_active           is_active             disclosure_config
+                                                          is_active
 ```
 
 Separation of concerns:
 
 - **Tenant** → *ownership*. Billing, tenant‑wide API key (`X-Api-Key` server‑to‑server), OpenAI API key.
-- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis) and KYC signing secret. MVP: exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
+- **Workspace** → *context*. Knowledge scope (documents, URL sources, chats, gap analysis). MVP: exactly **one** workspace per tenant, created automatically on signup; UI hides the selector.
 - **Bot** → *behavior*. Disclosure / response‑detail config, per‑channel tuning. MVP: exactly **one** bot per workspace (schema allows N, UI is single‑bot). Widget resolves by `Bot.public_id` via the `data-bot-id` attribute.
 - **public_id** → *access*. Lives on Bot only. Tenant has no `public_id`.
 
@@ -118,13 +115,12 @@ tenants
 > Historical note: the model was previously named `Client`; all schema/API surfaces now use **tenant** / `tenant_id`. See `backend/models.py:Tenant`.
 > Tenant has no `public_id` — widget access lives on `Bot.public_id`.
 
-#### Workspaces (knowledge + KYC context)
+#### Workspaces (knowledge context)
 ```sql
 workspaces
 ├─ id (PK, UUID)
 ├─ tenant_id (FK → tenants ON DELETE CASCADE, NOT NULL)
 ├─ name (VARCHAR, NOT NULL)
-├─ kyc_secret_key (+ previous + previous_expires_at + hint) — FI-KYC signing secrets (encrypted)
 ├─ settings (JSONB, default={})
 ├─ is_active (BOOLEAN)
 ├─ created_at (TIMESTAMP)
@@ -200,7 +196,7 @@ chats
 ├─ workspace_id (FK → workspaces, NOT NULL)
 ├─ bot_id (FK → bots, NOT NULL)
 ├─ session_id (UUID, unique per visitor session)
-├─ user_context (JSONB, nullable — FI-KYC identified session payload fields)
+├─ user_context (JSONB, nullable — sanitized userHints + browser_locale)
 ├─ tokens_used (INTEGER)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
@@ -210,12 +206,12 @@ Indexes:
 └─ (bot_id)
 ```
 
-#### Contact sessions (FI-KYC identified-user lifecycle)
+#### Contact sessions (cross-session history per visitor)
 ```sql
-contact_sessions   -- cross-session history for identified users
+contact_sessions   -- cross-session history when userHints carry user_id or email
 ├─ id (PK, UUID)
 ├─ workspace_id (FK → workspaces ON DELETE CASCADE, NOT NULL)
-├─ contact_id (VARCHAR(255), NOT NULL — the KYC token's user_id)
+├─ contact_id (VARCHAR(255), NOT NULL — userHints.user_id or "hint:<email>"; truncated to 200 chars by _USER_ID_CAP in apply_identity_context_patch before insert, so always fits the column)
 ├─ email, name, plan_tier, audience_tag (nullable)
 ├─ session_started_at, session_ended_at (nullable)
 ├─ conversation_turns (INTEGER, default 0)
@@ -302,7 +298,6 @@ The schema above is the **target**. As of April 2026 the code still reflects the
 | Workspace entity | dedicated table, FK on every content row | **missing** |
 | Bot → parent | `workspace_id` | `tenant_id` ([backend/models.py:275](backend/models.py:275)) |
 | Content scope (`documents`, `url_sources`, `chats`, `quick_answers`, `contact_sessions`, `escalation_tickets`, `gap_*`) | `workspace_id` | `tenant_id` |
-| KYC secrets | on `workspaces` | on `tenants` ([backend/models.py:218](backend/models.py:218)) |
 | Tenant public_id | not present | still exists ([backend/models.py:210](backend/models.py:210)) |
 
 Closing this gap is tracked as a single hard‑cutover migration (no production data to preserve). See `docs/adr/0001-tenant-workspace-bot.md`.

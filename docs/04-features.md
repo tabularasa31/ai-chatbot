@@ -604,11 +604,11 @@ Localization of deterministic text is handled by a shared helper in `backend/cha
 
 For any turn that has no user message to detect language from (the bootstrap greeting and any other pre-question deterministic text), the response language is resolved in this exact order. **This order must not be changed without an explicit product decision** — call sites and tests rely on it.
 
-1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via the signed `identity_token` in KYC mode). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
-2. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than KYC because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
+1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` on `window.Chat9Config`). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
+2. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
 3. **English** — final fallback when neither signal is available.
 
-KYC outranks browser deliberately. Reversing the order would silently override tenants who paid the integration cost of passing `locale` through `identity_token`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch.
+The explicit hint outranks browser deliberately. Reversing the order would silently override tenants who paid the integration cost of passing `locale` through `userHints`. Implementation: [`_resolve_language_context_inner`](../backend/chat/language.py) in `backend/chat/language.py` — bootstrap branch.
 
 #### Language locking — fixed contract
 
@@ -750,31 +750,36 @@ The selected level is injected into the RAG system prompt as a hard instruction 
 
 ---
 
-## 9. Widget User Identification (FI-KYC)
+## 9. Widget personalization via `userHints`
 
-By default the widget is **anonymous** — no information about the end user is passed to the bot. Optionally, clients can pass structured user context via a signed identity token.
+By default the widget is **anonymous** — no information about the end user is passed to the bot. The tenant frontend may optionally supply plain-JSON `userHints` on `window.Chat9Config` to personalize the session.
 
 ### How it works
 
-1. The client owner generates a signing secret in the dashboard (Settings → Widget API)
-2. On their server, the client creates an `identity_token` — a short-lived HMAC-SHA256 signed JWT containing user metadata: `plan_tier`, `locale`, `audience_tag`
-3. The widget passes this token to `POST /widget/session/init`
-4. Backend validates the signature, stores the context in `chats.user_context`
-5. In the RAG prompt, only the safe fields (`plan_tier`, `locale`, `audience_tag`) are included — no raw user PII
+1. The tenant page sets `window.Chat9Config = { userHints: { name, email, locale, plan_tier, audience_tag } }` before the loader script runs.
+2. The loader forwards the hints object to the widget iframe via a `chat9:hints` postMessage handshake (no URL-leakage).
+3. The widget calls `POST /widget/session/init` with `{ bot_id, user_hints }`.
+4. Backend `sanitize_user_hints` (see `backend/widget/service.py`) whitelists allowed keys, caps lengths, and validates `email`/`locale`. The result is patched into `chats.user_context` via `apply_identity_context_patch`.
+5. If hints carry `user_id` or `email`, a `ContactSession` row is created (synthesized `user_id="hint:<email>"` when only email is supplied) so cross-session history works.
+6. In the RAG prompt only safe fields (`plan_tier`, `locale`, `audience_tag`) are included — no raw PII.
+7. Escalation email metadata pulls `email`, `name`, `locale`, `user_id` from the same `Chat.user_context`.
 
 ### Session modes
 
 | Mode | Description |
 |------|-------------|
-| `identified` | Token was valid; user context is available |
-| `anonymous` | No token provided; standard anonymous session |
+| `hints` | At least one hint field survived sanitization; personalization context is attached. |
+| `anonymous` | No hints supplied (or all dropped during sanitization). |
 
-### Secret management
+### Trust boundary
 
-- `POST /clients/me/kyc/secret` — generate secret (one-time display)
-- `GET /clients/me/kyc/status` — check if secret exists, see hint (first 4 chars)
-- `POST /clients/me/kyc/rotate` — issue new secret; old one stays valid for **1 hour** (grace period for rolling deployments)
-- Secret is encrypted at rest (same mechanism as OpenAI key)
+Hints are **untrusted**. They come straight from the browser; anyone inspecting the page can change them. They are used only for:
+
+- greeting personalization, locale selection, and other text personalization;
+- escalation email metadata so the support team sees `Email:` / `Name:`;
+- escalation priority heuristic (`plan_tier` → ticket priority).
+
+Do **not** use hints for access control, paid-tier gating, audit logs that imply verified-identity semantics, or routing where impersonation matters. A future verified-identity path will be designed as Stage 2 (separate task) — it is intentionally out of scope today.
 
 ---
 
@@ -793,16 +798,17 @@ Example (placeholders — the Dashboard fills in your real bot public ID):
 </script>
 ```
 
-The loader supports two modes:
+The loader supports two modes (selected via `Chat9Config.mode`):
 - **Bubble** (default): floating chat button in the bottom-right corner.
-- **Inline**: renders inside an existing container. Add `data-mode="inline"` and `data-target="<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
+- **Inline**: renders inside an existing container. Set `Chat9Config.mode = "inline"` and `Chat9Config.target = "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
-Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~2.7 KB gzip):
-- Reads the bot `public_id` from `data-bot-id` on the script tag.
-- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `data-widget-base` for staging.
-- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `data-api-base` for staging or self-hosted dashboards.
-- Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<navigator.language>&apiBase=…&parentOrigin=<page origin>`.
-- KYC `identityToken` (passed via `data-identity` or `window.Chat9Config.identityToken`) is **not** put in the iframe URL — it is delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:identity` or `chat9:no-identity`) so signed tokens never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`).
+Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~2.9 KB gzip):
+- Reads the bot `public_id` from `data-bot-id` on the script tag (the only data-attribute it consumes).
+- Reads everything else from `window.Chat9Config`: `mode`, `color`, `position`, `target`, `apiBase`, `widgetBase`, `userHints`. There is no fallback to `data-*` attributes — the snippet is canonical.
+- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `Chat9Config.widgetBase`.
+- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `Chat9Config.apiBase` for staging or self-hosted dashboards.
+- Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<userHints.locale|navigator.language>&apiBase=…&parentOrigin=<page origin>`.
+- `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`).
 - The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk. Cross-origin calls from the iframe to the dashboard API go through the CORS middleware in `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
@@ -856,7 +862,7 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | **Escalations** (`/escalations`) | L2 ticket inbox; resolve tickets |
 | **Debug** (`/debug`) | Run RAG debug; answer + retrieval table with chunk previews and scores (code blocks use inline copy) |
 | **Response controls** (`/settings/disclosure`) | Disclosure level (Detailed / Standard / Corporate) |
-| **Widget API** (`/settings/widget`) | Generate / rotate KYC signing secret; Node.js token example |
+| **Widget settings** (`/widget-settings`) | Bot ID copy + Link Safety configuration (allowed domains for external link guard) |
 | **Admin** (`/admin/metrics`, admins only) | Platform-wide metrics |
 
 ---
@@ -868,7 +874,6 @@ The web dashboard at `getchat9.live` is a Next.js 14 app. Authenticated pages us
 | Authentication | JWT (HS256), bcrypt passwords; user access tokens include `typ=chat9_user` |
 | Data isolation | All queries scoped by `tenant_id`; no cross-tenant access possible |
 | API key storage | AES-GCM encrypted at rest |
-| KYC secret storage | AES-GCM encrypted at rest |
 | PII protection | Regex redaction before all OpenAI calls |
 | Rate limiting | `slowapi` with Redis-backed shared counters in production; route-level limits are listed in the "Rate limits (source of truth)" section above |
 | CORS | Production allowlist; widget served via iframe (same-origin for widget API calls) |

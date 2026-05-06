@@ -17,8 +17,6 @@ import { DocumentsSection } from "./_components/DocumentsSection";
 export default function KnowledgePage() {
   const router = useRouter();
   const pathname = usePathname();
-  const botIdMatch = pathname.match(/^\/dashboard\/bots\/([^/]+)\/knowledge$/);
-  const botId = botIdMatch?.[1];
   const [activeTab, setActiveTab] = useState<"documents" | "profile" | "faq">("documents");
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
@@ -106,7 +104,7 @@ export default function KnowledgePage() {
     } finally {
       setProfileLoading(false);
     }
-  }, [botId]);
+  }, []);
 
   const loadFaq = useCallback(async () => {
     setFaqLoading(true);
@@ -129,7 +127,7 @@ export default function KnowledgePage() {
     } finally {
       setFaqLoading(false);
     }
-  }, [botId, faqFilter]);
+  }, [faqFilter]);
 
   const load = useCallback(async () => {
     try {
@@ -209,7 +207,7 @@ export default function KnowledgePage() {
       }
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [botId, profile, loadFaq]);
+  }, [profile, loadFaq]);
 
   async function toggleDetail(sourceId: string) {
     if (expandedSourceId === sourceId) {
@@ -611,7 +609,6 @@ export default function KnowledgePage() {
   if (activeTab === "faq") {
     return (
       <FaqSection
-        botId={botId}
         activeTab={activeTab}
         onTabChange={setTab}
         faqLoading={faqLoading}

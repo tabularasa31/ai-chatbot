@@ -5,7 +5,6 @@ import { api, type KnowledgeFaqItem } from "@/lib/api";
 import { KnowledgeTabs, confidenceBadge } from "./shared";
 
 export interface FaqSectionProps {
-  botId?: string;
   activeTab: "documents" | "profile" | "faq";
   onTabChange: (tab: "documents" | "profile" | "faq") => void;
   faqLoading: boolean;
@@ -34,7 +33,6 @@ export interface FaqSectionProps {
 }
 
 export function FaqSection({
-  botId,
   activeTab,
   onTabChange,
   faqLoading,

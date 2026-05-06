@@ -45,20 +45,22 @@ function EmbedContent() {
     return `<script>\n  window.Chat9Config = {\n${lines.join(",\n")}\n  };\n</script>\n`;
   }
 
+  function buildScriptTag(botIdValue: string): string {
+    return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botIdValue}">\n</script>`;
+  }
+
   function getBubbleSnippet() {
     const config = buildConfigBlock({
       ...(color !== "#a855f7" ? { color } : {}),
       ...(position !== "right" ? { position } : {}),
     });
-    const scriptTag = `<script src="${WIDGET_LOADER_URL}" data-bot-id="${publicId ?? "YOUR_BOT_ID"}"></script>`;
-    return `${config ?? ""}${scriptTag}`;
+    return `${config ?? ""}${buildScriptTag(publicId ?? "YOUR_BOT_ID")}`;
   }
 
   function getInlineSnippet() {
     const divPart = `<div id="${targetId}"></div>`;
     const config = buildConfigBlock({ mode: "inline", target: targetId });
-    const scriptTag = `<script src="${WIDGET_LOADER_URL}" data-bot-id="${publicId ?? "YOUR_BOT_ID"}"></script>`;
-    return `${divPart}\n${config ?? ""}${scriptTag}`;
+    return `${divPart}\n${config ?? ""}${buildScriptTag(publicId ?? "YOUR_BOT_ID")}`;
   }
 
   if (loading) {

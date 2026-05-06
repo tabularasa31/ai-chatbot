@@ -27,7 +27,7 @@ def test_retry_succeeds_after_transient(monkeypatch: pytest.MonkeyPatch) -> None
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise APITimeoutError(request=_request())
+            raise InternalServerError("boom", response=_response(500), body=None)
         return "ok"
 
     result = call_openai_with_retry("chat_generate", _fn)
@@ -35,6 +35,23 @@ def test_retry_succeeds_after_transient(monkeypatch: pytest.MonkeyPatch) -> None
     assert result == "ok"
     assert calls["count"] == 2
     assert len(sleeps) == 1
+
+
+def test_no_retry_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", sleeps.append)
+
+    def _fn() -> str:
+        calls["count"] += 1
+        raise APITimeoutError(request=_request())
+
+    with pytest.raises(APITimeoutError):
+        call_openai_with_retry("chat_generate", _fn)
+
+    assert calls["count"] == 1
+    assert len(sleeps) == 0
 
 
 def test_retry_exhausts_then_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,7 +163,7 @@ def test_logs_retry_event_with_operation_label(
     def _fn() -> str:
         calls["count"] += 1
         if calls["count"] == 1:
-            raise APITimeoutError(request=_request())
+            raise InternalServerError("boom", response=_response(500), body=None)
         return "ok"
 
     assert call_openai_with_retry("chat_generate", _fn) == "ok"

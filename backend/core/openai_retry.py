@@ -66,6 +66,22 @@ def call_openai_with_retry(
                 raise
 
             elapsed = time.monotonic() - started
+            if classified.kind == OpenAIFailureKind.TIMEOUT:
+                _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="timeout_no_retry",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
+                    call_type=call_type,
+                )
+                raise
+
             remaining = total_budget - elapsed
             if (
                 classified.kind == OpenAIFailureKind.RATE_LIMIT
@@ -197,6 +213,22 @@ async def async_call_openai_with_retry(
                 raise
 
             elapsed = time.monotonic() - started
+            if classified.kind == OpenAIFailureKind.TIMEOUT:
+                _log_retry_exhausted(operation, attempt, elapsed, classified)
+                _emit_retry_exhausted(
+                    operation=operation,
+                    attempt=attempt,
+                    elapsed=elapsed,
+                    classified=classified,
+                    reason="timeout_no_retry",
+                    tenant_id=tenant_id,
+                    bot_id=bot_id,
+                    exc=exc,
+                    endpoint=endpoint,
+                    call_type=call_type,
+                )
+                raise
+
             remaining = total_budget - elapsed
             if (
                 classified.kind == OpenAIFailureKind.RATE_LIMIT
@@ -436,3 +468,21 @@ def _emit_retry_exhausted(
         )
     except Exception:
         logger.warning("Failed to emit openai_retry.exhausted event", exc_info=True)
+    if call_type == "chat_completion":
+        try:
+            capture_event(
+                "chat.failed",
+                distinct_id=_retry_distinct_id(tenant_id, bot_id),
+                tenant_id=tenant_id,
+                bot_id=bot_id,
+                properties={
+                    "operation": operation,
+                    "failure_kind": classified.kind.value,
+                    "error_type": type(exc).__name__ if exc is not None else classified.kind.value,
+                    "call_type": call_type,
+                    "reason": reason,
+                },
+                groups={"tenant": tenant_id} if tenant_id else None,
+            )
+        except Exception:
+            logger.warning("Failed to emit chat.failed event", exc_info=True)

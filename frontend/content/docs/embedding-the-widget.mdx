@@ -8,7 +8,10 @@ description: How to add the Chat9 chat widget to your site, with optional userHi
 Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. The loader is a tiny (~3 KB gzipped) script served from a CDN-style domain (`widget.getchat9.live`) — it injects an iframe pointing at the hosted widget UI on the same origin and forwards postMessage events between your page and the chat.
 
 ```html
-<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
 `data-bot-id` carries your bot's `public_id`, not a secret. It is safe to ship in page HTML.
@@ -40,7 +43,10 @@ There is exactly one shape for the embed code. `data-bot-id` is the only attribu
     widgetBase: "https://widget.getchat9.live/v1/"
   };
 </script>
-<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
 You can choose between two modes on the [Embed page](https://getchat9.live/embed):
@@ -130,7 +136,10 @@ The default embed is anonymous: Chat9 knows which bot to load, but does not know
     }
   };
 </script>
-<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
 ```
 
 When the widget mounts, it calls `POST /widget/session/init` with `bot_id` and `user_hints`. Hints land on the chat session and are used for:

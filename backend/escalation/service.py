@@ -11,6 +11,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datetime import UTC
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -121,13 +122,20 @@ def should_escalate(
     return False, None
 
 
-def detect_human_request(message: str, api_key: str) -> bool:
+def detect_human_request(
+    message: str, api_key: str, tenant_id: UUID | str | None = None
+) -> bool:
     """Return True if the user is requesting to speak with a human agent.
 
     Uses LLM classification so it works across all languages. Falls back to
     False on timeout or error to avoid false-positive escalations.
+
+    `tenant_id` partitions the in-memory result cache so tenants never read
+    each other's classifications.
     """
-    cache_key = hashlib.sha256(message[:200].encode()).hexdigest()
+    cache_key = hashlib.sha256(
+        f"{tenant_id}:{message}".encode()
+    ).hexdigest()
     cached = _hr_cache_get(cache_key)
     if cached is not None:
         return cached

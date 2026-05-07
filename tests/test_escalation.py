@@ -107,6 +107,54 @@ def test_detect_human_request_russian() -> None:
         assert detect_human_request("хочу поговорить с человеком", "sk-test") is True
 
 
+def test_detect_human_request_cache_isolated_per_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same message must not leak a cached classification across tenants."""
+    from unittest.mock import MagicMock
+
+    import backend.escalation.service as escalation_service
+
+    escalation_service._human_request_cache.clear()
+
+    tenant_a = uuid.uuid4()
+    tenant_b = uuid.uuid4()
+    message = "please help me"
+
+    call_count = {"n": 0}
+
+    def _fake_call(_label, fn):
+        call_count["n"] += 1
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = (
+            '{"human_request": true}'
+            if call_count["n"] == 1
+            else '{"human_request": false}'
+        )
+        return response
+
+    monkeypatch.setattr(
+        "backend.escalation.service.get_openai_client",
+        lambda _api_key: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.service.call_openai_with_retry",
+        _fake_call,
+    )
+
+    # Tenant A — first call hits LLM, returns True, gets cached.
+    assert detect_human_request(message, "sk-test", tenant_a) is True
+    # Same message, different tenant — must NOT reuse A's cached True; must
+    # call the LLM again (returns False per the mock).
+    assert detect_human_request(message, "sk-test", tenant_b) is False
+    assert call_count["n"] == 2
+
+    # Tenant A again — served from cache, no extra LLM call.
+    assert detect_human_request(message, "sk-test", tenant_a) is True
+    assert call_count["n"] == 2
+
+
 def test_detect_human_request_uses_human_request_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

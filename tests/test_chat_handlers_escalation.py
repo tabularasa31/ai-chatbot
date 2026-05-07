@@ -12,7 +12,6 @@ import uuid
 from typing import Any
 from unittest.mock import patch
 
-import pytest
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import HandlerContext
@@ -116,31 +115,31 @@ def test_handle_falls_through_when_awaiting_ticket_vanished_and_no_human_request
 
 
 def test_can_handle_returns_true_for_explicit_request_when_no_state_set(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
 ) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     ctx = _make_handler_context(
-        db=db_session, tenant=tenant, chat=chat, question_text="i need a human"
-    )
-    monkeypatch.setattr(
-        "backend.chat.handlers.escalation.detect_human_request",
-        lambda *_args, **_kw: True,
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="i need a human",
+        explicit_human_request=True,
     )
     assert EscalationStateMachine().can_handle(ctx) is True
 
 
 def test_can_handle_returns_false_when_no_state_and_no_human_request(
-    db_session: Session, monkeypatch: pytest.MonkeyPatch
+    db_session: Session,
 ) -> None:
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     ctx = _make_handler_context(
-        db=db_session, tenant=tenant, chat=chat, question_text="what is your price"
-    )
-    monkeypatch.setattr(
-        "backend.chat.handlers.escalation.detect_human_request",
-        lambda *_args, **_kw: False,
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="what is your price",
+        explicit_human_request=False,
     )
     assert EscalationStateMachine().can_handle(ctx) is False
 

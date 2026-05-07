@@ -166,6 +166,32 @@ _DOCS_QUESTION_RE = re.compile(
     r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b"
 )
 
+# Latin all-caps acronym tokens 2-5 chars (API, VPN, SLA, HTTP, B2B, 2FA, S3).
+# Lookahead bounds the length; the trailing pattern requires at least one
+# A-Z letter so plain numbers (100, 2023) don't false-positive. Presence of
+# such a token suggests the query carries jargon that query-rewrite is likely
+# to expand usefully - see _should_skip_query_rewrite.
+_ABBR_RE = re.compile(r"\b(?=[A-Z0-9]{2,5}\b)[A-Z0-9]*[A-Z][A-Z0-9]*\b")
+
+
+def _should_skip_query_rewrite(
+    question: str,
+    language_match: str,
+    min_words: int,
+) -> tuple[bool, str]:
+    """Decide whether ``async_semantic_query_rewrite`` can be skipped.
+
+    Returns ``(skip, reason)``. ``reason`` is always set — it doubles as a
+    log/trace marker so we can compute "% rewrite skipped" from telemetry.
+    """
+    if language_match != "native":
+        return False, "language_mismatch"
+    if len(question.split()) < min_words:
+        return False, "short_query"
+    if _ABBR_RE.search(question):
+        return False, "has_abbreviation"
+    return True, "eligible_to_skip"
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses moved from service.py.
@@ -2113,6 +2139,7 @@ class _PipelineState:
     variant_vectors: list[list[float]] = field(default_factory=list)
     embed_api_request_count: int = 0
     rewritten_variant: str | None = None
+    query_rewrite_skip_reason: str | None = None
     faq_match: FAQMatchResult | None = None
     profile: TenantProfile | None = None
     client_product_name: str | None = None
@@ -2211,6 +2238,34 @@ async def async_run_chat_pipeline(
 
         base_query_variants = _svc.expand_query(question)
 
+        target_kb_scripts = [s for s in state.kb_scripts if s != state.query_script]
+        state.cross_lingual_triggered = len(target_kb_scripts) > 0
+        if not state.kb_scripts or state.query_script == "other":
+            state.query_kb_language_match = "unknown"
+        elif state.query_script in state.kb_scripts:
+            state.query_kb_language_match = "native"
+        else:
+            state.query_kb_language_match = "mismatch"
+
+        # Decide whether to skip the (LLM-backed) semantic query rewrite. Cross-
+        # lingual rewrites below are gated separately by KB-script mismatch and
+        # stay independent of this decision.
+        skip_rewrite, rewrite_skip_reason = _should_skip_query_rewrite(
+            question,
+            state.query_kb_language_match,
+            settings.query_rewrite_skip_min_words,
+        )
+        state.query_rewrite_skip_reason = rewrite_skip_reason
+        logger.info(
+            "query_rewrite_gated",
+            extra={
+                "skipped": skip_rewrite,
+                "reason": rewrite_skip_reason,
+                "word_count": len(question.split()),
+                "language_match": state.query_kb_language_match,
+            },
+        )
+
         # Release the connection before the concurrent guard/embed OpenAI tasks.
         # async_match_faq (stage 3) will re-acquire it briefly; another close()
         # follows before await rel_task so that 2-10 s wait is also connectionless.
@@ -2233,23 +2288,16 @@ async def async_run_chat_pipeline(
                 timeout=settings.embedding_http_timeout_seconds,
             )
         )
-        rewrite_task = asyncio.create_task(
-            async_semantic_query_rewrite(
-                question,
-                api_key=api_key,
-                timeout=settings.semantic_query_rewrite_timeout_sec,
-                bot_id=retry_bot_id,
+        if not skip_rewrite:
+            rewrite_task = asyncio.create_task(
+                async_semantic_query_rewrite(
+                    question,
+                    api_key=api_key,
+                    timeout=settings.semantic_query_rewrite_timeout_sec,
+                    bot_id=retry_bot_id,
+                )
             )
-        )
 
-        target_kb_scripts = [s for s in state.kb_scripts if s != state.query_script]
-        state.cross_lingual_triggered = len(target_kb_scripts) > 0
-        if not state.kb_scripts or state.query_script == "other":
-            state.query_kb_language_match = "unknown"
-        elif state.query_script in state.kb_scripts:
-            state.query_kb_language_match = "native"
-        else:
-            state.query_kb_language_match = "mismatch"
         for target_script in target_kb_scripts:
             cross_lingual_tasks.append(
                 asyncio.create_task(
@@ -2330,14 +2378,21 @@ async def async_run_chat_pipeline(
                 state.rewritten_variant = None
         if trace is not None:
             rewrite_span = trace.span(name="query_rewrite")
+            wait_ms = (
+                0.0
+                if rewrite_task is None
+                else round((perf_counter() - rewrite_collect_start) * 1000, 2)
+            )
             rewrite_span.end(
                 output={
                     "rewritten": state.rewritten_variant is not None,
+                    "skipped": rewrite_task is None,
+                    "skip_reason": state.query_rewrite_skip_reason,
                     "variant_preview": state.rewritten_variant[:100]
                     if state.rewritten_variant
                     else None,
                 },
-                metadata={"wait_ms": round((perf_counter() - rewrite_collect_start) * 1000, 2)},
+                metadata={"wait_ms": wait_ms},
             )
 
         for cl_task in cross_lingual_tasks:

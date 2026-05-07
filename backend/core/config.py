@@ -139,6 +139,16 @@ class Settings(BaseSettings):
         "gpt-4.1-mini",
         alias="QUERY_REWRITE_MODEL",
     )
+    query_rewrite_skip_min_words: int = Field(
+        4,
+        alias="QUERY_REWRITE_SKIP_MIN_WORDS",
+        ge=1,
+        description=(
+            "Minimum word count for a query to be eligible for query-rewrite skip. "
+            "Queries shorter than this run rewrite even when language matches and "
+            "no abbreviations are present."
+        ),
+    )
     contradiction_adjudication_enabled: bool = Field(
         False,
         alias="CONTRADICTION_ADJUDICATION_ENABLED",

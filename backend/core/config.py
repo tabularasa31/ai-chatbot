@@ -175,7 +175,7 @@ class Settings(BaseSettings):
     )
     allowed_hosts_raw: str = Field("*", alias="ALLOWED_HOSTS")
     cors_allowed_origins_raw: str = Field(
-        "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,https://getchat9.live",
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002,http://localhost:3003,https://getchat9.live,https://widget-ru.getchat9.live",
         alias="CORS_ALLOWED_ORIGINS",
     )
     widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)

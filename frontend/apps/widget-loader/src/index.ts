@@ -18,6 +18,10 @@
 // `data-bot-id` is the only data-attribute on the loader script (it identifies
 // the bot before any config is read). Everything else lives on Chat9Config.
 //
+// Russian edge proxy: load this script from widget-ru.getchat9.live instead
+// of widget.getchat9.live, and the loader infers the matching API origin
+// (api-ru.getchat9.live) from its own scriptOrigin. No flag needed.
+//
 // window.Chat9Widget.destroy() removes all DOM elements and event listeners
 // created by the loader — useful for SPA cleanup.
 
@@ -57,6 +61,11 @@ declare global {
   // to the backend). Tenants on staging override via Chat9Config.apiBase.
   const DEFAULT_API_BASE = "https://getchat9.live";
 
+  // RU edge proxy API origin. Selected automatically when the loader script
+  // is served from widget-ru.getchat9.live (the matching widget edge).
+  // Bypasses TSPU throttling on Vercel/Railway from Russian ISPs.
+  const RU_API_BASE = "https://api-ru.getchat9.live";
+
   const currentScript: HTMLScriptElement | null =
     (document.currentScript as HTMLScriptElement | null) ??
     (() => {
@@ -86,8 +95,9 @@ declare global {
     ? Math.round(config.topClearance)
     : 0;
 
-  // Widget UI base: defaults to the script's own origin + /v1/. Strip trailing
-  // slashes from any override so we can append "/v1/?…" predictably.
+  // Widget UI base: explicit Chat9Config.widgetBase wins; otherwise the
+  // script's own origin is used. Strip trailing slashes so we can append
+  // "/v1/?…" predictably.
   const scriptOrigin = (() => {
     try {
       return new URL(currentScript.src).origin;
@@ -105,9 +115,13 @@ declare global {
     }
   })();
 
-  // API origin (where the iframe will fetch /widget/chat etc.). Trim trailing
-  // slashes so widget-app can append paths cleanly.
-  const apiBase = (config.apiBase || DEFAULT_API_BASE).replace(/\/+$/, "");
+  // API origin (where the iframe will fetch /widget/chat etc.). When the
+  // widget is served from the RU edge, route the API through it as well —
+  // serving a fast bundle but a throttled API would still leave the widget
+  // unusable. Explicit Chat9Config.apiBase overrides the inference.
+  const apiBaseDefault =
+    widgetOrigin === "https://widget-ru.getchat9.live" ? RU_API_BASE : DEFAULT_API_BASE;
+  const apiBase = (config.apiBase || apiBaseDefault).replace(/\/+$/, "");
 
   const browserLocale =
     userHints?.locale ||

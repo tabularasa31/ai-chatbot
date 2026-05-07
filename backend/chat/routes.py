@@ -1,5 +1,6 @@
 """FastAPI chat endpoints."""
 
+import asyncio
 import logging
 import uuid
 from collections import defaultdict
@@ -59,8 +60,8 @@ from backend.models import (
 )
 from backend.privacy_schemas import DeletedCountResponse
 from backend.tenants.llm_alerts import (
-    clear_llm_alert,
-    record_llm_failure,
+    apply_clear_alert,
+    apply_llm_failure,
 )
 from backend.tenants.llm_alerts import (
     is_actionable as is_actionable_llm_failure,
@@ -71,9 +72,11 @@ logger = logging.getLogger(__name__)
 
 
 def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", api_key: str | None = None) -> str:
-    """Log the quota-exceeded event to Sentry, raise/refresh the tenant
-    LLM-alert (email throttled to 24h via tenants.llm_alerts), and return
-    the user-facing error detail string (includes support email if known).
+    """Log the quota-exceeded event to Sentry and return the user-facing
+    error detail string (includes support email if known).
+
+    Tenant alert state + email are raised separately via ``apply_llm_failure``
+    in a ``to_thread`` (off the event loop) — see the chat handler below.
     """
     logger.error(
         "openai_quota_exceeded: tenant_id=%s tenant_name=%s",
@@ -93,8 +96,6 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", ap
             )
     except Exception:
         pass
-
-    record_llm_failure(db, tenant, LlmFailureType.quota_exhausted)
 
     profile = db.get(TenantProfile, tenant.id)
     support_email: str | None = profile.support_email if profile else None
@@ -172,30 +173,37 @@ async def chat(
         except RateLimitError as exc:
             if is_quota_exceeded(exc):
                 lang = detect_language(body.question).detected_language
-                raise HTTPException(
-                    status_code=402,
-                    detail=await run_sync(
-                        db,
-                        lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
-                    ),
-                ) from None
+                detail = await run_sync(
+                    db,
+                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
+                )
+                # Raise the tenant-level alert + throttled email off the
+                # event loop (sync httpx + DB inside).
+                await asyncio.to_thread(
+                    apply_llm_failure, tenant.id, LlmFailureType.quota_exhausted
+                )
+                raise HTTPException(status_code=402, detail=detail) from None
             raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
         except APIError as exc:
             # Classify so an invalid/revoked key surfaces a tenant-level alert
             # the same way quota_exhausted does (RateLimitError path above).
             failure_state = classify_llm_failure(exc)
             if is_actionable_llm_failure(failure_state.type):
-                await run_sync(
-                    db,
-                    lambda s: record_llm_failure(s, tenant, failure_state.type),
+                await asyncio.to_thread(
+                    apply_llm_failure, tenant.id, failure_state.type
                 )
             raise HTTPException(
                 status_code=503,
                 detail="OpenAI service unavailable",
             ) from None
 
-        # Successful turn — clear any active alert (no-op if none was set).
-        await run_sync(db, lambda s: clear_llm_alert(s, tenant))
+        # Clear any active alert only when the LLM actually ran successfully
+        # (tokens_used > 0). Greetings / cached / canned outcomes don't
+        # exercise the provider, so a "successful" turn there isn't evidence
+        # the broken key is back. Skip the DB roundtrip entirely when we
+        # know there's no alert to clear.
+        if outcome.tokens_used > 0 and tenant.llm_alert_type is not None:
+            await asyncio.to_thread(apply_clear_alert, tenant.id)
 
         response = ChatTurnResponse(
             text=outcome.text,

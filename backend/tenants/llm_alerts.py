@@ -5,21 +5,33 @@ out of credits or invalid — failures the tenant can fix), we:
 
   1. Record the failure on the tenant row so the dashboard can surface a
      banner and any subsequent successful turn knows to clear it.
-  2. Email the tenant admin once per 24h per failure type, so they actually
+  2. Email the tenant owner once per 24h per failure type, so they actually
      learn about the problem without getting spammed every chat turn.
 
 Transient OpenAI failures (timeouts, 5xx, ordinary rate-limits) do not
 trigger this — they're not the tenant's problem to fix.
+
+Concurrency: the throttle decision is serialized via SELECT ... FOR UPDATE
+so two concurrent failing requests can't both race past the 24h check and
+both send an email.
+
+Async-safety: callers running on the FastAPI event loop (the /chat
+endpoint) must invoke ``apply_llm_failure`` / ``apply_clear_alert``
+through ``asyncio.to_thread`` so the synchronous httpx + DB calls don't
+block the loop.
 """
 
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.chat.llm_unavailable import LlmFailureType
+from backend.core import db as core_db
 from backend.email.service import send_email
 from backend.models import Tenant, User
 
@@ -81,18 +93,37 @@ def _email_body(failure_type: str) -> str:
 
 def record_llm_failure(
     db: Session,
-    tenant: Tenant,
+    tenant_id: uuid.UUID,
     failure_type: str | LlmFailureType,
-) -> None:
-    """Mark the tenant as having an active LLM-failure alert and email the
-    admin if outside the throttle window.
+) -> bool:
+    """Mark the tenant as having an active LLM-failure alert.
 
-    Safe to call on every failing turn — throttling is enforced inside.
-    No-ops for non-actionable failure types.
+    Returns ``True`` iff the caller should send an email — throttle window
+    expired, or the alert type changed. The email itself is dispatched by
+    the caller (see ``apply_llm_failure``) so this function stays pure
+    DB-side and easy to reason about transactionally.
+
+    No-op (returns ``False``) for non-actionable failure types.
+
+    The throttle check is serialized via ``SELECT ... FOR UPDATE`` so two
+    concurrent failing requests can't both race past the 24h check and
+    both send an email. SQLite (used in tests) silently ignores the lock
+    clause — fine, tests are single-threaded.
+
+    Accepts ``tenant_id`` rather than a ``Tenant`` instance: when callers
+    bridge from async (``run_sync`` / ``to_thread``), passing an ORM
+    object across boundaries can leave it detached and silently fail on
+    attribute access. Always re-fetching inside this function avoids that.
     """
     value = failure_type.value if isinstance(failure_type, LlmFailureType) else failure_type
     if value not in _ACTIONABLE_TYPES:
-        return
+        return False
+
+    tenant = db.execute(
+        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+    ).scalar_one_or_none()
+    if tenant is None:
+        return False
 
     now = _now()
     type_changed = tenant.llm_alert_type != value
@@ -101,21 +132,29 @@ def record_llm_failure(
         tenant.llm_alert_first_at = now
 
     last_email = tenant.llm_alert_last_email_at
-    should_email = type_changed or last_email is None or (now - last_email) >= EMAIL_THROTTLE
+    should_email = (
+        type_changed or last_email is None or (now - last_email) >= EMAIL_THROTTLE
+    )
     if should_email:
-        _try_send_admin_email(db, tenant, value)
         tenant.llm_alert_last_email_at = now
 
     db.add(tenant)
     db.commit()
+    return should_email
 
 
-def clear_llm_alert(db: Session, tenant: Tenant) -> bool:
+def clear_llm_alert(db: Session, tenant_id: uuid.UUID) -> bool:
     """Clear the alert if one is set. Returns True iff state changed.
 
-    Called on every successful chat turn — cheap when no alert is set.
+    Cheap when no alert is set: a single SELECT, no write. Callers that
+    have already loaded the tenant and seen ``llm_alert_type is None``
+    can skip calling this entirely (see the guard at the chat-route call
+    site).
     """
-    if tenant.llm_alert_type is None:
+    tenant = db.execute(
+        select(Tenant).where(Tenant.id == tenant_id).with_for_update()
+    ).scalar_one_or_none()
+    if tenant is None or tenant.llm_alert_type is None:
         return False
     tenant.llm_alert_type = None
     tenant.llm_alert_first_at = None
@@ -125,14 +164,14 @@ def clear_llm_alert(db: Session, tenant: Tenant) -> bool:
     return True
 
 
-def _try_send_admin_email(db: Session, tenant: Tenant, failure_type: str) -> None:
+def _send_alert_email(db: Session, tenant_id: uuid.UUID, failure_type: str) -> None:
     # Target the tenant owner (= the first user attached to this tenant —
     # typically its creator). The User.is_admin column is Chat9's super-admin
     # flag (for /admin routes), not "tenant owner", so it cannot be used
     # here — most tenants have no super-admin in their member list.
     owner = (
         db.query(User)
-        .filter(User.tenant_id == tenant.id)
+        .filter(User.tenant_id == tenant_id)
         .order_by(User.created_at.asc())
         .first()
     )
@@ -147,5 +186,28 @@ def _try_send_admin_email(db: Session, tenant: Tenant, failure_type: str) -> Non
     except Exception:
         logger.warning(
             "llm_alert_email_failed",
-            extra={"tenant_id": str(tenant.id), "failure_type": failure_type},
+            extra={"tenant_id": str(tenant_id), "failure_type": failure_type},
         )
+
+
+def apply_llm_failure(tenant_id: uuid.UUID, failure_type: str | LlmFailureType) -> None:
+    """Sync entry point combining record + email in one fresh session.
+
+    Designed for ``asyncio.to_thread`` from async routes: opens its own
+    SessionLocal so the call doesn't share state with any async session
+    and the blocking httpx send doesn't run on the event loop.
+    Idempotent + no-op for non-actionable types.
+    """
+    value = failure_type.value if isinstance(failure_type, LlmFailureType) else failure_type
+    if value not in _ACTIONABLE_TYPES:
+        return
+    with core_db.SessionLocal() as session:
+        should_email = record_llm_failure(session, tenant_id, value)
+        if should_email:
+            _send_alert_email(session, tenant_id, value)
+
+
+def apply_clear_alert(tenant_id: uuid.UUID) -> None:
+    """Sync entry point for clearing on success — fresh SessionLocal."""
+    with core_db.SessionLocal() as session:
+        clear_llm_alert(session, tenant_id)

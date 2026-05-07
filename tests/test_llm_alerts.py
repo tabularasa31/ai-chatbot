@@ -58,7 +58,7 @@ def _bootstrap_tenant(
 # --- service: record/clear, throttle ----------------------------------------
 
 
-def test_record_llm_failure_sets_state_and_emails(
+def test_apply_llm_failure_sets_state_and_emails(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -72,9 +72,11 @@ def test_record_llm_failure_sets_state_and_emails(
     tenant_row, owner = _bootstrap_tenant(
         tenant, db_session, email="alert-record@example.com", name="Alert Record"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
 
-    db_session.refresh(tenant_row)
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
     assert tenant_row.llm_alert_type == "quota_exhausted"
     assert tenant_row.llm_alert_first_at is not None
     assert tenant_row.llm_alert_last_email_at is not None
@@ -83,7 +85,7 @@ def test_record_llm_failure_sets_state_and_emails(
     assert "quota" in sent[0]["subject"].lower()
 
 
-def test_record_llm_failure_throttles_email_within_24h(
+def test_apply_llm_failure_throttles_email_within_24h(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -97,13 +99,13 @@ def test_record_llm_failure_throttles_email_within_24h(
     tenant_row, _ = _bootstrap_tenant(
         tenant, db_session, email="alert-throttle@example.com", name="Throttle Co"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     assert len(sent) == 1
 
 
-def test_record_llm_failure_resends_after_throttle_window(
+def test_apply_llm_failure_resends_after_throttle_window(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -117,17 +119,20 @@ def test_record_llm_failure_resends_after_throttle_window(
     tenant_row, _ = _bootstrap_tenant(
         tenant, db_session, email="alert-reemit@example.com", name="Re-emit Co"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     # Backdate the last-sent timestamp past the throttle window.
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
     tenant_row.llm_alert_last_email_at = (
         tenant_row.llm_alert_last_email_at - alerts.EMAIL_THROTTLE - timedelta(minutes=1)
     )
     db_session.commit()
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
     assert len(sent) == 2
 
 
-def test_record_llm_failure_emails_immediately_when_type_changes(
+def test_apply_llm_failure_emails_immediately_when_type_changes(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -143,14 +148,14 @@ def test_record_llm_failure_emails_immediately_when_type_changes(
     tenant_row, _ = _bootstrap_tenant(
         tenant, db_session, email="alert-typechange@example.com", name="Type Change"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.invalid_api_key)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.invalid_api_key)
     assert len(sent) == 2
     assert "quota" in sent[0]["subject"].lower()
     assert "invalid" in sent[1]["subject"].lower()
 
 
-def test_record_llm_failure_ignores_non_actionable_types(
+def test_apply_llm_failure_ignores_non_actionable_types(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -164,14 +169,16 @@ def test_record_llm_failure_ignores_non_actionable_types(
     tenant_row, _ = _bootstrap_tenant(
         tenant, db_session, email="alert-noop@example.com", name="Noop Co"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.provider_timeout)
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.rate_limited)
-    db_session.refresh(tenant_row)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.provider_timeout)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.rate_limited)
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
     assert tenant_row.llm_alert_type is None
     assert sent == []
 
 
-def test_clear_llm_alert_resets_state(
+def test_apply_clear_alert_resets_state(
     tenant: TestClient,
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
@@ -181,15 +188,49 @@ def test_clear_llm_alert_resets_state(
     tenant_row, _ = _bootstrap_tenant(
         tenant, db_session, email="alert-clear@example.com", name="Clear Co"
     )
-    alerts.record_llm_failure(db_session, tenant_row, LlmFailureType.quota_exhausted)
+    alerts.apply_llm_failure(tenant_row.id, LlmFailureType.quota_exhausted)
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
     assert tenant_row.llm_alert_type == "quota_exhausted"
-    assert alerts.clear_llm_alert(db_session, tenant_row) is True
-    db_session.refresh(tenant_row)
+    alerts.apply_clear_alert(tenant_row.id)
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_row.id)
+    assert tenant_row is not None
     assert tenant_row.llm_alert_type is None
     assert tenant_row.llm_alert_first_at is None
     assert tenant_row.llm_alert_last_email_at is None
-    # Second call is a no-op.
-    assert alerts.clear_llm_alert(db_session, tenant_row) is False
+
+
+def test_record_llm_failure_returns_should_email_bool(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Direct unit check on the lower-level service: bool return drives
+    whether the caller dispatches the email side-effect."""
+    tenant_row, _ = _bootstrap_tenant(
+        tenant, db_session, email="alert-bool@example.com", name="Bool Co"
+    )
+    assert (
+        alerts.record_llm_failure(
+            db_session, tenant_row.id, LlmFailureType.quota_exhausted
+        )
+        is True
+    )
+    # Within throttle window — same type, recently emailed.
+    assert (
+        alerts.record_llm_failure(
+            db_session, tenant_row.id, LlmFailureType.quota_exhausted
+        )
+        is False
+    )
+    # Non-actionable types short-circuit before any DB write.
+    assert (
+        alerts.record_llm_failure(
+            db_session, tenant_row.id, LlmFailureType.provider_timeout
+        )
+        is False
+    )
 
 
 # --- API: GET /tenants/me/llm-alert -----------------------------------------
@@ -235,11 +276,7 @@ def test_llm_alert_endpoint_returns_active_alert(
     assert cl_resp.status_code == 201
     set_client_openai_key(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
-    tenant_row = db_session.get(Tenant, tenant_id)
-    assert tenant_row is not None
-    alerts.record_llm_failure(
-        db_session, tenant_row, LlmFailureType.invalid_api_key
-    )
+    alerts.apply_llm_failure(tenant_id, LlmFailureType.invalid_api_key)
 
     r = tenant.get(
         "/tenants/me/llm-alert",
@@ -421,6 +458,56 @@ def test_widget_invalid_api_key_raises_alert(
     assert "invalid" in sent[0]["subject"].lower()
 
 
+def test_widget_greeting_does_not_clear_alert(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful turn that didn't actually call the LLM (greeting,
+    canned small-talk: tokens_used == 0) is not evidence the broken key
+    is back, so the alert must not be cleared."""
+    monkeypatch.setattr("backend.tenants.llm_alerts.send_email", lambda **_: None)
+    from backend.chat.service import ChatTurnOutcome
+
+    token = register_and_verify_user(
+        tenant, db_session, email="widget-greeting-no-clear@example.com"
+    )
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Greeting Test"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    alerts.apply_llm_failure(tenant_id, LlmFailureType.quota_exhausted)
+
+    async def _greeting(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="Hello!",
+            document_ids=[],
+            tokens_used=0,  # canned greeting, no LLM call
+            chat_ended=False,
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message", _greeting
+    )
+
+    resp = tenant.post(
+        f"/widget/chat?bot_id={bot_public_id}",
+        json={"message": "hi"},
+    )
+    assert resp.status_code == 200
+    db_session.expire_all()
+    tenant_row = db_session.get(Tenant, tenant_id)
+    assert tenant_row is not None
+    # Alert remains — greeting didn't exercise the LLM, so we have no
+    # evidence the broken key is back.
+    assert tenant_row.llm_alert_type == "quota_exhausted"
+
+
 def test_widget_success_after_failure_clears_alert(
     tenant: TestClient,
     db_session: Session,
@@ -445,18 +532,17 @@ def test_widget_success_after_failure_clears_alert(
     set_client_openai_key(tenant, token)
     bot_public_id = _create_bot(tenant, token)
     tenant_id = uuid.UUID(cl_resp.json()["id"])
+    alerts.apply_llm_failure(tenant_id, LlmFailureType.quota_exhausted)
+    db_session.expire_all()
     tenant_row = db_session.get(Tenant, tenant_id)
     assert tenant_row is not None
-    alerts.record_llm_failure(
-        db_session, tenant_row, LlmFailureType.quota_exhausted
-    )
     assert tenant_row.llm_alert_type == "quota_exhausted"
 
     async def _success(*args, **kwargs):
         return ChatTurnOutcome(
-            text="ok",
+            text="answer with tokens",
             document_ids=[],
-            tokens_used=1,
+            tokens_used=10,
             chat_ended=False,
         )
 

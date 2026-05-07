@@ -40,15 +40,11 @@ from backend.models import (
     EscalationTrigger,
     Message,
     MessageRole,
-    Tenant,
 )
 from backend.observability.metrics import capture_event
 from backend.tenants.llm_alerts import (
-    clear_llm_alert,
-    record_llm_failure,
-)
-from backend.tenants.llm_alerts import (
-    is_actionable as is_actionable_llm_failure,
+    apply_clear_alert,
+    apply_llm_failure,
 )
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
@@ -426,23 +422,22 @@ def _apply_llm_alert_side_effect(
     tenant_id: uuid.UUID,
     failure_type: str | None,
 ) -> None:
-    """Sync write hook called from the async widget pipeline.
+    """Sync write hook called from the async widget pipeline via to_thread.
 
     For an actionable failure (quota_exhausted / invalid_api_key) records
-    the alert and emails the tenant admin (throttled to 24h). For a
-    successful turn (failure_type=None) clears any active alert. Other
-    failure types (transient, timeout, rate_limited) are no-ops here —
-    they shouldn't surface a tenant-action banner.
+    the alert and emails the tenant owner (throttled to 24h). For a
+    cleared signal (failure_type=None) clears any active alert. Other
+    failure types are no-ops here.
+
+    The caller is responsible for deciding *when* to pass ``None`` —
+    successful greeting / small-talk turns that didn't actually call the
+    LLM must not be treated as evidence the LLM is healthy.
     """
     try:
-        with core_db.SessionLocal() as session:
-            tenant = session.get(Tenant, tenant_id)
-            if tenant is None:
-                return
-            if failure_type is None:
-                clear_llm_alert(session, tenant)
-            elif is_actionable_llm_failure(failure_type):
-                record_llm_failure(session, tenant, failure_type)
+        if failure_type is None:
+            apply_clear_alert(tenant_id)
+        else:
+            apply_llm_failure(tenant_id, failure_type)
     except Exception:
         logger.warning("widget_llm_alert_side_effect_failed", exc_info=True)
 
@@ -617,19 +612,29 @@ def _widget_chat_stream(
             return
 
         outcome = result_holder.get("outcome")
-        # Tenant-level alert side-effect runs in a fresh sync session — the
-        # async pipeline session is already gone by here, and we want the
-        # write to commit independently of any later SSE failure. Only
-        # actionable failure types raise (or clear) the alert; other
-        # outcomes are no-ops.
+        # Tenant-level alert side-effect runs in a fresh sync session via
+        # to_thread (off the event loop) so the blocking httpx send doesn't
+        # freeze the SSE stream. We only signal "LLM healthy" (failure_type
+        # = None ⇒ clear) when the turn actually exercised the provider:
+        # tokens_used > 0 is the proxy. Greeting / small-talk handlers can
+        # return a successful outcome without ever calling OpenAI; treating
+        # those as evidence of recovery would clear the banner while the
+        # underlying key is still broken.
         if outcome is not None:
             tenant_id_value = process_kwargs.get("tenant_id")
             if tenant_id_value is not None:
-                await asyncio.to_thread(
-                    _apply_llm_alert_side_effect,
-                    tenant_id_value,
-                    outcome.failure_state.type.value if outcome.failure_state else None,
-                )
+                if outcome.failure_state is not None:
+                    await asyncio.to_thread(
+                        _apply_llm_alert_side_effect,
+                        tenant_id_value,
+                        outcome.failure_state.type.value,
+                    )
+                elif outcome.tokens_used > 0:
+                    await asyncio.to_thread(
+                        _apply_llm_alert_side_effect,
+                        tenant_id_value,
+                        None,
+                    )
         final_text = outcome.text if outcome is not None else ""
         is_llm_unavailable = (
             outcome is not None and outcome.failure_state is not None

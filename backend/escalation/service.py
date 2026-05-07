@@ -812,30 +812,23 @@ def perform_manual_escalation(
         optional_entity_types=optional_entity_types,
     )
     if is_llm_unavailable:
-        # LLM provider is the failing dependency — never call it for the
-        # handoff message. Resolve language without invoking OpenAI and pull
-        # canned copy from the static i18n table.
+        # LLM provider is the failing dependency — every step here must be
+        # provably LLM-free. Resolve the response language from local signals
+        # only (browser locale, then tenant escalation language); skip
+        # resolve_language_context to avoid any current/future LLM-using
+        # detection paths.
         tenant_profile = (
             db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
         )
         support_config = public_support_config_dict(
             tenant.settings if isinstance(tenant.settings, dict) else None
         )
-        language_context = resolve_language_context(
-            current_turn_text=original_user_message or "[LLM unavailable manual escalation.]",
-            is_bootstrap_turn=False,
-            bootstrap_user_locale=None,
-            browser_locale=(effective or {}).get("browser_locale"),
-            tenant_escalation_language=(
-                support_config.get("escalation_language")
-                or getattr(tenant_profile, "escalation_language", None)
-            ),
-            tenant_id=getattr(tenant, "public_id", None),
-            chat_id=str(chat.id) if chat is not None else None,
+        response_language = (
+            (effective or {}).get("browser_locale")
+            or support_config.get("escalation_language")
+            or getattr(tenant_profile, "escalation_language", None)
         )
-        message_to_user = support_notified_text(
-            language=language_context.response_language
-        )
+        message_to_user = support_notified_text(language=response_language)
         tokens_used = 0
     else:
         phase = (

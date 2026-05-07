@@ -813,9 +813,10 @@ export function ChatWidget({
   };
 
   /** Try again on an LLM-unavailable bubble: reuse the original user message
-   *  without producing a duplicate user bubble. The degraded message stays
-   *  on screen until the new turn either succeeds or fails again — keeping
-   *  it removes UI flicker if retry returns the same failure. */
+   *  without producing a duplicate user bubble. The degraded bubble stays
+   *  visible (in a loading state) during the retry — sendUserMessage appends
+   *  the new outcome below it; only on a successful answer do we drop the
+   *  stale bubble, avoiding flicker if retry returns the same failure. */
   const handleLlmUnavailableRetry = useCallback(async (messageId: string) => {
     let originalMessage: string | null = null;
     setMessages((prev) =>
@@ -828,12 +829,21 @@ export function ChatWidget({
       }),
     );
     if (!originalMessage) return;
+    const messagesCountBefore = messages.length;
     try {
-      // Drop the degraded bubble before the new attempt — either path's
-      // outcome will be re-rendered fresh by sendUserMessage.
-      setMessages((prev) => prev.filter((m) => m.id !== messageId));
       await sendUserMessage(originalMessage, { appendUserBubble: false });
+      // If sendUserMessage appended a non-degraded outcome (assistant or
+      // error), drop the stale degraded bubble. If it appended another
+      // llm_unavailable, the new bubble carries fresh state — also drop
+      // the old one so we don't show two side by side.
+      setMessages((prev) =>
+        prev.length > messagesCountBefore
+          ? prev.filter((m) => m.id !== messageId)
+          : prev,
+      );
     } finally {
+      // Always clear the loading flag on the old bubble (no-op if it was
+      // already removed by the success branch above).
       setMessages((prev) =>
         prev.map((m) =>
           m.id === messageId && m.type === "llm_unavailable"
@@ -842,7 +852,7 @@ export function ChatWidget({
         ),
       );
     }
-  }, [sendUserMessage]);
+  }, [messages.length, sendUserMessage]);
 
   /** Contact support on an LLM-unavailable bubble: POST to the escalate
    *  proxy with the original message and failure type. Backend creates the
@@ -861,11 +871,14 @@ export function ChatWidget({
       ),
     );
     try {
+      // Use apiBase (same origin as /widget/chat & /widget/history) — a
+      // relative path would target the customer site's origin when the
+      // widget is embedded, causing 404 / CORS failures.
       const params = new URLSearchParams({
-        botId,
+        bot_id: botId,
         session_id: sessionId,
       });
-      const res = await fetch(`/widget/escalate?${params}`, {
+      const res = await fetch(`${apiBase}/widget/escalate?${params}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -901,7 +914,7 @@ export function ChatWidget({
         ),
       ]);
     }
-  }, [botId, localeParam, messages, sessionId]);
+  }, [apiBase, botId, localeParam, messages, sessionId]);
 
   return (
     <div className="relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">

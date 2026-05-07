@@ -42,6 +42,10 @@ from backend.models import (
     MessageRole,
 )
 from backend.observability.metrics import capture_event
+from backend.tenants.llm_alerts import (
+    apply_clear_alert,
+    apply_llm_failure,
+)
 from backend.tenants.widget_chat_gate import (
     WidgetChatTenantGateError,
     get_bot_and_tenant_for_widget_chat,
@@ -414,6 +418,30 @@ def widget_chat(
 _STREAM_SENTINEL = object()
 
 
+def _apply_llm_alert_side_effect(
+    tenant_id: uuid.UUID,
+    failure_type: str | None,
+) -> None:
+    """Sync write hook called from the async widget pipeline via to_thread.
+
+    For an actionable failure (quota_exhausted / invalid_api_key) records
+    the alert and emails the tenant owner (throttled to 24h). For a
+    cleared signal (failure_type=None) clears any active alert. Other
+    failure types are no-ops here.
+
+    The caller is responsible for deciding *when* to pass ``None`` —
+    successful greeting / small-talk turns that didn't actually call the
+    LLM must not be treated as evidence the LLM is healthy.
+    """
+    try:
+        if failure_type is None:
+            apply_clear_alert(tenant_id)
+        else:
+            apply_llm_failure(tenant_id, failure_type)
+    except Exception:
+        logger.warning("widget_llm_alert_side_effect_failed", exc_info=True)
+
+
 def _emit_first_token_metric(
     *,
     sid: uuid.UUID,
@@ -584,6 +612,29 @@ def _widget_chat_stream(
             return
 
         outcome = result_holder.get("outcome")
+        # Tenant-level alert side-effect runs in a fresh sync session via
+        # to_thread (off the event loop) so the blocking httpx send doesn't
+        # freeze the SSE stream. We only signal "LLM healthy" (failure_type
+        # = None ⇒ clear) when the turn actually exercised the provider:
+        # tokens_used > 0 is the proxy. Greeting / small-talk handlers can
+        # return a successful outcome without ever calling OpenAI; treating
+        # those as evidence of recovery would clear the banner while the
+        # underlying key is still broken.
+        if outcome is not None:
+            tenant_id_value = process_kwargs.get("tenant_id")
+            if tenant_id_value is not None:
+                if outcome.failure_state is not None:
+                    await asyncio.to_thread(
+                        _apply_llm_alert_side_effect,
+                        tenant_id_value,
+                        outcome.failure_state.type.value,
+                    )
+                elif outcome.tokens_used > 0:
+                    await asyncio.to_thread(
+                        _apply_llm_alert_side_effect,
+                        tenant_id_value,
+                        None,
+                    )
         final_text = outcome.text if outcome is not None else ""
         is_llm_unavailable = (
             outcome is not None and outcome.failure_state is not None

@@ -1,5 +1,6 @@
 """FastAPI chat endpoints."""
 
+import asyncio
 import logging
 import uuid
 from collections import defaultdict
@@ -20,6 +21,7 @@ from backend.chat.history_service import (
     list_chat_sessions,
 )
 from backend.chat.language import detect_language, localize_text_to_language_result
+from backend.chat.llm_unavailable import LlmFailureType, classify_llm_failure
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
@@ -42,7 +44,6 @@ from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.idempotency import idempotent_section
 from backend.core.limiter import limiter
 from backend.core.openai_client import is_quota_exceeded
-from backend.email.service import send_email
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
@@ -58,15 +59,24 @@ from backend.models import (
     User,
 )
 from backend.privacy_schemas import DeletedCountResponse
+from backend.tenants.llm_alerts import (
+    apply_clear_alert,
+    apply_llm_failure,
+)
+from backend.tenants.llm_alerts import (
+    is_actionable as is_actionable_llm_failure,
+)
 from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 
 logger = logging.getLogger(__name__)
 
 
 def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", api_key: str | None = None) -> str:
-    """Log OpenAI quota-exceeded event to Sentry and email the tenant admin once.
+    """Log the quota-exceeded event to Sentry and return the user-facing
+    error detail string (includes support email if known).
 
-    Returns the user-facing error detail string (includes support email if known).
+    Tenant alert state + email are raised separately via ``apply_llm_failure``
+    in a ``to_thread`` (off the event loop) — see the chat handler below.
     """
     logger.error(
         "openai_quota_exceeded: tenant_id=%s tenant_name=%s",
@@ -89,29 +99,6 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", ap
 
     profile = db.get(TenantProfile, tenant.id)
     support_email: str | None = profile.support_email if profile else None
-
-    admin = (
-        db.query(User)
-        .filter(User.tenant_id == tenant.id, User.is_admin.is_(True))
-        .first()
-    )
-    if admin:
-        try:
-            send_email(
-                to=admin.email,
-                subject="[Chat9] OpenAI quota exceeded — action required",
-                body=(
-                    "Hello,\n\n"
-                    "Your OpenAI API key has run out of credits. "
-                    "Chat9 cannot generate responses for your users until you top up your balance.\n\n"
-                    "Please visit https://platform.openai.com/settings/organization/billing "
-                    "to add credits.\n\n"
-                    "— Chat9"
-                ),
-            )
-        except Exception:
-            logger.warning("quota_exceeded_email_failed: tenant_id=%s", tenant.id)
-
     contact = f" at {support_email}" if support_email else ""
     canonical = (
         "We're currently experiencing technical difficulties and are unable to respond via chat. "
@@ -186,19 +173,37 @@ async def chat(
         except RateLimitError as exc:
             if is_quota_exceeded(exc):
                 lang = detect_language(body.question).detected_language
-                raise HTTPException(
-                    status_code=402,
-                    detail=await run_sync(
-                        db,
-                        lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
-                    ),
-                ) from None
+                detail = await run_sync(
+                    db,
+                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
+                )
+                # Raise the tenant-level alert + throttled email off the
+                # event loop (sync httpx + DB inside).
+                await asyncio.to_thread(
+                    apply_llm_failure, tenant.id, LlmFailureType.quota_exhausted
+                )
+                raise HTTPException(status_code=402, detail=detail) from None
             raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-        except APIError:
+        except APIError as exc:
+            # Classify so an invalid/revoked key surfaces a tenant-level alert
+            # the same way quota_exhausted does (RateLimitError path above).
+            failure_state = classify_llm_failure(exc)
+            if is_actionable_llm_failure(failure_state.type):
+                await asyncio.to_thread(
+                    apply_llm_failure, tenant.id, failure_state.type
+                )
             raise HTTPException(
                 status_code=503,
                 detail="OpenAI service unavailable",
             ) from None
+
+        # Clear any active alert only when the LLM actually ran successfully
+        # (tokens_used > 0). Greetings / cached / canned outcomes don't
+        # exercise the provider, so a "successful" turn there isn't evidence
+        # the broken key is back. Skip the DB roundtrip entirely when we
+        # know there's no alert to clear.
+        if outcome.tokens_used > 0 and tenant.llm_alert_type is not None:
+            await asyncio.to_thread(apply_clear_alert, tenant.id)
 
         response = ChatTurnResponse(
             text=outcome.text,

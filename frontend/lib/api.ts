@@ -43,6 +43,19 @@ export type TenantResponse = {
   updated_at: string;
 };
 
+export type LlmAlertType =
+  | "quota_exhausted"
+  | "invalid_api_key"
+  | "provider_unavailable"
+  | "provider_timeout"
+  | "rate_limited"
+  | "unknown_llm_error";
+
+export type TenantLlmAlertResponse = {
+  type: LlmAlertType | null;
+  since: string | null;
+};
+
 export type TenantMeResponse = TenantResponse & {
   is_admin: boolean;
   is_verified: boolean;
@@ -543,6 +556,12 @@ export const api = {
       const responseData = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
       return responseData as TenantResponse;
+    },
+    async getLlmAlert(): Promise<TenantLlmAlertResponse> {
+      const res = await apiFetch(`${BASE_URL}/tenants/me/llm-alert`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load LLM alert"));
+      return data as TenantLlmAlertResponse;
     },
   },
   apiKeys: {

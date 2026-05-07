@@ -29,6 +29,15 @@ class Tenant(Base):
     openai_api_key = Column(String(500), nullable=True, default=None)
     settings = Column(JSON, nullable=False, default=dict)
     is_active = Column(Boolean, nullable=False, default=True)
+    # LLM-provider alert state. Set when the chat pipeline hits an actionable
+    # OpenAI failure (quota_exhausted, invalid_api_key); cleared on next
+    # successful turn. Drives the dashboard banner and throttles the
+    # "your key is broken" email to once per 24h. Stores the
+    # backend.chat.llm_unavailable.LlmFailureType value as a plain string
+    # to keep the column flexible (no DB enum).
+    llm_alert_type = Column(String(64), nullable=True)
+    llm_alert_first_at = Column(DateTime, nullable=True)
+    llm_alert_last_email_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

@@ -56,14 +56,35 @@ This is the only required snippet. The widget works anonymously out of the box. 
 - **Bubble** — floating button, bottom corner of the page.
 - **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget.
 
+### Routing from Russia
+
+If your site primarily serves visitors in Russia, load the widget from the Russian edge proxy. Replace `widget.getchat9.live` with `widget-ru.getchat9.live` in the script src — both the widget bundle and the API origin route through it automatically:
+
+```html
+<script
+  src="https://widget-ru.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
+```
+
+This bypasses traffic throttling that some Russian ISPs apply to Vercel/Railway. Visitors outside Russia work the same way — they just hit the RU edge with a small extra hop. If you serve mixed audiences, detect the visitor's country server-side and emit a different `src` per request, or A/B test.
+
 ### CSP
 
-If your site uses a Content Security Policy:
+If your site uses a Content Security Policy, default origins:
 
 ```
 script-src  https://widget.getchat9.live;
 frame-src   https://widget.getchat9.live;
 connect-src https://getchat9.live;
+```
+
+If you use `data-region="ru"`, allow the RU edge origins instead (or in addition):
+
+```
+script-src  https://widget.getchat9.live https://widget-ru.getchat9.live;
+frame-src   https://widget-ru.getchat9.live;
+connect-src https://api-ru.getchat9.live;
 ```
 
 ## Where to get the embed code

@@ -79,10 +79,10 @@ frame-src   https://widget.getchat9.live;
 connect-src https://getchat9.live;
 ```
 
-If you use `data-region="ru"`, allow the RU edge origins instead (or in addition):
+If you load the widget from the Russian edge proxy (`widget-ru.getchat9.live`), allow these origins instead:
 
 ```
-script-src  https://widget.getchat9.live https://widget-ru.getchat9.live;
+script-src  https://widget-ru.getchat9.live;
 frame-src   https://widget-ru.getchat9.live;
 connect-src https://api-ru.getchat9.live;
 ```

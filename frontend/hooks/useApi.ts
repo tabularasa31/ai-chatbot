@@ -11,7 +11,7 @@ import type {
 } from "@/lib/api";
 
 export function useClientMe() {
-  return useSWR<TenantMeResponse>("client/me", () => api.clients.getMe());
+  return useSWR<TenantMeResponse>("client/me", () => api.tenants.getMe());
 }
 
 export function useBots() {

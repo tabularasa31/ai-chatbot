@@ -12,7 +12,7 @@ export function Navbar() {
 
   useEffect(() => {
     Promise.all([
-      api.clients.getMe().catch(() => null),
+      api.tenants.getMe().catch(() => null),
       api.auth.getMe().catch(() => null),
     ]).then(([client, user]) => {
       if (client) {

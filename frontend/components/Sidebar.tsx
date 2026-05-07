@@ -130,7 +130,7 @@ export function Sidebar() {
   const [gapBadgeCount, setGapBadgeCount] = useState(0);
 
   useEffect(() => {
-    api.clients.getMe().then((c) => setIsAdmin(c.is_admin)).catch(() => {});
+    api.tenants.getMe().then((c) => setIsAdmin(c.is_admin)).catch(() => {});
   }, []);
 
   useEffect(() => {

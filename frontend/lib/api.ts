@@ -530,7 +530,7 @@ export const api = {
       return data as BotResponse;
     },
   },
-  clients: {
+  tenants: {
     async create(name: string) {
       const res = await apiFetch(`${BASE_URL}/tenants`, {
         method: "POST",
@@ -538,13 +538,13 @@ export const api = {
         body: JSON.stringify({ name }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create client"));
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to create tenant"));
       return data as CreateTenantResponse;
     },
     async getMe() {
       const res = await apiFetch(`${BASE_URL}/tenants/me`);
       const data = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get client"));
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to get tenant"));
       return data as TenantMeResponse;
     },
     async update(data: { name?: string; openai_api_key?: string | null }) {
@@ -554,7 +554,7 @@ export const api = {
         body: JSON.stringify(data),
       });
       const responseData = await res.json();
-      if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update client"));
+      if (!res.ok) throw new Error(getErrorMessage(responseData, "Failed to update tenant"));
       return responseData as TenantResponse;
     },
     async getLlmAlert(): Promise<TenantLlmAlertResponse> {

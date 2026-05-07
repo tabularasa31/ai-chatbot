@@ -132,7 +132,7 @@ export default function SettingsPage() {
     }
     setKeySaving(true);
     try {
-      await api.clients.update({ openai_api_key: key });
+      await api.tenants.update({ openai_api_key: key });
       await mutateClient();
       setOpenaiKeyInput("");
       setKeySavedOk(true);
@@ -148,7 +148,7 @@ export default function SettingsPage() {
     setError("");
     setKeySaving(true);
     try {
-      await api.clients.update({ openai_api_key: null });
+      await api.tenants.update({ openai_api_key: null });
       await mutateClient();
       setOpenaiKeyInput("");
     } catch (err) {

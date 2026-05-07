@@ -23,6 +23,20 @@ class AdminMetricsSummary(BaseModel):
     total_tokens_chat: int
 
 
+class AdminCacheCounter(BaseModel):
+    """Hit/miss counters for a single in-process cache."""
+
+    hits: int
+    misses: int
+    hit_rate: float
+
+
+class AdminCacheStats(BaseModel):
+    """Snapshot of all in-process cache counters keyed by cache name."""
+
+    caches: dict[str, AdminCacheCounter]
+
+
 class AdminTenantMetricsItem(BaseModel):
     """Per-tenant metrics row."""
 

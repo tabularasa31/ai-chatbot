@@ -96,6 +96,7 @@ def test_admin_cache_stats_endpoint_returns_snapshot(
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["relevance_guard"]["hits"] == 1
-    assert body["relevance_guard"]["misses"] == 1
-    assert body["embedding"]["misses"] == 1
+    assert body["caches"]["relevance_guard"]["hits"] == 1
+    assert body["caches"]["relevance_guard"]["misses"] == 1
+    assert body["caches"]["relevance_guard"]["hit_rate"] == 0.5
+    assert body["caches"]["embedding"]["misses"] == 1

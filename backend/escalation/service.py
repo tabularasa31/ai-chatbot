@@ -37,8 +37,11 @@ from backend.models import (
     TenantProfile,
     User,
 )
+from backend.observability.cache_metrics import record_hit, record_miss
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
+
+_HR_CACHE_NAME = "human_request"
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +58,14 @@ _human_request_cache: dict[str, tuple[float, bool]] = {}
 def _hr_cache_get(key: str) -> bool | None:
     item = _human_request_cache.get(key)
     if not item:
+        record_miss(_HR_CACHE_NAME)
         return None
     expires_at, result = item
     if time.time() > expires_at:
         _human_request_cache.pop(key, None)
+        record_miss(_HR_CACHE_NAME)
         return None
+    record_hit(_HR_CACHE_NAME)
     return result
 
 

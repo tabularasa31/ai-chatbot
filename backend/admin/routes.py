@@ -30,6 +30,7 @@ from backend.models import (
     Tenant,
     User,
 )
+from backend.observability.cache_metrics import snapshot as cache_snapshot
 from backend.privacy_schemas import DeletedCountResponse
 
 admin_router = APIRouter(prefix="/admin", tags=["admin"])
@@ -79,6 +80,19 @@ def get_metrics_summary(
         total_messages_assistant=total_messages_assistant,
         total_tokens_chat=total_tokens_chat,
     )
+
+
+@admin_router.get("/metrics/cache-stats")
+def get_cache_stats(
+    _: Annotated[User, Depends(get_admin_user)],
+) -> dict[str, dict[str, float | int]]:
+    """In-process hit/miss counters for the per-process caches.
+
+    Counters are local to whichever app instance handles the request — for
+    multi-worker deploys, snapshots vary between calls. Used to decide whether
+    each cache is pulling its weight under real traffic.
+    """
+    return cache_snapshot()
 
 
 @admin_router.get("/metrics/tenants", response_model=AdminTenantMetricsList)

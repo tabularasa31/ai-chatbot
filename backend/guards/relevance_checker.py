@@ -16,6 +16,9 @@ from backend.core.openai_client import get_async_openai_client, get_openai_clien
 from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle, record_stage_ms
+from backend.observability.cache_metrics import record_hit, record_miss
+
+_CACHE_NAME = "relevance_guard"
 
 TIMEOUT_SECONDS = 3.0
 CACHE_TTL_SECONDS = 5 * 60
@@ -59,11 +62,14 @@ _cache: dict[str, tuple[float, bool, str]] = {}
 def _cache_get(key: str) -> tuple[bool, str] | None:
     item = _cache.get(key)
     if not item:
+        record_miss(_CACHE_NAME)
         return None
     expires_at, relevant, reason = item
     if time.time() > expires_at:
         _cache.pop(key, None)
+        record_miss(_CACHE_NAME)
         return None
+    record_hit(_CACHE_NAME)
     return relevant, reason
 
 

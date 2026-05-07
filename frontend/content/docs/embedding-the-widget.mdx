@@ -95,7 +95,9 @@ When the bot escalates a conversation to a human agent, the chat is marked as en
 
 ```js
 window.Chat9Widget?.destroy();
-window.Chat9Config.userHints = null;
+if (window.Chat9Config) {
+  window.Chat9Config.userHints = null;
+}
 ```
 
 ---
@@ -139,7 +141,7 @@ Hints are used for greeting personalization, language selection, and escalation 
 
 ### Escalation priority
 
-| Trigger | No `plan_tier` | `"pro"` or `"enterprise"` |
+| Trigger | Other tiers / None | `"pro"` or `"enterprise"` |
 |---|---|---|
 | User requests a human | High | **Critical** |
 | No relevant answer found | Medium | **High** |

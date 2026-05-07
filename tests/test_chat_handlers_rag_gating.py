@@ -42,6 +42,9 @@ def test_skip_runs_rewrite_on_short_query() -> None:
         "how do I configure SLA notifications for my account",
         "tell me about API rate limits in the dashboard",
         "what is the VPN setup procedure for new users",
+        "how do I onboard B2B clients into the workspace",
+        "set up 2FA for the admin account please",
+        "where is the S3 bucket configuration in dashboard",
     ],
 )
 def test_skip_runs_rewrite_when_abbreviation_present(question: str) -> None:
@@ -52,6 +55,25 @@ def test_skip_runs_rewrite_when_abbreviation_present(question: str) -> None:
     )
     assert skip is False
     assert reason == "has_abbreviation"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "I have 100 orders pending in the queue today",
+        "show me invoices from 2023 in the dashboard",
+    ],
+)
+def test_skip_ignores_pure_numeric_tokens(question: str) -> None:
+    # Pure digits must not be treated as acronyms — otherwise routine queries
+    # mentioning counts or years would never get the latency win.
+    skip, reason = _should_skip_query_rewrite(
+        question,
+        language_match="native",
+        min_words=4,
+    )
+    assert skip is True
+    assert reason == "eligible_to_skip"
 
 
 @pytest.mark.parametrize(

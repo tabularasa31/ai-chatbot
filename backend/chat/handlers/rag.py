@@ -166,10 +166,12 @@ _DOCS_QUESTION_RE = re.compile(
     r"\b(docs|documentation|guide|guides|api reference|help center|knowledge base)\b"
 )
 
-# Latin all-caps tokens 2-5 chars long (API, VPN, SLA, B2B, HTTP). Presence of
-# such a token suggests the query carries an acronym/jargon term that
-# query-rewrite is likely to expand usefully - see _should_skip_query_rewrite.
-_ABBR_RE = re.compile(r"\b[A-Z]{2,5}\b")
+# Latin all-caps acronym tokens 2-5 chars (API, VPN, SLA, HTTP, B2B, 2FA, S3).
+# Lookahead bounds the length; the trailing pattern requires at least one
+# A-Z letter so plain numbers (100, 2023) don't false-positive. Presence of
+# such a token suggests the query carries jargon that query-rewrite is likely
+# to expand usefully - see _should_skip_query_rewrite.
+_ABBR_RE = re.compile(r"\b(?=[A-Z0-9]{2,5}\b)[A-Z0-9]*[A-Z][A-Z0-9]*\b")
 
 
 def _should_skip_query_rewrite(

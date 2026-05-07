@@ -14,8 +14,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from backend.chat.handlers.base import ChatTurnOutcome
 from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import localize_text_to_language_result
+from backend.chat.llm_unavailable import classify_llm_failure
+from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.chat.service import async_process_chat_message
 from backend.contact_sessions.service import start_user_session
@@ -499,6 +502,33 @@ def _widget_chat_stream(
                             ]
                         except Exception:
                             logger.warning("widget_source_lookup_failed", exc_info=True)
+            except APIError as exc:
+                # LLM provider unavailable. Convert to a degraded outcome with
+                # a typed failure_state instead of a raw error event so the
+                # widget can render Try again / Contact support buttons.
+                # No support ticket is created here (spec rule: LLM failure
+                # is a degraded service state, not an escalation event).
+                failure_state = classify_llm_failure(exc)
+                language = process_kwargs.get("browser_locale")
+                text = fallback_text(
+                    language=language,
+                    retryable=failure_state.retryable,
+                )
+                result_holder["outcome"] = ChatTurnOutcome(
+                    text=text,
+                    document_ids=[],
+                    tokens_used=0,
+                    chat_ended=False,
+                    failure_state=failure_state,
+                )
+                logger.info(
+                    "widget_chat_llm_unavailable",
+                    extra={
+                        "failure_type": failure_state.type.value,
+                        "retryable": failure_state.retryable,
+                        "session_id": str(sid),
+                    },
+                )
             except BaseException as exc:
                 result_holder["error"] = exc
             finally:
@@ -555,7 +585,14 @@ def _widget_chat_stream(
 
         outcome = result_holder.get("outcome")
         final_text = outcome.text if outcome is not None else ""
-        if not streamed_any and final_text:
+        is_llm_unavailable = (
+            outcome is not None and outcome.failure_state is not None
+        )
+        # Suppress streamed-chunk replay for the degraded path: no chunks
+        # were produced (LLM failed before any token), and emitting the
+        # fallback as a "chunk" before the "done" event would leak it into
+        # any naive client buffer.
+        if not streamed_any and final_text and not is_llm_unavailable:
             _emit_first_token_metric(
                 sid=sid,
                 t_start=t_start,
@@ -569,6 +606,8 @@ def _widget_chat_stream(
             session_id=sid,
             chat_ended=bool(outcome.chat_ended) if outcome is not None else False,
             ticket_number=outcome.ticket_number if outcome is not None else None,
+            outcome="llm_unavailable" if is_llm_unavailable else None,
+            failure_state=outcome.failure_state if is_llm_unavailable else None,
         )
         done_payload: dict[str, Any] = {
             "type": "done",
@@ -687,11 +726,11 @@ def widget_escalate(
         sid = uuid.UUID(session_id)
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid session_id") from None
-    trig = (
-        EscalationTrigger.user_request
-        if body.trigger == "user_request"
-        else EscalationTrigger.answer_rejected
-    )
+    trig = {
+        "user_request": EscalationTrigger.user_request,
+        "answer_rejected": EscalationTrigger.answer_rejected,
+        "llm_unavailable": EscalationTrigger.llm_unavailable,
+    }[body.trigger]
     try:
         msg, tnum = perform_manual_escalation(
             db,
@@ -701,6 +740,8 @@ def widget_escalate(
             user_note=body.user_note,
             trigger=trig,
             bot_public_id=bot_id,
+            failure_type=body.failure_type,
+            original_user_message=body.original_user_message,
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found") from None

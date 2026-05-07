@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
     from backend.chat.language import ResolvedLanguageContext
+    from backend.chat.llm_unavailable import LlmFailureState
     from backend.models import Bot, Chat, Tenant, TenantProfile
     from backend.observability import TraceHandle
 
@@ -24,6 +25,11 @@ class ChatTurnOutcome:
     tokens_used: int
     chat_ended: bool
     ticket_number: str | None = None
+    # When set, the turn ended in a degraded state because the LLM provider was
+    # unavailable. Acts as the discriminator for outcome = "llm_unavailable".
+    # No support ticket is created automatically; the widget shows the
+    # localized fallback ``text`` plus Try again / Contact support buttons.
+    failure_state: LlmFailureState | None = None
 
 
 @dataclass

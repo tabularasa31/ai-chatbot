@@ -1,5 +1,19 @@
 export type WidgetSource = { title: string; url: string };
 
+export type LlmFailureType =
+  | "provider_unavailable"
+  | "provider_timeout"
+  | "rate_limited"
+  | "quota_exhausted"
+  | "invalid_api_key"
+  | "unknown_llm_error";
+
+export type LlmFailureState = {
+  type: LlmFailureType;
+  retryable: boolean;
+  can_escalate: boolean;
+};
+
 export type ChatWidgetMessage =
   | {
       id: string;
@@ -11,6 +25,15 @@ export type ChatWidgetMessage =
       id: string;
       type: "system";
       subtype: "conversation_ended" | "new_conversation";
+    }
+  | {
+      id: string;
+      type: "llm_unavailable";
+      text: string;
+      originalMessage: string;
+      failureState: LlmFailureState;
+      escalationStatus: "idle" | "in_progress" | "done";
+      retryInProgress: boolean;
     };
 
 function createMessageId(): string {
@@ -30,6 +53,22 @@ export function createTextMessage(
     type,
     text,
     sources,
+  };
+}
+
+export function createLlmUnavailableMessage(args: {
+  text: string;
+  originalMessage: string;
+  failureState: LlmFailureState;
+}): ChatWidgetMessage {
+  return {
+    id: createMessageId(),
+    type: "llm_unavailable",
+    text: args.text,
+    originalMessage: args.originalMessage,
+    failureState: args.failureState,
+    escalationStatus: "idle",
+    retryInProgress: false,
   };
 }
 

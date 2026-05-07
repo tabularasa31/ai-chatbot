@@ -11,11 +11,14 @@ import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import {
   appendSystemMarker,
+  createLlmUnavailableMessage,
   createTextMessage,
   getLastEndedMarkerIndex,
   type ChatWidgetMessage,
+  type LlmFailureState,
   type WidgetSource,
 } from "@chat9/widget-shared";
+import { t as tString } from "./strings";
 import type { UserHints } from "./main";
 
 export type ChatWidgetBelowAssistantContext = {
@@ -522,6 +525,10 @@ export function ChatWidget({
         text?: string;
         session_id?: string;
         chat_ended?: boolean;
+        ticket_number?: string | null;
+        sources?: { title: string; url: string }[];
+        outcome?: string | null;
+        failure_state?: LlmFailureState | null;
       };
       return { res, payload };
     }
@@ -537,12 +544,26 @@ export function ChatWidget({
       chat_ended?: boolean;
       ticket_number?: string | null;
       sources?: { title: string; url: string }[];
+      outcome?: string | null;
+      failure_state?: LlmFailureState | null;
     } = {};
 
     const handleEvent = (eventData: string) => {
       const raw = eventData.trim();
       if (!raw) return;
-      let parsed: { type?: string; text?: string; stage?: string; session_id?: string; chat_ended?: boolean; ticket_number?: string; message?: string; code?: number; sources?: WidgetSource[] };
+      let parsed: {
+        type?: string;
+        text?: string;
+        stage?: string;
+        session_id?: string;
+        chat_ended?: boolean;
+        ticket_number?: string;
+        message?: string;
+        code?: number;
+        sources?: WidgetSource[];
+        outcome?: string | null;
+        failure_state?: LlmFailureState | null;
+      };
       try {
         parsed = JSON.parse(raw);
       } catch {
@@ -559,7 +580,16 @@ export function ChatWidget({
         payload.chat_ended = parsed.chat_ended;
         payload.ticket_number = parsed.ticket_number ?? null;
         payload.sources = parsed.sources ?? [];
-        if (typeof parsed.text === "string" && parsed.text !== fullText) {
+        payload.outcome = parsed.outcome ?? null;
+        payload.failure_state = parsed.failure_state ?? null;
+        // Don't replay the final text into onChunk for the degraded path:
+        // the LLM-unavailable message is rendered as its own UI block, not
+        // as an assistant bubble streamed token-by-token.
+        if (
+          parsed.outcome !== "llm_unavailable" &&
+          typeof parsed.text === "string" &&
+          parsed.text !== fullText
+        ) {
           onChunk?.(parsed.text);
         }
       } else if (parsed.type === "error") {
@@ -677,15 +707,20 @@ export function ChatWidget({
     [messages],
   );
 
-  const handleSend = async () => {
-    const userMessage = trimmedInput;
-    if (!userMessage || !canSend || chatClosed) return;
-
+  /** Send a user message through /widget/chat and apply the response.
+   *  Used both by the input-area send button and by the Try again retry path
+   *  for an LLM-unavailable degraded turn (in which case `appendUserBubble`
+   *  is false — the original user message is already on screen). */
+  const sendUserMessage = useCallback(async (
+    userMessage: string,
+    { appendUserBubble }: { appendUserBubble: boolean },
+  ) => {
     setLoading(true);
-    setInput("");
     setStreamingText("");
     setStatusStage(null);
-    setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
+    if (appendUserBubble) {
+      setMessages((prev) => [...prev, createTextMessage("user", userMessage)]);
+    }
 
     const handleChunk = (partial: string) => {
       setStreamingText(partial);
@@ -720,6 +755,25 @@ export function ChatWidget({
         throw new Error(formatApiDetail(detail, `API error: ${res.status}`));
       }
 
+      // LLM-unavailable degraded path: render typed fallback with action
+      // buttons instead of an assistant bubble. Backend already supplies
+      // the localized text in payload.text.
+      if (payload.outcome === "llm_unavailable" && payload.failure_state) {
+        if (payload.session_id) {
+          setSessionId(payload.session_id);
+          persistSession(botId, payload.session_id, userIdRef.current);
+        }
+        setMessages((prev) => [
+          ...prev,
+          createLlmUnavailableMessage({
+            text: payload.text ?? "",
+            originalMessage: userMessage,
+            failureState: payload.failure_state!,
+          }),
+        ]);
+        return;
+      }
+
       const data = payload as {
         text: string;
         session_id: string;
@@ -745,11 +799,109 @@ export function ChatWidget({
       setStatusStage(null);
       setLoading(false);
     }
+  }, [applyAssistantMessage, botId, requestWidgetTurn, sessionId]);
+
+  const handleSend = async () => {
+    const userMessage = trimmedInput;
+    if (!userMessage || !canSend || chatClosed) return;
+    setInput("");
+    await sendUserMessage(userMessage, { appendUserBubble: true });
   };
 
   const handleSendClick = () => {
     void handleSend();
   };
+
+  /** Try again on an LLM-unavailable bubble: reuse the original user message
+   *  without producing a duplicate user bubble. The degraded message stays
+   *  on screen until the new turn either succeeds or fails again — keeping
+   *  it removes UI flicker if retry returns the same failure. */
+  const handleLlmUnavailableRetry = useCallback(async (messageId: string) => {
+    let originalMessage: string | null = null;
+    setMessages((prev) =>
+      prev.map((msg) => {
+        if (msg.id === messageId && msg.type === "llm_unavailable") {
+          originalMessage = msg.originalMessage;
+          return { ...msg, retryInProgress: true };
+        }
+        return msg;
+      }),
+    );
+    if (!originalMessage) return;
+    try {
+      // Drop the degraded bubble before the new attempt — either path's
+      // outcome will be re-rendered fresh by sendUserMessage.
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      await sendUserMessage(originalMessage, { appendUserBubble: false });
+    } finally {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.type === "llm_unavailable"
+            ? { ...m, retryInProgress: false }
+            : m,
+        ),
+      );
+    }
+  }, [sendUserMessage]);
+
+  /** Contact support on an LLM-unavailable bubble: POST to the escalate
+   *  proxy with the original message and failure type. Backend creates the
+   *  ticket without invoking the LLM. */
+  const handleLlmUnavailableEscalate = useCallback(async (messageId: string) => {
+    const target = messages.find(
+      (m): m is Extract<ChatWidgetMessage, { type: "llm_unavailable" }> =>
+        m.id === messageId && m.type === "llm_unavailable",
+    );
+    if (!target || !sessionId) return;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId && m.type === "llm_unavailable"
+          ? { ...m, escalationStatus: "in_progress" }
+          : m,
+      ),
+    );
+    try {
+      const params = new URLSearchParams({
+        botId,
+        session_id: sessionId,
+      });
+      const res = await fetch(`/widget/escalate?${params}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trigger: "llm_unavailable",
+          failure_type: target.failureState.type,
+          original_user_message: target.originalMessage,
+        }),
+      });
+      if (!res.ok) throw new Error(`escalate failed: ${res.status}`);
+      const data = (await res.json()) as { ticket_number?: string };
+      if (data.ticket_number) setActiveTicket(data.ticket_number);
+      const notifiedText = tString(localeParam, "support_notified");
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.type === "llm_unavailable"
+            ? { ...m, escalationStatus: "done", text: notifiedText }
+            : m,
+        ),
+      );
+    } catch (error) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.type === "llm_unavailable"
+            ? { ...m, escalationStatus: "idle" }
+            : m,
+        ),
+      );
+      setMessages((prev) => [
+        ...prev,
+        createTextMessage(
+          "error",
+          error instanceof Error ? error.message : "Failed to contact support",
+        ),
+      ]);
+    }
+  }, [botId, localeParam, messages, sessionId]);
 
   return (
     <div className="relative flex h-full w-full min-h-0 flex-col overflow-hidden bg-white">
@@ -811,6 +963,46 @@ export function ChatWidget({
                     <div key={msg.id} className="flex justify-end">
                       <div className="max-w-[85%] rounded-2xl px-4 py-2 bg-[#f3e8ff] text-gray-800">
                         <p className="whitespace-pre-wrap">{msg.text}</p>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (msg.type === "llm_unavailable") {
+                  const showRetry =
+                    msg.failureState.retryable && msg.escalationStatus !== "done";
+                  const showEscalate =
+                    msg.failureState.can_escalate && msg.escalationStatus !== "done";
+                  const busy =
+                    msg.retryInProgress || msg.escalationStatus === "in_progress";
+                  return (
+                    <div key={msg.id} className="flex items-end gap-3">
+                      <div className="max-w-[85%] rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900">
+                        <p className="whitespace-pre-wrap">{msg.text}</p>
+                        {(showRetry || showEscalate) ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {showRetry ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleLlmUnavailableRetry(msg.id)}
+                                disabled={busy}
+                                className="inline-flex items-center rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {tString(localeParam, "try_again_button")}
+                              </button>
+                            ) : null}
+                            {showEscalate ? (
+                              <button
+                                type="button"
+                                onClick={() => void handleLlmUnavailableEscalate(msg.id)}
+                                disabled={busy}
+                                className="inline-flex items-center rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {tString(localeParam, "contact_support_button")}
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   );

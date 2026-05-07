@@ -5,7 +5,7 @@ description: How to add the Chat9 chat widget to your site, with optional userHi
 
 ## Basic embed
 
-Copy the snippet from the Dashboard and paste it before the closing `</body>` tag. The loader is a tiny (~3 KB gzipped) script served from a CDN-style domain (`widget.getchat9.live`) — it injects an iframe pointing at the hosted widget UI on the same origin and forwards postMessage events between your page and the chat.
+Paste this snippet before the closing `</body>` tag:
 
 ```html
 <script
@@ -14,125 +14,27 @@ Copy the snippet from the Dashboard and paste it before the closing `</body>` ta
 </script>
 ```
 
-`data-bot-id` carries your bot's `public_id`, not a secret. It is safe to ship in page HTML.
+`data-bot-id` is your bot's public ID — safe to include in page HTML.
 
-That single line is the only required snippet — the widget works anonymously out of the box. Everything else (mode, color, position, personalization) is optional and lives on `window.Chat9Config`, which you set **before** the loader script runs.
+This is the only required snippet. The widget works anonymously out of the box. All configuration is optional and goes through `window.Chat9Config`, which must be set **before** the loader script.
 
-## One canonical snippet
+> Do not add `async` or `defer` to the `widget.js` tag — the loader reads `document.currentScript` synchronously and will not start without it.
 
-There is exactly one shape for the embed code. `data-bot-id` is the only attribute on the `<script>` tag; all other configuration goes through `window.Chat9Config`.
+## Configuration
+
+`data-bot-id` is the only attribute on the `<script>` tag. Everything else goes through `window.Chat9Config`:
 
 ```html
 <script>
   window.Chat9Config = {
-    // optional UI tweaks
     mode: "bubble",          // "bubble" | "inline"
     color: "#a855f7",
-    position: "right",        // "right" | "left"
-    target: "chat9-widget",  // for mode: "inline" — id of the host element
-
-    // optional personalization (untrusted; see "userHints" below)
+    position: "right",       // "right" | "left"
+    target: "chat9-widget",  // inline mode only — id of the host element
     userHints: {
       name: "Anna",
       email: "anna@example.com",
       locale: "ru-RU"
-    },
-
-    // override only on staging or self-hosted dashboards
-    apiBase: "https://getchat9.live",
-    widgetBase: "https://widget.getchat9.live/v1/"
-  };
-</script>
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
-</script>
-```
-
-You can choose between two modes on the [Embed page](https://getchat9.live/embed):
-
-- **Bubble** (default) — floating chat button in the bottom-right corner.
-- **Inline** — renders the widget inside an existing container on your page. Set `Chat9Config.mode = "inline"` and `Chat9Config.target = "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
-
-### Config reference
-
-| Field | Default | Notes |
-|---|---|---|
-| `mode` | `"bubble"` | `"bubble"` or `"inline"`. |
-| `target` | — | DOM element id for inline mode. Ignored in bubble mode. |
-| `color` | violet gradient | Bubble background. Accepts `#RGB`, `#RRGGBB`, or any CSS color. |
-| `position` | `"right"` | `"right"` or `"left"`. Bubble corner. |
-| `userHints` | — | See [userHints](#userhints-optional). |
-| `apiBase` | `https://getchat9.live` | Override only for staging/self-hosted dashboards. |
-| `widgetBase` | derived from script src | Override only for testing a non-prod widget build. |
-
-### CSP allowlist
-
-If your site sets a Content Security Policy, allow Chat9 in the relevant directives:
-
-```
-script-src https://widget.getchat9.live;
-frame-src  https://widget.getchat9.live;
-connect-src https://getchat9.live;
-```
-
-The loader runs from `widget.getchat9.live`, the iframe is hosted there too, and the widget's API calls go to `getchat9.live` (or whatever `apiBase` you set).
-
-## What the widget does
-
-- A floating chat iframe appears in the bottom-right corner of your page (about 400×600px).
-- Users type questions and receive answers from your documentation.
-- Session continuity works across messages in the same visit.
-- If the widget starts a brand-new empty conversation, it can show a default greeting instead of an error or blank state.
-- If the bot needs one missing detail, it can ask a single follow-up question (embedded in the same text reply) instead of guessing.
-- The widget works in any language.
-
-Language behavior — short version: the bot replies in the language of the user's question once they've typed one; before that, it uses `userHints.locale` if you set it, then the browser locale, then English. See [Language Support](/docs/language) for the full contract, including sticky retention and the dashboard escalation-language override.
-
-## Where to get the embed code
-
-1. Log in to your Dashboard at https://getchat9.live.
-2. Copy the embed block from the **Dashboard** home (`/dashboard`) or the **Embed** page (`/embed`).
-
-## Session continuity
-
-The widget keeps a `session_id` so the bot can maintain context across follow-up questions.
-
-Current behavior:
-
-- sessions are stored in the browser (`localStorage`) and can continue in the same browser for up to 24 hours, rehydrated from `GET /widget/history`
-- when `userHints` includes a `user_id` (or `email`), browser storage is keyed off it, so reopening the widget on the same device for the same visitor resumes the previous chat (still subject to the 24-hour window) — `POST /widget/session/init` itself always returns a fresh `session_id`, so cross-device resume is not provided by the standard widget today
-- closed chats are not resumed
-
-If a chat is explicitly closed by support/escalation flow, the widget shows `Start new chat`. The old transcript stays visible, the widget marks the next section as a new conversation, and the next message starts a fresh session below the old history.
-
-Greeting behavior:
-
-- when the widget opens a brand-new session with no resumed transcript, it can show the default greeting automatically
-- if an existing session is resumed from the last 24 hours, the greeting is not shown again
-- after `Start new chat`, the next fresh empty session shows the greeting again
-
-Clarification behavior:
-
-- Chat9 may ask one clarification question when the user's request is ambiguous or missing a critical parameter, but at most one blocking clarifying question per conversation.
-- The clarifying question is part of the assistant's normal text reply — there is no separate structured payload and no quick-reply buttons.
-- Clarification replies are treated as part of the same conversation context, not as a brand-new standalone question.
-- Empty follow-up turns after the conversation has already started are still rejected as invalid input.
-
----
-
-## userHints (optional)
-
-The default embed is anonymous: Chat9 knows which bot to load, but does not know who the visitor is. If your tenant frontend already has user info and wants the widget to use it for personalization, set `userHints` on `window.Chat9Config`.
-
-```html
-<script>
-  window.Chat9Config = {
-    userHints: {
-      name: "Anna",
-      email: "anna@example.com",
-      locale: "ru-RU",
-      plan_tier: "growth"
     }
   };
 </script>
@@ -142,122 +44,103 @@ The default embed is anonymous: Chat9 knows which bot to load, but does not know
 </script>
 ```
 
-When the widget mounts, it calls `POST /widget/session/init` with `bot_id` and `user_hints`. Hints land on the chat session and are used for:
+| Field | Default | Notes |
+|---|---|---|
+| `mode` | `"bubble"` | `"bubble"` or `"inline"` |
+| `target` | — | DOM element id for inline mode |
+| `color` | violet gradient | Bubble background color (`#RGB`, `#RRGGBB`) |
+| `position` | `"right"` | `"right"` or `"left"` |
+| `userHints` | — | See [userHints](#userhints) |
 
-- greeting personalization (e.g. "Hi Anna")
-- the language Chat9 picks before the user types
-- escalation email metadata so your support team sees `Email: anna@…` and `Name: Anna` directly in the inbox notification
+**Modes:**
+- **Bubble** — floating button, bottom corner of the page.
+- **Inline** — renders inside a container you provide. Add `<div id="chat9-widget"></div>` where you want the widget.
 
-### Important — these hints are untrusted
+### CSP
 
-`userHints` are passed straight from the browser. Anyone inspecting the page can change them. **Do not** use them for:
+If your site uses a Content Security Policy:
 
-- access control, paid-tier gating, or routing that relies on the visitor really being who they say they are
-- audit logs that imply "user X said Y" with verification semantics
-- anything where impersonation matters
+```
+script-src  https://widget.getchat9.live;
+frame-src   https://widget.getchat9.live;
+connect-src https://getchat9.live;
+```
 
-Hints are honest *suggestions* from your frontend to the bot ("this visitor's display name is Anna, their preferred language is Russian"), not verified identity claims. A future verified-identity path is on the roadmap; until then, treat hints as personalization only.
+## Where to get the embed code
 
-### Allowed fields
+1. Log in to your Dashboard at https://getchat9.live.
+2. Copy the embed block from the **Dashboard** home or the **Embed** page.
 
-Unknown keys are dropped server-side; oversized values are truncated.
+## Session continuity
+
+Conversation history is stored on the server. The widget keeps a `session_id` in the visitor's browser (`localStorage`) for up to 24 hours — on return visits it fetches the previous conversation from the server using that ID, so history persists across page reloads.
+
+When `userHints` includes `user_id` or `email`, the storage key is scoped per visitor — different users on the same device get separate sessions.
+
+Cross-device resume is not supported: the `session_id` lives in the local browser only.
+
+When the bot escalates a conversation to a human agent, the chat is marked as ended. The transcript stays visible; a "Start new chat" button appears for the visitor to open a new session.
+
+**Greeting** is shown once per new session and not repeated on resume.
+
+**Clarification:** the bot may ask one follow-up question when a request is ambiguous. It appears as part of the normal text reply.
+
+## Login / logout lifecycle
+
+`userHints` are passed to the widget once — at iframe mount time. They cannot be updated after the widget has mounted.
+
+**SSR / multi-page apps:** set `userHints` server-side before sending HTML. On logout, the page navigates away and the iframe is destroyed automatically — nothing extra needed.
+
+**Single-page apps (SPA):** if your app redirects on logout, the page reloads and the widget reinitializes naturally for the next user. Call `destroy()` before the redirect to remove the iframe immediately:
+
+```js
+window.Chat9Widget?.destroy();
+window.Chat9Config.userHints = null;
+```
+
+---
+
+## userHints
+
+By default the widget is anonymous. Pass `userHints` to personalize the session:
+
+```html
+<script>
+  window.Chat9Config = {
+    userHints: {
+      user_id: "42",
+      name: "Anna",
+      email: "anna@example.com",
+      locale: "ru-RU",
+      plan_tier: "pro"
+    }
+  };
+</script>
+<script
+  src="https://widget.getchat9.live/widget.js"
+  data-bot-id="YOUR_BOT_PUBLIC_ID">
+</script>
+```
+
+Hints are used for greeting personalization, language selection, and escalation email metadata.
+
+> **Note:** Hints come from the browser and can be modified by anyone. Do not use them for access control, paid-tier gating, or audit logs. Treat them as personalization suggestions only.
+
+### Fields
 
 | Field | Notes |
 |---|---|
-| `user_id` | Optional stable identifier from your system. Used as the contact key for grouping a visitor's sessions. If absent, Chat9 falls back to `hint:<email>`. |
-| `email` | Plausible email address. Empty/malformed values are dropped. Used in escalation notifications. |
+| `user_id` | Stable ID from your system. Primary key for session grouping. Falls back to `hint:<email>` if absent. |
+| `email` | Used in escalation notifications. Malformed values are dropped. |
 | `name` | Display name. |
-| `plan_tier` | E.g. `"free" | "starter" | "growth" | "pro" | "enterprise"`. Influences escalation priority — see below. |
+| `plan_tier` | `"free"`, `"starter"`, `"growth"`, `"pro"`, `"enterprise"`. Affects escalation priority. |
 | `audience_tag` | Free-form segment label. |
-| `locale` | BCP-47 (e.g. `"en-US"`, `"ru-RU"`). Used as the bootstrap language for the greeting and as a stronger signal than browser locale. |
+| `locale` | BCP-47 (e.g. `"en-US"`, `"ru-RU"`). Overrides browser locale for language selection. |
 
-### `plan_tier` and escalation priority
+### Escalation priority
 
-When the bot escalates a conversation to a human, Chat9 uses `plan_tier` from the hints to set the ticket priority:
-
-| Trigger | `plan_tier` not set | `plan_tier: "pro"` or `"enterprise"` |
+| Trigger | No `plan_tier` | `"pro"` or `"enterprise"` |
 |---|---|---|
-| User explicitly requests a human | High | **Critical** |
-| Bot can't find a relevant answer | Medium | **High** |
+| User requests a human | High | **Critical** |
+| No relevant answer found | Medium | **High** |
 | Answer rejected by quality check | Medium | Medium |
-
-Because hints are untrusted, this is a personalization heuristic, not enforcement. Anyone could set `plan_tier: "enterprise"` from devtools — that's fine for the current "premium tickets surface first" use case, not fine for "premium users get free credits" use cases.
-
-### What Chat9 stores from hints
-
-Stored on the chat session:
-
-- `user_id` (or synthetic `hint:<email>` when only email was provided)
-- `email`
-- `name`
-- `plan_tier`
-- `audience_tag`
-- `locale`
-
-Used in the LLM prompt: `plan_tier`, `locale`, `audience_tag`.
-
-Used in escalation email metadata: `user_id`, `email`, `name`, `plan_tier`.
-
-### Calling `/widget/session/init` directly
-
-If you've built a custom integration without the loader, you can call session init yourself:
-
-```bash
-curl -X POST "https://getchat9.live/widget/session/init" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "bot_id": "YOUR_BOT_PUBLIC_ID",
-    "user_hints": {
-      "user_id": "cust_12345",
-      "email": "anna@example.com",
-      "name": "Anna",
-      "plan_tier": "growth",
-      "locale": "ru-RU"
-    },
-    "locale": "ru-RU"
-  }'
-```
-
-Response:
-
-```json
-{
-  "session_id": "1c576fd8-cf10-4b58-a4e7-460ea0d19dbe",
-  "mode": "hints"
-}
-```
-
-When no hints are sent (or all of them get dropped during sanitization), the response is:
-
-```json
-{
-  "session_id": "1c576fd8-cf10-4b58-a4e7-460ea0d19dbe",
-  "mode": "anonymous"
-}
-```
-
-Then send chat messages with the returned `session_id`:
-
-```bash
-curl -N -X POST "https://getchat9.live/widget/chat?bot_id=YOUR_BOT_PUBLIC_ID&session_id=1c576fd8-cf10-4b58-a4e7-460ea0d19dbe" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Hello"}'
-```
-
-`/widget/chat` responds with `Content-Type: text/event-stream` (Server-Sent Events). Frame sequence:
-
-1. one or more `data: {"type":"status","stage":"…"}` frames signalling progress (e.g. `"thinking"`) — safe to ignore if you only want the answer text
-2. one or more `data: {"type":"chunk","text":"…"}` frames as the model streams; concatenate `text` to render the answer as it arrives
-3. exactly one terminal `data: {"type":"done","text":"<full reply>","session_id":"…","chat_ended":false}` frame; the `done` payload may also include `ticket_number` (when the turn opened a support ticket) and `sources` (when the answer cited URL-backed documents)
-
-On a server-side error you may instead receive a single `data: {"type":"error","code":…,"message":"…"}` frame before the stream closes. See [API → POST /widget/chat](/docs/api#post-widgetchat) for the full contract.
-
-Public widget responses may include:
-
-- a normal answer derived from your knowledge base
-- the default localized greeting when a new empty conversation starts
-- a partial answer with a caveat when the bot is only partially confident
-- a single clarifying question (embedded in the same text reply) when the bot needs one missing detail to answer reliably
-- an escalation handoff message when the bot cannot answer safely
-
-There is no structured clarification payload and the widget does not render quick-reply buttons — the message text always lives in the `done` frame's `text` field.

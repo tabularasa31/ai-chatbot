@@ -63,11 +63,16 @@ def test_private_and_widget_chat_advertise_distinct_turn_schemas(tenant: TestCli
 
     widget_schema = spec["components"]["schemas"]["WidgetChatTurnResponse"]
     widget_properties = widget_schema["properties"]
+    # outcome + failure_state are degraded-state extensions for the
+    # LLM-unavailable path; populated only when the OpenAI provider fails
+    # mid-turn. Old widgets that ignore them still render `text`.
     assert set(widget_properties.keys()) == {
         "text",
         "session_id",
         "chat_ended",
         "ticket_number",
+        "outcome",
+        "failure_state",
     }
     assert "source_documents" not in widget_properties
     assert "tokens_used" not in widget_properties

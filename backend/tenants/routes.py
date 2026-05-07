@@ -26,6 +26,7 @@ from backend.tenants.schemas import (
     SupportSettingsResponse,
     TenantApiKeyListResponse,
     TenantApiKeyResponse,
+    TenantLlmAlertResponse,
     TenantMeResponse,
     TenantResponse,
     UpdatePrivacyConfigRequest,
@@ -199,6 +200,26 @@ def revoke_api_key_route(
     except Exception:
         pass
     return TenantApiKeyResponse.model_validate(row)
+
+
+@tenants_router.get("/me/llm-alert", response_model=TenantLlmAlertResponse)
+def get_llm_alert_route(
+    current_user: Annotated[User, Depends(require_verified_user)],
+    db: Annotated[Session, Depends(get_db)],
+) -> TenantLlmAlertResponse:
+    """Active LLM-failure alert for the dashboard banner.
+
+    Returns ``{type: null}`` when nothing is wrong. Cleared automatically
+    on the next successful chat turn (no manual dismiss endpoint — the
+    banner reflects live state, not a sticky notification).
+    """
+    tenant = get_tenant_by_user(current_user.id, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return TenantLlmAlertResponse(
+        type=tenant.llm_alert_type,
+        since=tenant.llm_alert_first_at,
+    )
 
 
 @tenants_router.get("/me/privacy", response_model=PrivacyConfigResponse)

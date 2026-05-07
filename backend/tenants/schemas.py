@@ -126,6 +126,19 @@ class SupportSettingsResponse(BaseModel):
     fallback_email: str | None = None
 
 
+class TenantLlmAlertResponse(BaseModel):
+    """Active LLM-failure alert for the tenant dashboard banner.
+
+    `type` is `null` when no alert is active. Possible non-null values match
+    `backend.chat.llm_unavailable.LlmFailureType` (currently
+    `quota_exhausted` or `invalid_api_key` — only actionable failures
+    raise an alert).
+    """
+
+    type: str | None = None
+    since: datetime | None = None
+
+
 class UpdateSupportSettingsRequest(BaseModel):
     """PUT body for /clients/me/support-settings."""
 

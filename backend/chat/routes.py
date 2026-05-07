@@ -20,6 +20,7 @@ from backend.chat.history_service import (
     list_chat_sessions,
 )
 from backend.chat.language import detect_language, localize_text_to_language_result
+from backend.chat.llm_unavailable import LlmFailureType, classify_llm_failure
 from backend.chat.schemas import (
     BadAnswerItem,
     BadAnswerListResponse,
@@ -42,7 +43,6 @@ from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.idempotency import idempotent_section
 from backend.core.limiter import limiter
 from backend.core.openai_client import is_quota_exceeded
-from backend.email.service import send_email
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
@@ -58,15 +58,22 @@ from backend.models import (
     User,
 )
 from backend.privacy_schemas import DeletedCountResponse
+from backend.tenants.llm_alerts import (
+    clear_llm_alert,
+    record_llm_failure,
+)
+from backend.tenants.llm_alerts import (
+    is_actionable as is_actionable_llm_failure,
+)
 from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 
 logger = logging.getLogger(__name__)
 
 
 def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", api_key: str | None = None) -> str:
-    """Log OpenAI quota-exceeded event to Sentry and email the tenant admin once.
-
-    Returns the user-facing error detail string (includes support email if known).
+    """Log the quota-exceeded event to Sentry, raise/refresh the tenant
+    LLM-alert (email throttled to 24h via tenants.llm_alerts), and return
+    the user-facing error detail string (includes support email if known).
     """
     logger.error(
         "openai_quota_exceeded: tenant_id=%s tenant_name=%s",
@@ -87,31 +94,10 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", ap
     except Exception:
         pass
 
+    record_llm_failure(db, tenant, LlmFailureType.quota_exhausted)
+
     profile = db.get(TenantProfile, tenant.id)
     support_email: str | None = profile.support_email if profile else None
-
-    admin = (
-        db.query(User)
-        .filter(User.tenant_id == tenant.id, User.is_admin.is_(True))
-        .first()
-    )
-    if admin:
-        try:
-            send_email(
-                to=admin.email,
-                subject="[Chat9] OpenAI quota exceeded — action required",
-                body=(
-                    "Hello,\n\n"
-                    "Your OpenAI API key has run out of credits. "
-                    "Chat9 cannot generate responses for your users until you top up your balance.\n\n"
-                    "Please visit https://platform.openai.com/settings/organization/billing "
-                    "to add credits.\n\n"
-                    "— Chat9"
-                ),
-            )
-        except Exception:
-            logger.warning("quota_exceeded_email_failed: tenant_id=%s", tenant.id)
-
     contact = f" at {support_email}" if support_email else ""
     canonical = (
         "We're currently experiencing technical difficulties and are unable to respond via chat. "
@@ -194,11 +180,22 @@ async def chat(
                     ),
                 ) from None
             raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
-        except APIError:
+        except APIError as exc:
+            # Classify so an invalid/revoked key surfaces a tenant-level alert
+            # the same way quota_exhausted does (RateLimitError path above).
+            failure_state = classify_llm_failure(exc)
+            if is_actionable_llm_failure(failure_state.type):
+                await run_sync(
+                    db,
+                    lambda s: record_llm_failure(s, tenant, failure_state.type),
+                )
             raise HTTPException(
                 status_code=503,
                 detail="OpenAI service unavailable",
             ) from None
+
+        # Successful turn — clear any active alert (no-op if none was set).
+        await run_sync(db, lambda s: clear_llm_alert(s, tenant))
 
         response = ChatTurnResponse(
             text=outcome.text,

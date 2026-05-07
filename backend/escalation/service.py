@@ -134,7 +134,7 @@ def detect_human_request(
     each other's classifications.
     """
     cache_key = hashlib.sha256(
-        f"{tenant_id}:{message[:200]}".encode()
+        f"{tenant_id}:{message}".encode()
     ).hexdigest()
     cached = _hr_cache_get(cache_key)
     if cached is not None:

@@ -29,7 +29,6 @@ from backend.escalation.service import (
     _escalation_clarify_already_asked,
     _set_escalation_clarify_flag,
     apply_collected_contact_email,
-    detect_human_request,
     get_latest_escalation_ticket_for_chat,
     parse_contact_email,
 )
@@ -66,14 +65,10 @@ class EscalationStateMachine(PipelineHandler):
         if chat.escalation_followup_pending:
             return True
         # Explicit human request runs through the FSM only when not already in
-        # a deterministic escalation state above. Detection re-runs here — the
-        # call is cheap (regex / phrase match) and keeps the handler self-
-        # contained for tests.
-        return bool(
-            detect_human_request(
-                ctx.redacted_question, ctx.api_key, ctx.tenant_id
-            )
-        )
+        # a deterministic escalation state above. Use the value pre-computed
+        # by the chat pipeline — re-running detect_human_request here would
+        # add a second LLM call (and on timeout, a second 3s wait).
+        return ctx.explicit_human_request
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         from backend.core.db import run_sync

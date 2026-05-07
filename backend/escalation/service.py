@@ -763,11 +763,20 @@ def perform_manual_escalation(
     user_note: str | None,
     trigger: EscalationTrigger,
     bot_public_id: str | None = None,
+    failure_type: str | None = None,
+    original_user_message: str | None = None,
 ) -> tuple[str, str]:
     """
     Create ticket + OpenAI handoff; persist assistant message only (no user bubble).
     Returns (message_to_user, ticket_number).
+
+    For ``trigger == EscalationTrigger.llm_unavailable`` the OpenAI handoff is
+    skipped entirely (the LLM is the failing dependency) and the user-facing
+    message is taken from the static i18n table. ``failure_type`` is recorded
+    in ``user_note``; ``original_user_message`` becomes the ticket's
+    ``primary_question``.
     """
+    from backend.chat.llm_unavailable_copy import support_notified_text
     from backend.escalation.openai_escalation import complete_escalation_openai_turn
     from backend.models import Chat, EscalationPhase
 
@@ -781,49 +790,81 @@ def perform_manual_escalation(
 
     effective = dict(chat.user_context) if chat.user_context else {}
     optional_entity_types = _tenant_optional_entity_types(tenant)
+
+    is_llm_unavailable = trigger == EscalationTrigger.llm_unavailable
+    enriched_note = user_note
+    if is_llm_unavailable and failure_type:
+        prefix = f"[llm_failure: {failure_type}]"
+        enriched_note = f"{prefix} {user_note}".strip() if user_note else prefix
+
+    primary_question_override = (
+        original_user_message if is_llm_unavailable and original_user_message else None
+    )
     ticket = create_escalation_ticket(
         tenant.id,
-        user_note or "(manual escalation)",
+        primary_question_override or user_note or "(manual escalation)",
         trigger,
         db,
         chat_id=chat.id,
         session_id=session_id,
         user_context=effective,
-        user_note=user_note,
+        user_note=enriched_note,
         optional_entity_types=optional_entity_types,
     )
-    phase = (
-        EscalationPhase.handoff_ask_email
-        if not ticket.user_email
-        else EscalationPhase.handoff_email_known
-    )
-    msgs = transcript_messages_for_openai(chat)
-    tenant_profile = (
-        db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
-    )
-    support_config = public_support_config_dict(
-        tenant.settings if isinstance(tenant.settings, dict) else None
-    )
-    language_context = resolve_language_context(
-        current_turn_text=user_note or "[User requested support via the Talk to support action.]",
-        is_bootstrap_turn=False,
-        bootstrap_user_locale=None,
-        browser_locale=(effective or {}).get("browser_locale"),
-        tenant_escalation_language=(
-            support_config.get("escalation_language")
+    if is_llm_unavailable:
+        # LLM provider is the failing dependency — every step here must be
+        # provably LLM-free. Resolve the response language from local signals
+        # only (browser locale, then tenant escalation language); skip
+        # resolve_language_context to avoid any current/future LLM-using
+        # detection paths.
+        tenant_profile = (
+            db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
+        )
+        support_config = public_support_config_dict(
+            tenant.settings if isinstance(tenant.settings, dict) else None
+        )
+        response_language = (
+            (effective or {}).get("browser_locale")
+            or support_config.get("escalation_language")
             or getattr(tenant_profile, "escalation_language", None)
-        ),
-        tenant_id=getattr(tenant, "public_id", None),
-        chat_id=str(chat.id) if chat is not None else None,
-    )
-    out = complete_escalation_openai_turn(
-        phase=phase,
-        chat_messages=msgs,
-        fact_json=fact_from_ticket(ticket, chat=chat),
-        latest_user_text="[User requested support via the Talk to support action.]",
-        api_key=api_key,
-        response_language=language_context.response_language,
-    )
+        )
+        message_to_user = support_notified_text(language=response_language)
+        tokens_used = 0
+    else:
+        phase = (
+            EscalationPhase.handoff_ask_email
+            if not ticket.user_email
+            else EscalationPhase.handoff_email_known
+        )
+        msgs = transcript_messages_for_openai(chat)
+        tenant_profile = (
+            db.query(TenantProfile).filter(TenantProfile.tenant_id == tenant.id).first()
+        )
+        support_config = public_support_config_dict(
+            tenant.settings if isinstance(tenant.settings, dict) else None
+        )
+        language_context = resolve_language_context(
+            current_turn_text=user_note or "[User requested support via the Talk to support action.]",
+            is_bootstrap_turn=False,
+            bootstrap_user_locale=None,
+            browser_locale=(effective or {}).get("browser_locale"),
+            tenant_escalation_language=(
+                support_config.get("escalation_language")
+                or getattr(tenant_profile, "escalation_language", None)
+            ),
+            tenant_id=getattr(tenant, "public_id", None),
+            chat_id=str(chat.id) if chat is not None else None,
+        )
+        out = complete_escalation_openai_turn(
+            phase=phase,
+            chat_messages=msgs,
+            fact_json=fact_from_ticket(ticket, chat=chat),
+            latest_user_text="[User requested support via the Talk to support action.]",
+            api_key=api_key,
+            response_language=language_context.response_language,
+        )
+        message_to_user = out.message_to_user
+        tokens_used = out.tokens_used
     if not ticket.user_email:
         chat.escalation_awaiting_ticket_id = ticket.id
     else:
@@ -836,18 +877,18 @@ def perform_manual_escalation(
             chat_id=chat.id,
             role=MessageRole.assistant,
             content=redact(
-                out.message_to_user,
+                message_to_user,
                 optional_entity_types=optional_entity_types,
             ).redacted_text,
-            content_original_encrypted=encrypt_value(out.message_to_user),
+            content_original_encrypted=encrypt_value(message_to_user),
             content_redacted=redact(
-                out.message_to_user,
+                message_to_user,
                 optional_entity_types=optional_entity_types,
             ).redacted_text,
             source_documents=None,
         )
     )
-    chat.tokens_used = int(chat.tokens_used or 0) + out.tokens_used
+    chat.tokens_used = int(chat.tokens_used or 0) + tokens_used
     db.add(chat)
     db.commit()
 
@@ -862,7 +903,7 @@ def perform_manual_escalation(
         priority=ticket.priority.value,
     )
 
-    return (out.message_to_user, ticket.ticket_number)
+    return (message_to_user, ticket.ticket_number)
 
 
 def chunks_preview_from_results(

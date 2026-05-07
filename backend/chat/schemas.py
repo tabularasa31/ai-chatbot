@@ -9,6 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from backend.chat.llm_unavailable import LlmFailureState
+
 
 class MessageFeedbackValue(str, Enum):
     up = "up"
@@ -70,12 +72,19 @@ class ChatTurnResponse(BaseModel):
 
 
 class WidgetChatTurnResponse(BaseModel):
-    """Widget `done` event payload for `/widget/chat` SSE responses."""
+    """Widget `done` event payload for `/widget/chat` SSE responses.
+
+    ``outcome`` and ``failure_state`` are populated only for the degraded
+    LLM-unavailable path. Old widgets that ignore them still render ``text``
+    (backward-compat — AC5 of LLM Unavailable spec).
+    """
 
     text: str
     session_id: UUID
     chat_ended: bool = False
     ticket_number: str | None = None
+    outcome: Literal["llm_unavailable"] | None = None
+    failure_state: LlmFailureState | None = None
 
 
 class MessageResponse(BaseModel):

@@ -50,6 +50,7 @@ class EscalationTrigger(str, enum.Enum):
     no_documents = "no_documents"
     user_request = "user_request"
     answer_rejected = "answer_rejected"
+    llm_unavailable = "llm_unavailable"
 
 
 class EscalationPriority(str, enum.Enum):

@@ -234,11 +234,11 @@ def chat_escalate(
             status_code=400,
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
         )
-    trig = (
-        EscalationTrigger.user_request
-        if body.trigger == "user_request"
-        else EscalationTrigger.answer_rejected
-    )
+    trig = {
+        "user_request": EscalationTrigger.user_request,
+        "answer_rejected": EscalationTrigger.answer_rejected,
+        "llm_unavailable": EscalationTrigger.llm_unavailable,
+    }[body.trigger]
     try:
         msg, tnum = perform_manual_escalation(
             db,
@@ -247,6 +247,8 @@ def chat_escalate(
             api_key=tenant.openai_api_key,
             user_note=body.user_note,
             trigger=trig,
+            failure_type=body.failure_type,
+            original_user_message=body.original_user_message,
         )
     except ValueError:
         raise HTTPException(status_code=404, detail="Session not found") from None

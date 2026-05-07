@@ -69,7 +69,11 @@ class EscalationStateMachine(PipelineHandler):
         # a deterministic escalation state above. Detection re-runs here — the
         # call is cheap (regex / phrase match) and keeps the handler self-
         # contained for tests.
-        return bool(detect_human_request(ctx.redacted_question, ctx.api_key))
+        return bool(
+            detect_human_request(
+                ctx.redacted_question, ctx.api_key, ctx.tenant_id
+            )
+        )
 
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         from backend.core.db import run_sync

@@ -689,7 +689,7 @@ async def async_process_chat_message(
     # progress during its OpenAI call.
     _hrc_start = perf_counter()
     explicit_human_request = await asyncio.to_thread(
-        detect_human_request, redacted_question, api_key
+        detect_human_request, redacted_question, api_key, tenant_id
     )
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 

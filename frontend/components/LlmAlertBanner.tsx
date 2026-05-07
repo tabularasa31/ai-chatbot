@@ -36,7 +36,7 @@ export function LlmAlertBanner() {
 
     async function fetchAlert() {
       try {
-        const data = await api.tenants.getLlmAlert();
+        const data = await api.clients.getLlmAlert();
         if (cancelled) return;
         setAlertType(data.type);
       } catch {

@@ -19,6 +19,9 @@ from __future__ import annotations
 import hashlib
 import time
 
+from backend.observability.cache_metrics import record_hit, record_miss
+
+_CACHE_NAME = "embedding"
 _CACHE_TTL_SECONDS = 3600      # 60 minutes — vectors are deterministic per model
 _MAX_CACHE_SIZE    = 2048
 
@@ -37,11 +40,14 @@ def get(text: str) -> list[float] | None:
     key = _make_key(text)
     item = _cache.get(key)
     if item is None:
+        record_miss(_CACHE_NAME)
         return None
     expires_at, vector = item
     if time.monotonic() > expires_at:
         _cache.pop(key, None)
+        record_miss(_CACHE_NAME)
         return None
+    record_hit(_CACHE_NAME)
     return vector
 
 

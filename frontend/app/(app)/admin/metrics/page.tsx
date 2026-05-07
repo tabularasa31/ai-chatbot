@@ -15,12 +15,12 @@ export default function AdminMetricsPage() {
   useEffect(() => {
     async function load() {
       try {
-        const client = await api.tenants.getMe().catch(() => null);
-        if (!client) {
+        const tenant = await api.tenants.getMe().catch(() => null);
+        if (!tenant) {
           setIsAdmin(false);
           return;
         }
-        if (!client.is_admin) {
+        if (!tenant.is_admin) {
           setIsAdmin(false);
           return;
         }

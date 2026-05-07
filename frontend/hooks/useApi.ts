@@ -10,8 +10,8 @@ import type {
   EscalationTicket,
 } from "@/lib/api";
 
-export function useClientMe() {
-  return useSWR<TenantMeResponse>("client/me", () => api.tenants.getMe());
+export function useTenantMe() {
+  return useSWR<TenantMeResponse>("tenant/me", () => api.tenants.getMe());
 }
 
 export function useBots() {

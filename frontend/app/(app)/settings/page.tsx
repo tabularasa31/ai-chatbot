@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, type DisclosureLevel } from "@/lib/api";
-import { useClientMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
+import { useTenantMe, useBots, useSupportSettings, useBotDisclosure } from "@/hooks/useApi";
 
 const DISCLOSURE_OPTIONS: {
   value: DisclosureLevel;
@@ -69,7 +69,7 @@ export default function SettingsPage() {
   const [supportSavedOk, setSupportSavedOk] = useState(false);
   const [disclosureSavedOk, setDisclosureSavedOk] = useState(false);
 
-  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useClientMe();
+  const { data: client, error: clientError, isLoading: clientLoading, mutate: mutateClient } = useTenantMe();
   const { data: bots, isLoading: botsLoading } = useBots();
   const { data: support, isLoading: supportLoading, mutate: mutateSupport } = useSupportSettings();
 

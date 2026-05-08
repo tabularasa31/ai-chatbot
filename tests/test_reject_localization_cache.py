@@ -60,7 +60,9 @@ def test_expired_entry_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_build_reject_response_result_caches_localize_call() -> None:
-    """First call hits the localize LLM; second call returns cached payload."""
+    """First call hits the localize LLM; second call returns cached payload
+    with ``tokens_used=0`` (no provider call on cache hit).
+    """
     call_count = {"n": 0}
 
     def fake_localize(*, canonical_text, target_language, **_kwargs):
@@ -88,8 +90,41 @@ def test_build_reject_response_result_caches_localize_call() -> None:
 
     assert call_count["n"] == 1
     assert first.text == second.text
-    assert first.tokens_used == second.tokens_used
-    assert first.tokens_used == 11
+    assert first.tokens_used == 11   # miss → real provider tokens
+    assert second.tokens_used == 0   # hit → no provider call this turn
+
+
+def test_zero_token_localize_results_are_not_cached() -> None:
+    """Localize fast paths and exception fallbacks return ``tokens_used=0``;
+    those must not pollute the cache (otherwise a transient failure pins
+    reject responses to the canonical English fallback for the full TTL).
+    """
+    call_count = {"n": 0}
+
+    def fake_localize_fallback(*, canonical_text, target_language, **_kwargs):
+        call_count["n"] += 1
+        # Simulates the localize exception path: returns canonical text with 0 tokens.
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+    with patch(
+        "backend.guards.reject_response.localize_text_to_language_result",
+        side_effect=fake_localize_fallback,
+    ):
+        build_reject_response_result(
+            reason=RejectReason.INJECTION_DETECTED,
+            profile=None,
+            api_key="sk-test",
+            fallback_locale="ru",
+        )
+        build_reject_response_result(
+            reason=RejectReason.INJECTION_DETECTED,
+            profile=None,
+            api_key="sk-test",
+            fallback_locale="ru",
+        )
+
+    # Both calls must hit fake_localize — no cache write on tokens_used == 0.
+    assert call_count["n"] == 2
 
 
 def test_build_reject_response_result_caches_per_language() -> None:
@@ -161,7 +196,9 @@ def test_concurrent_put_and_stats_does_not_raise() -> None:
 
 
 def test_build_reject_response_result_caches_response_language_path() -> None:
-    """The explicit ``response_language`` branch (localize_text_result) also caches."""
+    """The explicit ``response_language`` branch (localize_text_result) also caches.
+    Cache hit must clear ``tokens_used`` for the same reason as above.
+    """
     call_count = {"n": 0}
 
     def fake_localize(*, canonical_text, response_language, **_kwargs):

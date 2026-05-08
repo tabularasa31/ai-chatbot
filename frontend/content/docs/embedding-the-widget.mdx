@@ -48,8 +48,6 @@ All options are arguments to `Chat9Widget.start()`:
 | `color` | violet gradient | Bubble background color (`#RGB`, `#RRGGBB`) |
 | `position` | `"right"` | `"right"` or `"left"` |
 | `topClearance` | `0` | px reserved at the viewport top (e.g. height of a fixed navbar) |
-| `apiBase` | `https://getchat9.live` | Override only on staging/dev |
-| `widgetBase` | `<script origin>/v1/` | Origin of the widget UI bundle. Defaults to the loader script's own origin. Override only if you serve a custom widget build. |
 | `userHints` | — | See [userHints](#userhints) |
 
 **Modes:**
@@ -123,8 +121,8 @@ When the bot escalates a conversation to a human agent, the chat is marked as en
 Because `start`, `stop`, and `setHints` are explicit, the widget can survive a full SPA login/logout cycle without reloading `widget.js`.
 
 ```js
-// At app startup, after you've fetched any branding/config:
-Chat9Widget.start({ apiBase: API_ORIGIN, color: BRAND_COLOR });
+// At app startup, mount the widget anonymously:
+Chat9Widget.start({ color: "#a855f7" });
 
 // Once the user logs in:
 Chat9Widget.setHints({
@@ -144,8 +142,13 @@ Chat9Widget.setHints(null);   // keep the widget visible, anonymous
 Chat9Widget.stop();           // hide the widget completely
 
 // Re-login after stop():
-Chat9Widget.start({ apiBase: API_ORIGIN, color: BRAND_COLOR, userHints: { ... } });
+Chat9Widget.start({
+  color: "#a855f7",
+  userHints: { user_id: user.id, email: user.email }
+});
 ```
+
+Substitute your own brand color in `color` (any `#RGB`/`#RRGGBB`) — or omit it for the default violet gradient. All other options listed in [Configuration](#configuration) are supported here too.
 
 `setHints()` updates a running widget in-place — you do **not** need to `stop` and `start` to change identity.
 

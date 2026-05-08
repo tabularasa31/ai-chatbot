@@ -2225,13 +2225,24 @@ async def async_run_chat_pipeline(
     state = _PipelineState()
 
     async def _run_pre_retrieval_concurrent() -> ChatPipelineResult | None:
-        """Stage 1: KB-script detection, concurrent guards/embeds, FAQ, relevance.
+        """Stage 1: KB-script detection, injection guard (gating), then concurrent
+        relevance/embed/rewrite, FAQ, relevance.
 
-        Launches the relevance guard, base embedding and semantic-rewrite tasks
-        in parallel before awaiting the (synchronous-relative) injection guard,
-        so I/O overlaps. On injection / FAQ-direct / not-relevant the stage
-        returns a terminal :class:`ChatPipelineResult`; otherwise it populates
-        ``state`` with retrieval inputs and returns ``None``.
+        The injection guard runs FIRST and gates the LLM-backed concurrent tasks:
+        on injection detection (~25% of chat traffic per PostHog) the relevance
+        guard / embedding / semantic-rewrite tasks never launch, so we don't
+        burn 2-5 s waiting for the relevance LLM to finish (``task.cancel()``
+        does not reliably interrupt an in-flight httpx call — ``asyncio.gather``
+        still waits for the socket to drain).
+
+        Trade-off: on the 75% non-reject path we lose ~200-500 ms of I/O overlap
+        between the injection level-2 embedding call and ``rel_task``. The
+        weighted p50 effect is a net win (-575 ms expected at the current
+        traffic mix).
+
+        On FAQ-direct / not-relevant the stage returns a terminal
+        :class:`ChatPipelineResult`; otherwise it populates ``state`` with
+        retrieval inputs and returns ``None``.
         """
         # Pre-fetch guard profile; use preloaded value if supplied by caller.
         _guard_profile = (
@@ -2273,10 +2284,45 @@ async def async_run_chat_pipeline(
             },
         )
 
-        # Release the connection before the concurrent guard/embed OpenAI tasks.
-        # async_match_faq (stage 3) will re-acquire it briefly; another close()
-        # follows before await rel_task so that 2-10 s wait is also connectionless.
+        # Release the connection before any OpenAI calls. async_match_faq
+        # (stage 3) will re-acquire it briefly; another close() follows before
+        # await rel_task so that 2-10 s wait is also connectionless.
         await db.close()
+
+        # Injection guard BEFORE the concurrent task launch — see docstring.
+        # On detection (25% of traffic) we skip every downstream LLM call.
+        injection_result = await async_detect_injection(
+            question,
+            tenant_id=str(tenant_id),
+            api_key=api_key,
+            trace=trace,
+        )
+        if injection_result.detected:
+            reject_result = await async_build_reject_response_result(
+                reason=RejectReason.INJECTION_DETECTED,
+                profile=None,
+                response_language=language_context.response_language,
+                api_key=api_key,
+            )
+            return ChatPipelineResult(
+                raw_answer=reject_result.text,
+                final_answer=reject_result.text,
+                tokens_used=reject_result.tokens_used,
+                strategy="guard_reject",
+                reject_reason="injection",
+                is_reject=True,
+                is_faq_direct=False,
+                retrieval=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                language_context=language_context,
+            )
+
+        if status_callback is not None:
+            try:
+                status_callback("searching")
+            except Exception:
+                logger.debug("status_callback(searching) failed", exc_info=True)
 
         # Launch guard + embedding tasks concurrently — event loop handles all I/O.
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
@@ -2316,53 +2362,6 @@ async def async_run_chat_pipeline(
                         bot_id=retry_bot_id,
                     )
                 )
-            )
-
-        injection_result = await async_detect_injection(
-            question,
-            tenant_id=str(tenant_id),
-            api_key=api_key,
-            trace=trace,
-        )
-
-        async def _cancel_background_tasks() -> None:
-            """Cancel all still-running background tasks and drain CancelledErrors."""
-            tasks_to_cancel: list[asyncio.Task] = [rel_task, base_embed_task]
-            if rewrite_task is not None:
-                tasks_to_cancel.append(rewrite_task)
-            tasks_to_cancel.extend(cross_lingual_tasks)
-            for _t in tasks_to_cancel:
-                if not _t.done():
-                    _t.cancel()
-            if tasks_to_cancel:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
-        if not injection_result.detected and status_callback is not None:
-            try:
-                status_callback("searching")
-            except Exception:
-                logger.debug("status_callback(searching) failed", exc_info=True)
-
-        if injection_result.detected:
-            await _cancel_background_tasks()
-            reject_result = await async_build_reject_response_result(
-                reason=RejectReason.INJECTION_DETECTED,
-                profile=None,
-                response_language=language_context.response_language,
-                api_key=api_key,
-            )
-            return ChatPipelineResult(
-                raw_answer=reject_result.text,
-                final_answer=reject_result.text,
-                tokens_used=reject_result.tokens_used,
-                strategy="guard_reject",
-                reject_reason="injection",
-                is_reject=True,
-                is_faq_direct=False,
-                retrieval=None,
-                escalation_recommended=False,
-                escalation_trigger=None,
-                language_context=language_context,
             )
 
         # --- 2. Embed queries ---

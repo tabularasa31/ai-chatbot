@@ -120,6 +120,46 @@ def test_build_reject_response_result_caches_per_language() -> None:
     assert call_count["n"] == 2
 
 
+def test_concurrent_put_and_stats_does_not_raise() -> None:
+    """Worker threads from ``asyncio.to_thread`` hit the cache concurrently;
+    iterating ``_cache.values()`` while another thread inserts/evicts must
+    not raise ``RuntimeError: dictionary changed size during iteration``.
+    """
+    import threading
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+
+    def writer() -> None:
+        i = 0
+        try:
+            while not stop.is_set():
+                reject_localization_cache.put(f"text-{i}", "ru", f"перевод-{i}", i)
+                i += 1
+        except BaseException as exc:  # pragma: no cover — error path
+            errors.append(exc)
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                reject_localization_cache.stats()
+                reject_localization_cache.get("text-0", "ru")
+        except BaseException as exc:  # pragma: no cover — error path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=writer) for _ in range(2)] + [
+        threading.Thread(target=reader) for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    threading.Event().wait(0.2)
+    stop.set()
+    for t in threads:
+        t.join(timeout=2.0)
+
+    assert errors == []
+
+
 def test_build_reject_response_result_caches_response_language_path() -> None:
     """The explicit ``response_language`` branch (localize_text_result) also caches."""
     call_count = {"n": 0}

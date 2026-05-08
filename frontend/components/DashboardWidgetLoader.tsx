@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { api } from "@/lib/api";
+import type { UserHints, WindowWithChat9Widget } from "@/types/chat9-widget";
 
 const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID;
 const WIDGET_LOADER_URL =
@@ -9,31 +10,21 @@ const WIDGET_LOADER_URL =
 // Must match the fixed navbar height defined in (app)/layout.tsx.
 const TOP_CLEARANCE = 56;
 
-type UserHints = {
-  user_id?: string;
-  email?: string;
-  name?: string;
-  locale?: string;
-  plan_tier?: string;
-  audience_tag?: string;
-};
-
-type Chat9WidgetApi = {
-  start: (config?: Record<string, unknown>) => void;
-  stop: () => void;
-  setHints: (hints: UserHints | null) => void;
-  destroy: () => void;
-};
-
-type WindowWithWidget = Window & { Chat9Widget?: Chat9WidgetApi };
-
 // Module-scope guard: the loader script lives on the page once per browser
-// session even if React mounts/unmounts this component.
+// session even if React mounts/unmounts this component. Reset to null below
+// if Chat9Widget is gone (e.g. after destroy()) so we re-inject on next mount.
 let scriptReady: Promise<void> | null = null;
 
 function ensureLoaderScript(): Promise<void> {
+  // If a previous mount cached the promise but Chat9Widget has since been
+  // wiped (destroy(), or some other code deleted the global), the cached
+  // promise resolves to a stale state where window.Chat9Widget is undefined.
+  // Detect and force re-injection.
+  if (scriptReady && !(window as WindowWithChat9Widget).Chat9Widget) {
+    scriptReady = null;
+  }
   if (scriptReady) return scriptReady;
-  if ((window as WindowWithWidget).Chat9Widget) {
+  if ((window as WindowWithChat9Widget).Chat9Widget) {
     scriptReady = Promise.resolve();
     return scriptReady;
   }
@@ -43,7 +34,12 @@ function ensureLoaderScript(): Promise<void> {
     script.async = true;
     script.setAttribute("data-bot-id", BOT_ID!);
     script.onload = () => resolve();
-    script.onerror = () => reject(new Error("Chat9: failed to load widget.js"));
+    script.onerror = () => {
+      // Reset so a future mount can retry rather than inheriting a rejected
+      // promise forever.
+      scriptReady = null;
+      reject(new Error("Chat9: failed to load widget.js"));
+    };
     document.body.appendChild(script);
   });
   return scriptReady;
@@ -56,8 +52,14 @@ export function DashboardWidgetLoader() {
     let cancelled = false;
 
     function startWithHints(hints: UserHints | null) {
-      const w = window as WindowWithWidget;
+      const w = window as WindowWithChat9Widget;
       if (!w.Chat9Widget) return;
+      if (w.Chat9Widget.isStarted()) {
+        // Already mounted from a prior effect (StrictMode double-mount, or a
+        // sibling consumer). Just push hints; don't re-mount.
+        w.Chat9Widget.setHints(hints);
+        return;
+      }
       w.Chat9Widget.start({
         apiBase: window.location.origin,
         color: "#a855f7",
@@ -82,7 +84,7 @@ export function DashboardWidgetLoader() {
       cancelled = true;
       // stop() is the soft teardown — script and Chat9Widget stay registered
       // so the next mount can call start() again without re-downloading.
-      const w = window as WindowWithWidget;
+      const w = window as WindowWithChat9Widget;
       w.Chat9Widget?.stop();
     };
   }, []);

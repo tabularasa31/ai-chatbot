@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { motion } from "framer-motion";
+import type { WindowWithChat9Widget } from "@/types/chat9-widget";
 
 const LANDING_DEMO_BOT_ID = process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim();
 
@@ -10,22 +11,14 @@ const WIDGET_LOADER_URL =
 
 const TARGET_ID = "chat9-landing-demo";
 
-type Chat9WidgetApi = {
-  start: (config?: Record<string, unknown>) => void;
-  stop: () => void;
-  setHints: (hints: Record<string, string> | null) => void;
-  destroy: () => void;
-};
-
-type WindowWithWidget = Window & { Chat9Widget?: Chat9WidgetApi };
-
 function DemoWidget() {
   useEffect(() => {
     let cancelled = false;
 
     function startInline() {
-      const w = window as WindowWithWidget;
+      const w = window as WindowWithChat9Widget;
       if (cancelled || !w.Chat9Widget) return;
+      if (w.Chat9Widget.isStarted()) return;
       // Loader's hardcoded apiBase points at production getchat9.live, but the
       // landing page may run on a preview/staging host — point the embedded
       // widget back at *this* origin so /widget/* requests land on the dashboard
@@ -37,7 +30,7 @@ function DemoWidget() {
       });
     }
 
-    const w = window as WindowWithWidget;
+    const w = window as WindowWithChat9Widget;
     if (w.Chat9Widget) {
       startInline();
     } else {
@@ -51,7 +44,7 @@ function DemoWidget() {
 
     return () => {
       cancelled = true;
-      const w = window as WindowWithWidget;
+      const w = window as WindowWithChat9Widget;
       w.Chat9Widget?.stop();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";

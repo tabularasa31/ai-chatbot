@@ -26,7 +26,12 @@
 //   Chat9Widget.setHints(hints)  — update identity in the running iframe.
 //                                  If stopped, remembered for the next start().
 //                                  Pass null to clear (anonymous).
-//   Chat9Widget.destroy()        — stop() + delete window.Chat9Widget.
+//   Chat9Widget.isStarted()      — true while the widget is mounted.
+//   Chat9Widget.destroy()        — TERMINAL teardown: stop() + delete
+//                                  window.Chat9Widget. To use the widget
+//                                  again on this page you must reload
+//                                  widget.js (the API binding is gone).
+//                                  Most consumers want stop() instead.
 //
 // Russian edge proxy: load this script from widget-ru.getchat9.live instead
 // of widget.getchat9.live, and the loader infers the matching API origin
@@ -60,6 +65,7 @@ type Chat9WidgetApi = {
   start: (config?: StartConfig) => void;
   stop: () => void;
   setHints: (hints: UserHints | null) => void;
+  isStarted: () => boolean;
   destroy: () => void;
 };
 
@@ -480,10 +486,14 @@ declare global {
     if (handles) postHintsToIframe(handles, currentHints);
   }
 
+  function isStarted(): boolean {
+    return handles !== null;
+  }
+
   function destroy() {
     stop();
     delete window.Chat9Widget;
   }
 
-  window.Chat9Widget = { start, stop, setHints, destroy };
+  window.Chat9Widget = { start, stop, setHints, isStarted, destroy };
 })();

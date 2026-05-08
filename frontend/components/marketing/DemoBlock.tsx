@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { motion } from "framer-motion";
 import type { WindowWithChat9Widget } from "@/types/chat9-widget";
 
-const LANDING_DEMO_BOT_ID = process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim();
+const BOT_ID = process.env.NEXT_PUBLIC_CHAT9_BOT_ID?.trim();
 
 const WIDGET_LOADER_URL =
   process.env.NEXT_PUBLIC_WIDGET_LOADER_URL || "https://widget.getchat9.live/widget.js";
@@ -37,7 +37,7 @@ function DemoWidget() {
       const script = document.createElement("script");
       script.src = WIDGET_LOADER_URL;
       script.async = true;
-      script.setAttribute("data-bot-id", LANDING_DEMO_BOT_ID!);
+      script.setAttribute("data-bot-id", BOT_ID!);
       script.onload = startInline;
       document.body.appendChild(script);
     }
@@ -55,7 +55,7 @@ function DemoWidget() {
 }
 
 export function DemoBlock() {
-  const ready = Boolean(LANDING_DEMO_BOT_ID);
+  const ready = Boolean(BOT_ID);
 
   return (
     <section id="demo" className="max-w-7xl mx-auto px-6 py-20">
@@ -89,7 +89,7 @@ export function DemoBlock() {
               <p className="text-nd-text/40 text-sm text-center leading-relaxed max-w-sm">
                 Live demo unavailable — set{" "}
                 <code className="text-nd-text/60 text-xs">
-                  NEXT_PUBLIC_LANDING_DEMO_BOT_ID
+                  NEXT_PUBLIC_CHAT9_BOT_ID
                 </code>
                 .
               </p>

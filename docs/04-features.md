@@ -604,7 +604,7 @@ Localization of deterministic text is handled by a shared helper in `backend/cha
 
 For any turn that has no user message to detect language from (the bootstrap greeting and any other pre-question deterministic text), the response language is resolved in this exact order. **This order must not be changed without an explicit product decision** — call sites and tests rely on it.
 
-1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` on `window.Chat9Config`). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
+1. **`user_context.locale`** — the locale the tenant explicitly passed for this user (typically via `userHints.locale` in `Chat9Widget.start({...})` or `Chat9Widget.setHints({...})`). This is the strongest signal because the tenant's own system says "this specific user prefers locale X" — usually backed by the user's own account preferences in the tenant's product.
 2. **`user_context.browser_locale` / request `Accept-Language`** — the browser-reported locale. Weaker than the explicit hint because it reflects the device's OS/browser default, which can be wrong (e.g. an English-OS laptop used by a Spanish-speaking employee).
 3. **English** — final fallback when neither signal is available.
 
@@ -752,12 +752,12 @@ The selected level is injected into the RAG system prompt as a hard instruction 
 
 ## 9. Widget personalization via `userHints`
 
-By default the widget is **anonymous** — no information about the end user is passed to the bot. The tenant frontend may optionally supply plain-JSON `userHints` on `window.Chat9Config` to personalize the session.
+By default the widget is **anonymous** — no information about the end user is passed to the bot. The tenant frontend may optionally supply plain-JSON `userHints` to `Chat9Widget.start({...})` (or push them later via `Chat9Widget.setHints({...})`) to personalize the session.
 
 ### How it works
 
-1. The tenant page sets `window.Chat9Config = { userHints: { name, email, locale, plan_tier, audience_tag } }` before the loader script runs.
-2. The loader forwards the hints object to the widget iframe via a `chat9:hints` postMessage handshake (no URL-leakage).
+1. The tenant page calls `Chat9Widget.start({ userHints: { name, email, locale, plan_tier, audience_tag } })`. Hints can also be updated mid-session via `Chat9Widget.setHints({...})` — useful for SPA login/logout flows.
+2. The loader forwards the hints object to the widget iframe via a `chat9:hints` postMessage handshake (no URL-leakage). Re-calling `setHints` posts a fresh `chat9:hints` to the running iframe.
 3. The widget calls `POST /widget/session/init` with `{ bot_id, user_hints }`.
 4. Backend `sanitize_user_hints` (see `backend/widget/service.py`) whitelists allowed keys, caps lengths, and validates `email`/`locale`. The result is patched into `chats.user_context` via `apply_identity_context_patch`.
 5. If hints carry `user_id` or `email`, a `ContactSession` row is created (synthesized `user_id="hint:<email>"` when only email is supplied) so cross-session history works.
@@ -787,28 +787,35 @@ Do **not** use hints for access control, paid-tier gating, audit logs that imply
 
 ### How embedding works
 
-Users copy a snippet from the **Dashboard**. The snippet passes the bot's `public_id` via the `data-bot-id` attribute on the loader script tag. The loader and widget UI are served from a separate Vercel project (`chat9-widget`) at `widget.getchat9.live` — the dashboard project doesn't serve any widget assets.
+Users copy a snippet from the **Dashboard**. The snippet has two parts: a `<script>` that loads `widget.js` and registers `window.Chat9Widget`, then a second `<script>` that calls `Chat9Widget.start(config?)` to mount the chat. The bot is identified by the `data-bot-id` attribute on the loader script tag. The loader and widget UI are served from a separate Vercel project (`chat9-widget`) at `widget.getchat9.live` — the dashboard project doesn't serve any widget assets.
 
 Example (placeholders — the Dashboard fills in your real bot public ID):
 
 ```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script>
+  Chat9Widget.start();
 </script>
 ```
 
-The loader supports two modes (selected via `Chat9Config.mode`):
+The widget supports two modes (passed in the `start({...})` config):
 - **Bubble** (default): floating chat button in the bottom-right corner.
-- **Inline**: renders inside an existing container. Set `Chat9Config.mode = "inline"` and `Chat9Config.target = "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
+- **Inline**: renders inside an existing container. Pass `mode: "inline"` and `target: "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
-Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~2.9 KB gzip):
+Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~3 KB gzip):
 - Reads the bot `public_id` from `data-bot-id` on the script tag (the only data-attribute it consumes).
-- Reads everything else from `window.Chat9Config`: `mode`, `color`, `position`, `target`, `apiBase`, `widgetBase`, `userHints`. There is no fallback to `data-*` attributes — the snippet is canonical.
-- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `Chat9Config.widgetBase`.
-- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `Chat9Config.apiBase` for staging or self-hosted dashboards.
+- Loading the script does **not** mount any UI on its own — only `Chat9Widget.start(config?)` does.
+- Lifecycle methods on `window.Chat9Widget`:
+  - `start(config?)` mounts the FAB + iframe; no-op (with warning) if already started.
+  - `stop()` unmounts the DOM and listeners; the script and `Chat9Widget` stay registered, ready for another `start()`.
+  - `setHints(hints | null)` updates identity in a running iframe (or remembers it for the next `start()`); the widget iframe automatically remounts the chat when identity changes so per-conversation state resets cleanly.
+  - `isStarted()` returns `true` while mounted.
+  - `destroy()` is terminal — `stop()` + `delete window.Chat9Widget`. Most consumers want `stop()`.
+- `start({...})` accepts: `mode`, `color`, `position`, `target`, `topClearance`, `apiBase`, `widgetBase`, `userHints`. There are no `data-*` fallbacks.
+- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `widgetBase` in `start()`.
+- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `apiBase` in `start()` for staging or self-hosted dashboards.
 - Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<userHints.locale|navigator.language>&apiBase=…&parentOrigin=<page origin>`.
-- `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`).
+- `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`). The current hints state persists across `stop`/`start` cycles inside the loader closure (the message listener itself is bound per-mount and removed in `stop()`).
 - The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk. Cross-origin calls from the iframe to the dashboard API go through the CORS middleware in `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.

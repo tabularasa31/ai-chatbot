@@ -9,7 +9,7 @@ The app uses a **left sidebar** for navigation (main items, **SETTINGS**, and **
 
 - **Your Bot ID** — your bot's `public_id`, used in the widget embed snippet (the value of `data-bot-id`). Safe to expose in page HTML; this is not your secret API key.
 - **API key** — your secret `X-Api-Key` for server-to-server API calls (`POST /chat`, etc.). Copy with one click.
-- **Embed code** — HTML snippet that loads the widget loader (`widget.getchat9.live/widget.js`) and passes your bot's `public_id` via the `data-bot-id` attribute. Copy the block; code areas use an inline **copy** icon.
+- **Embed code** — HTML snippet that loads the widget loader (`widget.getchat9.live/widget.js`) with your bot's `public_id` via `data-bot-id`, then calls `Chat9Widget.start()` to mount the chat. Copy the block; code areas use an inline **copy** icon.
 - If the **OpenAI API key** is not set, an amber banner links to **Agents** (`/settings`) to configure it.
 
 ## Knowledge hub (`/knowledge`)

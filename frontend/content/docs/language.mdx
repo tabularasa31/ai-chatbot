@@ -18,7 +18,7 @@ Chat9 is language-agnostic. End users can write in any language and the bot repl
 
 When the widget opens a fresh session, Chat9 can show a default greeting before the user has typed anything. At this point there is no user message to detect a language from, so Chat9 picks the greeting's language using a fixed chain:
 
-1. **`userHints.locale`** — if you set `userHints` on `window.Chat9Config` and included a `locale`, that wins. It's the strongest signal because your own system told us about this specific visitor.
+1. **`userHints.locale`** — if you passed `userHints` to `Chat9Widget.start({...})` (or to `Chat9Widget.setHints({...})`) and included a `locale`, that wins. It's the strongest signal because your own system told us about this specific visitor.
 2. **Browser locale** — the `Accept-Language` header from the user's browser, or the `locale` you optionally passed when calling `POST /widget/session/init`.
 3. **English** — final fallback when no signal is available.
 
@@ -74,7 +74,7 @@ If you don't set an override, escalation artifacts default to English.
 
 ### From the widget integration — `userHints.locale`
 
-If your tenant frontend already knows the visitor's preferred language (for example, a registered locale on their account profile), pass it via `userHints.locale` on `window.Chat9Config`. Chat9 will use it as the bootstrap greeting language and as a stronger initial signal than the browser default. See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints-optional).
+If your tenant frontend already knows the visitor's preferred language (for example, a registered locale on their account profile), pass it via `userHints.locale` to `Chat9Widget.start({...})` (or `Chat9Widget.setHints({...})` after the widget is mounted). Chat9 will use it as the bootstrap greeting language and as a stronger initial signal than the browser default. See [Embedding the Widget → userHints](/docs/embedding-the-widget#userhints).
 
 ### From the widget integration — `Accept-Language` / `locale` query
 

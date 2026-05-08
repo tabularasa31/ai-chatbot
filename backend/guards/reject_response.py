@@ -10,6 +10,7 @@ from backend.chat.language import (
     localize_text_to_language,
     localize_text_to_language_result,
 )
+from backend.guards import reject_localization_cache
 from backend.models import TenantProfile as TenantProfileModel
 
 _SOFT_REJECT_MAX_WORDS = 2  # short inputs get an invite instead of a blunt refusal
@@ -130,25 +131,35 @@ def build_reject_response_result(
         profile=profile,
         question=question,
     )
+    cache_language = response_language or _resolve_reject_target_language(
+        question=question,
+        fallback_locale=fallback_locale,
+    )
+    if cache_language:
+        cached = reject_localization_cache.get(canonical_text, cache_language)
+        if cached is not None:
+            text, tokens_used = cached
+            return LocalizationResult(text=text, tokens_used=tokens_used)
+
     if response_language is None:
-        target_language = _resolve_reject_target_language(
-            question=question,
-            fallback_locale=fallback_locale,
-        )
         result = localize_text_to_language_result(
             canonical_text=canonical_text,
-            target_language=target_language,
+            target_language=cache_language,
             api_key=api_key,
             fallback_locale=fallback_locale,
             operation="reject_guard",
         )
-        return result
-    result = localize_text_result(
-        canonical_text=canonical_text,
-        response_language=response_language,
-        api_key=api_key,
-        operation="reject_guard",
-    )
+    else:
+        result = localize_text_result(
+            canonical_text=canonical_text,
+            response_language=response_language,
+            api_key=api_key,
+            operation="reject_guard",
+        )
+    if cache_language:
+        reject_localization_cache.put(
+            canonical_text, cache_language, result.text, result.tokens_used
+        )
     return result
 
 

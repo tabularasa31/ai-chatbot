@@ -360,7 +360,7 @@ Visit https://app.yourdomain.com
 
 **Loader:** `GET https://widget.getchat9.live/widget.js` — IIFE built from `frontend/apps/widget-loader/`. Registers `window.Chat9Widget` (lifecycle: `start`, `stop`, `setHints`, `isStarted`, `destroy`); does not mount any UI on script load — the consumer calls `Chat9Widget.start(config?)`. When started, injects an iframe pointing at `https://widget.getchat9.live/v1/?botId=…&apiBase=…&parentOrigin=…`.
 
-**Widget UI:** `GET https://widget.getchat9.live/v1/` — Vite + Preact bundle from `frontend/apps/widget-app/`. The widget calls `${apiBase}/widget/{chat,escalate,history,config}` and `${apiBase}/api/widget-{session/init,identity}` cross-origin, where `apiBase` defaults to the dashboard origin (`https://getchat9.live`) and is overridable via the `apiBase` field of `Chat9Widget.start({...})`. CORS for the widget paths is wired through `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
+**Widget UI:** `GET https://widget.getchat9.live/v1/` — Vite + Preact bundle from `frontend/apps/widget-app/`. The widget calls `${apiBase}/widget/{chat,escalate,history,config}` and `${apiBase}/api/widget-{session/init,identity}` cross-origin, where `apiBase` is **auto-inferred from the loader's own script origin**: `widget.getchat9.live` → `https://getchat9.live`; `widget-ru.getchat9.live` → `https://api-ru.getchat9.live`. Tenants switch edges by changing `<script src>`, never by overriding `apiBase`; `Chat9Widget.start({apiBase})` is internal-only (staging/dev). CORS for the widget paths is wired through `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
 
 **Typical snippet (bot's `public_id` from the dashboard, passed via `data-bot-id`):**
 ```html

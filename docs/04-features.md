@@ -811,9 +811,8 @@ Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~3 KB g
   - `setHints(hints | null)` updates identity in a running iframe (or remembers it for the next `start()`); the widget iframe automatically remounts the chat when identity changes so per-conversation state resets cleanly.
   - `isStarted()` returns `true` while mounted.
   - `destroy()` is terminal — `stop()` + `delete window.Chat9Widget`. Most consumers want `stop()`.
-- `start({...})` accepts: `mode`, `color`, `position`, `target`, `topClearance`, `apiBase`, `widgetBase`, `userHints`. There are no `data-*` fallbacks.
-- Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `widgetBase` in `start()`.
-- Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `apiBase` in `start()` for staging or self-hosted dashboards.
+- Tenant-facing `start({...})` options: `mode`, `color`, `position`, `target`, `topClearance`, `userHints`. There are no `data-*` fallbacks.
+- Internal-only options on the same call (not advertised in customer docs): `apiBase`, `widgetBase`. Both are **auto-inferred from the loader's script origin** — `widget.getchat9.live` resolves to `https://getchat9.live` for the API and `https://widget.getchat9.live/v1/` for the widget bundle; `widget-ru.getchat9.live` resolves to `https://api-ru.getchat9.live` and `https://widget-ru.getchat9.live/v1/`. Tenants switch to the RU edge by changing `<script src>`, not by passing `apiBase`. The override is only used in our own staging/dev configs.
 - Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<userHints.locale|navigator.language>&apiBase=…&parentOrigin=<page origin>`.
 - `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`). The current hints state persists across `stop`/`start` cycles inside the loader closure (the message listener itself is bound per-mount and removed in `stop()`).
 - The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).

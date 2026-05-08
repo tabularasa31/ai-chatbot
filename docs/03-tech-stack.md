@@ -112,7 +112,7 @@
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
 │  <script src="https://widget.getchat9.live/widget.js" data-bot-id="…">    │
-│  <script>Chat9Widget.start({ apiBase, color, userHints })</script>          │
+│  <script>Chat9Widget.start({ color, userHints })</script>                   │
 │                                                           │
 │  ↓                                                        │
 │  start() injects iframe → Next.js /widget?botId=…         │

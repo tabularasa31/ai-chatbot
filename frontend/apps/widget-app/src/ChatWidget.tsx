@@ -385,7 +385,7 @@ export function ChatWidget({
 
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams({ botId });
+    const params = new URLSearchParams({ bot_id: botId });
     if (localeParam) params.set("locale", localeParam);
 
     fetch(`${apiBase}/widget/config?${params}`)
@@ -409,7 +409,7 @@ export function ChatWidget({
     if (!sessionHydrated || !sessionId || historyLoaded) return;
     let cancelled = false;
     setLoading(true);
-    const params = new URLSearchParams({ botId, session_id: sessionId });
+    const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
     fetch(`${apiBase}/widget/history?${params}`)
       .then(async (r) => {
         if (r.status === 404) {
@@ -506,7 +506,7 @@ export function ChatWidget({
     onStatus?: (stage: string) => void;
   }) => {
     const params = new URLSearchParams({
-      botId,
+      bot_id: botId,
     });
     if (attemptSessionId) params.set("session_id", attemptSessionId);
 

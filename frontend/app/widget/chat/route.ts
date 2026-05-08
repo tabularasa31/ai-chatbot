@@ -11,14 +11,14 @@ export async function POST(request: NextRequest) {
     message?: unknown;
     locale?: unknown;
   };
-  const botId = searchParams.get("botId");
+  const botId = searchParams.get("bot_id") ?? searchParams.get("botId");
   const message = typeof body.message === "string" ? body.message : null;
   const sessionId = searchParams.get("session_id");
   const locale = typeof body.locale === "string" ? body.locale : null;
 
   if (!botId || message === null) {
     return NextResponse.json(
-      { detail: "botId and message are required" },
+      { detail: "bot_id and message are required" },
       { status: 400 }
     );
   }

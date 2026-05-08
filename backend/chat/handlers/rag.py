@@ -1699,6 +1699,7 @@ class RagHandler(PipelineHandler):
             latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
             retrieval_ms=result.retrieval_ms,
             llm_ms=result.llm_ms,
+            llm_lang_retry_ms=result.llm_lang_retry_ms,
             tokens_input=result.tokens_input,
             tokens_output=result.tokens_output,
             reliability_score=reliability_score,

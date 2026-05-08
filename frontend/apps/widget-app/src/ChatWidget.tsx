@@ -361,7 +361,7 @@ export function ChatWidget({
     const stored = readStoredSession(botId, userId);
 
     if (hints && !stored) {
-      fetch(`${apiBase}/api/widget-session/init`, {
+      fetch(`${apiBase}/widget/session/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bot_id: botId, user_hints: hints }),

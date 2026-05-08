@@ -37,30 +37,34 @@ function EmbedContent() {
   const apiBaseOverride =
     APP_URL && APP_URL !== "https://getchat9.live" ? APP_URL : null;
 
-  function buildConfigBlock(extras: Record<string, string>): string | null {
+  function buildStartConfig(extras: Record<string, string>): string {
     const entries = Object.entries(extras).filter(([, v]) => v !== "");
     if (apiBaseOverride) entries.push(["apiBase", apiBaseOverride]);
-    if (entries.length === 0) return null;
-    const lines = entries.map(([k, v]) => `  ${k}: ${JSON.stringify(v)}`);
-    return `<script>\n  window.Chat9Config = {\n${lines.join(",\n")}\n  };\n</script>\n`;
+    if (entries.length === 0) return "";
+    const lines = entries.map(([k, v]) => `    ${k}: ${JSON.stringify(v)}`);
+    return `{\n${lines.join(",\n")}\n  }`;
   }
 
   function buildScriptTag(botIdValue: string): string {
     return `<script\n  src="${WIDGET_LOADER_URL}"\n  data-bot-id="${botIdValue}">\n</script>`;
   }
 
+  function buildStartScript(configLiteral: string): string {
+    return `<script>\n  Chat9Widget.start(${configLiteral});\n</script>`;
+  }
+
   function getBubbleSnippet() {
-    const config = buildConfigBlock({
+    const config = buildStartConfig({
       ...(color !== "#a855f7" ? { color } : {}),
       ...(position !== "right" ? { position } : {}),
     });
-    return `${config ?? ""}${buildScriptTag(publicId ?? "YOUR_BOT_ID")}`;
+    return `${buildScriptTag(publicId ?? "YOUR_BOT_ID")}\n${buildStartScript(config)}`;
   }
 
   function getInlineSnippet() {
     const divPart = `<div id="${targetId}"></div>`;
-    const config = buildConfigBlock({ mode: "inline", target: targetId });
-    return `${divPart}\n${config ?? ""}${buildScriptTag(publicId ?? "YOUR_BOT_ID")}`;
+    const config = buildStartConfig({ mode: "inline", target: targetId });
+    return `${divPart}\n${buildScriptTag(publicId ?? "YOUR_BOT_ID")}\n${buildStartScript(config)}`;
   }
 
   if (loading) {
@@ -227,19 +231,25 @@ function EmbedContent() {
             <div><code className="font-mono text-slate-700">data-bot-id</code> on the script tag — your bot&apos;s public ID (required)</div>
             {mode === "bubble" ? (
               <>
-                <div><code className="font-mono text-slate-700">Chat9Config.color</code> — button color, e.g. <code className="font-mono">#a855f7</code></div>
-                <div><code className="font-mono text-slate-700">Chat9Config.position</code> — <code className="font-mono">right</code> or <code className="font-mono">left</code> (default: right)</div>
+                <div><code className="font-mono text-slate-700">color</code> — button color, e.g. <code className="font-mono">#a855f7</code></div>
+                <div><code className="font-mono text-slate-700">position</code> — <code className="font-mono">right</code> or <code className="font-mono">left</code> (default: right)</div>
               </>
             ) : (
               <>
-                <div><code className="font-mono text-slate-700">Chat9Config.mode</code> — must be <code className="font-mono">inline</code></div>
-                <div><code className="font-mono text-slate-700">Chat9Config.target</code> — ID of the container element (required)</div>
+                <div><code className="font-mono text-slate-700">mode</code> — must be <code className="font-mono">inline</code></div>
+                <div><code className="font-mono text-slate-700">target</code> — ID of the container element (required)</div>
               </>
             )}
             <div>
-              <code className="font-mono text-slate-700">Chat9Config.userHints</code> — optional personalization (
+              <code className="font-mono text-slate-700">userHints</code> — optional personalization (
               <code className="font-mono">name</code>, <code className="font-mono">email</code>, <code className="font-mono">locale</code>, <code className="font-mono">plan_tier</code>).
               Untrusted: use for greetings and escalation routing only.
+            </div>
+            <div className="pt-2">
+              All options are passed as the argument to <code className="font-mono text-slate-700">Chat9Widget.start(...)</code>.
+              You can also call <code className="font-mono text-slate-700">Chat9Widget.setHints(hints)</code> after login to update
+              identity, <code className="font-mono text-slate-700">Chat9Widget.stop()</code> to unmount, and
+              <code className="font-mono text-slate-700"> Chat9Widget.start()</code> again to bring it back.
             </div>
           </div>
         </div>

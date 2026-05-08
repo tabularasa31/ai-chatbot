@@ -2357,23 +2357,6 @@ async def async_run_chat_pipeline(
                 )
             )
 
-        async def _cancel_background_tasks() -> None:
-            """Cancel still-running background tasks and drain CancelledErrors.
-
-            Used by the FAQ-direct branch downstream. The injection-detected
-            branch above no longer needs this — it returns before any of these
-            tasks is created.
-            """
-            tasks_to_cancel: list[asyncio.Task] = [rel_task, base_embed_task]
-            if rewrite_task is not None:
-                tasks_to_cancel.append(rewrite_task)
-            tasks_to_cancel.extend(cross_lingual_tasks)
-            for _t in tasks_to_cancel:
-                if not _t.done():
-                    _t.cancel()
-            if tasks_to_cancel:
-                await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
         # --- 2. Embed queries ---
         embed_start = perf_counter()
         query_variants = list(base_query_variants)

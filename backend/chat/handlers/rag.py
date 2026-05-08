@@ -255,6 +255,11 @@ class ChatPipelineResult:
     # pipeline timing (ms); 0 means the stage was skipped
     retrieval_ms: int = 0
     llm_ms: int = 0
+    # Language-mismatch retry: a SECOND full async_generate_answer call when the
+    # first answer came back in the wrong language. Tracked separately so the
+    # PostHog `chat.turn` event reports honest LLM wall time without losing
+    # visibility into how often the retry actually fires.
+    llm_lang_retry_ms: int = 0
     tokens_input: int = 0
     tokens_output: int = 0
     # debug extras
@@ -1437,6 +1442,7 @@ class RagHandler(PipelineHandler):
                 latency_ms=int((perf_counter() - ctx.turn_started_at) * 1000),
                 retrieval_ms=result.retrieval_ms,
                 llm_ms=result.llm_ms,
+                llm_lang_retry_ms=result.llm_lang_retry_ms,
                 tokens_input=result.tokens_input,
                 tokens_output=result.tokens_output,
                 query_script=result.query_script,
@@ -2723,6 +2729,7 @@ async def async_run_chat_pipeline(
         )
         llm_ms = int((perf_counter() - llm_start) * 1000)
         record_stage_ms(trace, "llm_ms", llm_ms)
+        _lang_retry_ms = 0   # set below if the language-mismatch retry fires
 
         # --- 7b. Language check ---
         # Use the pre-resolved response_language as the expected output language for confirmed
@@ -2824,6 +2831,7 @@ async def async_run_chat_pipeline(
             escalation_trigger=esc_trigger,
             retrieval_ms=int(retrieval.retrieval_duration_ms),
             llm_ms=llm_ms,
+            llm_lang_retry_ms=_lang_retry_ms,
             faq_match=state.faq_match,
             language_context=language_context,
             query_script=state.query_script,

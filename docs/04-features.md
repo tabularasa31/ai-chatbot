@@ -803,7 +803,7 @@ The widget supports two modes (passed in the `start({...})` config):
 - **Inline**: renders inside an existing container. Pass `mode: "inline"` and `target: "<elementId>"`, and put an empty `<div id="<elementId>"></div>` where you want the widget.
 
 Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~3 KB gzip):
-- Reads the bot `public_id` from `data-bot-id` on the script tag (the only data-attribute it consumes); exposed back as `Chat9Widget.botId` for diagnostics.
+- Reads the bot `public_id` from `data-bot-id` on the script tag (the only data-attribute it consumes).
 - Loading the script does **not** mount any UI on its own — only `Chat9Widget.start(config?)` does.
 - Lifecycle methods on `window.Chat9Widget`:
   - `start(config?)` mounts the FAB + iframe; no-op (with warning) if already started.
@@ -815,7 +815,7 @@ Loader runtime (`frontend/apps/widget-loader/src/index.ts`, IIFE bundle, ~3 KB g
 - Derives the widget UI base from the script's own origin (`https://widget.getchat9.live/v1/`), overridable via `widgetBase` in `start()`.
 - Defaults `apiBase` to `https://getchat9.live` (the dashboard origin); overridable via `apiBase` in `start()` for staging or self-hosted dashboards.
 - Injects an `<iframe>` pointing to `${widgetBase}?botId=…&locale=<userHints.locale|navigator.language>&apiBase=…&parentOrigin=<page origin>`.
-- `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`). The handshake listener is persistent across `stop`/`start` cycles.
+- `userHints` (if any) are **not** put in the iframe URL — they are delivered by a `postMessage` handshake (widget posts `chat9:ready`, the loader replies with `chat9:hints` or `chat9:no-hints`) so the values never leak into browser history, server logs, or `Referer` headers. The `targetOrigin` for the reply is the widget origin (never `*`). The current hints state persists across `stop`/`start` cycles inside the loader closure (the message listener itself is bound per-mount and removed in `stop()`).
 - The iframe renders the full `widget-app` Preact bundle (`frontend/apps/widget-app/`).
 
 The iframe isolation means the widget has **no access to the host page DOM** — clean CORS boundary, no XSS risk. Cross-origin calls from the iframe to the dashboard API go through the CORS middleware in `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.

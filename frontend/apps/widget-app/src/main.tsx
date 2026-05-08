@@ -104,10 +104,14 @@ function App() {
       return;
     }
 
-    let resolved = false;
-    const resolve = (value: UserHints | null) => {
-      if (resolved) return;
-      resolved = true;
+    let firstResolved = false;
+    const applyHints = (value: UserHints | null) => {
+      // First message clears the handshake timeout; later messages just push
+      // new identity into the existing chat.
+      if (!firstResolved) {
+        firstResolved = true;
+        window.clearTimeout(timer);
+      }
       setHints(value);
     };
 
@@ -117,9 +121,9 @@ function App() {
       const data = event.data;
       if (!data || typeof data !== "object") return;
       if (data.type === "chat9:hints") {
-        resolve(coerceHints((data as { userHints?: unknown }).userHints));
+        applyHints(coerceHints((data as { userHints?: unknown }).userHints));
       } else if (data.type === "chat9:no-hints") {
-        resolve(null);
+        applyHints(null);
       }
     }
     window.addEventListener("message", handleMessage);
@@ -130,7 +134,10 @@ function App() {
 
     // Fail-safe: if the loader is broken or never sends a response, don't
     // hang on "Loading…" forever — degrade to anonymous after a short delay.
-    const timer = window.setTimeout(() => resolve(null), HINTS_HANDSHAKE_TIMEOUT_MS);
+    // Only applies until first resolution; later updates have no timeout.
+    const timer = window.setTimeout(() => {
+      if (!firstResolved) applyHints(null);
+    }, HINTS_HANDSHAKE_TIMEOUT_MS);
 
     return () => {
       window.removeEventListener("message", handleMessage);
@@ -157,9 +164,16 @@ function App() {
     );
   }
 
+  // Identity key — when the loader pushes a different user (login / user
+  // switch / logout), React remounts ChatWidget so per-conversation state
+  // (messages, sessionId, ticket) resets cleanly instead of leaking from
+  // the previous identity.
+  const identityKey = hints?.user_id ?? hints?.email ?? "anon";
+
   return (
     <div className="flex h-screen w-full font-['Inter']">
       <ChatWidget
+        key={identityKey}
         botId={botId}
         locale={locale}
         hints={hints}

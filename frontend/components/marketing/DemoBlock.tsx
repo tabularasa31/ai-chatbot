@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { motion } from "framer-motion";
+import type { WindowWithChat9Widget } from "@/types/chat9-widget";
 
 const LANDING_DEMO_BOT_ID = process.env.NEXT_PUBLIC_LANDING_DEMO_BOT_ID?.trim();
 
@@ -12,26 +13,41 @@ const TARGET_ID = "chat9-landing-demo";
 
 function DemoWidget() {
   useEffect(() => {
-    // Loader's hardcoded apiBase points at production getchat9.live, but the
-    // landing page may run on a preview/staging host — point the embedded
-    // widget back at *this* origin so /widget/* requests land on the dashboard
-    // serving the page.
-    (window as unknown as { Chat9Config?: Record<string, unknown> }).Chat9Config = {
-      mode: "inline",
-      target: TARGET_ID,
-      apiBase: window.location.origin,
-    };
-    const script = document.createElement("script");
-    script.src = WIDGET_LOADER_URL;
-    script.async = true;
-    script.setAttribute("data-bot-id", LANDING_DEMO_BOT_ID!);
-    document.body.appendChild(script);
+    let cancelled = false;
+
+    function startInline() {
+      const w = window as WindowWithChat9Widget;
+      if (cancelled || !w.Chat9Widget) return;
+      if (w.Chat9Widget.isStarted()) return;
+      // Loader's hardcoded apiBase points at production getchat9.live, but the
+      // landing page may run on a preview/staging host — point the embedded
+      // widget back at *this* origin so /widget/* requests land on the dashboard
+      // serving the page.
+      w.Chat9Widget.start({
+        mode: "inline",
+        target: TARGET_ID,
+        apiBase: window.location.origin,
+      });
+    }
+
+    const w = window as WindowWithChat9Widget;
+    if (w.Chat9Widget) {
+      startInline();
+    } else {
+      const script = document.createElement("script");
+      script.src = WIDGET_LOADER_URL;
+      script.async = true;
+      script.setAttribute("data-bot-id", LANDING_DEMO_BOT_ID!);
+      script.onload = startInline;
+      document.body.appendChild(script);
+    }
 
     return () => {
-      script.remove();
+      cancelled = true;
+      const w = window as WindowWithChat9Widget;
+      w.Chat9Widget?.stop();
       const target = document.getElementById(TARGET_ID);
       if (target) target.innerHTML = "";
-      delete (window as unknown as { Chat9Config?: unknown }).Chat9Config;
     };
   }, []);
 

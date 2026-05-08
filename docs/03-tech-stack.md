@@ -112,10 +112,10 @@
 ├─────────────────────────────────────────────────────────┤
 │                                                           │
 │  <script src="https://widget.getchat9.live/widget.js" data-bot-id="…">    │
-│  optional: window.Chat9Config.widgetUrl → Next.js origin   │
+│  <script>Chat9Widget.start({ apiBase, color, userHints })</script>          │
 │                                                           │
 │  ↓                                                        │
-│  Loader injects iframe → Next.js /widget?botId=…         │
+│  start() injects iframe → Next.js /widget?botId=…         │
 │                                                           │
 ├─────────────────────────────────────────────────────────┤
 │              Next.js /widget (ChatWidget)                 │

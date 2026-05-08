@@ -8,25 +8,26 @@ description: How to add the Chat9 chat widget to your site, with optional userHi
 Paste this snippet before the closing `</body>` tag:
 
 ```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script>
+  Chat9Widget.start();
 </script>
 ```
 
 `data-bot-id` is your bot's public ID — safe to include in page HTML.
 
-This is the only required snippet. The widget works anonymously out of the box. All configuration is optional and goes through `window.Chat9Config`, which must be set **before** the loader script.
+Loading `widget.js` registers `window.Chat9Widget` but does **not** mount any UI. You explicitly start the widget with `Chat9Widget.start(config?)` — call it with no arguments for an anonymous widget with default styling, or pass an options object to customize.
 
-> Do not add `async` or `defer` to the `widget.js` tag — the loader reads `document.currentScript` synchronously and will not start without it.
+> Do not add `async` or `defer` to the `widget.js` tag — the loader reads `document.currentScript` synchronously and will not register without it.
 
 ## Configuration
 
-`data-bot-id` is the only attribute on the `<script>` tag. Everything else goes through `window.Chat9Config`:
+All options are arguments to `Chat9Widget.start()`:
 
 ```html
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 <script>
-  window.Chat9Config = {
+  Chat9Widget.start({
     mode: "bubble",          // "bubble" | "inline"
     color: "#a855f7",
     position: "right",       // "right" | "left"
@@ -36,11 +37,7 @@ This is the only required snippet. The widget works anonymously out of the box. 
       email: "anna@example.com",
       locale: "ru-RU"
     }
-  };
-</script>
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+  });
 </script>
 ```
 
@@ -50,6 +47,8 @@ This is the only required snippet. The widget works anonymously out of the box. 
 | `target` | — | DOM element id for inline mode |
 | `color` | violet gradient | Bubble background color (`#RGB`, `#RRGGBB`) |
 | `position` | `"right"` | `"right"` or `"left"` |
+| `topClearance` | `0` | px reserved at the viewport top (e.g. height of a fixed navbar) |
+| `apiBase` | `https://getchat9.live` | Override only on staging/dev |
 | `userHints` | — | See [userHints](#userhints) |
 
 **Modes:**
@@ -61,9 +60,9 @@ This is the only required snippet. The widget works anonymously out of the box. 
 If your site primarily serves visitors in Russia, load the widget from the Russian edge proxy. Replace `widget.getchat9.live` with `widget-ru.getchat9.live` in the script src — both the widget bundle and the API origin route through it automatically:
 
 ```html
-<script
-  src="https://widget-ru.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+<script src="https://widget-ru.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script>
+  Chat9Widget.start();
 </script>
 ```
 
@@ -92,6 +91,18 @@ connect-src https://api-ru.getchat9.live;
 1. Log in to your Dashboard at https://getchat9.live.
 2. Copy the embed block from the **Dashboard** home or the **Embed** page.
 
+## Lifecycle API
+
+`window.Chat9Widget` exposes an explicit lifecycle. The script downloads once; you control when the chat appears, when it goes away, and what identity it carries.
+
+| Method | Behavior |
+|---|---|
+| `Chat9Widget.start(config?)` | Mount the FAB and chat iframe. No-op (with a console warning) if already started — call `stop()` first to reconfigure. |
+| `Chat9Widget.stop()` | Unmount the DOM and listeners. `window.Chat9Widget` stays registered; the script does not re-download. Call `start()` again to bring it back. |
+| `Chat9Widget.setHints(hints \| null)` | Push a new identity into a running widget. If the widget is stopped, the hints are remembered for the next `start()`. Pass `null` to clear (anonymous). |
+| `Chat9Widget.isStarted()` | `true` while the widget is mounted. |
+| `Chat9Widget.destroy()` | Terminal teardown. Removes the DOM and deletes `window.Chat9Widget`. To use the widget again on this page you must reload `widget.js`. **Most consumers want `stop()` instead.** |
+
 ## Session continuity
 
 Conversation history is stored on the server. The widget keeps a `session_id` in the visitor's browser (`localStorage`) for up to 24 hours — on return visits it fetches the previous conversation from the server using that ID, so history persists across page reloads.
@@ -106,30 +117,49 @@ When the bot escalates a conversation to a human agent, the chat is marked as en
 
 **Clarification:** the bot may ask one follow-up question when a request is ambiguous. It appears as part of the normal text reply.
 
-## Login / logout lifecycle
+## Login / logout in single-page apps
 
-`userHints` are passed to the widget once — at iframe mount time. They cannot be updated after the widget has mounted.
-
-**SSR / multi-page apps:** set `userHints` server-side before sending HTML. On logout, the page navigates away and the iframe is destroyed automatically — nothing extra needed.
-
-**Single-page apps (SPA):** if your app redirects on logout, the page reloads and the widget reinitializes naturally for the next user. Call `destroy()` before the redirect to remove the iframe immediately:
+Because `start`, `stop`, and `setHints` are explicit, the widget can survive a full SPA login/logout cycle without reloading `widget.js`.
 
 ```js
-window.Chat9Widget?.destroy();
-if (window.Chat9Config) {
-  window.Chat9Config.userHints = null;
-}
+// At app startup, after you've fetched any branding/config:
+Chat9Widget.start({ apiBase: API_ORIGIN, color: BRAND_COLOR });
+
+// Once the user logs in:
+Chat9Widget.setHints({
+  user_id: user.id,
+  email: user.email,
+  name: user.name
+});
+
+// User switches accounts without reloading:
+Chat9Widget.setHints({ user_id: otherUser.id, email: otherUser.email });
+// Conversation state resets server-side — the previous user's chat does
+// not leak to the new identity.
+
+// Logout — pick one:
+Chat9Widget.setHints(null);   // keep the widget visible, anonymous
+// or
+Chat9Widget.stop();           // hide the widget completely
+
+// Re-login after stop():
+Chat9Widget.start({ apiBase: API_ORIGIN, color: BRAND_COLOR, userHints: { ... } });
 ```
+
+`setHints()` updates a running widget in-place — you do **not** need to `stop` and `start` to change identity.
+
+For **server-rendered or multi-page apps**, the simplest pattern is to render the embed snippet on every page and pass the right `userHints` per request. On logout the page navigates and the widget is recreated naturally.
 
 ---
 
 ## userHints
 
-By default the widget is anonymous. Pass `userHints` to personalize the session:
+By default the widget is anonymous. Pass `userHints` to personalize the session — either at `start()` time, or later via `setHints()`:
 
 ```html
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
 <script>
-  window.Chat9Config = {
+  Chat9Widget.start({
     userHints: {
       user_id: "42",
       name: "Anna",
@@ -137,11 +167,7 @@ By default the widget is anonymous. Pass `userHints` to personalize the session:
       locale: "ru-RU",
       plan_tier: "pro"
     }
-  };
-</script>
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+  });
 </script>
 ```
 

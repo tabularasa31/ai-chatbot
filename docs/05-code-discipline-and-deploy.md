@@ -358,15 +358,15 @@ Visit https://app.yourdomain.com
 
 ### Widget (separate Vercel project)
 
-**Loader:** `GET https://widget.getchat9.live/widget.js` — IIFE built from `frontend/apps/widget-loader/`. Injects an iframe pointing at `https://widget.getchat9.live/v1/?botId=…&apiBase=…&parentOrigin=…`.
+**Loader:** `GET https://widget.getchat9.live/widget.js` — IIFE built from `frontend/apps/widget-loader/`. Registers `window.Chat9Widget` (lifecycle: `start`, `stop`, `setHints`, `isStarted`, `destroy`); does not mount any UI on script load — the consumer calls `Chat9Widget.start(config?)`. When started, injects an iframe pointing at `https://widget.getchat9.live/v1/?botId=…&apiBase=…&parentOrigin=…`.
 
-**Widget UI:** `GET https://widget.getchat9.live/v1/` — Vite + Preact bundle from `frontend/apps/widget-app/`. The widget calls `${apiBase}/widget/{chat,escalate,history,config}` and `${apiBase}/api/widget-{session/init,identity}` cross-origin, where `apiBase` defaults to the dashboard origin (`https://getchat9.live`) and is overridable via `data-api-base`. CORS for the widget paths is wired through `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
+**Widget UI:** `GET https://widget.getchat9.live/v1/` — Vite + Preact bundle from `frontend/apps/widget-app/`. The widget calls `${apiBase}/widget/{chat,escalate,history,config}` and `${apiBase}/api/widget-{session/init,identity}` cross-origin, where `apiBase` defaults to the dashboard origin (`https://getchat9.live`) and is overridable via the `apiBase` field of `Chat9Widget.start({...})`. CORS for the widget paths is wired through `frontend/middleware.ts` with the allowlist in `WIDGET_ALLOWED_ORIGINS`.
 
 **Typical snippet (bot's `public_id` from the dashboard, passed via `data-bot-id`):**
 ```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script>
+  Chat9Widget.start();
 </script>
 ```
 

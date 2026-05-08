@@ -192,14 +192,16 @@
 Сниппет для встраивания клиент копирует со страницы **Embed**. Это один канонический шаблон:
 
 ```html
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="…"></script>
 <script>
-  window.Chat9Config = {
+  Chat9Widget.start({
     userHints: { name: "Anna", email: "anna@example.com", locale: "ru-RU" },
     mode: "bubble"
-  };
+  });
 </script>
-<script src="https://widget.getchat9.live/widget.js" data-bot-id="…"></script>
 ```
+
+Загрузка `widget.js` регистрирует объект `window.Chat9Widget` (методы `start/stop/setHints/destroy`), но **сама по себе ничего не рендерит** — клиент явно вызывает `start()` когда хочет смонтировать чат. Это позволяет SPA-интеграциям держать скрипт загруженным, переключаясь между анонимным и идентифицированным режимом через `setHints()` без перекачки.
 
 `userHints` — опциональные подсказки **с фронтенда тенанта**. Поля: `user_id`, `email`, `name`, `locale`, `plan_tier`, `audience_tag`. Они **не верифицируются** — кто угодно может изменить их через DevTools. Используются для:
 

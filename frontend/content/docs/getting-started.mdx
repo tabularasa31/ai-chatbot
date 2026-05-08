@@ -37,11 +37,13 @@ You can get an OpenAI API key at https://platform.openai.com/api-keys.
 Example shape (the Dashboard fills in your real values):
 
 ```html
-<script
-  src="https://widget.getchat9.live/widget.js"
-  data-bot-id="YOUR_BOT_PUBLIC_ID">
+<script src="https://widget.getchat9.live/widget.js" data-bot-id="YOUR_BOT_PUBLIC_ID"></script>
+<script>
+  Chat9Widget.start();
 </script>
 ```
+
+The first script registers the widget; the second mounts it. See [Embedding the Widget](/docs/embedding-the-widget) for configuration options and the full `Chat9Widget` API (`start`, `stop`, `setHints`, `destroy`).
 
 ## Step 5: Test it
 

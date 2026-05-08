@@ -89,6 +89,7 @@ def _emit_chat_turn_event(
     latency_ms: int | None = None,
     retrieval_ms: int = 0,
     llm_ms: int = 0,
+    llm_lang_retry_ms: int = 0,
     reliability_score: str | None = None,
     best_confidence_score: float | None = None,
     decision: Decision | None = None,
@@ -116,7 +117,11 @@ def _emit_chat_turn_event(
             "identified": identified,
             "latency_ms": latency_ms,
             "retrieval_ms": retrieval_ms,
-            "llm_ms": llm_ms,
+            # llm_ms = main generate; llm_lang_retry_ms = full second
+            # async_generate_answer call when the language-mismatch retry
+            # fires. Sum gives true LLM wall time on the turn.
+            "llm_ms": llm_ms + llm_lang_retry_ms,
+            "llm_lang_retry_ms": llm_lang_retry_ms,
             "reliability_score": reliability_score,
             "best_confidence_score": best_confidence_score,
             "escalation_trigger": escalation_trigger,

@@ -152,6 +152,55 @@ def test_chat_turn_emits_chat_completed(monkeypatch):
     assert completed["properties"]["plan_tier"] == "free"
 
 
+def test_chat_turn_llm_ms_includes_lang_retry(monkeypatch):
+    """`llm_ms` in chat.turn must sum the main generate and the language-mismatch
+    retry. The retry is a SECOND full async_generate_answer call (~+12s p50);
+    omitting it would under-report total LLM wall time on cross-lingual turns
+    and skew the p50/p95 dashboards used to track latency wins.
+    """
+    svc, client = _make_enabled_svc(monkeypatch)
+
+    _emit_chat_turn_event(
+        tenant_public_id="tnt_abc",
+        bot_public_id="bot_123",
+        chat_id="chat_xyz",
+        strategy="faq_context",
+        reject_reason=None,
+        is_reject=False,
+        escalated=False,
+        latency_ms=20_000,
+        retrieval_ms=2_000,
+        llm_ms=6_000,
+        llm_lang_retry_ms=11_000,
+    )
+
+    turn = next(c for c in client.calls if c["event"] == "chat.turn")
+    assert turn["properties"]["llm_ms"] == 17_000   # 6000 + 11000
+    assert turn["properties"]["llm_lang_retry_ms"] == 11_000
+
+
+def test_chat_turn_llm_ms_omits_retry_when_zero(monkeypatch):
+    """The common path (no retry) reports the original llm_ms unchanged."""
+    svc, client = _make_enabled_svc(monkeypatch)
+
+    _emit_chat_turn_event(
+        tenant_public_id="tnt_abc",
+        bot_public_id="bot_123",
+        chat_id="chat_xyz",
+        strategy="rag_only",
+        reject_reason=None,
+        is_reject=False,
+        escalated=False,
+        latency_ms=8_000,
+        retrieval_ms=1_500,
+        llm_ms=5_000,
+    )
+
+    turn = next(c for c in client.calls if c["event"] == "chat.turn")
+    assert turn["properties"]["llm_ms"] == 5_000
+    assert turn["properties"]["llm_lang_retry_ms"] == 0
+
+
 # ---------------------------------------------------------------------------
 # chat_escalated event shape
 # ---------------------------------------------------------------------------

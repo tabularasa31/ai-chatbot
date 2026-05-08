@@ -4,12 +4,12 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const botId = searchParams.get("botId");
+  const botId = searchParams.get("bot_id") ?? searchParams.get("botId");
   const locale = searchParams.get("locale");
 
   if (!botId) {
     return NextResponse.json(
-      { detail: "botId is required" },
+      { detail: "bot_id is required" },
       { status: 400 },
     );
   }

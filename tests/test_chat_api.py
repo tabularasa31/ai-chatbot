@@ -293,10 +293,10 @@ def test_chat_no_embeddings(
     assert response.status_code == 200
     data = response.json()
     # No retrieved chunks → generation short-circuits to the canonical
-    # "no info" line in async_generate_answer; escalation still fires.
+    # "no info" line in async_generate_answer; pre-confirm escalation fires.
+    # Ticket is NOT created on the first turn — user must confirm first.
     assert data["text"].startswith("I don't have information about this.")
-    assert "A support ticket was created for you." in data["text"]
-    assert data["ticket_number"] == "ESC-0001"
+    assert data["ticket_number"] is None
     assert data["tokens_used"] == 15
     assert data.get("chat_ended") is False
 

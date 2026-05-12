@@ -91,6 +91,16 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    escalation_pre_confirm_pending = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    # Stores trigger/context for deferred ticket creation after user confirms.
+    # Schema: {"trigger": str, "primary_question": str,
+    #          "best_similarity_score": float|null, "retrieved_chunks": list|null}
+    escalation_pre_confirm_context = Column(JSON, nullable=True)
     ended_at = Column(DateTime, nullable=True)
     clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_response_language = Column(String(16), nullable=True)

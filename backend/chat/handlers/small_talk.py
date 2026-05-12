@@ -34,7 +34,7 @@ class SmallTalkHandler(PipelineHandler):
             # for non-new sessions); never short-circuit it as small talk.
             return False
         chat = ctx.chat
-        if chat.escalation_followup_pending or chat.escalation_awaiting_ticket_id or chat.ended_at:
+        if chat.escalation_followup_pending or chat.escalation_awaiting_ticket_id or chat.escalation_pre_confirm_pending or chat.ended_at:
             return False
         if len(ctx.redacted_question.split()) > _SHORT_TURN_MAX_WORDS:
             return False

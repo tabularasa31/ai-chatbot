@@ -1566,7 +1566,10 @@ class RagHandler(PipelineHandler):
                         complete_escalation_openai_turn,
                         phase=EscalationPhase.pre_confirm,
                         chat_messages=msgs,
-                        fact_json={"trigger": esc_trigger.value},
+                        fact_json={
+                            "trigger": esc_trigger.value,
+                            "user_email": (ctx.effective_user_ctx or {}).get("email"),
+                        },
                         latest_user_text=ctx.redacted_question,
                         api_key=ctx.api_key,
                         response_language=ctx.language_context.response_language,

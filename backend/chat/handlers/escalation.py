@@ -351,12 +351,13 @@ class EscalationStateMachine(PipelineHandler):
                 "best_similarity_score": None,
                 "retrieved_chunks": None,
             }
+            user_email = (ctx.effective_user_ctx or {}).get("email")
             out = await_only(
                 asyncio.to_thread(
                     _svc.complete_escalation_openai_turn,
                     phase=EscalationPhase.pre_confirm,
                     chat_messages=msgs,
-                    fact_json={"trigger": EscalationTrigger.user_request.value},
+                    fact_json={"trigger": EscalationTrigger.user_request.value, "user_email": user_email},
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                     response_language=ctx.language_context.response_language,
@@ -399,6 +400,7 @@ class EscalationStateMachine(PipelineHandler):
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
+            user_email = (ctx.effective_user_ctx or {}).get("email")
             out = await_only(
                 asyncio.to_thread(
                     _svc.complete_escalation_openai_turn,
@@ -407,6 +409,7 @@ class EscalationStateMachine(PipelineHandler):
                     fact_json={
                         "trigger": pre_confirm_ctx.get("trigger"),
                         "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                        "user_email": user_email,
                     },
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,

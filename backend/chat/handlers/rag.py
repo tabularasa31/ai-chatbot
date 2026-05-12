@@ -1359,8 +1359,6 @@ class RagHandler(PipelineHandler):
         _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
         _try_ingest_gap_signal = _svc._try_ingest_gap_signal
         complete_escalation_openai_turn = _svc.complete_escalation_openai_turn
-        create_escalation_ticket = _svc.create_escalation_ticket
-        fact_from_ticket = _svc.fact_from_ticket
         build_chat_messages_for_openai = _svc.build_chat_messages_for_openai
 
         chat = ctx.chat
@@ -1481,6 +1479,7 @@ class RagHandler(PipelineHandler):
             session_closed=(chat.ended_at is not None),
             active_escalation=(
                 chat.escalation_awaiting_ticket_id is not None
+                or chat.escalation_pre_confirm_pending
                 or chat.escalation_followup_pending
             ),
             clarification_count=chat.clarification_count,
@@ -1546,23 +1545,15 @@ class RagHandler(PipelineHandler):
         if escalate and esc_trigger is not None:
             try:
                 preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
-                ticket = create_escalation_ticket(
-                    ctx.tenant_id,
-                    ctx.question,
-                    esc_trigger,
-                    ctx.db,
-                    chat_id=chat.id,
-                    session_id=ctx.session_id,
-                    best_similarity_score=retrieval.best_confidence_score,
-                    retrieved_chunks=preview,
-                    user_context=ctx.effective_user_ctx,
-                    optional_entity_types=ctx.optional_entity_types,
-                )
-                esc_phase = (
-                    EscalationPhase.handoff_ask_email
-                    if not ticket.user_email
-                    else EscalationPhase.handoff_email_known
-                )
+                # Store context for deferred ticket creation after user confirms.
+                # Ticket is NOT created here — user must confirm first.
+                chat.escalation_pre_confirm_pending = True
+                chat.escalation_pre_confirm_context = {
+                    "trigger": esc_trigger.value,
+                    "primary_question": ctx.question,
+                    "best_similarity_score": retrieval.best_confidence_score,
+                    "retrieved_chunks": preview,
+                }
                 # We are inside a SQLAlchemy run_sync greenlet that runs ON the
                 # event loop thread, so a direct sync OpenAI call here would
                 # freeze the loop for the 2-5 s of the handoff completion. Bridge
@@ -1573,9 +1564,9 @@ class RagHandler(PipelineHandler):
                 esc = await_only(
                     asyncio.to_thread(
                         complete_escalation_openai_turn,
-                        phase=esc_phase,
+                        phase=EscalationPhase.pre_confirm,
                         chat_messages=msgs,
-                        fact_json=fact_from_ticket(ticket, chat=chat),
+                        fact_json={"trigger": esc_trigger.value},
                         latest_user_text=ctx.redacted_question,
                         api_key=ctx.api_key,
                         response_language=ctx.language_context.response_language,
@@ -1588,35 +1579,12 @@ class RagHandler(PipelineHandler):
                 )
                 answer = answer + "\n\n" + esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
-                created_ticket_number = ticket.ticket_number
-                # _notify_tenant_new_ticket lazy-loads ticket.chat, which can
-                # create a duplicate session instance when ctx.chat was detached
-                # by an earlier db.close(). Merge before writing escalation state.
-                chat = ctx.db.merge(chat)
-                ctx.chat = chat
-                if not ticket.user_email:
-                    chat.escalation_awaiting_ticket_id = ticket.id
-                else:
-                    chat.escalation_followup_pending = True
                 ctx.db.add(chat)
                 ctx.db.commit()
-                _emit_chat_escalated_event(
-                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                    bot_public_id=ctx.bot_public_id,
-                    chat_id=str(chat.id),
-                    escalation_reason=_decision.escalate_reason or esc_trigger.value,
-                    escalation_trigger=esc_trigger.value,
-                    plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-                    priority=ticket.priority if ticket is not None else None,
-                )
-                _emit_chat_session_ended_event(
-                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                    bot_public_id=ctx.bot_public_id,
-                    chat_id=str(chat.id),
-                    outcome="escalated",
-                )
             except Exception as e:
-                logger.warning("Escalation T-1/T-2 failed, returning RAG answer only: %s", e)
+                logger.warning("Escalation T-1/T-2 pre-confirm failed, returning RAG answer only: %s", e)
+                chat.escalation_pre_confirm_pending = False
+                chat.escalation_pre_confirm_context = None
 
         # Both branches (RAG answer or escalation handoff) write to the user in
         # response_language. escalation_language stays for tenant-side artifacts

@@ -17,11 +17,13 @@ with ``service.py``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.util import await_only
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.escalation.service import (
@@ -62,6 +64,8 @@ class EscalationStateMachine(PipelineHandler):
             return True
         if chat.escalation_awaiting_ticket_id:
             return True
+        if chat.escalation_pre_confirm_pending:
+            return True
         if chat.escalation_followup_pending:
             return True
         # Explicit human request runs through the FSM only when not already in
@@ -87,6 +91,8 @@ class EscalationStateMachine(PipelineHandler):
             # Ticket disappeared — flag was cleared. Drop into the gates below
             # in case another escalation state still applies; otherwise return
             # None so the router falls through to RagHandler.
+        if chat.escalation_pre_confirm_pending:
+            return self._handle_pre_confirm(ctx)
         if chat.escalation_followup_pending:
             return self._handle_followup_yes_no(ctx)
         # Explicit human request (T-3) — only fires when the user actually
@@ -327,7 +333,7 @@ class EscalationStateMachine(PipelineHandler):
             raise
 
     def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        """T-3: explicit human request lodged before RAG runs."""
+        """T-3: explicit human request — ask for confirmation before creating ticket."""
         _svc = _svc_lookup()
         chat = ctx.chat
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
@@ -338,102 +344,197 @@ class EscalationStateMachine(PipelineHandler):
             )
             human_request_span.end(output={"matched": True})
         try:
-            ticket = _svc.create_escalation_ticket(
-                ctx.tenant_id,
-                ctx.question,
-                EscalationTrigger.user_request,
-                ctx.db,
-                chat_id=chat.id,
-                session_id=ctx.session_id,
-                user_context=ctx.effective_user_ctx,
-                optional_entity_types=ctx.optional_entity_types,
+            chat.escalation_pre_confirm_pending = True
+            chat.escalation_pre_confirm_context = {
+                "trigger": EscalationTrigger.user_request.value,
+                "primary_question": ctx.question,
+                "best_similarity_score": None,
+                "retrieved_chunks": None,
+            }
+            out = await_only(
+                asyncio.to_thread(
+                    _svc.complete_escalation_openai_turn,
+                    phase=EscalationPhase.pre_confirm,
+                    chat_messages=msgs,
+                    fact_json={"trigger": EscalationTrigger.user_request.value},
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
             )
-            phase = (
-                EscalationPhase.handoff_ask_email
-                if not ticket.user_email
-                else EscalationPhase.handoff_email_known
-            )
-            out = _svc.complete_escalation_openai_turn(
-                phase=phase,
-                chat_messages=msgs,
-                fact_json=_svc.fact_from_ticket(ticket, chat=chat),
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
-            )
-            if not ticket.user_email:
-                chat.escalation_awaiting_ticket_id = ticket.id
-            else:
-                chat.escalation_followup_pending = True
-            _svc._set_last_response_language(
+            ctx.db.add(chat)
+            return _svc._escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,
-                response_language=ctx.language_context.response_language,
-                resolution_reason=ctx.language_context.response_language_resolution_reason,
                 language_context=ctx.language_context,
-            )
-            ctx.db.add(chat)
-            ctx.db.commit()
-            user_message, assistant_message = _svc._persist_turn(
-                ctx.db,
-                chat,
-                ctx.tenant_id,
-                ctx.question,
-                out.message_to_user,
-                [],
-                out.tokens_used,
+                question=ctx.question,
+                out=out,
                 optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
-            )
-            _svc._try_ingest_gap_signal(
-                chat=chat,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                question_text=ctx.redacted_question,
-                answer_confidence=None,
-                was_rejected=False,
-                had_fallback=False,
-                was_escalated=True,
-                language=ctx.language_context.response_language,
-            )
-            if ctx.trace is not None:
-                ctx.trace.update(
-                    output={"answer": out.message_to_user, "source": "explicit_handoff"},
-                    metadata={
-                        "chat_ended": False,
-                        "escalated": True,
-                        "response_language": ctx.language_context.response_language,
-                        "escalation_language": ctx.language_context.escalation_language,
-                    },
-                )
-            _svc._emit_chat_escalated_event(
-                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                bot_public_id=ctx.bot_public_id,
-                chat_id=str(chat.id),
-                escalation_reason="explicit_human_request",
-                escalation_trigger=EscalationTrigger.user_request.value,
-                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-                priority=ticket.priority if ticket is not None else None,
-            )
-            _svc._emit_chat_session_ended_event(
-                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                bot_public_id=ctx.bot_public_id,
-                chat_id=str(chat.id),
-                outcome="escalated",
-            )
-            return ChatTurnOutcome(
-                text=out.message_to_user,
-                document_ids=[],
-                tokens_used=out.tokens_used,
+                trace_source="escalation_pre_confirm_pending",
                 chat_ended=False,
-                ticket_number=ticket.ticket_number,
+                escalated=False,
             )
         except Exception as e:
-            # Legacy behaviour: log and fall back to the RAG handler so the
-            # user still gets a response. Returning None signals the router to
-            # try the next handler (RagHandler).
-            logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
+            logger.warning("Escalation T-3 pre-confirm failed, falling back to RAG: %s", e)
+            chat.escalation_pre_confirm_pending = False
+            chat.escalation_pre_confirm_context = None
             return None
+
+    def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome:
+        """Handle a pending pre-confirmation turn.
+
+        If the user says yes → create ticket and send handoff message.
+        If no → clear state and let chat continue.
+        If unclear → ask once more, then default to yes.
+        """
+        _svc = _svc_lookup()
+        chat = ctx.chat
+        pre_confirm_span = (
+            ctx.trace.span(name="escalation-pre-confirm", input={"pending": True})
+            if ctx.trace is not None
+            else None
+        )
+        pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
+        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+        try:
+            out = await_only(
+                asyncio.to_thread(
+                    _svc.complete_escalation_openai_turn,
+                    phase=EscalationPhase.pre_confirm,
+                    chat_messages=msgs,
+                    fact_json={
+                        "trigger": pre_confirm_ctx.get("trigger"),
+                        "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                    },
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
+            )
+            decision = out.followup_decision or "unclear"
+            if decision == "unclear" and _escalation_clarify_already_asked(chat):
+                decision = "yes"
+
+            if decision == "yes":
+                chat.escalation_pre_confirm_pending = False
+                _clear_escalation_clarify_flag(chat)
+                ctx.db.add(chat)
+                esc_trigger = EscalationTrigger(
+                    pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
+                )
+                ticket = _svc.create_escalation_ticket(
+                    ctx.tenant_id,
+                    pre_confirm_ctx.get("primary_question") or ctx.question,
+                    esc_trigger,
+                    ctx.db,
+                    chat_id=chat.id,
+                    session_id=ctx.session_id,
+                    best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
+                    retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
+                    user_context=ctx.effective_user_ctx,
+                    optional_entity_types=ctx.optional_entity_types,
+                )
+                # _notify_tenant_new_ticket lazy-loads ticket.chat, which can
+                # create a duplicate session instance. Merge before writing flags.
+                chat = ctx.db.merge(chat)
+                ctx.chat = chat
+                chat.escalation_pre_confirm_context = None
+                phase = (
+                    EscalationPhase.handoff_ask_email
+                    if not ticket.user_email
+                    else EscalationPhase.handoff_email_known
+                )
+                msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+                out_handoff = await_only(
+                    asyncio.to_thread(
+                        _svc.complete_escalation_openai_turn,
+                        phase=phase,
+                        chat_messages=msgs,
+                        fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                        latest_user_text=ctx.redacted_question,
+                        api_key=ctx.api_key,
+                        response_language=ctx.language_context.response_language,
+                    )
+                )
+                if not ticket.user_email:
+                    chat.escalation_awaiting_ticket_id = ticket.id
+                else:
+                    chat.escalation_followup_pending = True
+                ctx.db.add(chat)
+                if pre_confirm_span is not None:
+                    pre_confirm_span.end(
+                        output={"decision": decision, "ticket": ticket.ticket_number}
+                    )
+                _svc._emit_chat_escalated_event(
+                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+                    bot_public_id=ctx.bot_public_id,
+                    chat_id=str(chat.id),
+                    escalation_reason="pre_confirm_accepted",
+                    escalation_trigger=esc_trigger.value,
+                    plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+                    priority=ticket.priority if ticket is not None else None,
+                )
+                return _svc._escalation_turn_response(
+                    db=ctx.db,
+                    chat=chat,
+                    tenant_id=ctx.tenant_id,
+                    language_context=ctx.language_context,
+                    question=ctx.question,
+                    out=out_handoff,
+                    optional_entity_types=ctx.optional_entity_types,
+                    trace=ctx.trace,
+                    trace_source="escalation_pre_confirm_accepted",
+                    chat_ended=False,
+                    escalated=True,
+                    ticket_number=ticket.ticket_number,
+                )
+
+            if decision == "no":
+                chat.escalation_pre_confirm_pending = False
+                chat.escalation_pre_confirm_context = None
+                _clear_escalation_clarify_flag(chat)
+                ctx.db.add(chat)
+                if pre_confirm_span is not None:
+                    pre_confirm_span.end(output={"decision": decision})
+                return _svc._escalation_turn_response(
+                    db=ctx.db,
+                    chat=chat,
+                    tenant_id=ctx.tenant_id,
+                    language_context=ctx.language_context,
+                    question=ctx.question,
+                    out=out,
+                    optional_entity_types=ctx.optional_entity_types,
+                    trace=ctx.trace,
+                    trace_source="escalation_pre_confirm_declined",
+                    chat_ended=False,
+                    escalated=False,
+                )
+
+            # unclear — ask once more; second unclear defaults to yes above
+            _set_escalation_clarify_flag(chat)
+            ctx.db.add(chat)
+            if pre_confirm_span is not None:
+                pre_confirm_span.end(output={"decision": decision, "clarify": True})
+            return _svc._escalation_turn_response(
+                db=ctx.db,
+                chat=chat,
+                tenant_id=ctx.tenant_id,
+                language_context=ctx.language_context,
+                question=ctx.question,
+                out=out,
+                optional_entity_types=ctx.optional_entity_types,
+                trace=ctx.trace,
+                trace_source="escalation_pre_confirm_unclear",
+                chat_ended=False,
+                escalated=False,
+            )
+        except Exception as exc:
+            if pre_confirm_span is not None:
+                pre_confirm_span.end(
+                    output={"error": True},
+                    level="ERROR",
+                    status_message=str(exc),
+                )
+            raise

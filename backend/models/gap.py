@@ -76,6 +76,16 @@ class GapCluster(Base):
     last_computed_at = Column(DateTime, nullable=True)
     last_question_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+    draft_title = Column(Text, nullable=True)
+    draft_question = Column(Text, nullable=True)
+    draft_markdown = Column(Text, nullable=True)
+    draft_language = Column(String(8), nullable=True)
+    draft_updated_at = Column(DateTime, nullable=True)
+    published_faq_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenant_faq.id", ondelete="SET NULL", use_alter=True, name="fk_gap_clusters_published_faq_id"),
+        nullable=True,
+    )
 
 
 class GapDocTopic(Base):

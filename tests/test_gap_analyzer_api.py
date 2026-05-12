@@ -568,36 +568,26 @@ def test_archived_filter_is_source_specific(
 # Draft generation
 # ---------------------------------------------------------------------------
 
-def test_draft_for_mode_b_cluster_returns_markdown(
+def test_draft_for_mode_a_topic_returns_markdown(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    """Mode A keeps the template-driven draft endpoint (Mode B uses LLM workflow)."""
     token, tenant_id = _create_client_and_token(
-        tenant, db_session, email="gap-api-draft-mode-b@example.com", name="Gap API Draft Mode B Tenant"
+        tenant, db_session, email="gap-api-draft-mode-a@example.com", name="Gap API Draft Mode A Tenant"
     )
-    cluster = GapCluster(
+    topic = GapDocTopic(
         tenant_id=tenant_id,
-        label="Invoice exports for finance",
-        question_count=1,
-        aggregate_signal_weight=2.0,
+        topic_label="Invoice exports for finance",
         coverage_score=0.25,
-        status=GapClusterStatus.active,
+        status=GapDocTopicStatus.active,
     )
-    db_session.add(cluster)
-    db_session.flush()
-    db_session.add(
-        GapQuestion(
-            tenant_id=tenant_id,
-            question_text="How do invoice exports work for finance?",
-            cluster_id=cluster.id,
-            gap_signal_weight=2.0,
-        )
-    )
+    db_session.add(topic)
     db_session.commit()
-    db_session.refresh(cluster)
+    db_session.refresh(topic)
 
     response = tenant.post(
-        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        f"/gap-analyzer/mode_a/{topic.id}/draft",
         headers={"Authorization": f"Bearer {token}"},
     )
 
@@ -605,7 +595,6 @@ def test_draft_for_mode_b_cluster_returns_markdown(
     data = response.json()
     assert data["title"] == "Invoice exports for finance"
     assert "# Invoice exports for finance" in data["markdown"]
-    assert "How do invoice exports work for finance?" in data["markdown"]
 
 
 def test_draft_for_linked_mode_b_appends_mode_a_examples(

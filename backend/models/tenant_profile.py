@@ -60,8 +60,14 @@ class TenantFaq(Base):
     answer = Column(Text, nullable=False)
     question_embedding = Column(Vector(1536), nullable=True)
     confidence = Column(Float, nullable=True)
-    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger'
+    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger' | 'gap_analyzer'
     approved = Column(Boolean, nullable=False, default=False, server_default="false")
+    gap_source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gap_clusters.id", ondelete="SET NULL", use_alter=True, name="fk_tenant_faq_gap_source_id"),
+        nullable=True,
+        index=True,
+    )
     # Phase 4: explainability fields (only populated for source='logs')
     cluster_size = Column(Integer, nullable=True)
     source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs

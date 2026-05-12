@@ -277,6 +277,9 @@ def _build_mode_b_items(
                 linked_example_questions=_clean_questions(linked_topic.example_questions if linked_topic is not None else None),
                 also_missing_in_docs=linked_topic is not None,
                 last_updated=cluster.last_computed_at or cluster.last_question_at or cluster.created_at,
+                has_draft=bool(cluster.draft_markdown),
+                draft_updated_at=cluster.draft_updated_at,
+                published_faq_id=cluster.published_faq_id,
             )
         )
 

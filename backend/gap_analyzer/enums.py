@@ -41,6 +41,9 @@ class GapClusterStatus(str, Enum):
     dismissed = "dismissed"
     closed = "closed"
     inactive = "inactive"
+    drafting = "drafting"
+    in_review = "in_review"
+    resolved = "resolved"
 
 
 class GapDocTopicStatus(str, Enum):

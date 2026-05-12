@@ -278,10 +278,26 @@ export type KnowledgeFaqListResponse = {
 };
 
 export type GapSource = "mode_a" | "mode_b";
-export type GapItemStatus = "active" | "closed" | "dismissed" | "inactive";
+export type GapItemStatus =
+  | "active"
+  | "closed"
+  | "dismissed"
+  | "inactive"
+  | "drafting"
+  | "in_review"
+  | "resolved";
 export type GapClassification = "uncovered" | "partial" | "covered" | "unknown";
 export type GapModeAStatusFilter = "active" | "dismissed" | "archived" | "all";
-export type GapModeBStatusFilter = "active" | "closed" | "dismissed" | "inactive" | "archived" | "all";
+export type GapModeBStatusFilter =
+  | "active"
+  | "closed"
+  | "dismissed"
+  | "inactive"
+  | "drafting"
+  | "in_review"
+  | "resolved"
+  | "archived"
+  | "all";
 export type GapModeASort = "coverage_asc" | "newest";
 export type GapModeBSort = "signal_desc" | "coverage_asc" | "newest";
 export type GapDismissReason = "feature_request" | "not_relevant" | "already_covered" | "other";
@@ -303,6 +319,9 @@ export type GapItem = {
   linked_example_questions: string[];
   also_missing_in_docs: boolean;
   last_updated: string | null;
+  has_draft: boolean;
+  draft_updated_at: string | null;
+  published_faq_id: string | null;
 };
 
 export type GapSummary = {
@@ -336,6 +355,27 @@ export type GapDraftResponse = {
   gap_id: string;
   title: string;
   markdown: string;
+};
+
+export type GapDraftPayload = {
+  gap_id: string;
+  title: string;
+  question: string;
+  markdown: string;
+  language: string;
+  draft_updated_at: string;
+  status: GapItemStatus;
+};
+
+export type GapPublishResult = {
+  gap_id: string;
+  faq_id: string;
+  status: GapItemStatus;
+};
+
+export type GapDiscardDraftResponse = {
+  gap_id: string;
+  status: GapItemStatus;
 };
 
 export type GapRecalculateResponse = {
@@ -894,6 +934,67 @@ export const api = {
       const data = await res.json();
       if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate draft"));
       return data as GapDraftResponse;
+    },
+    async generateModeBDraft(gapId: string): Promise<GapDraftPayload> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to generate FAQ draft"));
+      return data as GapDraftPayload;
+    },
+    async getModeBDraft(gapId: string): Promise<GapDraftPayload> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to load draft"));
+      return data as GapDraftPayload;
+    },
+    async refineModeBDraft(gapId: string, guidance: string): Promise<GapDraftPayload> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft/refine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guidance }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to refine draft"));
+      return data as GapDraftPayload;
+    },
+    async updateModeBDraft(
+      gapId: string,
+      payload: { title: string; question: string; markdown: string; if_match: string },
+    ): Promise<GapDraftPayload> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to save draft"));
+      return data as GapDraftPayload;
+    },
+    async discardModeBDraft(gapId: string): Promise<GapDiscardDraftResponse> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/draft`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to discard draft"));
+      return data as GapDiscardDraftResponse;
+    },
+    async publishModeBDraft(gapId: string): Promise<GapPublishResult> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/publish`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to publish FAQ"));
+      return data as GapPublishResult;
+    },
+    async resolveModeBGap(gapId: string): Promise<GapActionResponse> {
+      const res = await apiFetch(`${BASE_URL}/gap-analyzer/mode_b/${gapId}/resolve`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(getErrorMessage(data, "Failed to resolve gap"));
+      return data as GapActionResponse;
     },
   },
   chat: {

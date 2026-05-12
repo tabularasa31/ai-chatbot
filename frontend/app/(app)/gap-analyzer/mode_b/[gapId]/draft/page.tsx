@@ -251,7 +251,7 @@ export default function ModeBDraftReviewPage() {
               className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
             />
             <p className="mt-2 text-xs text-slate-500">
-              Used by the bot's FAQ matcher to find this answer.
+              Used by the bot&apos;s FAQ matcher to find this answer.
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">

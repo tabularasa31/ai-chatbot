@@ -237,7 +237,7 @@ export default function ModeBDraftReviewPage() {
               id="draft-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
             />
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -248,7 +248,7 @@ export default function ModeBDraftReviewPage() {
               id="draft-question"
               value={question}
               onChange={(e) => setQuestion(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
             />
             <p className="mt-2 text-xs text-slate-500">
               Used by the bot&apos;s FAQ matcher to find this answer.
@@ -263,7 +263,7 @@ export default function ModeBDraftReviewPage() {
               value={markdown}
               onChange={(e) => setMarkdown(e.target.value)}
               rows={16}
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs leading-6 focus:border-violet-400 focus:outline-none"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-6 text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
             />
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -276,7 +276,7 @@ export default function ModeBDraftReviewPage() {
               onChange={(e) => setGuidance(e.target.value)}
               placeholder="e.g. Make it shorter, add a code example, write in a friendlier tone."
               rows={3}
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
             />
             <div className="mt-3 flex justify-end">
               <button

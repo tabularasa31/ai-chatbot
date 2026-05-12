@@ -366,9 +366,9 @@ export default function GapAnalyzerPage() {
   const [hasOpenAiKey, setHasOpenAiKey] = useState(true);
 
   useEffect(() => {
-    api.tenants
+    api.clients
       .getMe()
-      .then((tenant) => setHasOpenAiKey(Boolean(tenant.has_openai_key)))
+      .then((client) => setHasOpenAiKey(Boolean(client.has_openai_key)))
       .catch(() => setHasOpenAiKey(false));
   }, []);
 

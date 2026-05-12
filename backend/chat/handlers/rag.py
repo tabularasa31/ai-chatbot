@@ -1589,6 +1589,11 @@ class RagHandler(PipelineHandler):
                 answer = answer + "\n\n" + esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
                 created_ticket_number = ticket.ticket_number
+                # _notify_tenant_new_ticket lazy-loads ticket.chat, which can
+                # create a duplicate session instance when ctx.chat was detached
+                # by an earlier db.close(). Merge before writing escalation state.
+                chat = ctx.db.merge(chat)
+                ctx.chat = chat
                 if not ticket.user_email:
                     chat.escalation_awaiting_ticket_id = ticket.id
                 else:

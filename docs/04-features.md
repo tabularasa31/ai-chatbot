@@ -667,11 +667,14 @@ When the bot cannot adequately answer, the conversation is **escalated to a huma
 
 ### What happens on escalation
 
-1. An `EscalationTicket` record is created with a sequential number **ESC-####** (per client, e.g. ESC-0001)
-2. The bot sends a GPT-generated handoff message to the user explaining the situation
-3. The owner of the client receives an **email notification** (via Brevo) with ticket details
-4. The chat session is **closed** — the user sees a banner and the input is disabled
-5. The user can initiate a new session at any time
+All three automatic triggers (T-1, T-2, T-3) go through a **pre-confirm** step before a ticket is created:
+
+1. The bot asks the user in one sentence whether they'd like their request forwarded to the human support team. If the user's email is already known via KYC/user context, the bot does **not** ask for it again.
+2. **User confirms (yes):** An `EscalationTicket` record is created with a sequential number **ESC-####** (per client, e.g. ESC-0001). The bot sends a GPT-generated handoff message. The tenant's support inbox receives an **email notification** (via Brevo) with ticket details. If no email is on file, the bot politely asks the user to provide one.
+3. **User declines (no):** Pre-confirm state is cleared; the chat continues normally.
+4. **Unclear reply:** The bot asks once more for clarification; a second unclear response defaults to "yes".
+
+The chat session is **not** immediately closed after escalation — the user can continue exchanging messages in the same session while the ticket is open.
 
 ### Ticket inbox (dashboard)
 

@@ -423,6 +423,13 @@ class EscalationStateMachine(PipelineHandler):
             if decision == "yes":
                 chat.escalation_pre_confirm_pending = False
                 _clear_escalation_clarify_flag(chat)
+                # Merge before ticket creation: _notify_tenant_new_ticket inside
+                # create_escalation_ticket lazy-loads ticket.chat, which would
+                # create a duplicate Chat identity in the session if we don't
+                # merge first. Merging here prevents the InvalidRequestError that
+                # would silently swallow the email notification.
+                chat = ctx.db.merge(chat)
+                ctx.chat = chat
                 ctx.db.add(chat)
                 esc_trigger = EscalationTrigger(
                     pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
@@ -439,10 +446,6 @@ class EscalationStateMachine(PipelineHandler):
                     user_context=ctx.effective_user_ctx,
                     optional_entity_types=ctx.optional_entity_types,
                 )
-                # _notify_tenant_new_ticket lazy-loads ticket.chat, which can
-                # create a duplicate session instance. Merge before writing flags.
-                chat = ctx.db.merge(chat)
-                ctx.chat = chat
                 chat.escalation_pre_confirm_context = None
                 phase = (
                     EscalationPhase.handoff_ask_email

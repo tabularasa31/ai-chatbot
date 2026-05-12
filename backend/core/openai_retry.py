@@ -400,6 +400,7 @@ def _emit_call_attempt(
             properties={
                 "operation": operation,
                 "attempt": attempt,
+                "is_retry": attempt > 1,
                 "elapsed_ms": int(elapsed * 1000),
                 "call_type": call_type,
                 "error_type": type(prev_exc).__name__ if prev_exc is not None else None,

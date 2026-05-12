@@ -70,10 +70,26 @@ def upgrade() -> None:
             ["id"],
             ondelete="SET NULL",
         )
+
+    tenant_faq_indexes = {i["name"] for i in inspector.get_indexes("tenant_faq")}
+    if "ix_tenant_faq_gap_source_id" not in tenant_faq_indexes:
         op.create_index(
             "ix_tenant_faq_gap_source_id",
             "tenant_faq",
             ["gap_source_id"],
+        )
+    # Concurrency guard: at most one published FAQ per gap cluster. Two
+    # racing POST /publish requests can both pass the orchestrator's status
+    # check; the unique partial index makes the second INSERT fail at the DB
+    # layer (caught by the route and translated to 409).
+    if "uq_tenant_faq_gap_source_id" not in tenant_faq_indexes:
+        op.create_index(
+            "uq_tenant_faq_gap_source_id",
+            "tenant_faq",
+            ["gap_source_id"],
+            unique=True,
+            postgresql_where=sa.text("gap_source_id IS NOT NULL"),
+            sqlite_where=sa.text("gap_source_id IS NOT NULL"),
         )
 
 

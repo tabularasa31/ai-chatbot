@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from backend.gap_analyzer._classification import (
     _mode_b_status_from_coverage,
@@ -685,16 +686,36 @@ class GapAnalyzerOrchestrator:
     # without publishing.
     # ----------------------------------------------------------------------
 
-    def _load_mode_b_cluster(self, *, tenant_id: UUID, gap_id: UUID) -> GapCluster:
+    def _load_mode_b_cluster(
+        self,
+        *,
+        tenant_id: UUID,
+        gap_id: UUID,
+        for_update: bool = False,
+    ) -> GapCluster:
         db = self._require_sqlalchemy_repository().db
-        cluster = (
-            db.query(GapCluster)
-            .filter(GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id)
-            .first()
+        query = db.query(GapCluster).filter(
+            GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id
         )
+        if for_update:
+            # No-op on SQLite, real row lock on Postgres. Serialises racing publishes.
+            query = query.with_for_update()
+        cluster = query.first()
         if cluster is None:
             raise GapResourceNotFoundError("Gap cluster not found")
         return cluster
+
+    def _require_draft_mutable(self, cluster: GapCluster) -> None:
+        """Reject draft mutations against a cluster that has already been resolved.
+
+        Without this check, a stale tab (or browser-back after publish) can call
+        Save / Refine / Discard / Generate and reopen a published gap while
+        ``published_faq_id`` still references a live FAQ row.
+        """
+        if cluster.status == GapClusterStatus.resolved or cluster.published_faq_id is not None:
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved; draft state is read-only."
+            )
 
     def _resolve_draft_language(self, *, tenant_id: UUID) -> str:
         # ``escalation_language`` is the tenant's canonical output language (set in
@@ -735,6 +756,7 @@ class GapAnalyzerOrchestrator:
         db = self._require_sqlalchemy_repository().db
         repository = self._require_repository()
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
 
         encrypted_api_key = repository.get_client_openai_key(tenant_id)
         if not encrypted_api_key:
@@ -780,6 +802,7 @@ class GapAnalyzerOrchestrator:
         db = self._require_sqlalchemy_repository().db
         repository = self._require_repository()
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
         if not cluster.draft_markdown:
             raise GapResourceNotFoundError("No draft to refine; generate one first")
 
@@ -826,6 +849,7 @@ class GapAnalyzerOrchestrator:
     ) -> DraftPayload:
         db = self._require_sqlalchemy_repository().db
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
         if cluster.draft_markdown is None or cluster.draft_updated_at is None:
             raise GapResourceNotFoundError("No draft to update; generate one first")
 
@@ -856,7 +880,11 @@ class GapAnalyzerOrchestrator:
         resolved and a new approved FAQ row exists.
         """
         db = self._require_sqlalchemy_repository().db
-        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        # SELECT ... FOR UPDATE serialises two concurrent publish requests on
+        # Postgres so the second one observes the first one's status flip.
+        cluster = self._load_mode_b_cluster(
+            tenant_id=tenant_id, gap_id=gap_id, for_update=True
+        )
         # Idempotency: block double-publish (double-click / retry). publish is the
         # only path that writes to tenant_faq, so we must not let it run twice.
         if cluster.status == GapClusterStatus.resolved or cluster.published_faq_id is not None:
@@ -880,7 +908,17 @@ class GapAnalyzerOrchestrator:
             confidence=cluster.coverage_score,
         )
         db.add(faq)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            # Belt-and-braces: if the row lock didn't catch it (e.g. SQLite or a
+            # pre-Postgres-locking dialect), the unique partial index on
+            # tenant_faq.gap_source_id rejects the duplicate. Translate to the
+            # same 409 the orchestrator-level check produces.
+            db.rollback()
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved — no new FAQ row was created."
+            ) from None
 
         cluster.published_faq_id = faq.id
         cluster.status = GapClusterStatus.resolved
@@ -899,6 +937,7 @@ class GapAnalyzerOrchestrator:
     def discard_draft(self, *, tenant_id: UUID, gap_id: UUID) -> DiscardDraftResponse:
         db = self._require_sqlalchemy_repository().db
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
         cluster.draft_title = None
         cluster.draft_question = None
         cluster.draft_markdown = None

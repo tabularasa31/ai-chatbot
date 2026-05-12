@@ -455,6 +455,129 @@ def test_update_draft_rejects_empty_fields(
     assert response.status_code == 422, response.text
 
 
+def test_publish_race_blocked_by_unique_index(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """If two requests race past the orchestrator-level idempotency check, the
+    DB-level unique partial index on tenant_faq.gap_source_id must reject the
+    second insert."""
+    token, tenant_id = _bootstrap_tenant(
+        tenant, db_session, email="drafts-race@example.com", name="Drafts Race"
+    )
+    cluster = _make_cluster(db_session, tenant_id, label="Race topic")
+
+    draft = DraftContent(title="t", question="Q?", markdown="A.")
+    with _patch_llm_generate(draft), _patch_guard_clear():
+        tenant.post(
+            f"/gap-analyzer/mode_b/{cluster.id}/draft",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    # Simulate a racing publish: pre-insert a tenant_faq row pointing at this
+    # cluster (as the lost-race winner would have done) BUT leave cluster
+    # status/published_faq_id untouched, so the orchestrator's status check
+    # passes and we fall through to the INSERT. The unique partial index
+    # must then reject the duplicate.
+    racing_faq = TenantFaq(
+        tenant_id=tenant_id,
+        question="Q?",
+        answer="A.",
+        source="gap_analyzer",
+        approved=True,
+        gap_source_id=cluster.id,
+    )
+    db_session.add(racing_faq)
+    db_session.commit()
+
+    response = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 409, response.text
+
+    db_session.expire_all()
+    faq_count = (
+        db_session.query(TenantFaq)
+        .filter(TenantFaq.tenant_id == tenant_id, TenantFaq.gap_source_id == cluster.id)
+        .count()
+    )
+    assert faq_count == 1
+
+
+def test_resolved_cluster_rejects_draft_mutations(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A stale tab cannot Save / Refine / Discard / Generate after publish."""
+    token, tenant_id = _bootstrap_tenant(
+        tenant, db_session, email="drafts-reopen@example.com", name="Drafts Reopen"
+    )
+    cluster = _make_cluster(db_session, tenant_id, label="Reopen topic")
+
+    draft = DraftContent(title="t", question="Q?", markdown="A.")
+    with _patch_llm_generate(draft), _patch_guard_clear():
+        gen = tenant.post(
+            f"/gap-analyzer/mode_b/{cluster.id}/draft",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    if_match = gen.json()["draft_updated_at"]
+
+    publish = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/publish",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert publish.status_code == 200
+
+    # Save against a resolved gap must fail.
+    save = tenant.patch(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "title": "edited",
+            "question": "Q?",
+            "markdown": "edited body",
+            "if_match": if_match,
+        },
+    )
+    assert save.status_code == 409, save.text
+
+    # Refine against a resolved gap must fail.
+    refine = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft/refine",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"guidance": "make it shorter"},
+    )
+    assert refine.status_code == 409, refine.text
+
+    # Discard against a resolved gap must fail.
+    discard = tenant.delete(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert discard.status_code == 409, discard.text
+
+    # Regenerate against a resolved gap must fail (regardless of OpenAI key).
+    regenerate = tenant.post(
+        f"/gap-analyzer/mode_b/{cluster.id}/draft",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert regenerate.status_code == 409, regenerate.text
+
+    # Cluster + FAQ are intact.
+    db_session.expire_all()
+    persisted = db_session.get(GapCluster, cluster.id)
+    assert persisted is not None
+    assert persisted.status == GapClusterStatus.resolved
+    assert persisted.published_faq_id is not None
+    faq_count = (
+        db_session.query(TenantFaq)
+        .filter(TenantFaq.tenant_id == tenant_id, TenantFaq.gap_source_id == cluster.id)
+        .count()
+    )
+    assert faq_count == 1
+
+
 def test_generate_pipeline_parses_llm_json_payload() -> None:
     """Unit test for the LLM pipeline parsing layer (no orchestrator)."""
     from backend.gap_analyzer.pipelines.llm_drafts import _parse_draft_payload

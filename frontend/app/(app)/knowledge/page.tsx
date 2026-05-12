@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   api,
   type DocumentListItem,
@@ -14,10 +14,24 @@ import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_com
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
 
+type KnowledgeTab = "documents" | "profile" | "faq";
+
+function parseTab(value: string | null): KnowledgeTab {
+  return value === "faq" || value === "profile" ? value : "documents";
+}
+
 export default function KnowledgePage() {
   const router = useRouter();
   const pathname = usePathname();
-  const [activeTab, setActiveTab] = useState<"documents" | "profile" | "faq">("documents");
+  const searchParams = useSearchParams();
+  const [activeTab, setActiveTab] = useState<KnowledgeTab>(() =>
+    parseTab(searchParams?.get("tab") ?? null),
+  );
+
+  useEffect(() => {
+    const next = parseTab(searchParams?.get("tab") ?? null);
+    setActiveTab((current) => (current === next ? current : next));
+  }, [searchParams]);
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [sources, setSources] = useState<UrlSource[]>([]);
@@ -66,7 +80,7 @@ export default function KnowledgePage() {
   const [removingFaqIds, setRemovingFaqIds] = useState<string[]>([]);
   const faqItemsRef = useRef<KnowledgeFaqItem[]>([]);
 
-  function setTab(tab: "documents" | "profile" | "faq") {
+  function setTab(tab: KnowledgeTab) {
     const next = new URLSearchParams(
       typeof window === "undefined" ? "" : window.location.search
     );

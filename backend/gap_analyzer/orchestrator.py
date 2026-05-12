@@ -117,6 +117,10 @@ class DraftVersionConflictError(RuntimeError):
     """Raised when a PATCH update has a stale If-Match timestamp."""
 
 
+class DraftAlreadyPublishedError(RuntimeError):
+    """Raised when publish_draft is called on a cluster that's already resolved."""
+
+
 class GapAnalyzerOrchestrator:
     """Command routing and bounded Gap Analyzer behavior."""
 
@@ -693,6 +697,9 @@ class GapAnalyzerOrchestrator:
         return cluster
 
     def _resolve_draft_language(self, *, tenant_id: UUID) -> str:
+        # ``escalation_language`` is the tenant's canonical output language (set in
+        # Settings → Support config); we reuse it for FAQ draft generation rather
+        # than introducing a parallel ``docs_language`` field.
         db = self._require_sqlalchemy_repository().db
         profile = (
             db.query(TenantProfile)
@@ -739,25 +746,19 @@ class GapAnalyzerOrchestrator:
         label = (cluster.label or "Untitled gap").strip()
         language = self._resolve_draft_language(tenant_id=tenant_id)
 
-        previous_status = cluster.status
-        cluster.status = GapClusterStatus.drafting
-        db.add(cluster)
-        db.flush()
-
-        try:
-            content = self._generate_with_injection_guard(
-                tenant_id=tenant_id,
-                encrypted_api_key=encrypted_api_key,
-                label=label,
-                example_questions=sample_questions,
-                coverage_score=cluster.coverage_score,
-                signal_weight=cluster.aggregate_signal_weight,
-                language=language,
-            )
-        except Exception:
-            cluster.status = previous_status
-            db.add(cluster)
-            raise
+        # Don't pre-flip status to ``drafting`` — if the LLM call fails the
+        # caller's transaction is left dirty and we'd risk persisting a
+        # half-state on a later commit. We flip to ``in_review`` only after a
+        # clean LLM result + injection-guard pass.
+        content = self._generate_with_injection_guard(
+            tenant_id=tenant_id,
+            encrypted_api_key=encrypted_api_key,
+            label=label,
+            example_questions=sample_questions,
+            coverage_score=cluster.coverage_score,
+            signal_weight=cluster.aggregate_signal_weight,
+            language=language,
+        )
 
         cluster.draft_title = content.title
         cluster.draft_question = content.question
@@ -836,8 +837,9 @@ class GapAnalyzerOrchestrator:
                 "Draft has been modified by another session; reload before saving"
             )
 
-        cluster.draft_title = title.strip() or cluster.draft_title
-        cluster.draft_question = question.strip() or cluster.draft_question
+        # Schema enforces min_length=1 on title/question/markdown, so trust the input.
+        cluster.draft_title = title.strip()
+        cluster.draft_question = question.strip()
         cluster.draft_markdown = markdown
         cluster.draft_updated_at = datetime.now(UTC)
         if cluster.status not in {GapClusterStatus.in_review, GapClusterStatus.drafting}:
@@ -855,6 +857,12 @@ class GapAnalyzerOrchestrator:
         """
         db = self._require_sqlalchemy_repository().db
         cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        # Idempotency: block double-publish (double-click / retry). publish is the
+        # only path that writes to tenant_faq, so we must not let it run twice.
+        if cluster.status == GapClusterStatus.resolved or cluster.published_faq_id is not None:
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved — no new FAQ row was created."
+            )
         if (
             not cluster.draft_markdown
             or not cluster.draft_question
@@ -896,6 +904,8 @@ class GapAnalyzerOrchestrator:
         cluster.draft_markdown = None
         cluster.draft_language = None
         cluster.draft_updated_at = None
+        # Discard only happens from drafting / in_review (a draft must exist), so
+        # recomputing from coverage is safe — we never overwrite closed/dismissed.
         cluster.status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
         db.add(cluster)
         db.flush()
@@ -970,8 +980,11 @@ class GapAnalyzerOrchestrator:
         encrypted_api_key: str,
         content: DraftContent,
     ) -> bool:
+        # Check every LLM-authored surface (title and canonical question are
+        # admin-visible and the question gets embedded for the FAQ matcher).
+        combined = f"{content.title}\n{content.question}\n{content.markdown}"
         result = detect_injection(
-            content.markdown,
+            combined,
             tenant_id=str(tenant_id),
             api_key=encrypted_api_key,
         )

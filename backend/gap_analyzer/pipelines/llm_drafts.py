@@ -68,13 +68,22 @@ def _format_questions(questions: list[str]) -> str:
 
 
 def _parse_draft_payload(raw: str) -> DraftContent:
-    parsed = json.loads(raw or "{}")
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        logger.warning("gap_analyzer_draft_invalid_json preview=%r", (raw or "")[:200])
+        raise ValueError("LLM draft response was not valid JSON") from None
     if not isinstance(parsed, dict):
+        logger.warning("gap_analyzer_draft_non_object_json preview=%r", (raw or "")[:200])
         raise ValueError("LLM draft response was not a JSON object")
     title = (parsed.get("title") or "").strip()
     question = (parsed.get("question") or "").strip()
     markdown = (parsed.get("markdown") or "").strip()
     if not title or not question or not markdown:
+        logger.warning(
+            "gap_analyzer_draft_missing_fields title=%s question=%s markdown=%s",
+            bool(title), bool(question), bool(markdown),
+        )
         raise ValueError("LLM draft response missing required fields (title/question/markdown)")
     return DraftContent(title=title, question=question, markdown=markdown)
 
@@ -147,7 +156,9 @@ def refine_draft(
             {"role": "user", "content": user_prompt},
         ],
         response_format={"type": "json_object"},
-        temperature=0.2,
+        # Lower than generation: the admin is asking for a specific deterministic
+        # edit, not creative variation.
+        temperature=0.0,
     )
     raw_content = response.choices[0].message.content or "{}"
     return _parse_draft_payload(raw_content)

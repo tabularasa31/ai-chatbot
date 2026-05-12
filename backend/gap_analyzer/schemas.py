@@ -6,10 +6,14 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode, GapSource
 
+# NOTE: ``GapItemStatus`` now exposes ``drafting | in_review | resolved`` in addition
+# to the historical four. The default "active" filter also surfaces ``drafting`` and
+# ``in_review`` items so admins can resume their work in progress — only ``resolved``
+# clusters leave the active list.
 GapItemStatus = Literal[
     "active",
     "closed",
@@ -133,9 +137,9 @@ class RefineDraftRequest(BaseModel):
 
 
 class UpdateDraftRequest(BaseModel):
-    title: str
-    question: str
-    markdown: str
+    title: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    markdown: str = Field(min_length=1)
     if_match: datetime
 
 

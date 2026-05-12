@@ -13,6 +13,7 @@ from backend.core.db import get_db
 from backend.gap_analyzer.enums import GapRunMode, GapSource
 from backend.gap_analyzer.jobs import start_gap_analyzer_job_runner
 from backend.gap_analyzer.orchestrator import (
+    DraftAlreadyPublishedError,
     DraftGenerationNotAvailableError,
     DraftInjectionGuardError,
     DraftVersionConflictError,
@@ -38,7 +39,7 @@ from backend.gap_analyzer.schemas import (
     UpdateDraftRequest,
 )
 from backend.knowledge.routes import _generate_faq_embedding_background
-from backend.models import Tenant, User
+from backend.models import TenantFaq, User
 from backend.tenants.service import get_tenant_by_user
 
 gap_analyzer_router = APIRouter(tags=["gap-analyzer"])
@@ -57,13 +58,6 @@ def _resolve_client_id(*, db: Session, current_user: User) -> uuid.UUID:
     if tenant is None:
         raise HTTPException(status_code=404, detail="Tenant not found")
     return tenant.id
-
-
-def _resolve_tenant(*, db: Session, current_user: User) -> Tenant:
-    tenant = get_tenant_by_user(current_user.id, db)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail="Tenant not found")
-    return tenant
 
 
 @gap_analyzer_router.get("", response_model=GapAnalyzerResponse)
@@ -182,8 +176,12 @@ def _handle_draft_errors(call):
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except DraftVersionConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    except DraftAlreadyPublishedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except DraftInjectionGuardError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from None
+        # The upstream LLM call succeeded — we rejected the *output*. 422 keeps
+        # monitoring from treating this as an upstream outage.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @gap_analyzer_router.post("/mode_b/{gap_id}/draft", response_model=DraftPayload)
@@ -282,7 +280,9 @@ def publish_mode_b_draft(
     This is the ONLY endpoint that writes to the knowledge base — generate /
     refine / save endpoints never touch ``tenant_faq``.
     """
-    tenant = _resolve_tenant(db=db, current_user=current_user)
+    tenant = get_tenant_by_user(current_user.id, db)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
     orchestrator = _resolve_gap_analyzer_orchestrator(db=db)
     result = _handle_draft_errors(
         lambda: orchestrator.publish_draft(tenant_id=tenant.id, gap_id=gap_id)
@@ -290,8 +290,6 @@ def publish_mode_b_draft(
     db.commit()
 
     if tenant.openai_api_key:
-        from backend.models import TenantFaq
-
         faq = db.get(TenantFaq, result.faq_id)
         if faq is not None and faq.question_embedding is None:
             background_tasks.add_task(

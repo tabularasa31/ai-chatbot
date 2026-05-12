@@ -357,7 +357,11 @@ class EscalationStateMachine(PipelineHandler):
                     _svc.complete_escalation_openai_turn,
                     phase=EscalationPhase.pre_confirm,
                     chat_messages=msgs,
-                    fact_json={"trigger": EscalationTrigger.user_request.value, "user_email": user_email},
+                    fact_json={
+                        "trigger": EscalationTrigger.user_request.value,
+                        "user_email": user_email,
+                        "clarify_round": 0,
+                    },
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                     response_language=ctx.language_context.response_language,

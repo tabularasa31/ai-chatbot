@@ -1569,6 +1569,7 @@ class RagHandler(PipelineHandler):
                         fact_json={
                             "trigger": esc_trigger.value,
                             "user_email": (ctx.effective_user_ctx or {}).get("email"),
+                            "clarify_round": 0,
                         },
                         latest_user_text=ctx.redacted_question,
                         api_key=ctx.api_key,

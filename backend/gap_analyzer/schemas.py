@@ -6,14 +6,36 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.gap_analyzer.enums import GapCommandStatus, GapDismissReason, GapRunMode, GapSource
 
-GapItemStatus = Literal["active", "closed", "dismissed", "inactive"]
+# NOTE: ``GapItemStatus`` now exposes ``drafting | in_review | resolved`` in addition
+# to the historical four. The default "active" filter also surfaces ``drafting`` and
+# ``in_review`` items so admins can resume their work in progress — only ``resolved``
+# clusters leave the active list.
+GapItemStatus = Literal[
+    "active",
+    "closed",
+    "dismissed",
+    "inactive",
+    "drafting",
+    "in_review",
+    "resolved",
+]
 GapClassification = Literal["uncovered", "partial", "covered", "unknown"]
 ModeAStatusFilter = Literal["active", "dismissed", "archived", "all"]
-ModeBStatusFilter = Literal["active", "closed", "dismissed", "inactive", "archived", "all"]
+ModeBStatusFilter = Literal[
+    "active",
+    "closed",
+    "dismissed",
+    "inactive",
+    "drafting",
+    "in_review",
+    "resolved",
+    "archived",
+    "all",
+]
 ModeASort = Literal["coverage_asc", "newest"]
 ModeBSort = Literal["signal_desc", "coverage_asc", "newest"]
 
@@ -56,6 +78,9 @@ class GapItemResponse(BaseModel):
     linked_example_questions: list[str] = []
     also_missing_in_docs: bool = False
     last_updated: datetime | None = None
+    has_draft: bool = False
+    draft_updated_at: datetime | None = None
+    published_faq_id: UUID | None = None
 
 
 class GapSummaryResponse(BaseModel):
@@ -93,3 +118,37 @@ class GapDraftResponse(BaseModel):
     gap_id: UUID
     title: str
     markdown: str
+
+
+class DraftPayload(BaseModel):
+    """Mode B draft state stored on gap_clusters.draft_* columns."""
+
+    gap_id: UUID
+    title: str
+    question: str
+    markdown: str
+    language: str
+    draft_updated_at: datetime
+    status: GapItemStatus
+
+
+class RefineDraftRequest(BaseModel):
+    guidance: str
+
+
+class UpdateDraftRequest(BaseModel):
+    title: str = Field(min_length=1)
+    question: str = Field(min_length=1)
+    markdown: str = Field(min_length=1)
+    if_match: datetime
+
+
+class PublishResult(BaseModel):
+    gap_id: UUID
+    faq_id: UUID
+    status: GapItemStatus
+
+
+class DiscardDraftResponse(BaseModel):
+    gap_id: UUID
+    status: GapItemStatus

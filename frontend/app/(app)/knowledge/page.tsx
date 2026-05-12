@@ -14,10 +14,33 @@ import { KnowledgeTabs, confidenceBadge, POLLABLE_SOURCE_STATUSES } from "./_com
 import { FaqSection } from "./_components/FaqSection";
 import { DocumentsSection } from "./_components/DocumentsSection";
 
+type KnowledgeTab = "documents" | "profile" | "faq";
+
+function parseTab(value: string | null): KnowledgeTab {
+  return value === "faq" || value === "profile" ? value : "documents";
+}
+
 export default function KnowledgePage() {
   const router = useRouter();
   const pathname = usePathname();
-  const [activeTab, setActiveTab] = useState<"documents" | "profile" | "faq">("documents");
+  // Read tab from URL on mount + on browser back/forward.
+  // ``useSearchParams()`` would force a Suspense boundary for static prerender
+  // (next build fails with "missing-suspense-with-csr-bailout"); reading
+  // ``window.location.search`` in an effect keeps the page client-rendered
+  // without that wrapper and is enough — the FAQ tab is reached via in-app
+  // navigation, not as a landing page.
+  const [activeTab, setActiveTab] = useState<KnowledgeTab>("documents");
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const syncFromUrl = () => {
+      const next = parseTab(new URLSearchParams(window.location.search).get("tab"));
+      setActiveTab((current) => (current === next ? current : next));
+    };
+    syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
+  }, []);
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [sources, setSources] = useState<UrlSource[]>([]);
@@ -66,7 +89,7 @@ export default function KnowledgePage() {
   const [removingFaqIds, setRemovingFaqIds] = useState<string[]>([]);
   const faqItemsRef = useRef<KnowledgeFaqItem[]>([]);
 
-  function setTab(tab: "documents" | "profile" | "faq") {
+  function setTab(tab: KnowledgeTab) {
     const next = new URLSearchParams(
       typeof window === "undefined" ? "" : window.location.search
     );

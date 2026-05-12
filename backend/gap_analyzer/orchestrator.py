@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from backend.gap_analyzer._classification import (
     _mode_b_status_from_coverage,
@@ -38,6 +39,9 @@ from backend.gap_analyzer.pipelines.link_sync import (
     _active_mode_a_ids_suppressed_by_mode_b,
     _sync_mode_links,
 )
+from backend.gap_analyzer.pipelines.llm_drafts import DraftContent
+from backend.gap_analyzer.pipelines.llm_drafts import generate_draft as llm_generate_draft
+from backend.gap_analyzer.pipelines.llm_drafts import refine_draft as llm_refine_draft
 from backend.gap_analyzer.pipelines.mode_a import (
     _batched,
     _build_coverage_query,
@@ -67,6 +71,8 @@ from backend.gap_analyzer.repository import (
     SqlAlchemyGapAnalyzerRepository,
 )
 from backend.gap_analyzer.schemas import (
+    DiscardDraftResponse,
+    DraftPayload,
     GapActionResponse,
     GapAnalyzerResponse,
     GapDraftResponse,
@@ -76,9 +82,18 @@ from backend.gap_analyzer.schemas import (
     ModeBResult,
     ModeBSort,
     ModeBStatusFilter,
+    PublishResult,
     RecalculateCommandResult,
 )
-from backend.models import GapCluster, GapDismissal, GapDocTopic, GapQuestion
+from backend.guards.injection_detector import detect_injection
+from backend.models import (
+    GapCluster,
+    GapDismissal,
+    GapDocTopic,
+    GapQuestion,
+    TenantFaq,
+    TenantProfile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +104,22 @@ _BULK_ID_BATCH_SIZE = 1000
 
 class GapResourceNotFoundError(ValueError):
     """Raised when a requested gap resource does not exist for the tenant."""
+
+
+class DraftGenerationNotAvailableError(RuntimeError):
+    """Raised when LLM draft generation cannot run (e.g. missing OpenAI key)."""
+
+
+class DraftInjectionGuardError(RuntimeError):
+    """Raised when the injection guard rejects every retry of an LLM draft."""
+
+
+class DraftVersionConflictError(RuntimeError):
+    """Raised when a PATCH update has a stale If-Match timestamp."""
+
+
+class DraftAlreadyPublishedError(RuntimeError):
+    """Raised when publish_draft is called on a cluster that's already resolved."""
 
 
 class GapAnalyzerOrchestrator:
@@ -644,6 +675,359 @@ class GapAnalyzerOrchestrator:
             signal_weight=cluster.aggregate_signal_weight,
         )
         return GapDraftResponse(source=source, gap_id=gap_id, title=label, markdown=markdown)
+
+    # ----------------------------------------------------------------------
+    # Mode B draft / publish workflow
+    #
+    # Draft state lives on the GapCluster (draft_* columns). Generation never
+    # publishes — only an explicit admin call to ``publish_draft`` writes to
+    # ``tenant_faq``. ``start_draft_generation`` / ``refine_draft`` / ``update_draft``
+    # / ``discard_draft`` are all draft-only; ``mark_resolved`` closes the gap
+    # without publishing.
+    # ----------------------------------------------------------------------
+
+    def _load_mode_b_cluster(
+        self,
+        *,
+        tenant_id: UUID,
+        gap_id: UUID,
+        for_update: bool = False,
+    ) -> GapCluster:
+        db = self._require_sqlalchemy_repository().db
+        query = db.query(GapCluster).filter(
+            GapCluster.id == gap_id, GapCluster.tenant_id == tenant_id
+        )
+        if for_update:
+            # No-op on SQLite, real row lock on Postgres. Serialises racing publishes.
+            query = query.with_for_update()
+        cluster = query.first()
+        if cluster is None:
+            raise GapResourceNotFoundError("Gap cluster not found")
+        return cluster
+
+    def _require_draft_mutable(self, cluster: GapCluster) -> None:
+        """Reject draft mutations against a cluster that has already been resolved.
+
+        Without this check, a stale tab (or browser-back after publish) can call
+        Save / Refine / Discard / Generate and reopen a published gap while
+        ``published_faq_id`` still references a live FAQ row.
+        """
+        if cluster.status == GapClusterStatus.resolved or cluster.published_faq_id is not None:
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved; draft state is read-only."
+            )
+
+    def _resolve_draft_language(self, *, tenant_id: UUID) -> str:
+        # ``escalation_language`` is the tenant's canonical output language (set in
+        # Settings → Support config); we reuse it for FAQ draft generation rather
+        # than introducing a parallel ``docs_language`` field.
+        db = self._require_sqlalchemy_repository().db
+        profile = (
+            db.query(TenantProfile)
+            .filter(TenantProfile.tenant_id == tenant_id)
+            .first()
+        )
+        language = (getattr(profile, "escalation_language", None) or "").strip().lower()
+        return language or "en"
+
+    def _draft_payload_from_cluster(self, cluster: GapCluster) -> DraftPayload:
+        if cluster.draft_markdown is None or cluster.draft_updated_at is None:
+            raise GapResourceNotFoundError("No draft exists for this gap")
+        return DraftPayload(
+            gap_id=cluster.id,
+            title=cluster.draft_title or "",
+            question=cluster.draft_question or "",
+            markdown=cluster.draft_markdown,
+            language=cluster.draft_language or "en",
+            draft_updated_at=cluster.draft_updated_at,
+            status=GapClusterStatus(cluster.status).value,
+        )
+
+    def get_mode_b_draft(self, *, tenant_id: UUID, gap_id: UUID) -> DraftPayload:
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        return self._draft_payload_from_cluster(cluster)
+
+    def start_draft_generation(self, *, tenant_id: UUID, gap_id: UUID) -> DraftPayload:
+        """Generate a fresh FAQ draft for a Mode B cluster and persist it.
+
+        Does NOT publish — the result lives on draft_* columns until the admin
+        explicitly calls publish_draft.
+        """
+        db = self._require_sqlalchemy_repository().db
+        repository = self._require_repository()
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
+
+        encrypted_api_key = repository.get_client_openai_key(tenant_id)
+        if not encrypted_api_key:
+            raise DraftGenerationNotAvailableError(
+                "Tenant has no OpenAI API key configured. Connect a key in Settings."
+            )
+
+        sample_questions = _load_mode_b_question_samples(db, [cluster.id]).get(cluster.id, [])
+        label = (cluster.label or "Untitled gap").strip()
+        language = self._resolve_draft_language(tenant_id=tenant_id)
+
+        # Don't pre-flip status to ``drafting`` — if the LLM call fails the
+        # caller's transaction is left dirty and we'd risk persisting a
+        # half-state on a later commit. We flip to ``in_review`` only after a
+        # clean LLM result + injection-guard pass.
+        content = self._generate_with_injection_guard(
+            tenant_id=tenant_id,
+            encrypted_api_key=encrypted_api_key,
+            label=label,
+            example_questions=sample_questions,
+            coverage_score=cluster.coverage_score,
+            signal_weight=cluster.aggregate_signal_weight,
+            language=language,
+        )
+
+        cluster.draft_title = content.title
+        cluster.draft_question = content.question
+        cluster.draft_markdown = content.markdown
+        cluster.draft_language = language
+        cluster.draft_updated_at = datetime.now(UTC)
+        cluster.status = GapClusterStatus.in_review
+        db.add(cluster)
+        db.flush()
+        return self._draft_payload_from_cluster(cluster)
+
+    def refine_draft(
+        self,
+        *,
+        tenant_id: UUID,
+        gap_id: UUID,
+        guidance: str,
+    ) -> DraftPayload:
+        db = self._require_sqlalchemy_repository().db
+        repository = self._require_repository()
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
+        if not cluster.draft_markdown:
+            raise GapResourceNotFoundError("No draft to refine; generate one first")
+
+        encrypted_api_key = repository.get_client_openai_key(tenant_id)
+        if not encrypted_api_key:
+            raise DraftGenerationNotAvailableError(
+                "Tenant has no OpenAI API key configured. Connect a key in Settings."
+            )
+
+        sample_questions = _load_mode_b_question_samples(db, [cluster.id]).get(cluster.id, [])
+        label = (cluster.label or "Untitled gap").strip()
+        language = cluster.draft_language or self._resolve_draft_language(tenant_id=tenant_id)
+
+        content = self._refine_with_injection_guard(
+            tenant_id=tenant_id,
+            encrypted_api_key=encrypted_api_key,
+            current_title=cluster.draft_title or "",
+            current_question=cluster.draft_question or "",
+            current_markdown=cluster.draft_markdown,
+            guidance=guidance,
+            label=label,
+            example_questions=sample_questions,
+            language=language,
+        )
+
+        cluster.draft_title = content.title
+        cluster.draft_question = content.question
+        cluster.draft_markdown = content.markdown
+        cluster.draft_updated_at = datetime.now(UTC)
+        cluster.status = GapClusterStatus.in_review
+        db.add(cluster)
+        db.flush()
+        return self._draft_payload_from_cluster(cluster)
+
+    def update_draft(
+        self,
+        *,
+        tenant_id: UUID,
+        gap_id: UUID,
+        title: str,
+        question: str,
+        markdown: str,
+        if_match: datetime,
+    ) -> DraftPayload:
+        db = self._require_sqlalchemy_repository().db
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
+        if cluster.draft_markdown is None or cluster.draft_updated_at is None:
+            raise GapResourceNotFoundError("No draft to update; generate one first")
+
+        existing = cluster.draft_updated_at
+        existing_aware = existing if existing.tzinfo else existing.replace(tzinfo=UTC)
+        incoming = if_match if if_match.tzinfo else if_match.replace(tzinfo=UTC)
+        if int(existing_aware.timestamp() * 1000) != int(incoming.timestamp() * 1000):
+            raise DraftVersionConflictError(
+                "Draft has been modified by another session; reload before saving"
+            )
+
+        # Schema enforces min_length=1 on title/question/markdown, so trust the input.
+        cluster.draft_title = title.strip()
+        cluster.draft_question = question.strip()
+        cluster.draft_markdown = markdown
+        cluster.draft_updated_at = datetime.now(UTC)
+        if cluster.status not in {GapClusterStatus.in_review, GapClusterStatus.drafting}:
+            cluster.status = GapClusterStatus.in_review
+        db.add(cluster)
+        db.flush()
+        return self._draft_payload_from_cluster(cluster)
+
+    def publish_draft(self, *, tenant_id: UUID, gap_id: UUID) -> PublishResult:
+        """Promote the current draft into ``tenant_faq``. Admin-confirmed only.
+
+        Callers MUST gate this behind an explicit admin action — never call from
+        background jobs or implicit flows. After this returns, the cluster is
+        resolved and a new approved FAQ row exists.
+        """
+        db = self._require_sqlalchemy_repository().db
+        # SELECT ... FOR UPDATE serialises two concurrent publish requests on
+        # Postgres so the second one observes the first one's status flip.
+        cluster = self._load_mode_b_cluster(
+            tenant_id=tenant_id, gap_id=gap_id, for_update=True
+        )
+        # Idempotency: block double-publish (double-click / retry). publish is the
+        # only path that writes to tenant_faq, so we must not let it run twice.
+        if cluster.status == GapClusterStatus.resolved or cluster.published_faq_id is not None:
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved — no new FAQ row was created."
+            )
+        if (
+            not cluster.draft_markdown
+            or not cluster.draft_question
+            or not cluster.draft_title
+        ):
+            raise GapResourceNotFoundError("No complete draft to publish")
+
+        faq = TenantFaq(
+            tenant_id=tenant_id,
+            question=cluster.draft_question.strip(),
+            answer=cluster.draft_markdown,
+            source="gap_analyzer",
+            approved=True,
+            gap_source_id=cluster.id,
+            confidence=cluster.coverage_score,
+        )
+        db.add(faq)
+        try:
+            db.flush()
+        except IntegrityError:
+            # Belt-and-braces: if the row lock didn't catch it (e.g. SQLite or a
+            # pre-Postgres-locking dialect), the unique partial index on
+            # tenant_faq.gap_source_id rejects the duplicate. Translate to the
+            # same 409 the orchestrator-level check produces.
+            db.rollback()
+            raise DraftAlreadyPublishedError(
+                "This gap has already been resolved — no new FAQ row was created."
+            ) from None
+
+        cluster.published_faq_id = faq.id
+        cluster.status = GapClusterStatus.resolved
+        db.add(cluster)
+        db.flush()
+        return PublishResult(gap_id=cluster.id, faq_id=faq.id, status=cluster.status.value)
+
+    def mark_resolved(self, *, tenant_id: UUID, gap_id: UUID) -> GapActionResponse:
+        db = self._require_sqlalchemy_repository().db
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        cluster.status = GapClusterStatus.resolved
+        db.add(cluster)
+        db.flush()
+        return GapActionResponse(source=GapSource.mode_b, gap_id=cluster.id, status=cluster.status.value)
+
+    def discard_draft(self, *, tenant_id: UUID, gap_id: UUID) -> DiscardDraftResponse:
+        db = self._require_sqlalchemy_repository().db
+        cluster = self._load_mode_b_cluster(tenant_id=tenant_id, gap_id=gap_id)
+        self._require_draft_mutable(cluster)
+        cluster.draft_title = None
+        cluster.draft_question = None
+        cluster.draft_markdown = None
+        cluster.draft_language = None
+        cluster.draft_updated_at = None
+        # Discard only happens from drafting / in_review (a draft must exist), so
+        # recomputing from coverage is safe — we never overwrite closed/dismissed.
+        cluster.status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
+        db.add(cluster)
+        db.flush()
+        return DiscardDraftResponse(gap_id=cluster.id, status=cluster.status.value)
+
+    def _generate_with_injection_guard(
+        self,
+        *,
+        tenant_id: UUID,
+        encrypted_api_key: str,
+        label: str,
+        example_questions: list[str],
+        coverage_score: float | None,
+        signal_weight: float | None,
+        language: str,
+    ) -> DraftContent:
+        for attempt in (1, 2):
+            content = llm_generate_draft(
+                encrypted_api_key=encrypted_api_key,
+                label=label,
+                example_questions=example_questions,
+                coverage_score=coverage_score,
+                signal_weight=signal_weight,
+                language=language,
+            )
+            if not self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
+                return content
+            logger.warning(
+                "gap_analyzer_draft_injection_detected tenant_id=%s attempt=%s", tenant_id, attempt
+            )
+        raise DraftInjectionGuardError(
+            "Generated draft was rejected by the injection guard. Please edit manually."
+        )
+
+    def _refine_with_injection_guard(
+        self,
+        *,
+        tenant_id: UUID,
+        encrypted_api_key: str,
+        current_title: str,
+        current_question: str,
+        current_markdown: str,
+        guidance: str,
+        label: str,
+        example_questions: list[str],
+        language: str,
+    ) -> DraftContent:
+        for attempt in (1, 2):
+            content = llm_refine_draft(
+                encrypted_api_key=encrypted_api_key,
+                current_title=current_title,
+                current_question=current_question,
+                current_markdown=current_markdown,
+                guidance=guidance,
+                label=label,
+                example_questions=example_questions,
+                language=language,
+            )
+            if not self._draft_triggers_injection(tenant_id=tenant_id, encrypted_api_key=encrypted_api_key, content=content):
+                return content
+            logger.warning(
+                "gap_analyzer_draft_injection_detected tenant_id=%s attempt=%s mode=refine", tenant_id, attempt
+            )
+        raise DraftInjectionGuardError(
+            "Refined draft was rejected by the injection guard. Please edit manually."
+        )
+
+    def _draft_triggers_injection(
+        self,
+        *,
+        tenant_id: UUID,
+        encrypted_api_key: str,
+        content: DraftContent,
+    ) -> bool:
+        # Check every LLM-authored surface (title and canonical question are
+        # admin-visible and the question gets embedded for the FAQ matcher).
+        combined = f"{content.title}\n{content.question}\n{content.markdown}"
+        result = detect_injection(
+            combined,
+            tenant_id=str(tenant_id),
+            api_key=encrypted_api_key,
+        )
+        return bool(result.detected)
 
     async def request_recalculation(
         self,

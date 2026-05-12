@@ -3,7 +3,19 @@ from __future__ import annotations
 import uuid
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
@@ -60,12 +72,32 @@ class TenantFaq(Base):
     answer = Column(Text, nullable=False)
     question_embedding = Column(Vector(1536), nullable=True)
     confidence = Column(Float, nullable=True)
-    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger'
+    source = Column(Text, nullable=True)  # 'docs' | 'logs' | 'swagger' | 'gap_analyzer'
     approved = Column(Boolean, nullable=False, default=False, server_default="false")
+    gap_source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("gap_clusters.id", ondelete="SET NULL", use_alter=True, name="fk_tenant_faq_gap_source_id"),
+        nullable=True,
+        index=True,
+    )
     # Phase 4: explainability fields (only populated for source='logs')
     cluster_size = Column(Integer, nullable=True)
     source_message_ids = Column(JSON, nullable=True)  # list of up to 10 message IDs
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    # Concurrency guard for the Gap Analyzer → FAQ publish flow: at most one
+    # published FAQ per source gap cluster. Two racing POST /publish calls can
+    # both pass the orchestrator's status check; this partial unique index
+    # makes the second INSERT fail at the DB layer (route translates to 409).
+    __table_args__ = (
+        Index(
+            "uq_tenant_faq_gap_source_id",
+            "gap_source_id",
+            unique=True,
+            postgresql_where=text("gap_source_id IS NOT NULL"),
+            sqlite_where=text("gap_source_id IS NOT NULL"),
+        ),
+    )
 
     tenant = relationship("Tenant")
 

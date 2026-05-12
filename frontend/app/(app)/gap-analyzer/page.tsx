@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
@@ -38,10 +40,13 @@ function StatusBadge({ status }: { status: GapItem["status"] }) {
     closed: "bg-emerald-100 text-emerald-700",
     dismissed: "bg-slate-200 text-slate-700",
     inactive: "bg-slate-100 text-slate-500",
+    drafting: "bg-amber-100 text-amber-700",
+    in_review: "bg-indigo-100 text-indigo-700",
+    resolved: "bg-emerald-100 text-emerald-700",
   };
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${styles[status] ?? styles.dismissed}`}>
-      {status}
+      {status.replace("_", " ")}
     </span>
   );
 }
@@ -136,16 +141,25 @@ function DraftPanel({
 function GapCard({
   item,
   busy,
+  hasOpenAiKey,
   onDismiss,
   onReactivate,
   onDraft,
+  onGenerateModeBDraft,
 }: {
   item: GapItem;
   busy: boolean;
+  hasOpenAiKey: boolean;
   onDismiss: (item: GapItem) => Promise<void>;
   onReactivate: (item: GapItem) => Promise<void>;
   onDraft: (item: GapItem) => Promise<void>;
+  onGenerateModeBDraft: (item: GapItem) => Promise<void>;
 }) {
+  const isModeB = item.source === "mode_b";
+  const showGenerate = isModeB && item.status === "active";
+  const showContinueDraft = isModeB && (item.status === "in_review" || item.status === "drafting");
+  const showResolved = isModeB && item.status === "resolved";
+  const generateDisabled = busy || !hasOpenAiKey;
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -171,17 +185,48 @@ function GapCard({
               Coverage: {item.coverage_score == null ? "—" : item.coverage_score.toFixed(2)} · Questions: {item.question_count}
               {item.aggregate_signal_weight != null && ` · Signal: ${item.aggregate_signal_weight.toFixed(1)}`}
             </p>
+            {showResolved && (
+              <p className="mt-2 text-xs">
+                <Link
+                  href="/knowledge?tab=faq"
+                  className="text-emerald-700 underline decoration-emerald-300 underline-offset-2 hover:text-emerald-800"
+                >
+                  View published FAQ →
+                </Link>
+              </p>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => onDraft(item)}
-            disabled={busy}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            Draft
-          </button>
+          {showGenerate && (
+            <button
+              type="button"
+              onClick={() => onGenerateModeBDraft(item)}
+              disabled={generateDisabled}
+              title={hasOpenAiKey ? undefined : "Connect your OpenAI API key in Settings to use this feature"}
+              className="rounded-lg bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+            >
+              Generate FAQ draft
+            </button>
+          )}
+          {showContinueDraft && (
+            <Link
+              href={`/gap-analyzer/mode_b/${item.id}/draft`}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              Continue draft
+            </Link>
+          )}
+          {!isModeB && (
+            <button
+              type="button"
+              onClick={() => onDraft(item)}
+              disabled={busy}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Draft
+            </button>
+          )}
           {item.status === "dismissed" || item.status === "inactive" ? (
             <button
               type="button"
@@ -191,7 +236,7 @@ function GapCard({
             >
               Reactivate
             </button>
-          ) : (
+          ) : item.status === "resolved" ? null : (
             <button
               type="button"
               onClick={() => onDismiss(item)}
@@ -229,15 +274,19 @@ function GapCard({
 function GapCardList({
   items,
   busyItemId,
+  hasOpenAiKey,
   onDismiss,
   onReactivate,
   onDraft,
+  onGenerateModeBDraft,
 }: {
   items: GapItem[];
   busyItemId: string | null;
+  hasOpenAiKey: boolean;
   onDismiss: (item: GapItem) => Promise<void>;
   onReactivate: (item: GapItem) => Promise<void>;
   onDraft: (item: GapItem) => Promise<void>;
+  onGenerateModeBDraft: (item: GapItem) => Promise<void>;
 }) {
   return (
     <>
@@ -246,9 +295,11 @@ function GapCardList({
           key={item.id}
           item={item}
           busy={busyItemId === item.id}
+          hasOpenAiKey={hasOpenAiKey}
           onDismiss={onDismiss}
           onReactivate={onReactivate}
           onDraft={onDraft}
+          onGenerateModeBDraft={onGenerateModeBDraft}
         />
       ))}
     </>
@@ -261,18 +312,22 @@ function ArchiveGroup({
   items,
   emptyMessage,
   busyItemId,
+  hasOpenAiKey,
   onDismiss,
   onReactivate,
   onDraft,
+  onGenerateModeBDraft,
 }: {
   title: string;
   note: string;
   items: GapItem[];
   emptyMessage: string;
   busyItemId: string | null;
+  hasOpenAiKey: boolean;
   onDismiss: (item: GapItem) => Promise<void>;
   onReactivate: (item: GapItem) => Promise<void>;
   onDraft: (item: GapItem) => Promise<void>;
+  onGenerateModeBDraft: (item: GapItem) => Promise<void>;
 }) {
   return (
     <div className="space-y-3">
@@ -284,9 +339,11 @@ function ArchiveGroup({
         <GapCardList
           items={items}
           busyItemId={busyItemId}
+          hasOpenAiKey={hasOpenAiKey}
           onDismiss={onDismiss}
           onReactivate={onReactivate}
           onDraft={onDraft}
+          onGenerateModeBDraft={onGenerateModeBDraft}
         />
       ) : (
         <EmptyState message={emptyMessage} />
@@ -296,6 +353,7 @@ function ArchiveGroup({
 }
 
 export default function GapAnalyzerPage() {
+  const router = useRouter();
   const [data, setData] = useState<GapAnalyzerResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -305,6 +363,14 @@ export default function GapAnalyzerPage() {
   const [recalculating, setRecalculating] = useState(false);
   const [modeAStatus, setModeAStatus] = useState<GapModeAStatusFilter>("active");
   const [modeBStatus, setModeBStatus] = useState<GapModeBStatusFilter>("active");
+  const [hasOpenAiKey, setHasOpenAiKey] = useState(true);
+
+  useEffect(() => {
+    api.clients
+      .getMe()
+      .then((client) => setHasOpenAiKey(Boolean(client.has_openai_key)))
+      .catch(() => setHasOpenAiKey(false));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -367,6 +433,21 @@ export default function GapAnalyzerPage() {
       setBusyItemId(null);
     }
   }, []);
+
+  const handleGenerateModeBDraft = useCallback(
+    async (item: GapItem) => {
+      setBusyItemId(item.id);
+      setError("");
+      try {
+        await api.gapAnalyzer.generateModeBDraft(item.id);
+        router.push(`/gap-analyzer/mode_b/${item.id}/draft`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to generate FAQ draft");
+        setBusyItemId(null);
+      }
+    },
+    [router],
+  );
 
   const handleRecalculate = useCallback(async () => {
     setRecalculating(true);
@@ -531,6 +612,8 @@ export default function GapAnalyzerPage() {
               onDismiss={handleDismiss}
               onReactivate={handleReactivate}
               onDraft={handleDraft}
+              hasOpenAiKey={hasOpenAiKey}
+              onGenerateModeBDraft={handleGenerateModeBDraft}
             />
           ) : data && data.mode_a_items.length > 0 ? (
             <GapCardList
@@ -539,6 +622,8 @@ export default function GapAnalyzerPage() {
               onDismiss={handleDismiss}
               onReactivate={handleReactivate}
               onDraft={handleDraft}
+              hasOpenAiKey={hasOpenAiKey}
+              onGenerateModeBDraft={handleGenerateModeBDraft}
             />
           ) : (
             <EmptyState message="No Mode A items for the current filter." />
@@ -580,6 +665,8 @@ export default function GapAnalyzerPage() {
                 onDismiss={handleDismiss}
                 onReactivate={handleReactivate}
                 onDraft={handleDraft}
+                hasOpenAiKey={hasOpenAiKey}
+                onGenerateModeBDraft={handleGenerateModeBDraft}
               />
               <ArchiveGroup
                 title="Dismissed Mode B clusters"
@@ -590,6 +677,8 @@ export default function GapAnalyzerPage() {
                 onDismiss={handleDismiss}
                 onReactivate={handleReactivate}
                 onDraft={handleDraft}
+                hasOpenAiKey={hasOpenAiKey}
+                onGenerateModeBDraft={handleGenerateModeBDraft}
               />
               <ArchiveGroup
                 title="Inactive Mode B clusters"
@@ -600,6 +689,8 @@ export default function GapAnalyzerPage() {
                 onDismiss={handleDismiss}
                 onReactivate={handleReactivate}
                 onDraft={handleDraft}
+                hasOpenAiKey={hasOpenAiKey}
+                onGenerateModeBDraft={handleGenerateModeBDraft}
               />
             </div>
           ) : data && data.mode_b_items.length > 0 ? (
@@ -609,6 +700,8 @@ export default function GapAnalyzerPage() {
               onDismiss={handleDismiss}
               onReactivate={handleReactivate}
               onDraft={handleDraft}
+              hasOpenAiKey={hasOpenAiKey}
+              onGenerateModeBDraft={handleGenerateModeBDraft}
             />
           ) : (
             <EmptyState message="No Mode B items for the current filter." />

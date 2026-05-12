@@ -64,7 +64,11 @@ def _effective_mode_b_status(cluster: GapCluster) -> GapClusterStatus:
 
 def _mode_b_status_matches_filter(status_filter: ModeBStatusFilter, status: GapClusterStatus) -> bool:
     if status_filter == "active":
-        return status == GapClusterStatus.active
+        # Contract change (Gap Analyzer → FAQ workflow): the "active" filter now surfaces
+        # in-progress drafts so admins can resume their work. Consumers that strictly want
+        # ``status == "active"`` should filter client-side or use the dedicated
+        # ``drafting`` / ``in_review`` filter values.
+        return status in {GapClusterStatus.active, GapClusterStatus.drafting, GapClusterStatus.in_review}
     if status_filter == "archived":
         return status in {GapClusterStatus.closed, GapClusterStatus.dismissed, GapClusterStatus.inactive}
     if status_filter == "closed":
@@ -73,11 +77,20 @@ def _mode_b_status_matches_filter(status_filter: ModeBStatusFilter, status: GapC
         return status == GapClusterStatus.dismissed
     if status_filter == "inactive":
         return status == GapClusterStatus.inactive
+    if status_filter == "drafting":
+        return status == GapClusterStatus.drafting
+    if status_filter == "in_review":
+        return status == GapClusterStatus.in_review
+    if status_filter == "resolved":
+        return status == GapClusterStatus.resolved
     return status in {
         GapClusterStatus.active,
         GapClusterStatus.closed,
         GapClusterStatus.dismissed,
         GapClusterStatus.inactive,
+        GapClusterStatus.drafting,
+        GapClusterStatus.in_review,
+        GapClusterStatus.resolved,
     }
 
 

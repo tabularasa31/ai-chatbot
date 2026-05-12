@@ -108,6 +108,10 @@ def vector_top_k_for_tenant(
     if not query_embedding or top_k <= 0:
         return []
 
+    # Normalize once so both the postgres SQL filter and the SQLite Python
+    # post-filter (inside mode_a_embedding_rows) see the same cased values.
+    excluded_file_types = tuple(ft.casefold() for ft in excluded_file_types)
+
     if _is_postgres(db):
         distance_expr = Embedding.vector.cosine_distance(query_embedding)
         pg_query = (

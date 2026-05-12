@@ -67,21 +67,12 @@ def get_mode_a_corpus_chunks(
     tenant_id: UUID,
     excluded_file_types: tuple[str, ...],
 ) -> list[ModeACorpusChunk]:
-    rows = (
-        db.query(Embedding, Document)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.tenant_id == tenant_id)
-        .filter(Document.status == "ready")
-        .filter(Embedding.chunk_text.isnot(None))
-        .order_by(Document.id.asc(), Embedding.id.asc())
-        .all()
-    )
+    # Document.file_type is nullable=False so .value is always safe; getattr
+    # mirrors the pattern used in mode_a_embedding_rows for consistency.
+    rows = mode_a_embedding_rows(db, tenant_id=tenant_id, excluded_file_types=excluded_file_types)
     chunks: list[ModeACorpusChunk] = []
-    excluded = {value.casefold() for value in excluded_file_types}
     for embedding, document in rows:
-        file_type = document.file_type.value
-        if file_type.casefold() in excluded:
-            continue
+        file_type = str(getattr(document.file_type, "value", document.file_type))
         metadata = embedding.metadata_json if isinstance(embedding.metadata_json, dict) else {}
         chunks.append(
             ModeACorpusChunk(

@@ -17,11 +17,13 @@ with ``service.py``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy.util import await_only
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.escalation.service import (
@@ -349,13 +351,16 @@ class EscalationStateMachine(PipelineHandler):
                 "best_similarity_score": None,
                 "retrieved_chunks": None,
             }
-            out = _svc.complete_escalation_openai_turn(
-                phase=EscalationPhase.pre_confirm,
-                chat_messages=msgs,
-                fact_json={"trigger": EscalationTrigger.user_request.value},
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
+            out = await_only(
+                asyncio.to_thread(
+                    _svc.complete_escalation_openai_turn,
+                    phase=EscalationPhase.pre_confirm,
+                    chat_messages=msgs,
+                    fact_json={"trigger": EscalationTrigger.user_request.value},
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
             )
             ctx.db.add(chat)
             return _svc._escalation_turn_response(
@@ -373,6 +378,8 @@ class EscalationStateMachine(PipelineHandler):
             )
         except Exception as e:
             logger.warning("Escalation T-3 pre-confirm failed, falling back to RAG: %s", e)
+            chat.escalation_pre_confirm_pending = False
+            chat.escalation_pre_confirm_context = None
             return None
 
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome:
@@ -392,16 +399,19 @@ class EscalationStateMachine(PipelineHandler):
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
-            out = _svc.complete_escalation_openai_turn(
-                phase=EscalationPhase.pre_confirm,
-                chat_messages=msgs,
-                fact_json={
-                    "trigger": pre_confirm_ctx.get("trigger"),
-                    "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
-                },
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
+            out = await_only(
+                asyncio.to_thread(
+                    _svc.complete_escalation_openai_turn,
+                    phase=EscalationPhase.pre_confirm,
+                    chat_messages=msgs,
+                    fact_json={
+                        "trigger": pre_confirm_ctx.get("trigger"),
+                        "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                    },
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
             )
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
@@ -437,13 +447,16 @@ class EscalationStateMachine(PipelineHandler):
                     else EscalationPhase.handoff_email_known
                 )
                 msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
-                out_handoff = _svc.complete_escalation_openai_turn(
-                    phase=phase,
-                    chat_messages=msgs,
-                    fact_json=_svc.fact_from_ticket(ticket, chat=chat),
-                    latest_user_text=ctx.redacted_question,
-                    api_key=ctx.api_key,
-                    response_language=ctx.language_context.response_language,
+                out_handoff = await_only(
+                    asyncio.to_thread(
+                        _svc.complete_escalation_openai_turn,
+                        phase=phase,
+                        chat_messages=msgs,
+                        fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                        latest_user_text=ctx.redacted_question,
+                        api_key=ctx.api_key,
+                        response_language=ctx.language_context.response_language,
+                    )
                 )
                 if not ticket.user_email:
                     chat.escalation_awaiting_ticket_id = ticket.id

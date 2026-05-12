@@ -43,4 +43,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("downgrade not supported — remove columns manually if needed")
+    op.drop_column("chats", "escalation_pre_confirm_context")
+    op.drop_column("chats", "escalation_pre_confirm_pending")

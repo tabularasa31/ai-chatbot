@@ -263,7 +263,7 @@ export default function ModeBDraftReviewPage() {
               value={markdown}
               onChange={(e) => setMarkdown(e.target.value)}
               rows={16}
-              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-6 text-slate-900 focus:border-violet-400 focus:outline-none"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs leading-6 text-slate-900 placeholder:text-slate-400 focus:border-violet-400 focus:outline-none"
             />
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">

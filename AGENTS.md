@@ -32,7 +32,7 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 |---|---|
 | `orchestrator.py` | `GapAnalyzerOrchestrator` — thin shell, delegates to pipelines |
 | `repository.py` | `SqlAlchemyGapAnalyzerRepository` — thin proxy, delegates to `_repo/` |
-| `_repo/` | Persistence subpackage (8 focused ops modules, see below) |
+| `_repo/` | Persistence subpackage (focused ops modules, see below) |
 | `pipelines/mode_a.py` | Mode A coverage pipeline helpers |
 | `pipelines/mode_b.py` | Mode B clustering state machine |
 | `pipelines/link_sync.py` | Mode A ↔ Mode B vector link sync |
@@ -51,6 +51,11 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 | `bm25_cache.py` | Thread-safe BM25 LRU/TTL cache + `_load_or_cache_bm25_corpus` |
 | `job_queue_helpers.py` | Constants and pure helpers for job-queue logic |
 | `job_retry.py` | Retry policy: effective max attempts, delay with jitter |
+| `signals.py` | GapQuestion signal ingestion (Phase 2) |
+| `mode_a.py` | Mode A persistence: corpus chunks, dismissals, replace-topics |
+| `mode_b.py` | Mode B persistence: clusters, question embeddings, per-tenant vector/BM25 retrieval |
+| `job_queue.py` | Job CRUD: enqueue / claim / finalize / lease management |
+| `summary.py` | Active gap summary read model |
 
 **Import-graph conventions** (design intent, not test-enforced):
 - `pipelines/` must not import `orchestrator`

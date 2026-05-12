@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   api,
   type DocumentListItem,
@@ -23,15 +23,24 @@ function parseTab(value: string | null): KnowledgeTab {
 export default function KnowledgePage() {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [activeTab, setActiveTab] = useState<KnowledgeTab>(() =>
-    parseTab(searchParams?.get("tab") ?? null),
-  );
+  // Read tab from URL on mount + on browser back/forward.
+  // ``useSearchParams()`` would force a Suspense boundary for static prerender
+  // (next build fails with "missing-suspense-with-csr-bailout"); reading
+  // ``window.location.search`` in an effect keeps the page client-rendered
+  // without that wrapper and is enough — the FAQ tab is reached via in-app
+  // navigation, not as a landing page.
+  const [activeTab, setActiveTab] = useState<KnowledgeTab>("documents");
 
   useEffect(() => {
-    const next = parseTab(searchParams?.get("tab") ?? null);
-    setActiveTab((current) => (current === next ? current : next));
-  }, [searchParams]);
+    if (typeof window === "undefined") return;
+    const syncFromUrl = () => {
+      const next = parseTab(new URLSearchParams(window.location.search).get("tab"));
+      setActiveTab((current) => (current === next ? current : next));
+    };
+    syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
+  }, []);
 
   const [documents, setDocuments] = useState<DocumentListItem[]>([]);
   const [sources, setSources] = useState<UrlSource[]>([]);

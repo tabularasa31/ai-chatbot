@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import typography from "@tailwindcss/typography";
 import { ND_BRAND_COLORS } from "../../tailwind-brand";
 
 // Brand palette is shared with the dashboard via `frontend/tailwind-brand.ts`
@@ -13,7 +14,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [typography],
 };
 
 export default config;

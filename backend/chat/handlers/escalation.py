@@ -351,12 +351,17 @@ class EscalationStateMachine(PipelineHandler):
                 "best_similarity_score": None,
                 "retrieved_chunks": None,
             }
+            user_email = (ctx.effective_user_ctx or {}).get("email")
             out = await_only(
                 asyncio.to_thread(
                     _svc.complete_escalation_openai_turn,
                     phase=EscalationPhase.pre_confirm,
                     chat_messages=msgs,
-                    fact_json={"trigger": EscalationTrigger.user_request.value},
+                    fact_json={
+                        "trigger": EscalationTrigger.user_request.value,
+                        "user_email": user_email,
+                        "clarify_round": 0,
+                    },
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                     response_language=ctx.language_context.response_language,
@@ -399,6 +404,7 @@ class EscalationStateMachine(PipelineHandler):
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
+            user_email = (ctx.effective_user_ctx or {}).get("email")
             out = await_only(
                 asyncio.to_thread(
                     _svc.complete_escalation_openai_turn,
@@ -407,6 +413,7 @@ class EscalationStateMachine(PipelineHandler):
                     fact_json={
                         "trigger": pre_confirm_ctx.get("trigger"),
                         "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                        "user_email": user_email,
                     },
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
@@ -420,6 +427,13 @@ class EscalationStateMachine(PipelineHandler):
             if decision == "yes":
                 chat.escalation_pre_confirm_pending = False
                 _clear_escalation_clarify_flag(chat)
+                # Merge before ticket creation: _notify_tenant_new_ticket inside
+                # create_escalation_ticket lazy-loads ticket.chat, which would
+                # create a duplicate Chat identity in the session if we don't
+                # merge first. Merging here prevents the InvalidRequestError that
+                # would silently swallow the email notification.
+                chat = ctx.db.merge(chat)
+                ctx.chat = chat
                 ctx.db.add(chat)
                 esc_trigger = EscalationTrigger(
                     pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
@@ -436,10 +450,6 @@ class EscalationStateMachine(PipelineHandler):
                     user_context=ctx.effective_user_ctx,
                     optional_entity_types=ctx.optional_entity_types,
                 )
-                # _notify_tenant_new_ticket lazy-loads ticket.chat, which can
-                # create a duplicate session instance. Merge before writing flags.
-                chat = ctx.db.merge(chat)
-                ctx.chat = chat
                 chat.escalation_pre_confirm_context = None
                 phase = (
                     EscalationPhase.handoff_ask_email

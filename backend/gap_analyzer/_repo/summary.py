@@ -82,8 +82,10 @@ def get_gap_summary(db: Session, *, tenant_id: UUID) -> GapSummaryResponse:
             partial_count += 1
         if bool(is_new):
             new_badge_count += 1
-        if extracted_at is not None and (last_updated is None or extracted_at > last_updated):
-            last_updated = extracted_at
+        if extracted_at is not None:
+            extracted_at = _aware_datetime(extracted_at)
+            if last_updated is None or extracted_at > last_updated:
+                last_updated = extracted_at
 
     for coverage_score, is_new, last_computed_at, last_question_at, created_at in cluster_rows:
         total_active += 1

@@ -70,14 +70,19 @@ def _strip_tzinfo_for_naive_datetime_columns(
       * Server-side ``onupdate=`` callables are unaffected — they already
         flow through ``_utcnow``.
     """
-    targets = list(session.new) + list(session.dirty)
+    # ``IdentitySet.union`` avoids materialising two intermediate lists; the
+    # result is iterable directly.
+    targets = session.new.union(session.dirty)
     if not targets:
         return
     for obj in targets:
-        try:
-            mapper = sa_inspect(obj).mapper
-        except Exception:
+        # ``raiseerr=False`` returns ``None`` instead of raising
+        # ``NoInspectionAvailable`` for objects we cannot inspect (e.g. ad-hoc
+        # non-mapped instances surfaced via attribute events).
+        inspection = sa_inspect(obj, raiseerr=False)
+        if inspection is None:
             continue
+        mapper = inspection.mapper
         for col in mapper.columns:
             col_type = getattr(col, "type", None)
             if not isinstance(col_type, DateTime):

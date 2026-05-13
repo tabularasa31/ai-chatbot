@@ -169,7 +169,9 @@ class EscalationStateMachine(PipelineHandler):
                 # apply_collected_contact_email flushes (not commits) so all
                 # mutations — email, chat flags, and the message turn — commit
                 # atomically in _escalation_turn_response below.
-                apply_collected_contact_email(ticket.id, chat.id, email, ctx.db)
+                apply_collected_contact_email(
+                    ticket.id, chat.id, email, ctx.db, latest_user_text=ctx.question
+                )
                 ctx.db.refresh(ticket)
                 ctx.db.refresh(chat)
                 ctx.db.expire(chat, ["messages"])
@@ -438,9 +440,14 @@ class EscalationStateMachine(PipelineHandler):
                 esc_trigger = EscalationTrigger(
                     pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
                 )
+                # Use the current user turn as primary_question — it carries
+                # more substantive context than the original trigger fragment
+                # ("call a specialist", "I want a human"). The trigger phrase
+                # still appears in the email transcript via the conversation
+                # history, so no information is lost.
                 ticket = _svc.create_escalation_ticket(
                     ctx.tenant_id,
-                    pre_confirm_ctx.get("primary_question") or ctx.question,
+                    ctx.question or pre_confirm_ctx.get("primary_question") or "",
                     esc_trigger,
                     ctx.db,
                     chat_id=chat.id,
@@ -449,6 +456,7 @@ class EscalationStateMachine(PipelineHandler):
                     retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
                     user_context=ctx.effective_user_ctx,
                     optional_entity_types=ctx.optional_entity_types,
+                    latest_user_text=ctx.question,
                 )
                 chat.escalation_pre_confirm_context = None
                 phase = (

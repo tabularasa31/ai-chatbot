@@ -37,6 +37,7 @@ from backend.models import (
     TenantProfile,
     User,
 )
+from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
@@ -591,7 +592,13 @@ def _notify_tenant_new_ticket(
     # the marker so the initial-notify turns are not re-sent as delta later;
     # the missing anchor will simply cause ``_notify_tenant_ticket_update`` to
     # skip threaded updates, which is the right degraded behaviour.
-    now = datetime.now(UTC)
+    # Use the project-wide ``_utcnow()`` (naive UTC). All datetime columns on
+    # this row — including ``last_notified_at`` and ``updated_at`` — are
+    # ``TIMESTAMP WITHOUT TIME ZONE`` (no ``timezone=True``); psycopg2 silently
+    # drops ``tzinfo`` for aware values but asyncpg raises ``DataError``,
+    # rolling back the transaction and surfacing as "Internal error" in the
+    # widget. See ``backend/models/base._utcnow`` for the rationale.
+    now = _utcnow()
     if isinstance(send_result, str) and send_result:
         ticket.notification_message_id = send_result
     ticket.last_notified_at = now
@@ -642,11 +649,13 @@ def advance_notification_marker_to_current(
     """
     if ticket.chat_id is None:
         return
-    high_id = _current_high_user_message_id(ticket.chat_id, db, fallback_at=datetime.now(UTC))
+    high_id = _current_high_user_message_id(ticket.chat_id, db, fallback_at=_utcnow())
     if high_id is None:
         return
     ticket.last_notified_message_id = high_id
-    ticket.last_notified_at = datetime.now(UTC)
+    # Naive UTC — column is ``DateTime`` (no ``timezone=True``); see the note
+    # in ``_notify_tenant_new_ticket`` above.
+    ticket.last_notified_at = _utcnow()
     db.add(ticket)
     db.flush()
 
@@ -809,7 +818,11 @@ def _notify_tenant_ticket_update(
         # eligible user turn.
         return
 
-    ticket.last_notified_at = now
+    # ``now`` above is timezone-aware (UTC) and used only for debounce
+    # arithmetic. The column is ``DateTime`` (naive, no ``timezone=True``);
+    # writing aware values crashes asyncpg with ``DataError`` and rolls back
+    # the transaction. See ``models/base._utcnow`` for the project policy.
+    ticket.last_notified_at = _utcnow()
     if new_msgs:
         ticket.last_notified_message_id = new_msgs[-1].id
     db.add(ticket)
@@ -999,11 +1012,12 @@ def resolve_ticket(
     )
     if not ticket:
         raise ValueError("ticket not found")
-    from datetime import datetime
 
     ticket.status = EscalationStatus.resolved
     ticket.resolution_text = resolution_text
-    ticket.resolved_at = datetime.now(UTC)
+    # Naive UTC: ``resolved_at`` is ``DateTime`` (no ``timezone=True``); see
+    # the note in ``_notify_tenant_new_ticket`` for the asyncpg rationale.
+    ticket.resolved_at = _utcnow()
     db.add(ticket)
     db.commit()
     db.refresh(ticket)

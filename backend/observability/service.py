@@ -238,6 +238,12 @@ class _NoOpTrace(TraceHandle):
 @dataclass
 class _LangfuseSpan(SpanHandle):
     span_obj: Any
+    # Local accumulator of all metadata ever set on this observation. We always
+    # send the merged dict to the SDK so that ``update_metadata`` cannot
+    # accidentally clobber the rich initial metadata (prompt / cache / model
+    # context for ``llm-generation``) — independent of whether the Langfuse
+    # SDK version treats ``update(metadata=...)`` as merge or replace.
+    _metadata: dict[str, Any] | None = None
 
     def end(
         self,
@@ -251,7 +257,7 @@ class _LangfuseSpan(SpanHandle):
         if output is not None:
             payload["output"] = output
         if metadata:
-            payload["metadata"] = metadata
+            payload["metadata"] = _merge_observation_metadata(self._metadata, metadata)
         if level is not None:
             payload["level"] = level
         if status_message is not None:
@@ -261,12 +267,15 @@ class _LangfuseSpan(SpanHandle):
     def update_metadata(self, **kvs: Any) -> None:
         if not kvs:
             return
-        _safe_invoke(self.span_obj.update, metadata=dict(kvs))
+        self._metadata = _merge_observation_metadata(self._metadata, kvs)
+        _safe_invoke(self.span_obj.update, metadata=dict(self._metadata))
 
 
 @dataclass
 class _LangfuseGeneration(GenerationHandle):
     generation_obj: Any
+    # Local accumulator — see ``_LangfuseSpan._metadata`` for rationale.
+    _metadata: dict[str, Any] | None = None
 
     def end(
         self,
@@ -281,7 +290,7 @@ class _LangfuseGeneration(GenerationHandle):
         if output is not None:
             payload["output"] = output
         if metadata:
-            payload["metadata"] = metadata
+            payload["metadata"] = _merge_observation_metadata(self._metadata, metadata)
         if usage:
             payload["usage"] = usage
         if level is not None:
@@ -293,7 +302,27 @@ class _LangfuseGeneration(GenerationHandle):
     def update_metadata(self, **kvs: Any) -> None:
         if not kvs:
             return
-        _safe_invoke(self.generation_obj.update, metadata=dict(kvs))
+        self._metadata = _merge_observation_metadata(self._metadata, kvs)
+        _safe_invoke(self.generation_obj.update, metadata=dict(self._metadata))
+
+
+def _merge_observation_metadata(
+    base: dict[str, Any] | None, extra: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Shallow-merge ``extra`` into ``base`` and return a new dict.
+
+    ``extra`` keys override ``base``. Used by the live Langfuse handles to
+    accumulate metadata locally so each ``update_metadata`` / ``end`` call
+    sends the full superset to the SDK — safe regardless of whether the SDK
+    version merges or replaces ``metadata`` on observation updates.
+    """
+    if not base and not extra:
+        return {}
+    if not base:
+        return dict(extra or {})
+    if not extra:
+        return dict(base)
+    return {**base, **extra}
 
 
 @dataclass
@@ -316,7 +345,10 @@ class _LangfuseTrace(TraceHandle):
         )
         if span_obj is None:
             return _NoOpSpan()
-        return _LangfuseSpan(span_obj)
+        return _LangfuseSpan(
+            span_obj=span_obj,
+            _metadata=dict(metadata) if metadata else None,
+        )
 
     def generation(
         self,
@@ -335,7 +367,10 @@ class _LangfuseTrace(TraceHandle):
         )
         if generation_obj is None:
             return _NoOpGeneration()
-        return _LangfuseGeneration(generation_obj)
+        return _LangfuseGeneration(
+            generation_obj=generation_obj,
+            _metadata=dict(metadata) if metadata else None,
+        )
 
     def update(
         self,

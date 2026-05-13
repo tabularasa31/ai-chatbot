@@ -670,43 +670,68 @@ def test_notify_email_body_contains_full_context_and_reply_to(
     args, kwargs = send_email_mock.call_args
     subject = args[1]
     body = args[2]
+    headers = kwargs.get("extra_headers") or {}
 
     assert kwargs.get("reply_to") == "enduser@acme.io"
-    assert "[Chat9 · HIGH] ESC-0102" in subject
+
+    # Subject: ticket number only, no priority tier (priority must not leak
+    # back to the user through the Re: prefix on a support reply).
+    assert subject.startswith("[ESC-0102]")
+    assert "HIGH" not in subject
+    assert "Chat9" not in subject
     assert "Yes please" in subject
 
-    assert "TICKET" in body
-    assert "ESC-0102" in body
-    assert "user_request" in body
-    assert "high" in body
+    # Body must be user-safe — anything quoted back via Reply must be safe to
+    # be shown to the end user. Internal metadata lives in X-Chat9-* headers.
+    assert "Priority:" not in body
+    assert "Trigger:" not in body
+    assert "Chat ID:" not in body
+    assert "Session ID:" not in body
+    assert "why_escalated" not in body
+    assert "best_match_score" not in body
+    assert "/escalations/" not in body
+    assert "Reference info" not in body
+    assert "for the full audit log" not in body.lower()
+    # User-only fields stay in body (already user-known: their own email, name,
+    # the question they asked, the conversation they had). Plan tier / user_id
+    # / KYC extras are tenant-internal classifications that must NOT leak back
+    # to the user — those move to headers.
+    assert "pro" not in body  # plan_tier
+    assert "u_18422" not in body  # user_id
+    assert "paying_b2b" not in body  # audience_tag
+    assert "ACME" not in body  # KYC extra: company
+    assert "ops_lead" not in body  # KYC extra: role_in_company
 
-    assert "HOW TO REPLY TO THE USER" in body
+    # User-safe content present.
     assert "enduser@acme.io" in body
     assert "Ivan Petrov" in body
-    assert "ru-RU" in body
-    assert "pro" in body
-    assert "u_18422" in body
-    assert "paying_b2b" in body
-    # Extra KYC keys are surfaced verbatim under "Other:".
-    assert "company: ACME" in body
-    assert "role_in_company: ops_lead" in body
-    assert "metadata:" in body and "widget" in body
-
-    assert "USER'S QUESTION" in body
-    assert "USER'S NOTE" in body
-    assert "I need help with the invoice from March." in body
-
-    assert "CONVERSATION (last 5 turns" in body
-    # Full content (non-truncated) of every recent turn.
+    assert "Yes please" in body  # primary question
+    assert "I need help with the invoice from March." in body  # user note
     assert "How can I download last month's invoice?" in body
     assert "Could you confirm the billing email so I can check?" in body
 
-    # Reference info block sits at the end as small footer.
-    why_idx = body.index("Reference info (for analysts)")
-    convo_idx = body.index("CONVERSATION (last 5 turns")
-    assert why_idx > convo_idx
-    assert "best_match_score: 0.31" in body
-    assert "/escalations/" in body
+    # Conversation has UTC timestamps in HH:MM format.
+    assert "CONVERSATION (UTC)" in body
+    import re as _re
+    assert _re.search(r"\b\d{2}:\d{2}\s+user:", body) is not None
+
+    # Internal metadata lives in X-Chat9-* headers.
+    assert headers.get("X-Chat9-Ticket-Number") == "ESC-0102"
+    assert headers.get("X-Chat9-Priority") == "high"
+    assert headers.get("X-Chat9-Trigger") == "user_request"
+    assert headers.get("X-Chat9-Why-Escalated") == "user_request"
+    assert headers.get("X-Chat9-Plan") == "pro"
+    assert headers.get("X-Chat9-User-Id") == "u_18422"
+    assert headers.get("X-Chat9-Audience") == "paying_b2b"
+    assert headers.get("X-Chat9-Locale") == "ru-RU"
+    assert headers.get("X-Chat9-Chat-Id") == str(chat.id)
+    assert headers.get("X-Chat9-Match-Score") == "0.3100"
+    kyc_raw = headers.get("X-Chat9-KYC") or "{}"
+    import json as _json
+    kyc = _json.loads(kyc_raw)
+    assert kyc.get("company") == "ACME"
+    assert kyc.get("role_in_company") == "ops_lead"
+    assert kyc.get("metadata") == {"source": "widget"}
 
 
 def test_notify_email_skipped_when_no_user_email(
@@ -857,6 +882,112 @@ def test_apply_collected_contact_email_does_not_double_notify(
         )
 
     send_email_mock.assert_not_called()
+
+
+def test_notify_email_body_appends_latest_user_text_not_yet_in_db(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """The user turn that triggers escalation isn't persisted until *after*
+    the notification fires (persistence ordering in the chat pipeline).
+    Without ``latest_user_text``, the email transcript would miss the very
+    message that caused the escalation — exactly the bug seen on ESC-0056."""
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="latest-owner@example.com"
+    )
+
+    chat = Chat(
+        tenant_id=cl.id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "u@example.com"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    db_session.add_all([
+        Message(chat_id=chat.id, role=MessageRole.user, content="hi"),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="Hello! How can I help?",
+        ),
+        Message(chat_id=chat.id, role=MessageRole.user, content="call a human"),
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="Would you like me to escalate?",
+        ),
+    ])
+    db_session.commit()
+
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0310",
+        primary_question="yes, my invoice is broken",
+        primary_question_redacted="yes, my invoice is broken",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.high,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="u@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(
+            cl,
+            ticket,
+            db_session,
+            latest_user_text="yes, my invoice is broken",
+        )
+
+    body = send_email_mock.call_args.args[2]
+    # All 4 persisted turns + the un-persisted current turn must be present.
+    assert "hi" in body
+    assert "call a human" in body
+    assert "Would you like me to escalate?" in body
+    assert "yes, my invoice is broken" in body
+    # No duplication if the latest_user_text accidentally equals the last
+    # persisted user message — handled by transcript dedupe. Sanity: only
+    # one occurrence of the new content in the conversation block.
+    convo_start = body.index("CONVERSATION (UTC)")
+    assert body.count("yes, my invoice is broken", convo_start) == 1
+
+
+def test_notify_email_subject_omits_priority_tier(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="subj-owner@example.com"
+    )
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-0311",
+        primary_question="urgent help",
+        primary_question_redacted="urgent help",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.critical,
+        status=EscalationStatus.open,
+        user_email="user@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    subject = send_email_mock.call_args.args[1]
+    assert subject.startswith("[ESC-0311]")
+    # Priority tier is internal — must not leak via the Re: prefix on a
+    # support reply quoting this subject.
+    for forbidden in ("CRITICAL", "Critical", "HIGH", "Chat9"):
+        assert forbidden not in subject
 
 
 def test_notify_email_body_omits_user_note_section_when_absent(

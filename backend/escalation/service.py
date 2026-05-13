@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from datetime import UTC
+from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -282,9 +282,18 @@ def _full_transcript_from_chat(
     chat_id: uuid.UUID,
     db: Session,
     *,
-    max_turns: int = 5,
-) -> list[tuple[str, str]] | None:
-    """Last ``max_turns`` user/assistant pairs as ``(role, content)`` — full text, redacted."""
+    max_turns: int = 10,
+    extra_user_turn: tuple[str, datetime] | None = None,
+) -> list[tuple[str, str, datetime | None]] | None:
+    """Last ``max_turns`` user/assistant pairs as ``(role, content, created_at)``.
+
+    ``extra_user_turn`` lets callers append a user message that is not yet
+    persisted (the current turn — escalation notifications fire *before*
+    ``_persist_turn`` runs, so without this the transcript misses the very
+    message that triggered the escalation). Skipped if the last DB row is
+    already a user turn with the same content (defensive against double-add
+    when persistence ordering changes later).
+    """
     msgs = (
         db.query(Message)
         .filter(Message.chat_id == chat_id)
@@ -292,14 +301,17 @@ def _full_transcript_from_chat(
         .limit(max_turns * 2)
         .all()
     )
-    if not msgs:
-        return None
-    msgs = list(reversed(msgs))
-    out: list[tuple[str, str]] = []
-    for m in msgs:
-        role = "user" if m.role == MessageRole.user else "assistant"
-        out.append((role, _safe_message_content(m)))
-    return out
+    out: list[tuple[str, str, datetime | None]] = []
+    if msgs:
+        for m in reversed(msgs):
+            role = "user" if m.role == MessageRole.user else "assistant"
+            out.append((role, _safe_message_content(m), m.created_at))
+    if extra_user_turn is not None:
+        text, when = extra_user_turn
+        text = text.strip()
+        if text and not (out and out[-1][0] == "user" and out[-1][1].strip() == text):
+            out.append(("user", text, when))
+    return out or None
 
 
 _KYC_IDENTITY_KEYS = {"email", "name", "plan_tier", "user_id", "audience_tag", "locale", "browser_locale"}
@@ -311,155 +323,191 @@ _KYC_IDENTITY_KEYS = {"email", "name", "plan_tier", "user_id", "audience_tag", "
 _TRANSCRIPT_WRAP_INDENT = " " * 13
 
 
-def _format_extra_kyc(user_context: dict[str, Any] | None) -> list[str]:
-    """All non-identity keys from ``user_context`` rendered as ``key: value`` lines.
-
-    Identity keys (email/name/plan_tier/user_id/audience_tag/locale/browser_locale)
-    are surfaced in their own labelled rows; everything else lands here verbatim
-    so the support agent can see arbitrary widget-supplied KYC fields.
-    """
-    if not user_context:
-        return []
-    lines: list[str] = []
-    for key in sorted(user_context.keys()):
-        if key in _KYC_IDENTITY_KEYS:
-            continue
-        value = user_context[key]
-        if value is None or value == "":
-            continue
-        if isinstance(value, (dict, list)):
-            try:
-                rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
-            except (TypeError, ValueError):
-                rendered = str(value)
-        else:
-            rendered = str(value)
-        lines.append(f"  {key}: {rendered}")
-    return lines
-
-
 def _build_escalation_email_body(
     tenant: Tenant,
     ticket: EscalationTicket,
     db: Session,
+    *,
+    latest_user_text: str | None = None,
+    latest_user_at: datetime | None = None,
 ) -> str:
-    """Compose the support-team escalation email body.
+    """Compose the user-safe escalation email body.
 
-    Layout (all English; user content kept in original language):
-      - Header / opening sentence
-      - TICKET metadata
-      - HOW TO REPLY TO THE USER (contact details + KYC)
-      - USER'S QUESTION (full, redacted)
-      - USER'S NOTE (if present)
-      - CONVERSATION (last 5 turns, full content)
-      - WHY THE BOT ESCALATED (reference info, last)
-      - Dashboard link for full audit log
+    Critical constraint: the support agent replies via plain Reply (we set
+    ``Reply-To`` to the end-user's address). The user's mail client will
+    quote this body back to them. So **everything in the body must be safe
+    to be shown to the end user**. Internal metadata (priority, trigger,
+    chat_id, match scores) lives in custom SMTP headers — see
+    :func:`_build_escalation_email_headers`. Mail clients quote bodies but
+    do not quote headers.
+
+    Layout (user-safe only):
+      - One-line intro
+      - FROM (user's own email + name — they already know these)
+      - THEIR QUESTION
+      - USER'S NOTE (if present — user-provided)
+      - CONVERSATION with HH:MM UTC timestamps
     """
-    base = settings.FRONTEND_URL.rstrip("/")
     sep = "─" * 56
-    lines: list[str] = ["New escalation requires a human reply.", ""]
-
-    opened_at = ticket.created_at.strftime("%Y-%m-%d %H:%M UTC") if ticket.created_at else "—"
-    lines.append(sep)
-    lines.append("TICKET")
-    lines.append(f"  Number:    {ticket.ticket_number}")
-    lines.append(f"  Priority:  {ticket.priority.value}")
-    lines.append(f"  Trigger:   {ticket.trigger.value}")
-    lines.append(f"  Opened:    {opened_at}")
-    if ticket.chat_id:
-        chat_id_str = str(ticket.chat_id)
-        if ticket.session_id:
-            lines.append(f"  Chat ID:   {chat_id_str}  (session {ticket.session_id})")
-        else:
-            lines.append(f"  Chat ID:   {chat_id_str}")
-    lines.append("")
+    lines: list[str] = [
+        "Hello,",
+        "",
+        f"A user on your bot ({tenant.name}) is asking for a human reply.",
+        "Reply directly to this email — your response will reach the user.",
+        "",
+    ]
 
     chat: Chat | None = ticket.chat if ticket.chat_id else None
     user_ctx: dict[str, Any] = {}
     if chat and isinstance(chat.user_context, dict):
         user_ctx = chat.user_context
 
-    lines.append(sep)
-    lines.append("HOW TO REPLY TO THE USER")
     contact_email = ticket.user_email or user_ctx.get("email")
     contact_name = ticket.user_name or user_ctx.get("name")
-    locale = user_ctx.get("locale")
-    browser_locale = user_ctx.get("browser_locale")
-    plan = ticket.plan_tier or user_ctx.get("plan_tier")
-    user_id = ticket.user_id or user_ctx.get("user_id")
-    audience = user_ctx.get("audience_tag")
 
-    if contact_email:
-        lines.append(f"  Email:     {contact_email}    ← reply directly to this email")
+    lines.append(sep)
+    lines.append("FROM")
+    if contact_email and contact_name:
+        lines.append(f"  {contact_email}  ({contact_name})")
+    elif contact_email:
+        lines.append(f"  {contact_email}")
+    elif contact_name:
+        lines.append(f"  {contact_name}  (contact email not provided)")
     else:
-        lines.append("  Email:     (not provided)")
-    if contact_name:
-        lines.append(f"  Name:      {contact_name}")
-    if locale or browser_locale:
-        if locale and browser_locale and locale != browser_locale:
-            lines.append(f"  Locale:    {locale}  (browser: {browser_locale})")
-        else:
-            lines.append(f"  Locale:    {locale or browser_locale}")
-    if plan:
-        lines.append(f"  Plan:      {plan}")
-    if user_id:
-        lines.append(f"  User ID:   {user_id}")
-    if audience:
-        lines.append(f"  Audience:  {audience}")
-    extra = _format_extra_kyc(user_ctx)
-    if extra:
-        lines.append("  Other:")
-        lines.extend(extra)
-    if not contact_email:
-        lines.append("")
-        lines.append(
-            "  ⚠ The user has NOT provided contact details. Reply via the "
-            "dashboard (link below) — they will see your reply on the next visit."
-        )
+        lines.append("  (contact details not provided)")
     lines.append("")
 
     lines.append(sep)
-    lines.append("USER'S QUESTION")
-    lines.append(f"  {_safe_ticket_question(ticket)}")
+    lines.append("THEIR QUESTION")
+    question_text = _safe_ticket_question(ticket).strip()
+    if question_text:
+        for q_line in question_text.splitlines() or [question_text]:
+            lines.append(f"  {q_line}")
+    else:
+        lines.append("  (empty)")
     lines.append("")
 
     if ticket.user_note:
         lines.append(sep)
         lines.append("USER'S NOTE")
-        lines.append(f"  {ticket.user_note}")
+        for n_line in ticket.user_note.splitlines() or [ticket.user_note]:
+            lines.append(f"  {n_line}")
         lines.append("")
 
-    transcript: list[tuple[str, str]] | None = None
+    extra_turn: tuple[str, datetime] | None = None
+    if latest_user_text and latest_user_text.strip():
+        when = latest_user_at or datetime.now(UTC)
+        extra_turn = (latest_user_text, when)
+
+    transcript: list[tuple[str, str, datetime | None]] | None = None
     if ticket.chat_id:
-        transcript = _full_transcript_from_chat(ticket.chat_id, db)
+        transcript = _full_transcript_from_chat(
+            ticket.chat_id,
+            db,
+            extra_user_turn=extra_turn,
+        )
     if transcript:
         lines.append(sep)
-        lines.append("CONVERSATION (last 5 turns, PII redacted)")
-        for role, content in transcript:
+        lines.append("CONVERSATION (UTC)")
+        last_date: date | None = None
+        for role, content, when in transcript:
+            when_utc = _to_utc(when)
+            if when_utc is not None:
+                cur_date = when_utc.date()
+                if last_date is not None and cur_date != last_date:
+                    lines.append(f"  ── {cur_date.isoformat()} ──")
+                last_date = cur_date
+                prefix = when_utc.strftime("%H:%M")
+            else:
+                prefix = "  · "
             indented = content.replace("\n", "\n" + _TRANSCRIPT_WRAP_INDENT)
-            lines.append(f"  {role}: {indented}")
+            lines.append(f"  {prefix}  {role}: {indented}")
         lines.append("")
     elif ticket.conversation_summary:
         lines.append(sep)
-        lines.append("CONVERSATION (last 5 turns, PII redacted)")
+        lines.append("CONVERSATION")
         for raw_line in ticket.conversation_summary.splitlines():
             lines.append(f"  {raw_line}")
         lines.append("")
 
-    lines.append(sep)
-    lines.append("Reference info (for analysts) — not needed to reply:")
-    lines.append(f"  why_escalated: {ticket.trigger.value}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _to_utc(when: datetime | None) -> datetime | None:
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        return when.replace(tzinfo=UTC)
+    return when.astimezone(UTC)
+
+
+def _build_escalation_email_headers(
+    ticket: EscalationTicket,
+    *,
+    chat: Chat | None = None,
+) -> dict[str, str]:
+    """Internal ticket metadata as ``X-Chat9-*`` headers.
+
+    Mail clients do not quote headers when the recipient hits Reply, so this is
+    where priority/trigger/chat_id/match-score live — they must reach the
+    support inbox but must NOT leak back to the end user via a reply-thread.
+    """
+    user_ctx: dict[str, Any] = {}
+    if chat is None and ticket.chat_id and ticket.chat is not None:
+        chat = ticket.chat
+    if chat is not None and isinstance(chat.user_context, dict):
+        user_ctx = chat.user_context
+
+    headers: dict[str, str] = {
+        "X-Chat9-Ticket-Number": ticket.ticket_number,
+        "X-Chat9-Priority": ticket.priority.value,
+        "X-Chat9-Trigger": ticket.trigger.value,
+        "X-Chat9-Why-Escalated": ticket.trigger.value,
+    }
+    if ticket.chat_id:
+        headers["X-Chat9-Chat-Id"] = str(ticket.chat_id)
+    if ticket.session_id:
+        headers["X-Chat9-Session-Id"] = str(ticket.session_id)
+    plan = ticket.plan_tier or user_ctx.get("plan_tier")
+    if plan:
+        headers["X-Chat9-Plan"] = str(plan)
+    user_id = ticket.user_id or user_ctx.get("user_id")
+    if user_id:
+        headers["X-Chat9-User-Id"] = str(user_id)
+    locale = user_ctx.get("locale")
+    if locale:
+        headers["X-Chat9-Locale"] = str(locale)
+    browser_locale = user_ctx.get("browser_locale")
+    if browser_locale and browser_locale != locale:
+        headers["X-Chat9-Browser-Locale"] = str(browser_locale)
+    audience = user_ctx.get("audience_tag")
+    if audience:
+        headers["X-Chat9-Audience"] = str(audience)
     if ticket.best_similarity_score is not None:
-        lines.append(
-            f"  best_match_score: {ticket.best_similarity_score:.2f} (threshold {ESCALATION_THRESHOLD:.2f})"
-        )
-    lines.append("")
-    lines.append(f"For the full audit log: {base}/escalations/{ticket.id}")
+        headers["X-Chat9-Match-Score"] = f"{ticket.best_similarity_score:.4f}"
+    kyc_extras: dict[str, Any] = {}
+    for key, value in user_ctx.items():
+        if key in _KYC_IDENTITY_KEYS:
+            continue
+        if value is None or value == "":
+            continue
+        kyc_extras[key] = value
+    if kyc_extras:
+        try:
+            headers["X-Chat9-KYC"] = json.dumps(kyc_extras, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            pass
+    return headers
 
-    return "\n".join(lines)
 
-
-def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Session) -> None:
+def _notify_tenant_new_ticket(
+    tenant: Tenant,
+    ticket: EscalationTicket,
+    db: Session,
+    *,
+    latest_user_text: str | None = None,
+    latest_user_at: datetime | None = None,
+) -> None:
     """Send the escalation notification to the tenant's support inbox.
 
     Skipped when the ticket has no usable end-user email: support cannot reply
@@ -468,6 +516,10 @@ def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Sess
     signal (gap analysis, queue review), and the notification is re-attempted
     later via :func:`apply_collected_contact_email` once the user provides a
     valid email.
+
+    ``latest_user_text`` is the current user turn — escalation notifications
+    fire *before* persistence runs, so the DB transcript misses the very
+    message that triggered the escalation unless we thread it through.
     """
     if not _is_valid_email(ticket.user_email):
         if ticket.user_email:
@@ -491,14 +543,29 @@ def _notify_tenant_new_ticket(tenant: Tenant, ticket: EscalationTicket, db: Sess
         logger.warning("No escalation notification email configured for tenant_id=%s", tenant.id)
         return
 
-    body = _build_escalation_email_body(tenant, ticket, db)
-    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
-    subject = (
-        f"[Chat9 · {ticket.priority.value.upper()}] {ticket.ticket_number}"
-        f" — {question_preview}"
+    body = _build_escalation_email_body(
+        tenant,
+        ticket,
+        db,
+        latest_user_text=latest_user_text,
+        latest_user_at=latest_user_at,
     )
+    headers = _build_escalation_email_headers(ticket)
+    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
+    # Subject deliberately omits priority tier (`HIGH`/`CRITICAL`) — the user
+    # will see the subject prefixed with `Re:` if support replies and we don't
+    # want to leak our internal urgency classification back to them. The ticket
+    # number is fine: it's a tenant-facing identifier the user may already
+    # know from the bot's acknowledgement message.
+    subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
     try:
-        send_email(recipient, subject, body, reply_to=ticket.user_email)
+        send_email(
+            recipient,
+            subject,
+            body,
+            reply_to=ticket.user_email,
+            extra_headers=headers,
+        )
     except Exception as e:
         logger.warning("Escalation email failed: %s", e)
 
@@ -517,6 +584,7 @@ def create_escalation_ticket(
     user_context: dict | None = None,
     user_note: str | None = None,
     optional_entity_types: set[str] | None = None,
+    latest_user_text: str | None = None,
 ) -> EscalationTicket:
     from sqlalchemy.exc import IntegrityError
 
@@ -591,7 +659,7 @@ def create_escalation_ticket(
         db.refresh(ticket)
 
     try:
-        _notify_tenant_new_ticket(tenant, ticket, db)
+        _notify_tenant_new_ticket(tenant, ticket, db, latest_user_text=latest_user_text)
     except Exception as e:
         logger.warning("notify tenant owner failed (ticket still created): %s", e)
 
@@ -631,6 +699,8 @@ def apply_collected_contact_email(
     chat_id: uuid.UUID,
     email: str,
     db: Session,
+    *,
+    latest_user_text: str | None = None,
 ) -> None:
     ticket = db.query(EscalationTicket).filter(EscalationTicket.id == ticket_id).first()
     chat = db.query(Chat).filter(Chat.id == chat_id).first()
@@ -656,7 +726,12 @@ def apply_collected_contact_email(
     db.flush()
     if notify_late and ticket.tenant is not None:
         try:
-            _notify_tenant_new_ticket(ticket.tenant, ticket, db)
+            _notify_tenant_new_ticket(
+                ticket.tenant,
+                ticket,
+                db,
+                latest_user_text=latest_user_text,
+            )
         except Exception as e:
             logger.warning(
                 "deferred escalation email failed (ticket=%s): %s",

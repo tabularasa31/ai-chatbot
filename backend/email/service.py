@@ -17,6 +17,7 @@ def send_email(
     body: str,
     *,
     reply_to: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> None:
     """Send email via Brevo HTTP API.
 
@@ -24,14 +25,19 @@ def send_email(
     - Network/API errors are logged but do NOT raise (to avoid breaking signup).
     - ``reply_to`` lets the recipient reply directly to a third party (e.g. the
       end-user behind an escalation ticket) by pressing "Reply" in their client.
+    - ``extra_headers`` are added as custom SMTP headers (e.g. ``X-Chat9-*``).
+      Mail clients quote the body when the recipient hits Reply but do NOT
+      quote custom headers — this is the right channel for internal metadata
+      that must not leak back to the end user via a reply-thread.
     """
     if not settings.BREVO_API_KEY or not settings.EMAIL_FROM:
         # Dev fallback: log email instead of sending
         logger.info(
-            "EMAIL DEV MODE: to=%s subject=%s reply_to=%s body=%s",
+            "EMAIL DEV MODE: to=%s subject=%s reply_to=%s headers=%s body=%s",
             to,
             subject,
             reply_to,
+            extra_headers,
             body,
         )
         return
@@ -44,6 +50,8 @@ def send_email(
     }
     if reply_to:
         payload["replyTo"] = {"email": reply_to}
+    if extra_headers:
+        payload["headers"] = {str(k): str(v) for k, v in extra_headers.items() if v is not None}
 
     try:
         resp = httpx.post(

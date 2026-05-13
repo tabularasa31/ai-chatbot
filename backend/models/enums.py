@@ -77,6 +77,7 @@ class PiiEventDirection(str, enum.Enum):
 class EscalationPhase(str, enum.Enum):
     """OpenAI escalation UX phases (fact_json), not stored on DB."""
 
+    pre_confirm = "pre_confirm"
     handoff_email_known = "handoff_email_known"
     handoff_ask_email = "handoff_ask_email"
     email_parse_failed = "email_parse_failed"

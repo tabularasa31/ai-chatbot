@@ -1,18 +1,21 @@
 """Escalation state machine — handles the FI-ESC pre-RAG paths.
 
-Encapsulates four escalation states that previously lived inline in
-``service.process_chat_message``:
+States, in priority order:
 
-  * ``chat.ended_at is not None``        → chat already closed
-  * ``chat.escalation_awaiting_ticket_id`` → awaiting contact email
-  * ``chat.escalation_followup_pending``    → follow-up yes/no
-  * explicit human request (T-3 trigger) before RAG runs
+  * ``chat.ended_at is not None``            → chat already closed
+  * ``chat.escalation_awaiting_ticket_id``   → awaiting contact email
+  * ``chat.escalation_followup_pending``      → follow-up yes/no
+  * ``chat.escalation_pre_confirm_pending``  → waiting for the user to
+    confirm the human handoff *and* provide a substantive description. The
+    ticket is created only on this confirmation turn, using whichever text
+    is most descriptive (current message if substantive, else the stored
+    original "I need an operator" phrase).
+  * explicit human request (T-3 trigger) before RAG runs — initiates the
+    pre_confirm phase above instead of minting a ticket immediately.
 
-Behaviour is byte-equivalent to the legacy inline branches; this module is
-purely a structural extraction. Persistence helpers, OpenAI escalation calls,
-ticket creation and event emission still live in ``backend.chat.service`` and
-``backend.escalation.*`` and are looked up lazily to avoid a circular import
-with ``service.py``.
+Persistence helpers, OpenAI escalation calls, ticket creation and event
+emission live in ``backend.chat.service`` and ``backend.escalation.*`` and
+are looked up lazily to avoid a circular import with ``service.py``.
 """
 
 from __future__ import annotations
@@ -27,10 +30,14 @@ from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, Pipeline
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
+    _pre_confirm_clarify_already_asked,
     _set_escalation_clarify_flag,
+    _set_pre_confirm_clarify_flag,
     apply_collected_contact_email,
+    clear_pre_confirm_state,
     get_latest_escalation_ticket_for_chat,
     parse_contact_email,
+    set_pre_confirm_state,
 )
 from backend.models import EscalationPhase, EscalationTicket, EscalationTrigger
 
@@ -64,6 +71,8 @@ class EscalationStateMachine(PipelineHandler):
             return True
         if chat.escalation_followup_pending:
             return True
+        if getattr(chat, "escalation_pre_confirm_pending", False):
+            return True
         # Explicit human request runs through the FSM only when not already in
         # a deterministic escalation state above. Use the value pre-computed
         # by the chat pipeline — re-running detect_human_request here would
@@ -89,6 +98,11 @@ class EscalationStateMachine(PipelineHandler):
             # None so the router falls through to RagHandler.
         if chat.escalation_followup_pending:
             return self._handle_followup_yes_no(ctx)
+        if getattr(chat, "escalation_pre_confirm_pending", False):
+            outcome = self._handle_pre_confirm(ctx)
+            if outcome is not None:
+                return outcome
+            # Pre-confirm state was inconsistent (cleared) — fall through.
         # Explicit human request (T-3) — only fires when the user actually
         # asked for a human. Without this gate, a stale-pointer recovery
         # (vanished awaiting-ticket cleared above) would mint a fresh
@@ -327,44 +341,39 @@ class EscalationStateMachine(PipelineHandler):
             raise
 
     def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        """T-3: explicit human request lodged before RAG runs."""
+        """T-3: explicit human request lodged before RAG runs.
+
+        Instead of minting a ticket on the literal first user phrase (which is
+        usually a meta-question like "how do I reach a human?"), we set the
+        ``escalation_pre_confirm_pending`` flag, persist the trigger/context,
+        and emit a single short pre-confirmation reply. The actual ticket is
+        created on the next turn by :meth:`_handle_pre_confirm` — using the
+        substantive content the user is about to provide as the primary
+        question of the ticket.
+        """
         _svc = _svc_lookup()
         chat = ctx.chat
-        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         if ctx.trace is not None:
             human_request_span = ctx.trace.span(
                 name="human-request-detection",
                 input={"question": ctx.redacted_question},
             )
-            human_request_span.end(output={"matched": True})
+            human_request_span.end(output={"matched": True, "pre_confirm": True})
         try:
-            ticket = _svc.create_escalation_ticket(
-                ctx.tenant_id,
-                ctx.question,
-                EscalationTrigger.user_request,
-                ctx.db,
-                chat_id=chat.id,
-                session_id=ctx.session_id,
-                user_context=ctx.effective_user_ctx,
-                optional_entity_types=ctx.optional_entity_types,
+            set_pre_confirm_state(
+                chat,
+                trigger=EscalationTrigger.user_request,
+                primary_question=ctx.question,
             )
-            phase = (
-                EscalationPhase.handoff_ask_email
-                if not ticket.user_email
-                else EscalationPhase.handoff_email_known
-            )
+            msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
             out = _svc.complete_escalation_openai_turn(
-                phase=phase,
+                phase=EscalationPhase.pre_confirm,
                 chat_messages=msgs,
-                fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                fact_json=_pre_confirm_fact_json(ctx, trigger=EscalationTrigger.user_request),
                 latest_user_text=ctx.redacted_question,
                 api_key=ctx.api_key,
                 response_language=ctx.language_context.response_language,
             )
-            if not ticket.user_email:
-                chat.escalation_awaiting_ticket_id = ticket.id
-            else:
-                chat.escalation_followup_pending = True
             _svc._set_last_response_language(
                 db=ctx.db,
                 chat=chat,
@@ -375,7 +384,7 @@ class EscalationStateMachine(PipelineHandler):
             )
             ctx.db.add(chat)
             ctx.db.commit()
-            user_message, assistant_message = _svc._persist_turn(
+            _svc._persist_turn(
                 ctx.db,
                 chat,
                 ctx.tenant_id,
@@ -386,54 +395,295 @@ class EscalationStateMachine(PipelineHandler):
                 optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
             )
-            _svc._try_ingest_gap_signal(
-                chat=chat,
-                tenant_id=ctx.tenant_id,
-                session_id=ctx.session_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                question_text=ctx.redacted_question,
-                answer_confidence=None,
-                was_rejected=False,
-                had_fallback=False,
-                was_escalated=True,
-                language=ctx.language_context.response_language,
-            )
             if ctx.trace is not None:
                 ctx.trace.update(
-                    output={"answer": out.message_to_user, "source": "explicit_handoff"},
+                    output={"answer": out.message_to_user, "source": "pre_confirm_ask"},
                     metadata={
                         "chat_ended": False,
-                        "escalated": True,
+                        "escalated": False,
+                        "pre_confirm": True,
                         "response_language": ctx.language_context.response_language,
                         "escalation_language": ctx.language_context.escalation_language,
                     },
                 )
-            _svc._emit_chat_escalated_event(
-                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                bot_public_id=ctx.bot_public_id,
-                chat_id=str(chat.id),
-                escalation_reason="explicit_human_request",
-                escalation_trigger=EscalationTrigger.user_request.value,
-                plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-                priority=ticket.priority if ticket is not None else None,
-            )
-            _svc._emit_chat_session_ended_event(
-                tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                bot_public_id=ctx.bot_public_id,
-                chat_id=str(chat.id),
-                outcome="escalated",
-            )
             return ChatTurnOutcome(
                 text=out.message_to_user,
                 document_ids=[],
                 tokens_used=out.tokens_used,
                 chat_ended=False,
-                ticket_number=ticket.ticket_number,
+                ticket_number=None,
             )
         except Exception as e:
             # Legacy behaviour: log and fall back to the RAG handler so the
             # user still gets a response. Returning None signals the router to
             # try the next handler (RagHandler).
-            logger.warning("Escalation T-3 failed, falling back to RAG: %s", e)
+            logger.warning("Escalation T-3 pre-confirm failed, falling back to RAG: %s", e)
+            # Reset the flag we tentatively set so the chat does not get
+            # stuck in pre_confirm without an actual outgoing question.
+            clear_pre_confirm_state(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
             return None
+
+    def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+        """Second turn after T-3: classify user reply and either escalate or
+        let the chat continue normally.
+
+        Returns ``None`` only when the pre-confirm context is inconsistent
+        (missing payload) — caller falls through to the explicit-request gate.
+        """
+        _svc = _svc_lookup()
+        chat = ctx.chat
+        pre_ctx = getattr(chat, "escalation_pre_confirm_context", None) or None
+        if not isinstance(pre_ctx, dict):
+            # Inconsistent state — clear and let the caller decide what to do.
+            clear_pre_confirm_state(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            return None
+
+        stored_trigger = EscalationTrigger.user_request
+        try:
+            stored_trigger = EscalationTrigger(pre_ctx.get("trigger") or "user_request")
+        except ValueError:
+            stored_trigger = EscalationTrigger.user_request
+        stored_primary_question = (pre_ctx.get("primary_question") or "").strip()
+
+        span = (
+            ctx.trace.span(
+                name="escalation-pre-confirm",
+                input={"clarify_round": int(_pre_confirm_clarify_already_asked(chat))},
+            )
+            if ctx.trace is not None
+            else None
+        )
+
+        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+        try:
+            classifier_out = _svc.complete_escalation_openai_turn(
+                phase=EscalationPhase.pre_confirm,
+                chat_messages=msgs,
+                fact_json={
+                    **_pre_confirm_fact_json(ctx, trigger=stored_trigger),
+                    "clarify_round": 1 if _pre_confirm_clarify_already_asked(chat) else 0,
+                },
+                latest_user_text=ctx.redacted_question,
+                api_key=ctx.api_key,
+                response_language=ctx.language_context.response_language,
+            )
+        except Exception as exc:
+            if span is not None:
+                span.end(output={"error": True}, level="ERROR", status_message=str(exc))
+            raise
+
+        decision = classifier_out.followup_decision  # "yes" | "no" | "unclear" | None
+
+        # Promote ambiguous answers to "yes" once we've already asked once;
+        # otherwise we'd loop forever asking the user to confirm.
+        if decision in (None, "unclear") and _pre_confirm_clarify_already_asked(chat):
+            decision = "yes"
+
+        if decision == "no":
+            # User declined the handoff. Clear state and let the RAG handler
+            # answer the user's current message instead.
+            clear_pre_confirm_state(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            if span is not None:
+                span.end(output={"decision": "no", "escalated": False, "fallthrough": True})
+            return None
+
+        if decision == "unclear":
+            # First ambiguous reply — re-ask the confirmation question once.
+            _set_pre_confirm_clarify_flag(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            _svc._persist_turn(
+                ctx.db,
+                chat,
+                ctx.tenant_id,
+                ctx.question,
+                classifier_out.message_to_user,
+                [],
+                classifier_out.tokens_used,
+                optional_entity_types=ctx.optional_entity_types,
+                trace=ctx.trace,
+            )
+            if span is not None:
+                span.end(output={"decision": "unclear", "clarify_round": 1})
+            if ctx.trace is not None:
+                ctx.trace.update(
+                    output={
+                        "answer": classifier_out.message_to_user,
+                        "source": "pre_confirm_clarify",
+                    },
+                    metadata={
+                        "chat_ended": False,
+                        "escalated": False,
+                        "pre_confirm": True,
+                        "response_language": ctx.language_context.response_language,
+                        "escalation_language": ctx.language_context.escalation_language,
+                    },
+                )
+            return ChatTurnOutcome(
+                text=classifier_out.message_to_user,
+                document_ids=[],
+                tokens_used=classifier_out.tokens_used,
+                chat_ended=False,
+                ticket_number=None,
+            )
+
+        # decision in {"yes", None (treated as yes after fallthrough above)} —
+        # the user is confirming, or has supplied substantive content we treat
+        # as implicit confirmation. Create the ticket now.
+        # Pick the most descriptive primary_question:
+        #   - if the user wrote something substantive this turn, prefer it
+        #     (e.g. "сайт не открывается" — that IS the support request);
+        #   - else fall back to the original stored question (typical "yes"
+        #     short confirmation where the user is just acknowledging).
+        current_text = ctx.question.strip()
+        looks_substantive = len(current_text) >= 8 and current_text.lower() not in {
+            "да",
+            "ага",
+            "конечно",
+            "yes",
+            "yep",
+            "sure",
+            "ok",
+            "okay",
+            "please",
+        }
+        primary_question = (
+            ctx.question
+            if looks_substantive or not stored_primary_question
+            else stored_primary_question
+        )
+
+        clear_pre_confirm_state(chat)
+        try:
+            ticket = _svc.create_escalation_ticket(
+                ctx.tenant_id,
+                primary_question,
+                stored_trigger,
+                ctx.db,
+                chat_id=chat.id,
+                session_id=ctx.session_id,
+                user_context=ctx.effective_user_ctx,
+                optional_entity_types=ctx.optional_entity_types,
+            )
+        except Exception as exc:
+            if span is not None:
+                span.end(output={"error": True}, level="ERROR", status_message=str(exc))
+            raise
+
+        phase = (
+            EscalationPhase.handoff_ask_email
+            if not ticket.user_email
+            else EscalationPhase.handoff_email_known
+        )
+        out = _svc.complete_escalation_openai_turn(
+            phase=phase,
+            chat_messages=_svc.build_chat_messages_for_openai(chat, ctx.redacted_question),
+            fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+            latest_user_text=ctx.redacted_question,
+            api_key=ctx.api_key,
+            response_language=ctx.language_context.response_language,
+        )
+
+        if not ticket.user_email:
+            chat.escalation_awaiting_ticket_id = ticket.id
+        else:
+            chat.escalation_followup_pending = True
+        _svc._set_last_response_language(
+            db=ctx.db,
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            response_language=ctx.language_context.response_language,
+            resolution_reason=ctx.language_context.response_language_resolution_reason,
+            language_context=ctx.language_context,
+        )
+        ctx.db.add(chat)
+        ctx.db.commit()
+        user_message, assistant_message = _svc._persist_turn(
+            ctx.db,
+            chat,
+            ctx.tenant_id,
+            ctx.question,
+            out.message_to_user,
+            [],
+            out.tokens_used + classifier_out.tokens_used,
+            optional_entity_types=ctx.optional_entity_types,
+            trace=ctx.trace,
+        )
+        _svc._try_ingest_gap_signal(
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            session_id=ctx.session_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            question_text=ctx.redacted_question,
+            answer_confidence=None,
+            was_rejected=False,
+            had_fallback=False,
+            was_escalated=True,
+            language=ctx.language_context.response_language,
+        )
+        if span is not None:
+            span.end(output={"decision": "yes", "escalated": True, "ticket_id": str(ticket.id)})
+        if ctx.trace is not None:
+            ctx.trace.update(
+                output={"answer": out.message_to_user, "source": "pre_confirm_handoff"},
+                metadata={
+                    "chat_ended": False,
+                    "escalated": True,
+                    "response_language": ctx.language_context.response_language,
+                    "escalation_language": ctx.language_context.escalation_language,
+                },
+            )
+        _svc._emit_chat_escalated_event(
+            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+            bot_public_id=ctx.bot_public_id,
+            chat_id=str(chat.id),
+            escalation_reason="explicit_human_request",
+            escalation_trigger=stored_trigger.value,
+            plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+            priority=ticket.priority,
+        )
+        _svc._emit_chat_session_ended_event(
+            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+            bot_public_id=ctx.bot_public_id,
+            chat_id=str(chat.id),
+            outcome="escalated",
+        )
+        return ChatTurnOutcome(
+            text=out.message_to_user,
+            document_ids=[],
+            tokens_used=out.tokens_used + classifier_out.tokens_used,
+            chat_ended=False,
+            ticket_number=ticket.ticket_number,
+        )
+
+
+def _pre_confirm_fact_json(
+    ctx: HandlerContext,
+    *,
+    trigger: EscalationTrigger,
+    sla_hours: int = 24,
+) -> dict[str, Any]:
+    """Fact block for the pre_confirm LLM phase — no ticket exists yet."""
+    user_ctx = ctx.effective_user_ctx or {}
+    chat_ctx = (ctx.chat.user_context or {}) if ctx.chat else {}
+    locale = (
+        user_ctx.get("locale")
+        or user_ctx.get("browser_locale")
+        or chat_ctx.get("locale")
+        or chat_ctx.get("browser_locale")
+    )
+    return {
+        "ticket_number": None,
+        "sla_hours": sla_hours,
+        "user_email": user_ctx.get("email"),
+        "trigger": trigger.value,
+        "priority": None,
+        "locale": locale,
+    }

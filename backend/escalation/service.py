@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 ESCALATION_THRESHOLD = 0.45
 
 _CLARIFY_KEY = "escalation_followup_clarify"
+_PRE_CONFIRM_CLARIFY_KEY = "escalation_pre_confirm_clarify"
 
 _HUMAN_REQUEST_TIMEOUT = 3.0
 _HUMAN_REQUEST_CACHE_TTL = 5 * 60
@@ -766,6 +767,51 @@ def _clear_escalation_clarify_flag(chat: Chat) -> None:
     ctx = dict(chat.user_context or {})
     ctx.pop(_CLARIFY_KEY, None)
     chat.user_context = ctx
+
+
+def _pre_confirm_clarify_already_asked(chat: Chat) -> bool:
+    return bool((chat.user_context or {}).get(_PRE_CONFIRM_CLARIFY_KEY))
+
+
+def _set_pre_confirm_clarify_flag(chat: Chat) -> None:
+    ctx = dict(chat.user_context or {})
+    ctx[_PRE_CONFIRM_CLARIFY_KEY] = True
+    chat.user_context = ctx
+
+
+def _clear_pre_confirm_clarify_flag(chat: Chat) -> None:
+    ctx = dict(chat.user_context or {})
+    ctx.pop(_PRE_CONFIRM_CLARIFY_KEY, None)
+    chat.user_context = ctx
+
+
+def set_pre_confirm_state(
+    chat: Chat,
+    *,
+    trigger: EscalationTrigger,
+    primary_question: str,
+    best_similarity_score: float | None = None,
+    retrieved_chunks: list[dict[str, Any]] | None = None,
+) -> None:
+    """Mark the chat as waiting for the user to confirm a human handoff.
+
+    No escalation ticket is created at this point; the stored context is
+    consumed by :func:`finalize_pre_confirm_state` when the user confirms (or
+    provides their actual problem statement).
+    """
+    chat.escalation_pre_confirm_pending = True
+    chat.escalation_pre_confirm_context = {
+        "trigger": trigger.value,
+        "primary_question": (primary_question or "")[:8000],
+        "best_similarity_score": best_similarity_score,
+        "retrieved_chunks": retrieved_chunks,
+    }
+
+
+def clear_pre_confirm_state(chat: Chat) -> None:
+    chat.escalation_pre_confirm_pending = False
+    chat.escalation_pre_confirm_context = None
+    _clear_pre_confirm_clarify_flag(chat)
 
 
 def perform_manual_escalation(

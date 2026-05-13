@@ -96,12 +96,24 @@ def _strip_tzinfo_for_naive_datetime_columns(
             tz = getattr(value, "tzinfo", None)
             if tz is None:
                 continue
+            # Convert to UTC BEFORE stripping ``tzinfo``. Plain
+            # ``value.replace(tzinfo=None)`` preserves wall time, which
+            # silently corrupts the instant for non-UTC aware inputs (e.g.
+            # ``2026-05-13T10:00:00-04:00`` → ``2026-05-13T10:00:00`` stored
+            # as naive UTC = 4 hours off). ``astimezone(UTC)`` normalises
+            # the instant first; subsequent ``replace(tzinfo=None)`` then
+            # strips the tag without losing information. Project callers
+            # already pass UTC, but the listener exists as a defense layer
+            # and must handle any aware input safely.
+            normalized = value.astimezone(dt.UTC).replace(tzinfo=None)
             logger.debug(
-                "naive_datetime_listener: stripping tzinfo from %s.%s",
+                "naive_datetime_listener: normalising tzinfo on %s.%s "
+                "(input_tz=%s)",
                 type(obj).__name__,
                 col.key,
+                tz,
             )
-            setattr(obj, col.key, value.replace(tzinfo=None))
+            setattr(obj, col.key, normalized)
 
 
 event.listen(Session, "before_flush", _strip_tzinfo_for_naive_datetime_columns)

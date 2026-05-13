@@ -341,3 +341,36 @@ def test_before_flush_leaves_naive_datetimes_unchanged(db_session) -> None:
     db_session.refresh(chat)
     assert chat.ended_at == naive_value
     assert chat.ended_at.tzinfo is None
+
+
+def test_before_flush_converts_non_utc_aware_to_utc_then_strips_tzinfo(db_session) -> None:
+    """Regression for Codex P1 review on PR #682.
+
+    The naive-datetime listener used to ``value.replace(tzinfo=None)``,
+    which preserves wall time. A non-UTC aware input like
+    ``2026-05-13T10:00:00-04:00`` (i.e. 14:00 UTC) would have been stored
+    as naive ``10:00:00`` — interpreted as UTC by every downstream
+    comparison, so the recorded instant would be 4 hours behind reality.
+    The listener now ``astimezone(UTC)``-first and only then strips
+    ``tzinfo``, preserving the instant.
+    """
+    user = _create_user(db_session, email="non-utc-aware@example.com")
+    tenant = _create_client(db_session, user)
+
+    chat = Chat(tenant_id=tenant.id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+
+    # 10:00 in a -04:00 zone == 14:00 UTC.
+    eastern = dt.timezone(dt.timedelta(hours=-4))
+    chat.ended_at = dt.datetime(2026, 5, 13, 10, 0, 0, tzinfo=eastern)
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    assert chat.ended_at == dt.datetime(2026, 5, 13, 14, 0, 0), (
+        "listener must convert to UTC before stripping tzinfo — bare "
+        "replace(tzinfo=None) would have stored 10:00 and silently shifted "
+        "the instant by 4 hours"
+    )
+    assert chat.ended_at.tzinfo is None

@@ -54,7 +54,14 @@ def _make_retrieval_context(score: float) -> RetrievalContext:
     )
 
 
-def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
+def test_gap_signal_default_timestamp_is_naive_utc() -> None:
+    """``GapSignal.created_at`` flows into ``GapQuestion.created_at`` —
+    a naive ``DateTime`` column. PR #682 switched the default from
+    ``datetime.now(UTC)`` (aware) to a naive UTC value because asyncpg
+    rejects aware values for ``TIMESTAMP WITHOUT TIME ZONE`` and the
+    ``before_flush`` listener would otherwise rewrite the value on every
+    insert. Asserting naive here documents the contract.
+    """
     signal = GapSignal(
         tenant_id=uuid.uuid4(),
         question_text="How does this work?",
@@ -64,8 +71,7 @@ def test_gap_signal_default_timestamp_is_timezone_aware() -> None:
         was_escalated=False,
         user_thumbed_down=False,
     )
-    assert signal.created_at.tzinfo is not None
-    assert signal.created_at.utcoffset() is not None
+    assert signal.created_at.tzinfo is None
 
 
 @pytest.mark.parametrize(

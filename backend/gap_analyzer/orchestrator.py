@@ -94,6 +94,7 @@ from backend.models import (
     TenantFaq,
     TenantProfile,
 )
+from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -545,7 +546,7 @@ class GapAnalyzerOrchestrator:
             raise GapResourceNotFoundError("Gap cluster not found")
         cluster.status = GapClusterStatus.dismissed
         cluster.question_count_at_dismissal = cluster.question_count
-        cluster.last_computed_at = datetime.now(UTC)
+        cluster.last_computed_at = _utcnow()
         existing = (
             db.query(GapDismissal)
             .filter(
@@ -615,7 +616,7 @@ class GapAnalyzerOrchestrator:
         )
         status = _mode_b_status_from_coverage(float(cluster.coverage_score or 0.0))
         cluster.status = status
-        cluster.last_computed_at = datetime.now(UTC)
+        cluster.last_computed_at = _utcnow()
         db.add(cluster)
         return GapActionResponse(source=source, gap_id=gap_id, status=status.value)
 
@@ -786,7 +787,7 @@ class GapAnalyzerOrchestrator:
         cluster.draft_question = content.question
         cluster.draft_markdown = content.markdown
         cluster.draft_language = language
-        cluster.draft_updated_at = datetime.now(UTC)
+        cluster.draft_updated_at = _utcnow()
         cluster.status = GapClusterStatus.in_review
         db.add(cluster)
         db.flush()
@@ -831,7 +832,7 @@ class GapAnalyzerOrchestrator:
         cluster.draft_title = content.title
         cluster.draft_question = content.question
         cluster.draft_markdown = content.markdown
-        cluster.draft_updated_at = datetime.now(UTC)
+        cluster.draft_updated_at = _utcnow()
         cluster.status = GapClusterStatus.in_review
         db.add(cluster)
         db.flush()
@@ -865,7 +866,7 @@ class GapAnalyzerOrchestrator:
         cluster.draft_title = title.strip()
         cluster.draft_question = question.strip()
         cluster.draft_markdown = markdown
-        cluster.draft_updated_at = datetime.now(UTC)
+        cluster.draft_updated_at = _utcnow()
         if cluster.status not in {GapClusterStatus.in_review, GapClusterStatus.drafting}:
             cluster.status = GapClusterStatus.in_review
         db.add(cluster)

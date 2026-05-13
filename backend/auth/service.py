@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import jwt
 from sqlalchemy.orm import Session
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.security import ALGORITHM, create_access_token, hash_password, verify_password
 from backend.models import User
+from backend.models.base import _utcnow
 
 ACCESS_TOKEN_EXPIRE_SECONDS = 24 * 60 * 60  # 24 hours
 
@@ -102,7 +103,10 @@ def create_reset_token(email: str, db: Session) -> str | None:
 
     token = uuid.uuid4().hex
     user.reset_password_token = token
-    user.reset_password_expires_at = datetime.now(UTC) + timedelta(hours=1)
+    # Naive UTC — column is ``DateTime`` (no ``timezone=True``); both the
+    # write and the later ``>= now`` comparison must be naive to keep the
+    # async path (asyncpg) happy. See ``models/base._utcnow``.
+    user.reset_password_expires_at = _utcnow() + timedelta(hours=1)
     db.commit()
     return token
 
@@ -113,7 +117,7 @@ def reset_password(token: str, new_password: str, db: Session) -> bool:
 
     Returns True if successful, False if token invalid/expired.
     """
-    now = datetime.now(UTC)
+    now = _utcnow()
     user = (
         db.query(User)
         .filter(

@@ -268,3 +268,76 @@ def test_multiple_messages_in_chat_order(db_session) -> None:
         .all()
     )
     assert [m.id for m in messages] == [msg1.id, msg2.id]
+
+
+# ---------------------------------------------------------------------------
+# before_flush tzinfo-stripping listener
+#
+# Defense-in-depth registered in ``backend/models/base.py`` after the prod
+# "Internal error" surfaced in Sentry ``PYTHON-FASTAPI-H`` — see PR #680. The
+# listener inspects every new/dirty ORM object before flush and normalises
+# tz-aware values bound for naive ``DateTime`` columns. Without it, asyncpg
+# rejects aware values for ``TIMESTAMP WITHOUT TIME ZONE`` columns and the
+# session enters PendingRollback.
+# ---------------------------------------------------------------------------
+
+
+def test_before_flush_strips_tzinfo_on_naive_datetime_columns(db_session) -> None:
+    """ORM attribute write of an aware datetime to a naive DateTime column
+    must be normalised to naive at flush time.
+    """
+    user = _create_user(db_session, email="aware-tzinfo@example.com")
+    tenant = _create_client(db_session, user)
+
+    chat = Chat(tenant_id=tenant.id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+
+    # Assign an aware UTC datetime — listener should strip tzinfo at flush.
+    chat.ended_at = dt.datetime.now(dt.UTC)
+    assert chat.ended_at.tzinfo is not None, "test setup precondition"
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    assert chat.ended_at is not None
+    assert chat.ended_at.tzinfo is None, (
+        "before_flush listener must have stripped tzinfo from naive DateTime "
+        "column; aware values crash asyncpg on the widget chat path"
+    )
+
+
+def test_before_flush_leaves_none_datetimes_untouched(db_session) -> None:
+    """The listener must not error on objects whose datetime column is
+    ``None`` (e.g. newly-inserted chats with optional ``ended_at``).
+    """
+    user = _create_user(db_session, email="none-datetime@example.com")
+    tenant = _create_client(db_session, user)
+
+    chat = Chat(tenant_id=tenant.id, session_id=uuid.uuid4())
+    assert chat.ended_at is None
+    db_session.add(chat)
+    db_session.commit()  # No exception expected.
+    db_session.refresh(chat)
+    assert chat.ended_at is None
+
+
+def test_before_flush_leaves_naive_datetimes_unchanged(db_session) -> None:
+    """Already-naive values pass through the listener untouched — no
+    accidental ``replace(tzinfo=None)`` re-roundtrip that could change
+    timestamps.
+    """
+    user = _create_user(db_session, email="naive-datetime@example.com")
+    tenant = _create_client(db_session, user)
+
+    chat = Chat(tenant_id=tenant.id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.commit()
+
+    naive_value = dt.datetime(2026, 5, 13, 12, 34, 56)
+    chat.ended_at = naive_value
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    assert chat.ended_at == naive_value
+    assert chat.ended_at.tzinfo is None

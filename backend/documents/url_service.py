@@ -779,12 +779,19 @@ def trigger_refresh(
 def _mark_run_finished(run: UrlSourceRun, *, status: str, error_message: str | None = None) -> None:
     run.status = status
     run.error_message = error_message
-    run.finished_at = _utcnow()
+    # Compute duration BEFORE assigning ``run.finished_at`` and using a local
+    # variable. Otherwise reading ``run.created_at`` below can trigger a
+    # SQLAlchemy autoflush, which fires the ``before_flush`` tzinfo-stripping
+    # listener (``models/base.py``) and rewrites the just-assigned
+    # ``run.finished_at`` to naive — leaving the subtraction with mismatched
+    # tz-awareness between sides (``aware created_at vs naive finished_at``).
+    finished_at = _utcnow()
     if run.created_at:
         started = run.created_at
         if started.tzinfo is None:
             started = started.replace(tzinfo=dt.UTC)
-        run.duration_seconds = max(0, int((run.finished_at - started).total_seconds()))
+        run.duration_seconds = max(0, int((finished_at - started).total_seconds()))
+    run.finished_at = finished_at
 
 
 class _CrawlAbortedError(Exception):

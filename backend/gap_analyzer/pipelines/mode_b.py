@@ -84,6 +84,15 @@ def _prepare_mode_b_clusters(clusters: list[ModeBClusterRecord]) -> list[_Mutabl
                 aggregate_signal_weight=cluster.aggregate_signal_weight,
                 coverage_score=cluster.coverage_score or 0.0,
                 status=status,
+                # NOTE: Aware UTC on purpose. This dataclass stays aware
+                # throughout the in-memory Mode B pipeline because
+                # ``ModeBClusterRecord.last_question_at`` and
+                # ``ModeBQuestionRecord.created_at`` are converted to aware
+                # by ``_aware_datetime`` in ``_repo/mode_b.py``; mixing
+                # naive and aware later in ``_update_mode_b_cluster`` would
+                # raise ``TypeError`` in ``max(...)``. The aware value is
+                # normalised to naive at write time by the ``before_flush``
+                # listener (see ``models/base.py``).
                 last_question_at=cluster.last_question_at or datetime.now(UTC),
             )
         )

@@ -33,6 +33,7 @@ from backend.models import (
     MessageRole,
     TenantFaq,
 )
+from backend.models.base import _utcnow
 from backend.utils.math import cosine_similarity as _cosine_similarity
 
 logger = logging.getLogger(__name__)
@@ -252,7 +253,7 @@ def _save_embeddings(
     for msg, vec in zip(batch, vectors, strict=True):
         existing = db.query(MessageEmbedding).filter_by(message_id=msg.id).first()
         if existing:
-            existing.last_used_at = datetime.now(UTC)
+            existing.last_used_at = _utcnow()
         else:
             db.add(
                 MessageEmbedding(
@@ -274,7 +275,10 @@ def _touch_embeddings(
     db.query(MessageEmbedding).filter(
         MessageEmbedding.message_id.in_(message_ids)
     ).update(
-        {"last_used_at": datetime.now(UTC)},
+        # Naive UTC: Core-level ``.update()`` bypasses the
+        # ``before_flush`` tzinfo-stripping listener; must hand the column
+        # a naive value directly.
+        {"last_used_at": _utcnow()},
         synchronize_session=False,
     )
     db.commit()
@@ -474,7 +478,10 @@ def try_acquire_job_lock(
         return None
 
     old_watermark = state.last_run_started_at
-    now = datetime.now(UTC)
+    # Naive UTC — ``now`` flows back to the caller and eventually lands on
+    # ``LogAnalysisState.last_run_started_at`` (naive column) via the Core
+    # ``sa_update`` in ``_finalize_job`` below.
+    now = _utcnow()
 
     result = db.execute(
         sa_update(LogAnalysisState)
@@ -715,7 +722,8 @@ def _finalize_job(
 
     values: dict = {
         "is_running": False,
-        "last_run_at": datetime.now(UTC),
+        # Naive UTC — Core-level ``sa_update`` bypasses the flush listener.
+        "last_run_at": _utcnow(),
         "last_run_started_at": new_watermark,
         "messages_since_last_run": 0,
         "last_run_status": status,

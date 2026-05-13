@@ -713,9 +713,7 @@ def _notify_tenant_ticket_update(
         # the full transcript so support already has this context.
         return
 
-    chat: Chat | None = ticket.chat if ticket.chat_id else None
-    if chat is None and ticket.chat_id is not None:
-        chat = db.query(Chat).filter(Chat.id == ticket.chat_id).first()
+    chat: Chat | None = ticket.chat
     if chat is not None and chat.ended_at is not None:
         return
 

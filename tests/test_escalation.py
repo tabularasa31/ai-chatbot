@@ -961,6 +961,103 @@ def test_notify_email_body_appends_latest_user_text_not_yet_in_db(
     assert body.count("yes, my invoice is broken", convo_start) == 1
 
 
+def test_notify_tenant_new_ticket_stores_naive_last_notified_at(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Regression for the prod "Internal error" surfaced in Sentry
+    ``PYTHON-FASTAPI-H`` (2026-05-13).
+
+    Background: ``escalation_tickets.last_notified_at`` is declared as
+    ``Column(DateTime, nullable=True)`` — i.e. ``TIMESTAMP WITHOUT TIME
+    ZONE`` in Postgres. The notify helper used to write ``datetime.now(UTC)``
+    (tz-aware) into that column. psycopg2 silently dropped ``tzinfo``;
+    asyncpg (used on the ``/widget/chat`` path) rejects aware values for
+    naive columns with ``DataError: can't subtract offset-naive and
+    offset-aware datetimes``. The DataError put the session into
+    ``PENDING_ROLLBACK`` and the very next attribute access on the ticket
+    raised ``PendingRollbackError``, surfacing as a 500 in the widget.
+
+    The fix routes every datetime that lands on a naive column through
+    :func:`backend.models.base._utcnow`. This test asserts the contract on
+    the notify path: after a successful notify the column value must be
+    naive.
+    """
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="naive-notified-at@example.com"
+    )
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-NV01",
+        primary_question="need a human",
+        primary_question_redacted="need a human",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.medium,
+        status=EscalationStatus.open,
+        user_email="enduser@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    with patch(
+        "backend.escalation.service.send_email",
+        return_value="<test-message-id@example.com>",
+    ):
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.last_notified_at is not None
+    assert ticket.last_notified_at.tzinfo is None, (
+        "last_notified_at must be naive UTC — column is DateTime WITHOUT TIME "
+        "ZONE; asyncpg refuses aware values and surfaces as a 500 in the widget"
+    )
+
+
+def test_advance_notification_marker_stores_naive_last_notified_at(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Same naive-UTC contract for the ``advance_notification_marker_to_current``
+    helper. Without this, the email-capture turn fixup would trip the same
+    asyncpg DataError on the ``/widget/chat`` path.
+    """
+    cl = _make_tenant_for_email_test(
+        tenant, db_session, owner_email="naive-advance@example.com"
+    )
+    chat = Chat(tenant_id=cl.id, session_id=uuid.uuid4())
+    db_session.add(chat)
+    db_session.flush()
+    # The helper bails out early if there is no persisted user message.
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.user,
+            content="anchor turn",
+        )
+    )
+    ticket = EscalationTicket(
+        tenant_id=cl.id,
+        ticket_number="ESC-NV02",
+        primary_question="need a human",
+        primary_question_redacted="need a human",
+        trigger=EscalationTrigger.user_request,
+        priority=EscalationPriority.medium,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        user_email="enduser@example.com",
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+
+    advance_notification_marker_to_current(ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.last_notified_at is not None
+    assert ticket.last_notified_at.tzinfo is None
+
+
 def test_notify_email_subject_omits_priority_tier(
     tenant: TestClient,
     db_session: Session,

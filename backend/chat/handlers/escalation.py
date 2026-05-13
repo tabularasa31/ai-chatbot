@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -37,6 +36,7 @@ from backend.escalation.service import (
     parse_contact_email,
 )
 from backend.models import EscalationPhase, EscalationTicket, EscalationTrigger
+from backend.models.base import _utcnow
 
 
 def _svc_lookup() -> Any:
@@ -302,7 +302,12 @@ class EscalationStateMachine(PipelineHandler):
             if decision == "no":
                 chat.escalation_followup_pending = False
                 _clear_escalation_clarify_flag(chat)
-                chat.ended_at = datetime.now(UTC)
+                # ``Chat.ended_at`` is ``DateTime`` (naive). asyncpg refuses
+                # to coerce aware values into ``TIMESTAMP WITHOUT TIME ZONE``
+                # and raises ``DataError`` → ``PendingRollbackError`` on the
+                # next attribute access. See ``models/base._utcnow`` for the
+                # rationale.
+                chat.ended_at = _utcnow()
                 ctx.db.add(chat)
                 if followup_span is not None:
                     followup_span.end(output={"decision": decision, "chat_ended": True})

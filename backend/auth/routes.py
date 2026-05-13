@@ -1,7 +1,7 @@
 """FastAPI auth endpoints."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -33,6 +33,7 @@ from backend.core.db import get_db
 from backend.core.limiter import limiter
 from backend.email.service import send_email
 from backend.models import User
+from backend.models.base import _utcnow
 from backend.tenants.service import (
     ensure_tenant_for_user,
 )
@@ -109,7 +110,8 @@ def register(
     # Generate verification token and send email
     token = uuid.uuid4().hex
     user.verification_token = token
-    user.verification_expires_at = datetime.now(UTC) + timedelta(days=2)
+    # Naive UTC: see ``models/base._utcnow`` for the asyncpg rationale.
+    user.verification_expires_at = _utcnow() + timedelta(days=2)
     user.is_verified = False
     db.commit()
     db.refresh(user)
@@ -177,7 +179,7 @@ def verify_email(
     db: Annotated[Session, Depends(get_db)],
 ) -> VerifyEmailResponse:
     """Verify user's email using a one-time token. Returns JWT on success and sets httpOnly cookie."""
-    now = datetime.now(UTC)
+    now = _utcnow()
     user = (
         db.query(User)
         .filter(

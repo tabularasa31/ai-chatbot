@@ -104,7 +104,14 @@ class UrlPreflightResult:
 
 
 def _utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
+    # Naive UTC — every ``DateTime`` column this value lands on is declared
+    # without ``timezone=True`` (see ``backend/models/base._utcnow``). Returning
+    # aware would either crash asyncpg (``can't subtract offset-naive and
+    # offset-aware datetimes``) on write or get silently rewritten to naive by
+    # the ``before_flush`` listener mid-function — see ``_mark_run_finished``
+    # below where the listener was caught stripping ``run.finished_at`` between
+    # the assignment and the duration calculation.
+    return dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
 
 def _count_tenant_documents(db: Session, tenant_id: uuid.UUID) -> int:
@@ -747,9 +754,9 @@ def trigger_refresh(
 ) -> UrlSource:
     source = get_url_source(source_id, tenant.id, db)
     now = _utcnow()
+    # Naive throughout: ``_utcnow`` is naive UTC, ``last_refresh_requested_at``
+    # is a naive ``DateTime`` column. No tzinfo normalisation needed.
     last_refresh = source.last_refresh_requested_at
-    if last_refresh is not None and last_refresh.tzinfo is None:
-        last_refresh = last_refresh.replace(tzinfo=dt.UTC)
     stuck_in_indexing = (
         source.status == SourceStatus.indexing
         and last_refresh is not None
@@ -779,12 +786,13 @@ def trigger_refresh(
 def _mark_run_finished(run: UrlSourceRun, *, status: str, error_message: str | None = None) -> None:
     run.status = status
     run.error_message = error_message
-    run.finished_at = _utcnow()
+    finished_at = _utcnow()
     if run.created_at:
-        started = run.created_at
-        if started.tzinfo is None:
-            started = started.replace(tzinfo=dt.UTC)
-        run.duration_seconds = max(0, int((run.finished_at - started).total_seconds()))
+        # Both ``finished_at`` (from naive ``_utcnow``) and ``run.created_at``
+        # (loaded from a naive ``DateTime`` column) are naive — no tzinfo
+        # juggling needed.
+        run.duration_seconds = max(0, int((finished_at - run.created_at).total_seconds()))
+    run.finished_at = finished_at
 
 
 class _CrawlAbortedError(Exception):

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.models import Document, DocumentType, Embedding, TenantProfile
+from backend.models.base import _utcnow
 from backend.tenant_knowledge.faq_service import (
     FAQ_MIN_CONFIDENCE_THRESHOLD,
     insert_new_faq_candidates,
@@ -337,7 +337,7 @@ def run_extract_client_knowledge_for_document(
             else 0.0
         )
 
-        updated_at = datetime.now(UTC)
+        updated_at = _utcnow()
         merge_into_profile(
             db,
             tenant_id=tenant_id,

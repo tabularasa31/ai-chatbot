@@ -12,7 +12,6 @@ Public API:
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import logging
 import uuid
 from typing import Any
@@ -22,6 +21,7 @@ from sqlalchemy import select
 
 from backend.core import db as core_db
 from backend.core.queue import _CRON_JOBS, enqueue, get_main_loop, register_job
+from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,13 @@ async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:
     """
     from backend.models import SourceStatus, Tenant, UrlSource
 
-    now = dt.datetime.now(dt.UTC)
+    # Naive UTC: ``UrlSource.next_crawl_at`` is ``DateTime`` (no
+    # ``timezone=True``) and this query runs through asyncpg via
+    # ``AsyncSessionLocal``. asyncpg rejects aware params for naive columns
+    # with ``DataError: can't subtract offset-naive and offset-aware
+    # datetimes`` — the same crash class as PR #680. Use naive UTC to keep
+    # the cron tick from failing every minute.
+    now = _utcnow()
 
     async with core_db.AsyncSessionLocal() as db:
         result = await db.execute(

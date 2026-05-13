@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import and_, case, or_
@@ -30,6 +30,7 @@ from backend.gap_analyzer._repo.records import GapJobEnqueueResult, GapJobRecord
 from backend.gap_analyzer.enums import GapCommandStatus, GapJobKind, GapJobStatus
 from backend.gap_analyzer.schemas import GapRunMode
 from backend.models import GapAnalyzerJob
+from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def enqueue_gap_job(
             job_kind=job_kind,
             status=_enum_value(GapJobStatus.queued, capabilities=capabilities),
             trigger=trigger,
-            available_at=datetime.now(UTC),
+            available_at=_utcnow(),
         )
     )
     db.flush()
@@ -71,7 +72,7 @@ def claim_next_gap_job(db: Session) -> GapJobRecord | None:
     """Claim the next eligible gap job, using SKIP LOCKED when available."""
     capabilities = _repository_capabilities(db)
     if capabilities.supports_skip_locked:
-        now = datetime.now(UTC)
+        now = _utcnow()
         lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
         candidate = (
             db.query(GapAnalyzerJob)
@@ -115,7 +116,7 @@ def claim_next_gap_job(db: Session) -> GapJobRecord | None:
         )
 
     for _ in range(_GAP_JOB_CLAIM_MAX_ATTEMPTS):
-        now = datetime.now(UTC)
+        now = _utcnow()
         lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
         candidate = (
             db.query(GapAnalyzerJob.id)
@@ -192,7 +193,7 @@ def claim_next_gap_job(db: Session) -> GapJobRecord | None:
 
 
 def refresh_gap_job_lease(db: Session, *, job_id: UUID, tenant_id: UUID) -> bool:
-    now = datetime.now(UTC)
+    now = _utcnow()
     lease_expires_at = now + timedelta(seconds=_GAP_JOB_LEASE_SECONDS)
     updated_rows = (
         db.query(GapAnalyzerJob)
@@ -220,7 +221,7 @@ def release_gap_job_for_retry(
     reason: str,
 ) -> bool:
     capabilities = _repository_capabilities(db)
-    now = datetime.now(UTC)
+    now = _utcnow()
     updated_rows = (
         db.query(GapAnalyzerJob)
         .filter(GapAnalyzerJob.id == job_id)
@@ -245,7 +246,7 @@ def release_gap_job_for_retry(
 
 
 def complete_gap_job(db: Session, *, job_id: UUID, tenant_id: UUID) -> bool:
-    now = datetime.now(UTC)
+    now = _utcnow()
     updated_rows = (
         db.query(GapAnalyzerJob)
         .filter(GapAnalyzerJob.id == job_id)
@@ -300,7 +301,7 @@ def fail_gap_job(
         )
         return False
     capabilities = _repository_capabilities(db)
-    now = datetime.now(UTC)
+    now = _utcnow()
     attempt_count = int(job.attempt_count or 0)
     max_attempts = effective_max_attempts(job, failure_kind)
     final_failure = (

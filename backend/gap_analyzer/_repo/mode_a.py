@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,6 +16,7 @@ from backend.gap_analyzer._repo.records import ModeACorpusChunk, ModeADismissalR
 from backend.gap_analyzer.enums import GapDocTopicStatus, GapSource
 from backend.gap_analyzer.prompts import ModeATopicCandidate
 from backend.models import Document, Embedding, GapDismissal, GapDocTopic, Tenant
+from backend.models.base import _utcnow
 
 
 def get_client_openai_key(db: Session, tenant_id: UUID) -> str | None:
@@ -117,7 +117,7 @@ def replace_mode_a_topics(
     topic_embeddings: dict[str, list[float]],
     extraction_chunk_hash: str,
 ) -> None:
-    extracted_at = datetime.now(UTC)
+    extracted_at = _utcnow()
     capabilities = _repository_capabilities(db)
     db.query(GapDocTopic).filter(GapDocTopic.tenant_id == tenant_id).delete()
     if not candidates:

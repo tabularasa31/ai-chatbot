@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models import ContactSession
+from backend.models.base import _utcnow
 
 _TRACKED_IDENTITY_FIELDS = (
     "email",
@@ -21,7 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 def _now_utc() -> datetime:
-    return datetime.now(UTC)
+    # Module-local alias; all callers persist this value to a naive DateTime
+    # column (``ContactSession.started_at`` / ``ended_at``), so route through
+    # the project-wide naive helper. See ``models/base._utcnow``.
+    return _utcnow()
 
 
 def _clean_optional_text(value: Any) -> str | None:

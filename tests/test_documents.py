@@ -666,7 +666,11 @@ def test_refresh_url_source_returns_429_inside_cooldown(
         normalized_domain="docs.example.com",
         status=SourceStatus.ready,
         crawl_schedule=SourceSchedule.weekly,
-        last_refresh_requested_at=datetime.now(timezone.utc),
+        # Naive UTC — matches the project-wide ``DateTime`` column policy
+        # (no ``timezone=True``). The ``before_flush`` listener would strip
+        # tzinfo anyway, but writing naive directly documents the contract
+        # and keeps the in-test monkeypatch below symmetric.
+        last_refresh_requested_at=datetime.now(timezone.utc).replace(tzinfo=None),
         pages_indexed=0,
         chunks_created=0,
         tokens_used=0,
@@ -675,7 +679,10 @@ def test_refresh_url_source_returns_429_inside_cooldown(
     db_session.add(source)
     db_session.commit()
 
-    monkeypatch.setattr("backend.documents.url_service._utcnow", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(
+        "backend.documents.url_service._utcnow",
+        lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+    )
 
     response = tenant.post(
         f"/documents/sources/{source.id}/refresh",

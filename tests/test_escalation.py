@@ -1829,3 +1829,204 @@ def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
         _notify_tenant_ticket_update(ticket, db_session)
 
     send_email_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Pre-confirm static template + narrow classifier
+#
+# Regression suite for the prod bug visible in the user's screenshot
+# ("Ваш запрос передан … Хотите, чтобы я передал?"): the general escalation
+# LLM was leaking handoff-phase wording into the pre_confirm reply because
+# both phases shared one system prompt. The fix renders pre_confirm copy
+# from canonical English templates via ``localize_text_to_language_result``
+# and isolates the yes/no/unclear decision into a narrow classifier whose
+# output schema has no ``message_to_user`` slot at all.
+# ---------------------------------------------------------------------------
+
+
+def test_render_pre_confirm_text_initial_localizes_canonical_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Initial pre_confirm reply must come from the canonical English text,
+    not from the general escalation LLM. This is the bug source: the LLM was
+    free to compose its own message that mixed phases.
+    """
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import (
+        PRE_CONFIRM_QUESTION_EN,
+        render_pre_confirm_text,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_localize(**kwargs: object) -> LocalizationResult:
+        captured.update(kwargs)
+        return LocalizationResult(text="LOCALIZED", tokens_used=7)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    out = render_pre_confirm_text(
+        variant="initial",
+        response_language="ru",
+        api_key="sk-test",
+    )
+
+    assert captured["canonical_text"] == PRE_CONFIRM_QUESTION_EN
+    assert captured["target_language"] == "ru"
+    assert out.message_to_user == "LOCALIZED"
+    assert out.followup_decision is None
+    assert out.tokens_used == 7
+
+
+def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The three variants must localize three different canonical strings.
+    Otherwise the ``no`` and ``unclear`` branches would echo the same text
+    as the initial question and the UX would look like a stuck loop.
+    """
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import (
+        PRE_CONFIRM_CLARIFY_EN,
+        PRE_CONFIRM_DECLINED_EN,
+        PRE_CONFIRM_QUESTION_EN,
+        render_pre_confirm_text,
+    )
+
+    seen: list[str] = []
+
+    def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+        seen.append(canonical_text)
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
+    render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
+    render_pre_confirm_text(variant="declined", response_language="en", api_key="k")
+
+    assert seen == [
+        PRE_CONFIRM_QUESTION_EN,
+        PRE_CONFIRM_CLARIFY_EN,
+        PRE_CONFIRM_DECLINED_EN,
+    ]
+    assert len(set(seen)) == 3, "three variants must use three distinct canonicals"
+
+
+def test_classify_pre_confirm_reply_parses_decision_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Narrow classifier returns only the decision label; never a message."""
+    from backend.escalation.openai_escalation import classify_pre_confirm_reply
+
+    class _FakeMessage:
+        content = '{"decision": "yes"}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeUsage:
+        total_tokens = 4
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = _FakeUsage()
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                def create(**_kwargs: object) -> object:
+                    return _FakeResponse()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_openai_client",
+        lambda *_a, **_k: _FakeClient(),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.call_openai_with_retry",
+        lambda _name, fn, **_k: fn(),
+    )
+
+    decision, tokens = classify_pre_confirm_reply(
+        latest_user_text="yes please",
+        api_key="sk-test",
+    )
+    assert decision == "yes"
+    assert tokens == 4
+
+
+def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A substantive non-yes/no reply (e.g. user describes a new problem) is
+    surfaced as ``None`` so the caller can degrade to the unclear/re-ask
+    path rather than treat random content as an accept/decline.
+    """
+    from backend.escalation.openai_escalation import classify_pre_confirm_reply
+
+    class _FakeMessage:
+        content = '{"decision": null}'
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeUsage:
+        total_tokens = 3
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = _FakeUsage()
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                def create(**_kwargs: object) -> object:
+                    return _FakeResponse()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_openai_client",
+        lambda *_a, **_k: _FakeClient(),
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.call_openai_with_retry",
+        lambda _name, fn, **_k: fn(),
+    )
+
+    decision, tokens = classify_pre_confirm_reply(
+        latest_user_text="my site is down with a 502",
+        api_key="sk-test",
+    )
+    assert decision is None
+    assert tokens == 3
+
+
+def test_classify_pre_confirm_reply_fails_safe_on_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API blowups must degrade to ``(None, 0)`` rather than raise — the
+    handler turns ``None`` into ``unclear`` which re-asks the user, which
+    is the right fallback when we can't classify confidently.
+    """
+    from backend.escalation.openai_escalation import classify_pre_confirm_reply
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("openai down")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_openai_client", _boom
+    )
+
+    decision, tokens = classify_pre_confirm_reply(
+        latest_user_text="yes",
+        api_key="sk-test",
+    )
+    assert decision is None
+    assert tokens == 0

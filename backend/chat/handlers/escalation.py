@@ -374,10 +374,16 @@ class EscalationStateMachine(PipelineHandler):
             raise
 
     def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        """T-3: explicit human request — ask for confirmation before creating ticket."""
+        """T-3: explicit human request — ask for confirmation before creating ticket.
+
+        Renders the confirmation question from a canonical English template
+        through ``localize_text_to_language_result`` rather than the
+        general-purpose escalation LLM. This eliminates the prompt-mixing bug
+        where the model emitted handoff-style text ("Ваш запрос передан…")
+        alongside the pre_confirm question in a single reply.
+        """
         _svc = _svc_lookup()
         chat = ctx.chat
-        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         if ctx.trace is not None:
             human_request_span = ctx.trace.span(
                 name="human-request-detection",
@@ -392,20 +398,15 @@ class EscalationStateMachine(PipelineHandler):
                 "best_similarity_score": None,
                 "retrieved_chunks": None,
             }
-            user_email = (ctx.effective_user_ctx or {}).get("email")
             out = await_only(
                 asyncio.to_thread(
-                    _svc.complete_escalation_openai_turn,
-                    phase=EscalationPhase.pre_confirm,
-                    chat_messages=msgs,
-                    fact_json={
-                        "trigger": EscalationTrigger.user_request.value,
-                        "user_email": user_email,
-                        "clarify_round": 0,
-                    },
-                    latest_user_text=ctx.redacted_question,
-                    api_key=ctx.api_key,
+                    _svc.render_pre_confirm_text,
+                    variant="initial",
                     response_language=ctx.language_context.response_language,
+                    api_key=ctx.api_key,
+                    tenant_id=str(ctx.tenant_id),
+                    bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                    chat_id=str(chat.id),
                 )
             )
             ctx.db.add(chat)
@@ -431,9 +432,18 @@ class EscalationStateMachine(PipelineHandler):
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome:
         """Handle a pending pre-confirmation turn.
 
-        If the user says yes → create ticket and send handoff message.
-        If no → clear state and let chat continue.
-        If unclear → ask once more, then default to yes.
+        Two-stage:
+          1. ``classify_pre_confirm_reply`` runs a narrow LLM call that
+             returns only the yes/no/unclear/null decision. The classifier
+             has no way to emit a user-facing message — that's deliberate;
+             it removes the prompt-mixing bug where the LLM combined a
+             pre_confirm question with a handoff-style "your request has
+             been forwarded" sentence in the same reply.
+          2. The user-facing message is rendered separately:
+             - ``yes``    → existing handoff-phase LLM call (after ticket
+               creation), unchanged.
+             - ``no``     → static ``declined`` template.
+             - ``unclear`` → static ``clarify`` template.
         """
         _svc = _svc_lookup()
         chat = ctx.chat
@@ -443,25 +453,20 @@ class EscalationStateMachine(PipelineHandler):
             else None
         )
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
-        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
-            user_email = (ctx.effective_user_ctx or {}).get("email")
-            out = await_only(
+            decision_raw, classify_tokens = await_only(
                 asyncio.to_thread(
-                    _svc.complete_escalation_openai_turn,
-                    phase=EscalationPhase.pre_confirm,
-                    chat_messages=msgs,
-                    fact_json={
-                        "trigger": pre_confirm_ctx.get("trigger"),
-                        "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
-                        "user_email": user_email,
-                    },
+                    _svc.classify_pre_confirm_reply,
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
-                    response_language=ctx.language_context.response_language,
                 )
             )
-            decision = out.followup_decision or "unclear"
+            # Treat ``null`` (substantive non-yes/no reply) the same as
+            # ``unclear`` here — both drive the re-ask path on the first
+            # round and the auto-yes promotion on the second. Mirrors the
+            # pre-refactor behaviour where the LLM's ``followup_decision``
+            # also degraded to "unclear" via the ``or "unclear"`` idiom.
+            decision = decision_raw or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
                 decision = "yes"
 
@@ -517,6 +522,9 @@ class EscalationStateMachine(PipelineHandler):
                         response_language=ctx.language_context.response_language,
                     )
                 )
+                # Fold the classifier tokens into the per-turn usage so
+                # analytics see the full cost of a pre_confirm→handoff turn.
+                out_handoff.tokens_used += classify_tokens
                 if not ticket.user_email:
                     chat.escalation_awaiting_ticket_id = ticket.id
                 else:
@@ -572,13 +580,25 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.add(chat)
                 if pre_confirm_span is not None:
                     pre_confirm_span.end(output={"decision": decision})
+                out_declined = await_only(
+                    asyncio.to_thread(
+                        _svc.render_pre_confirm_text,
+                        variant="declined",
+                        response_language=ctx.language_context.response_language,
+                        api_key=ctx.api_key,
+                        tenant_id=str(ctx.tenant_id),
+                        bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                        chat_id=str(chat.id),
+                    )
+                )
+                out_declined.tokens_used += classify_tokens
                 return _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
                     language_context=ctx.language_context,
                     question=ctx.question,
-                    out=out,
+                    out=out_declined,
                     optional_entity_types=ctx.optional_entity_types,
                     trace=ctx.trace,
                     trace_source="escalation_pre_confirm_declined",
@@ -591,13 +611,25 @@ class EscalationStateMachine(PipelineHandler):
             ctx.db.add(chat)
             if pre_confirm_span is not None:
                 pre_confirm_span.end(output={"decision": decision, "clarify": True})
+            out_clarify = await_only(
+                asyncio.to_thread(
+                    _svc.render_pre_confirm_text,
+                    variant="clarify",
+                    response_language=ctx.language_context.response_language,
+                    api_key=ctx.api_key,
+                    tenant_id=str(ctx.tenant_id),
+                    bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                    chat_id=str(chat.id),
+                )
+            )
+            out_clarify.tokens_used += classify_tokens
             return _svc._escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,
                 language_context=ctx.language_context,
                 question=ctx.question,
-                out=out,
+                out=out_clarify,
                 optional_entity_types=ctx.optional_entity_types,
                 trace=ctx.trace,
                 trace_source="escalation_pre_confirm_unclear",

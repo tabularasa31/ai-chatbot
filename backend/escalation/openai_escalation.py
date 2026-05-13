@@ -74,6 +74,7 @@ def complete_escalation_openai_turn(
     api_key: str,
     response_language: str = "en",
     model: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> EscalationLlmResult:
     """One OpenAI JSON-object completion; never raises on API errors.
 
@@ -117,6 +118,7 @@ def complete_escalation_openai_turn(
                 max_completion_tokens=_esc_max_tokens,
                 **({} if _esc_reasoning else {"response_format": {"type": "json_object"}}),
             ),
+            langfuse_observation=langfuse_observation,
         )
         raw = response.choices[0].message.content or "{}"
         data = json.loads(raw)

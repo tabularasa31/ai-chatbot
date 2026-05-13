@@ -230,6 +230,23 @@ Deployment: typically Railway (API + Postgres), frontend on Vercel. All env vars
 
 See `docs/07-observability-rollout.md` for Langfuse/trace rollout details.
 
+**Reading Langfuse traces — common misread to avoid.** One chat turn fans out
+~7-10 distinct OpenAI calls by design (injection guard, relevance guard,
+embed, semantic rewrite, generate, validate, escalation, etc. — see
+`backend/core/openai_client.py`). Each appears as its own span / generation
+in the trace. **Counting observations is NOT counting retries.** To
+distinguish "succeeded on first try" from "retried":
+
+- Look at the observation's `metadata.attempt_count` and `metadata.was_retried`
+  (stamped by `backend/core/openai_retry.py`). `attempt_count=1` means the
+  call succeeded on the first try; `was_retried=true` means it actually
+  retried.
+- For exhausted retries, `metadata.retry_exhausted=true` and
+  `metadata.retry_failure_kind` are stamped before re-raise.
+- In PostHog, real retries are the `openai_retry.retry_scheduled` event
+  (NOT `openai_retry.attempt`, which fires once per call including the
+  initial success).
+
 ---
 
 ## Repository layout

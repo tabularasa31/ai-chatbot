@@ -10,7 +10,7 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Literal
+from typing import Any, Literal
 
 from rank_bm25 import BM25Okapi
 from sqlalchemy import Text as SAText
@@ -1118,7 +1118,12 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
     return detect_query_script_bucket(embedding.chunk_text or "")
 
 
-def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
+def _rewrite_query_for_retrieval(
+    query: str,
+    *,
+    api_key: str,
+    langfuse_observation: Any | None = None,
+) -> str | None:
     """
     Rephrase a user question as English documentation-style keywords.
 
@@ -1150,6 +1155,7 @@ def _rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
                 temperature=0,
                 max_completion_tokens=60,
             ),
+            langfuse_observation=langfuse_observation,
         )
         rewritten = (response.choices[0].message.content or "").strip()
         return rewritten if rewritten else None
@@ -1199,6 +1205,7 @@ def semantic_query_rewrite(
     api_key: str,
     timeout: float = 2.0,
     bot_id: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> str | None:
     """LLM-based semantic rewrite: user symptom → feature/product terminology.
 
@@ -1227,6 +1234,7 @@ def semantic_query_rewrite(
                 max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
             bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
         )
         rewrite = (response.choices[0].message.content or "").strip()
         # Sanity: non-empty, single line, not too long
@@ -1428,6 +1436,7 @@ def semantic_query_rewrite_for_kb(
     api_key: str,
     timeout: float = 2.0,
     bot_id: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> str | None:
     """Rewrite the user query in the language of the knowledge base.
 
@@ -1460,6 +1469,7 @@ def semantic_query_rewrite_for_kb(
                 max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
             bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
         )
         rewrite = (response.choices[0].message.content or "").strip()
         if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
@@ -1509,6 +1519,7 @@ def embed_query(
     api_key: str,
     timeout: float | None = None,
     max_attempts: int | None = None,
+    langfuse_observation: Any | None = None,
 ) -> list[float]:
     """
     Embed a search query using OpenAI embeddings API.
@@ -1534,6 +1545,7 @@ def embed_query(
         ),
         call_type="embedding",
         max_attempts=max_attempts,
+        langfuse_observation=langfuse_observation,
     )
     vector = response.data[0].embedding
     _emb_cache.put(query, vector)
@@ -1545,6 +1557,7 @@ def embed_queries(
     *,
     api_key: str,
     timeout: float | None = None,
+    langfuse_observation: Any | None = None,
 ) -> list[list[float]]:
     """Embed multiple search queries in one OpenAI API round-trip.
 
@@ -1566,6 +1579,7 @@ def embed_queries(
             input=unique_misses,
         ),
         call_type="embedding",
+        langfuse_observation=langfuse_observation,
     )
     for text, item in zip(unique_misses, response.data, strict=True):
         _emb_cache.put(text, item.embedding)
@@ -3256,7 +3270,12 @@ def _session_is_sqlite(db: Session | AsyncSession) -> bool:
 # ── Async OpenAI helpers ─────────────────────────────────────────────────────
 
 
-async def _async_rewrite_query_for_retrieval(query: str, *, api_key: str) -> str | None:
+async def _async_rewrite_query_for_retrieval(
+    query: str,
+    *,
+    api_key: str,
+    langfuse_observation: Any | None = None,
+) -> str | None:
     """Async counterpart of :func:`_rewrite_query_for_retrieval`."""
     try:
         client = get_async_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
@@ -3280,6 +3299,7 @@ async def _async_rewrite_query_for_retrieval(query: str, *, api_key: str) -> str
                 temperature=0,
                 max_completion_tokens=60,
             ),
+            langfuse_observation=langfuse_observation,
         )
         rewritten = (response.choices[0].message.content or "").strip()
         return rewritten if rewritten else None
@@ -3293,6 +3313,7 @@ async def async_embed_query(
     api_key: str,
     timeout: float | None = None,
     max_attempts: int | None = None,
+    langfuse_observation: Any | None = None,
 ) -> list[float]:
     """Async counterpart of :func:`embed_query`."""
     cached = _emb_cache.get(query)
@@ -3307,6 +3328,7 @@ async def async_embed_query(
         ),
         call_type="embedding",
         max_attempts=max_attempts,
+        langfuse_observation=langfuse_observation,
     )
     vector = response.data[0].embedding
     _emb_cache.put(query, vector)
@@ -3318,6 +3340,7 @@ async def async_embed_queries(
     *,
     api_key: str,
     timeout: float | None = None,
+    langfuse_observation: Any | None = None,
 ) -> list[list[float]]:
     """Async counterpart of :func:`embed_queries`.
 
@@ -3339,6 +3362,7 @@ async def async_embed_queries(
             input=unique_misses,
         ),
         call_type="embedding",
+        langfuse_observation=langfuse_observation,
     )
     for text, item in zip(unique_misses, response.data, strict=True):
         _emb_cache.put(text, item.embedding)
@@ -3363,6 +3387,7 @@ async def async_semantic_query_rewrite(
     api_key: str,
     timeout: float = 2.0,
     bot_id: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> str | None:
     """Async counterpart of :func:`semantic_query_rewrite`."""
     if not query or not api_key:
@@ -3379,6 +3404,7 @@ async def async_semantic_query_rewrite(
                 max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
             bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
         )
         rewrite = (response.choices[0].message.content or "").strip()
         if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
@@ -3395,6 +3421,7 @@ async def async_semantic_query_rewrite_for_kb(
     api_key: str,
     timeout: float = 2.0,
     bot_id: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> str | None:
     """Async counterpart of :func:`semantic_query_rewrite_for_kb`."""
     lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
@@ -3421,6 +3448,7 @@ async def async_semantic_query_rewrite_for_kb(
                 max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
             ),
             bot_id=bot_id,
+            langfuse_observation=langfuse_observation,
         )
         rewrite = (response.choices[0].message.content or "").strip()
         if rewrite and "\n" not in rewrite and len(rewrite) <= 200:

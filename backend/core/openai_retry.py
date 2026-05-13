@@ -37,6 +37,7 @@ def call_openai_with_retry(
     call_type: str = "chat_completion",
     max_attempts: int | None = None,
     emit_chat_failed: bool = False,
+    langfuse_observation: Any | None = None,
 ) -> T:
     """Retry ``fn`` with exponential backoff on transient OpenAI errors.
 
@@ -44,6 +45,15 @@ def call_openai_with_retry(
     Pass ``emit_chat_failed=True`` at call sites where exhaustion means the
     user-visible chat turn failed (e.g. the main LLM generate call). Helper
     paths that catch and recover from OpenAI errors should leave it False.
+
+    Pass ``langfuse_observation`` (a ``SpanHandle`` / ``GenerationHandle``) to
+    stamp the observation with ``attempt_count`` and ``was_retried`` on
+    success, or ``attempt_count`` / ``was_retried`` / ``retry_exhausted`` on
+    final failure. This lets Langfuse trace readers distinguish a stage that
+    succeeded on the first try from one that retried — vs counting the number
+    of observations in a trace as "retries" (a common misread, since one chat
+    turn fans out ~7-10 distinct OpenAI calls by design). Best-effort: any
+    exception from the observation update is swallowed.
     """
     started = time.monotonic()
     max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
@@ -63,10 +73,17 @@ def call_openai_with_retry(
             prev_classified=last_classified,
         )
         try:
-            return fn()
+            result = fn()
         except Exception as exc:
             classified = classify_openai_error(exc)
             if classified.kind == OpenAIFailureKind.PERMANENT:
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
+                )
                 raise
 
             elapsed = time.monotonic() - started
@@ -84,6 +101,13 @@ def call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -107,6 +131,13 @@ def call_openai_with_retry(
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
                 )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
+                )
                 raise
             if attempt >= max_attempts or remaining <= 0:
                 _log_retry_exhausted(operation, attempt, elapsed, classified)
@@ -122,6 +153,13 @@ def call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -144,6 +182,13 @@ def call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -173,6 +218,13 @@ def call_openai_with_retry(
             time.sleep(delay)
             last_exc = exc
             last_classified = classified
+        else:
+            _stamp_observation(
+                langfuse_observation,
+                attempt_count=attempt,
+                was_retried=attempt > 1,
+            )
+            return result
 
     if last_exc is not None:  # pragma: no cover
         raise last_exc
@@ -189,6 +241,7 @@ async def async_call_openai_with_retry(
     call_type: str = "chat_completion",
     max_attempts: int | None = None,
     emit_chat_failed: bool = False,
+    langfuse_observation: Any | None = None,
 ) -> T:
     """Async counterpart of :func:`call_openai_with_retry`.
 
@@ -198,6 +251,8 @@ async def async_call_openai_with_retry(
     Pass ``max_attempts=1`` to disable retries (fail fast on first error).
     Pass ``emit_chat_failed=True`` at call sites where exhaustion means the
     user-visible chat turn failed. See :func:`call_openai_with_retry`.
+    Pass ``langfuse_observation`` to stamp ``attempt_count`` and
+    ``was_retried`` on the observation — see :func:`call_openai_with_retry`.
     """
     started = time.monotonic()
     max_attempts = max_attempts if max_attempts is not None else settings.openai_user_retry_max_attempts
@@ -217,10 +272,17 @@ async def async_call_openai_with_retry(
             prev_classified=last_classified,
         )
         try:
-            return await fn()
+            result = await fn()
         except Exception as exc:
             classified = classify_openai_error(exc)
             if classified.kind == OpenAIFailureKind.PERMANENT:
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
+                )
                 raise
 
             elapsed = time.monotonic() - started
@@ -238,6 +300,13 @@ async def async_call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -261,6 +330,13 @@ async def async_call_openai_with_retry(
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
                 )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
+                )
                 raise
             if attempt >= max_attempts or remaining <= 0:
                 _log_retry_exhausted(operation, attempt, elapsed, classified)
@@ -276,6 +352,13 @@ async def async_call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -298,6 +381,13 @@ async def async_call_openai_with_retry(
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
+                )
+                _stamp_observation(
+                    langfuse_observation,
+                    attempt_count=attempt,
+                    was_retried=attempt > 1,
+                    retry_exhausted=True,
+                    retry_failure_kind=classified.kind.value,
                 )
                 raise
 
@@ -327,10 +417,36 @@ async def async_call_openai_with_retry(
             await asyncio.sleep(delay)
             last_exc = exc
             last_classified = classified
+        else:
+            _stamp_observation(
+                langfuse_observation,
+                attempt_count=attempt,
+                was_retried=attempt > 1,
+            )
+            return result
 
     if last_exc is not None:  # pragma: no cover
         raise last_exc
     raise RuntimeError("async_openai_retry_unreachable")
+
+
+def _stamp_observation(observation: Any | None, **kvs: Any) -> None:
+    """Best-effort stamp of retry metadata onto a Langfuse observation.
+
+    The observation is expected to expose ``update_metadata(**kvs)`` (see
+    ``backend.observability.service.SpanHandle``). Duck-typed: any object with
+    a callable ``update_metadata`` works, which keeps the retry wrapper
+    decoupled from the observability layer. Any failure is swallowed — retry
+    correctness must not depend on metric/trace plumbing.
+    """
+    if observation is None or not kvs:
+        return
+    try:
+        update_fn = getattr(observation, "update_metadata", None)
+        if callable(update_fn):
+            update_fn(**kvs)
+    except Exception:  # pragma: no cover — defensive only
+        logger.debug("openai_retry_stamp_observation_failed", exc_info=True)
 
 
 def _delay_for_user(

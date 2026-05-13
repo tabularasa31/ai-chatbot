@@ -143,6 +143,7 @@ def _run_ner(
     tenant_id: str | None,
     bot_id: str | None,
     client_timeout_seconds: float | None = None,
+    langfuse_observation: Any | None = None,
 ) -> list[str]:
     """Single OpenAI NER call → parsed entity list. Returns [] on any error.
 
@@ -173,6 +174,7 @@ def _run_ner(
             tenant_id=tenant_id,
             bot_id=bot_id,
             call_type="chat_completion",
+            langfuse_observation=langfuse_observation,
         )
     except Exception:
         # Retry-exhausted, permanent OpenAI error, network — all degrade.

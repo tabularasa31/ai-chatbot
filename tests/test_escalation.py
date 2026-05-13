@@ -123,7 +123,7 @@ def test_detect_human_request_cache_isolated_per_tenant(
 
     call_count = {"n": 0}
 
-    def _fake_call(_label, fn):
+    def _fake_call(_label, fn, **_kwargs):
         call_count["n"] += 1
         response = MagicMock()
         response.choices = [MagicMock()]

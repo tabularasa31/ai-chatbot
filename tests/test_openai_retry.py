@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
 import pytest
 from openai import APITimeoutError, AuthenticationError, InternalServerError, RateLimitError
 
-from backend.core.openai_retry import _delay_for_user, call_openai_with_retry
+from backend.core.openai_retry import (
+    _delay_for_user,
+    async_call_openai_with_retry,
+    call_openai_with_retry,
+)
 from backend.core.openai_errors import ClassifiedError, OpenAIFailureKind
 
 
@@ -150,6 +155,183 @@ def test_jitter_is_within_bounds() -> None:
     delay = _delay_for_user(classified=classified, attempt=2, budget_seconds=1.5)
 
     assert 0.6 <= delay <= 0.78
+
+
+class _RecordingObservation:
+    """Test double mimicking the SpanHandle.update_metadata contract."""
+
+    def __init__(self, *, raise_on_update: bool = False) -> None:
+        self.updates: list[dict[str, object]] = []
+        self._raise = raise_on_update
+
+    def update_metadata(self, **kvs: object) -> None:
+        if self._raise:
+            raise RuntimeError("observation_broken")
+        self.updates.append(dict(kvs))
+
+
+def test_observation_stamped_on_first_attempt_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+
+    result = call_openai_with_retry(
+        "chat_generate",
+        lambda: "ok",
+        langfuse_observation=obs,
+    )
+
+    assert result == "ok"
+    assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
+
+
+def test_observation_stamped_after_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+    calls = {"count": 0}
+
+    def _fn() -> str:
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise InternalServerError("boom", response=_response(500), body=None)
+        return "ok"
+
+    result = call_openai_with_retry("chat_generate", _fn, langfuse_observation=obs)
+
+    assert result == "ok"
+    assert calls["count"] == 3
+    assert obs.updates == [{"attempt_count": 3, "was_retried": True}]
+
+
+def test_observation_stamped_on_exhaustion(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+
+    with pytest.raises(InternalServerError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(
+                InternalServerError("boom", response=_response(500), body=None)
+            ),
+            langfuse_observation=obs,
+        )
+
+    exhausted = [u for u in obs.updates if u.get("retry_exhausted")]
+    assert exhausted, f"no exhausted stamp recorded; got {obs.updates}"
+    final = exhausted[-1]
+    assert final["was_retried"] is True
+    assert "retry_failure_kind" in final
+
+
+def test_observation_stamped_on_timeout_no_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+
+    with pytest.raises(APITimeoutError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
+            langfuse_observation=obs,
+        )
+
+    assert obs.updates == [
+        {
+            "attempt_count": 1,
+            "was_retried": False,
+            "retry_exhausted": True,
+            "retry_failure_kind": "timeout",
+        }
+    ]
+
+
+def test_observation_stamped_on_permanent_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation()
+
+    with pytest.raises(AuthenticationError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(
+                AuthenticationError("auth", response=_response(401), body=None)
+            ),
+            langfuse_observation=obs,
+        )
+
+    assert obs.updates == [
+        {
+            "attempt_count": 1,
+            "was_retried": False,
+            "retry_exhausted": True,
+            "retry_failure_kind": "permanent",
+        }
+    ]
+
+
+def test_observation_none_default_is_a_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default langfuse_observation=None must not blow anything up."""
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    assert call_openai_with_retry("chat_generate", lambda: "ok") == "ok"
+
+
+def test_broken_observation_does_not_break_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If update_metadata raises, retry result must still be returned."""
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+    obs = _RecordingObservation(raise_on_update=True)
+
+    assert (
+        call_openai_with_retry("chat_generate", lambda: "ok", langfuse_observation=obs)
+        == "ok"
+    )
+
+
+def test_observation_without_update_metadata_is_silently_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duck-typed: observation lacking update_metadata is silently skipped."""
+    monkeypatch.setattr("backend.core.openai_retry.time.sleep", lambda _: None)
+
+    class _NoMethod:
+        pass
+
+    assert (
+        call_openai_with_retry(
+            "chat_generate", lambda: "ok", langfuse_observation=_NoMethod()
+        )
+        == "ok"
+    )
+
+
+def test_async_observation_stamped_on_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async wrapper stamps the observation just like the sync wrapper."""
+
+    async def _runner() -> None:
+        obs = _RecordingObservation()
+
+        async def _fn() -> str:
+            return "ok"
+
+        async def _no_sleep(_: float) -> None:
+            return None
+
+        monkeypatch.setattr("backend.core.openai_retry.asyncio.sleep", _no_sleep)
+
+        result = await async_call_openai_with_retry(
+            "chat_generate", _fn, langfuse_observation=obs
+        )
+
+        assert result == "ok"
+        assert obs.updates == [{"attempt_count": 1, "was_retried": False}]
+
+    asyncio.run(_runner())
 
 
 def test_logs_retry_event_with_operation_label(

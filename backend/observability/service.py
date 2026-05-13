@@ -65,6 +65,16 @@ class SpanHandle(ABC):
     ) -> None:
         raise NotImplementedError
 
+    def update_metadata(self, **kvs: Any) -> None:
+        """Merge ``kvs`` into the span's metadata.
+
+        Default is a no-op so test doubles / fake handles don't have to
+        implement this. Concrete handles override to either push the update
+        to the Langfuse SDK in-flight (for live spans) or stash for the queued
+        ``.end()`` (for deferred spans).
+        """
+        return None
+
 
 class GenerationHandle(SpanHandle, ABC):
     """Interface for generation-like objects."""
@@ -248,6 +258,11 @@ class _LangfuseSpan(SpanHandle):
             payload["status_message"] = status_message
         _safe_invoke(self.span_obj.end, **payload)
 
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        _safe_invoke(self.span_obj.update, metadata=dict(kvs))
+
 
 @dataclass
 class _LangfuseGeneration(GenerationHandle):
@@ -274,6 +289,11 @@ class _LangfuseGeneration(GenerationHandle):
         if status_message is not None:
             payload["status_message"] = status_message
         _safe_invoke(self.generation_obj.end, **payload)
+
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        _safe_invoke(self.generation_obj.update, metadata=dict(kvs))
 
 
 @dataclass
@@ -375,6 +395,12 @@ class _DeferredSpan(SpanHandle):
             }
         )
 
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        existing = self._kwargs.get("metadata") or {}
+        self._kwargs["metadata"] = {**existing, **kvs}
+
 
 class _DeferredGeneration(GenerationHandle):
     def __init__(self, trace: _DeferredTrace, *, kwargs: dict[str, Any]) -> None:
@@ -403,6 +429,12 @@ class _DeferredGeneration(GenerationHandle):
                 },
             }
         )
+
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        existing = self._kwargs.get("metadata") or {}
+        self._kwargs["metadata"] = {**existing, **kvs}
 
 
 class _DeferredTrace(TraceHandle):

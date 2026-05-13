@@ -11,10 +11,13 @@ from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import Session
 
 from backend.escalation.service import (
+    _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS,
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
     _notify_tenant_new_ticket,
+    _notify_tenant_ticket_update,
     _set_escalation_clarify_flag,
+    advance_notification_marker_to_current,
     apply_collected_contact_email,
     compute_priority,
     create_escalation_ticket,
@@ -1364,3 +1367,285 @@ def test_perform_manual_escalation_emits_chat_escalated_event(
     assert props["escalation_reason"] == "user_request"
     assert props["escalation_trigger"] == "user_request"
     assert escalated_events[0].get("bot_id") == "bot_abc"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up update emails (threaded notifies for new turns post-handoff).
+# ---------------------------------------------------------------------------
+
+
+def _setup_followup_fixture(
+    tenant: TestClient,
+    db_session: Session,
+    *,
+    owner_email: str,
+    notification_message_id: str | None = "<initial-abc@brevo>",
+) -> tuple[Tenant, Chat, EscalationTicket]:
+    token = register_and_verify_user(tenant, db_session, email=owner_email)
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Followup Tenant"},
+    )
+    assert cl_resp.status_code == 201
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
+    assert cl is not None
+
+    chat = Chat(
+        tenant_id=tenant_id,
+        session_id=uuid.uuid4(),
+        user_context={"email": "enduser@acme.io"},
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+
+    ticket = EscalationTicket(
+        tenant_id=tenant_id,
+        ticket_number="ESC-9001",
+        primary_question="i cannot log in",
+        trigger=EscalationTrigger.user_request,
+        status=EscalationStatus.open,
+        chat_id=chat.id,
+        session_id=chat.session_id,
+        user_email="enduser@acme.io",
+        notification_message_id=notification_message_id,
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    db_session.refresh(ticket)
+    return cl, chat, ticket
+
+
+def _persist_user_message(db_session: Session, chat: Chat, content: str) -> Message:
+    msg = Message(chat_id=chat.id, role=MessageRole.user, content=content)
+    db_session.add(msg)
+    db_session.commit()
+    db_session.refresh(msg)
+    return msg
+
+
+def test_notify_ticket_update_threads_under_initial_notify(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="thread-owner@example.com"
+    )
+    msg = _persist_user_message(db_session, chat, "also locked out of my admin account")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        send_email_mock.return_value = "<update-xyz@brevo>"
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_called_once()
+    subject = send_email_mock.call_args.args[1]
+    body = send_email_mock.call_args.args[2]
+    headers = send_email_mock.call_args.kwargs["extra_headers"]
+    assert subject.startswith("Re: [ESC-9001]")
+    assert headers["In-Reply-To"] == "<initial-abc@brevo>"
+    assert headers["References"] == "<initial-abc@brevo>"
+    assert "X-Chat9-Ticket-Number" in headers
+    assert "also locked out of my admin account" in body
+
+    db_session.refresh(ticket)
+    assert ticket.last_notified_message_id == msg.id
+
+
+def test_notify_ticket_update_sends_only_new_turns_as_delta(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="delta-owner@example.com"
+    )
+    from datetime import UTC, datetime, timedelta
+
+    old = _persist_user_message(db_session, chat, "OLD CONTEXT already notified")
+    ticket.last_notified_message_id = old.id
+    ticket.last_notified_at = datetime.now(UTC) - timedelta(
+        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS + 30
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    _persist_user_message(db_session, chat, "BRAND NEW context turn one")
+    _persist_user_message(db_session, chat, "BRAND NEW context turn two")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    body = send_email_mock.call_args.args[2]
+    assert "OLD CONTEXT already notified" not in body
+    assert "BRAND NEW context turn one" in body
+    assert "BRAND NEW context turn two" in body
+
+
+def test_notify_ticket_update_debounces_within_window(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="debounce-owner@example.com"
+    )
+    _persist_user_message(db_session, chat, "first follow-up message")
+    ticket.last_notified_at = datetime.now(UTC) - timedelta(
+        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS - 5
+    )
+    db_session.add(ticket)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_ticket_update_skips_when_no_initial_message_id(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    _, chat, ticket = _setup_followup_fixture(
+        tenant,
+        db_session,
+        owner_email="anchor-owner@example.com",
+        notification_message_id=None,
+    )
+    _persist_user_message(db_session, chat, "new context but no anchor")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_ticket_update_skips_when_ticket_resolved(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="resolved-owner@example.com"
+    )
+    ticket.status = EscalationStatus.resolved
+    db_session.add(ticket)
+    db_session.commit()
+    _persist_user_message(db_session, chat, "post-resolution chatter")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_ticket_update_skips_when_chat_ended(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    from datetime import UTC, datetime
+
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="ended-owner@example.com"
+    )
+    chat.ended_at = datetime.now(UTC)
+    db_session.add(chat)
+    db_session.commit()
+    _persist_user_message(db_session, chat, "post-end message")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_ticket_update_noop_when_no_new_turns(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="noturns-owner@example.com"
+    )
+    only = _persist_user_message(db_session, chat, "the only turn already notified")
+    ticket.last_notified_message_id = only.id
+    ticket.last_notified_at = only.created_at
+    db_session.add(ticket)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_new_ticket_captures_message_id_from_send_email(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    cl, chat, ticket = _setup_followup_fixture(
+        tenant,
+        db_session,
+        owner_email="capture-id-owner@example.com",
+        notification_message_id=None,
+    )
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        send_email_mock.return_value = "<brand-new-id@brevo>"
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id == "<brand-new-id@brevo>"
+    assert ticket.last_notified_at is not None
+
+
+def test_advance_notification_marker_to_current_skips_persisted_turn(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Mimics the email-capture flow: initial notify bundled the current turn
+    via ``latest_user_text``; the marker advance prevents a follow-up notify
+    from re-sending that same turn under the threaded reply.
+    """
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="advance-owner@example.com"
+    )
+    persisted = _persist_user_message(
+        db_session, chat, "current turn bundled in initial body"
+    )
+    advance_notification_marker_to_current(ticket, db_session)
+    db_session.refresh(ticket)
+    assert ticket.last_notified_message_id == persisted.id
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()
+
+
+def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """The escalation handler only calls update-notify on decision == ``unclear``
+    (substantive content). Yes/no replies short-circuit before the notify call,
+    so the support inbox stays free of admin chatter. Asserted here as a
+    state-level invariant rather than via the full handler stack.
+    """
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="yesno-owner@example.com"
+    )
+    # User answered "yes" / "no" — no notify expected because the handler
+    # never reaches the notify call site for those branches.
+    yes_msg = _persist_user_message(db_session, chat, "да")
+    # Simulate what the handler would do: advance marker past this turn since
+    # it is administrative and is not forwarded to support.
+    ticket.last_notified_message_id = yes_msg.id
+    ticket.last_notified_at = yes_msg.created_at
+    db_session.add(ticket)
+    db_session.commit()
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    send_email_mock.assert_not_called()

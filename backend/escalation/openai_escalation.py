@@ -24,11 +24,153 @@ FALLBACK_EN_GENERIC = (
     "the team will follow up by email when possible."
 )
 
+# ---------------------------------------------------------------------------
+# Pre-confirm phase — static canonical templates.
+#
+# The pre_confirm phase was previously rendered through ``complete_escalation_
+# openai_turn`` together with the handoff phases. That gave the model enough
+# rope to (a) ignore "Do NOT mention a ticket number / email", (b) compromise
+# between the global handoff rule and the pre_confirm-only rule and emit BOTH
+# in one message ("Ваш запрос передан … Хотите, чтобы я передал?"). The two
+# bugs in PR-feedback / production screenshots both traced back to that
+# overlap.
+#
+# Pre-confirm content has essentially zero variation by case — it's the same
+# one-sentence question every time. We render it via the same canonical-text
+# + ``localize_text_to_language_result`` pipeline used for the fallback
+# message, which kills the prompt-mixing problem at the root. The yes/no
+# classification stays on the LLM, but in a separate narrow call
+# (``classify_pre_confirm_reply``) whose only output is the decision label —
+# the model has no way to leak a handoff-style ``message_to_user`` because
+# the function doesn't ask for one.
+# ---------------------------------------------------------------------------
+
+PRE_CONFIRM_QUESTION_EN = (
+    "Would you like me to forward your request to our support team "
+    "so they can reply by email?"
+)
+PRE_CONFIRM_CLARIFY_EN = (
+    "Just to confirm — should I forward your request to our support team "
+    "for an email reply?"
+)
+PRE_CONFIRM_DECLINED_EN = (
+    "Got it, I won't forward this to support. Let me know if you need "
+    "anything else here in the chat."
+)
+
 
 class EscalationLlmResult(BaseModel):
     message_to_user: str
     followup_decision: Literal["yes", "no", "unclear"] | None = None
     tokens_used: int = 0
+
+
+def render_pre_confirm_text(
+    *,
+    variant: Literal["initial", "clarify", "declined"],
+    response_language: str,
+    api_key: str,
+    tenant_id: str | None = None,
+    bot_id: str | None = None,
+    chat_id: str | None = None,
+) -> EscalationLlmResult:
+    """Localize one of the canonical pre_confirm templates.
+
+    Always emits an ``EscalationLlmResult`` with ``followup_decision=None``
+    so callers that store ``out.message_to_user`` and ``out.tokens_used``
+    keep working unchanged. The variant chooses which canonical phrase
+    gets localized — initial question, repeat after an ambiguous reply,
+    or polite acknowledgement of a decline.
+    """
+    canonical = {
+        "initial": PRE_CONFIRM_QUESTION_EN,
+        "clarify": PRE_CONFIRM_CLARIFY_EN,
+        "declined": PRE_CONFIRM_DECLINED_EN,
+    }[variant]
+    localization = localize_text_to_language_result(
+        canonical_text=canonical,
+        target_language=response_language,
+        api_key=api_key,
+        operation=f"pre_confirm_{variant}",
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        chat_id=chat_id,
+    )
+    return EscalationLlmResult(
+        message_to_user=localization.text,
+        followup_decision=None,
+        tokens_used=localization.tokens_used,
+    )
+
+
+_PRE_CONFIRM_CLASSIFIER_SYSTEM = (
+    "You are a strict classifier. The chat assistant just asked the user "
+    "whether to forward their request to a human support team. Decide "
+    "whether the latest user message is a direct answer to THAT confirmation "
+    "question.\n"
+    "\n"
+    "Return JSON with a single key `decision`, whose value is one of:\n"
+    '  - "yes"     — user clearly accepts the handoff. Apply the same '
+    "rule across languages: short affirmatives, polite acceptances, or "
+    'explicit "please escalate / forward me to support" all count.\n'
+    '  - "no"      — user clearly declines. Apply across languages: '
+    'short negatives, "no thanks", "I\'ll figure it out", and the like.\n'
+    '  - "unclear" — user is hesitating or asking a meta-question about '
+    "the handoff itself.\n"
+    "  - null      — user said something substantive that is NOT a yes/no "
+    "answer (e.g. described a new problem, asked an unrelated question). "
+    "Use null whenever the message is not addressed to the confirmation "
+    "question.\n"
+    "\n"
+    'Output ONLY the JSON object, e.g. {"decision": "yes"}. No prose, '
+    "no extra fields, no localised text."
+)
+
+
+def classify_pre_confirm_reply(
+    *,
+    latest_user_text: str,
+    api_key: str,
+    model: str | None = None,
+    langfuse_observation: Any | None = None,
+) -> tuple[Literal["yes", "no", "unclear"] | None, int]:
+    """Narrow LLM call: only returns the yes/no/unclear/null decision.
+
+    Returns ``(decision, tokens_used)``. Never raises — defaults to
+    ``(None, 0)`` on any failure so the caller can fall through to the
+    re-ask path.
+    """
+    model_name = model or settings.escalation_model
+    _reasoning = is_reasoning_model(model_name)
+    messages = [
+        {"role": "system", "content": _PRE_CONFIRM_CLASSIFIER_SYSTEM},
+        {
+            "role": "user",
+            "content": f"LATEST_USER_MESSAGE:\n{latest_user_text}",
+        },
+    ]
+    try:
+        client = get_openai_client(api_key)
+        response = call_openai_with_retry(
+            "classify_pre_confirm_reply",
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **({} if _reasoning else {"temperature": 0}),
+                max_completion_tokens=20,
+                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+            ),
+            langfuse_observation=langfuse_observation,
+        )
+        raw = response.choices[0].message.content or "{}"
+        decision_raw = json.loads(raw).get("decision")
+        tokens = response.usage.total_tokens if response.usage else 0
+        if decision_raw in ("yes", "no", "unclear"):
+            return decision_raw, tokens  # type: ignore[return-value]
+        return None, tokens
+    except Exception as exc:
+        logger.warning("classify_pre_confirm_reply failed: %s", exc)
+        return None, 0
 
 
 ESCALATION_SYSTEM = """You are the same assistant as in the embedded support chat.

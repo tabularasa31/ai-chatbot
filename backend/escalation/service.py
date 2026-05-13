@@ -486,7 +486,7 @@ def _build_escalation_email_headers(
     if ticket.best_similarity_score is not None:
         headers["X-Chat9-Match-Score"] = f"{ticket.best_similarity_score:.4f}"
     kyc_extras: dict[str, Any] = {}
-    for key, value in (user_ctx or {}).items():
+    for key, value in user_ctx.items():
         if key in _KYC_IDENTITY_KEYS:
             continue
         if value is None or value == "":

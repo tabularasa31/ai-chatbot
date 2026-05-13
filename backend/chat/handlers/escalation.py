@@ -440,14 +440,16 @@ class EscalationStateMachine(PipelineHandler):
                 esc_trigger = EscalationTrigger(
                     pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
                 )
-                # Use the current user turn as primary_question — it carries
-                # more substantive context than the original trigger fragment
-                # ("call a specialist", "I want a human"). The trigger phrase
-                # still appears in the email transcript via the conversation
-                # history, so no information is lost.
+                # Keep `pre_confirm_ctx["primary_question"]` as the canonical
+                # ticket question: for low-similarity pre-confirm it holds the
+                # actual user query (e.g. "where do I download invoices"),
+                # whereas `ctx.question` on this turn is typically just the
+                # bare confirmation ("yes"). The substantive context from the
+                # current turn is surfaced separately via `latest_user_text`,
+                # which appends it to the email transcript.
                 ticket = _svc.create_escalation_ticket(
                     ctx.tenant_id,
-                    ctx.question or pre_confirm_ctx.get("primary_question") or "",
+                    pre_confirm_ctx.get("primary_question") or ctx.question,
                     esc_trigger,
                     ctx.db,
                     chat_id=chat.id,

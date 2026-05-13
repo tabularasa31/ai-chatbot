@@ -23,7 +23,6 @@ from backend.core.crypto import decrypt_value, encrypt_value
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
 from backend.email.service import send_email
-from backend.models.base import _utcnow
 from backend.models import (
     Chat,
     EscalationPriority,
@@ -38,6 +37,7 @@ from backend.models import (
     TenantProfile,
     User,
 )
+from backend.models.base import _utcnow
 from backend.observability.cache_metrics import record_hit, record_miss
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict

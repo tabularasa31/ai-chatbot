@@ -1550,6 +1550,32 @@ def test_notify_ticket_update_threads_under_initial_notify(
     assert ticket.last_notified_message_id == msg.id
 
 
+def test_notify_ticket_update_stores_naive_last_notified_at(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Same naive-UTC contract as the initial notify (Sentry
+    ``PYTHON-FASTAPI-H``): ``_notify_tenant_ticket_update`` also assigns to
+    ``ticket.last_notified_at`` (line 821 after the ``send_email`` call).
+    Computes ``now = datetime.now(UTC)`` for the debounce arithmetic, then
+    writes ``_utcnow()`` to the column — aware-for-math, naive-for-storage.
+    """
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="naive-update@example.com"
+    )
+    _persist_user_message(db_session, chat, "follow-up turn after handoff")
+
+    with patch(
+        "backend.escalation.service.send_email",
+        return_value="<update-msgid@example.com>",
+    ):
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.last_notified_at is not None
+    assert ticket.last_notified_at.tzinfo is None
+
+
 def test_notify_ticket_update_sends_only_new_turns_as_delta(
     tenant: TestClient,
     db_session: Session,

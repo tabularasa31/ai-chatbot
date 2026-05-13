@@ -818,7 +818,11 @@ def _notify_tenant_ticket_update(
         # eligible user turn.
         return
 
-    ticket.last_notified_at = now
+    # ``now`` above is timezone-aware (UTC) and used only for debounce
+    # arithmetic. The column is ``DateTime`` (naive, no ``timezone=True``);
+    # writing aware values crashes asyncpg with ``DataError`` and rolls back
+    # the transaction. See ``models/base._utcnow`` for the project policy.
+    ticket.last_notified_at = _utcnow()
     if new_msgs:
         ticket.last_notified_message_id = new_msgs[-1].id
     db.add(ticket)

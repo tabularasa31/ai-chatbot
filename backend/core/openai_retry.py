@@ -77,121 +77,48 @@ def call_openai_with_retry(
         except Exception as exc:
             classified = classify_openai_error(exc)
             if classified.kind == OpenAIFailureKind.PERMANENT:
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
+                _stamp_failure_observation(
+                    langfuse_observation, attempt=attempt, classified=classified
                 )
                 raise
 
             elapsed = time.monotonic() - started
-            if classified.kind == OpenAIFailureKind.TIMEOUT:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="timeout_no_retry",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-
             remaining = total_budget - elapsed
-            if (
-                classified.kind == OpenAIFailureKind.RATE_LIMIT
-                and classified.retry_after_seconds is not None
-                and classified.retry_after_seconds > total_budget
-            ):
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="rate_limit_over_budget",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-            if attempt >= max_attempts or remaining <= 0:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="max_attempts" if attempt >= max_attempts else "budget_exhausted",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-
-            delay = _delay_for_user(
+            exhaust_reason = _classify_exhaustion(
                 classified=classified,
                 attempt=attempt,
-                budget_seconds=total_budget,
+                max_attempts=max_attempts,
+                remaining=remaining,
+                total_budget=total_budget,
             )
-            if delay > remaining:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
+            delay: float | None = None
+            if exhaust_reason is None:
+                delay = _delay_for_user(
+                    classified=classified,
+                    attempt=attempt,
+                    budget_seconds=total_budget,
+                )
+                if delay > remaining:
+                    exhaust_reason = "delay_over_remaining"
+
+            if exhaust_reason is not None:
+                _finalize_exhaustion(
                     operation=operation,
                     attempt=attempt,
                     elapsed=elapsed,
                     classified=classified,
-                    reason="delay_over_remaining",
+                    reason=exhaust_reason,
                     tenant_id=tenant_id,
                     bot_id=bot_id,
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
+                    langfuse_observation=langfuse_observation,
                 )
                 raise
 
+            assert delay is not None  # exhaust_reason is None ⇒ delay was set
             delay = min(delay, max(remaining - _USER_BUDGET_HEADROOM_SECONDS, 0.0))
             logger.info(
                 "openai_user_retry",
@@ -276,121 +203,48 @@ async def async_call_openai_with_retry(
         except Exception as exc:
             classified = classify_openai_error(exc)
             if classified.kind == OpenAIFailureKind.PERMANENT:
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
+                _stamp_failure_observation(
+                    langfuse_observation, attempt=attempt, classified=classified
                 )
                 raise
 
             elapsed = time.monotonic() - started
-            if classified.kind == OpenAIFailureKind.TIMEOUT:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="timeout_no_retry",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-
             remaining = total_budget - elapsed
-            if (
-                classified.kind == OpenAIFailureKind.RATE_LIMIT
-                and classified.retry_after_seconds is not None
-                and classified.retry_after_seconds > total_budget
-            ):
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="rate_limit_over_budget",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-            if attempt >= max_attempts or remaining <= 0:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
-                    operation=operation,
-                    attempt=attempt,
-                    elapsed=elapsed,
-                    classified=classified,
-                    reason="max_attempts" if attempt >= max_attempts else "budget_exhausted",
-                    tenant_id=tenant_id,
-                    bot_id=bot_id,
-                    exc=exc,
-                    endpoint=endpoint,
-                    call_type=call_type,
-                    emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
-                )
-                raise
-
-            delay = _delay_for_user(
+            exhaust_reason = _classify_exhaustion(
                 classified=classified,
                 attempt=attempt,
-                budget_seconds=total_budget,
+                max_attempts=max_attempts,
+                remaining=remaining,
+                total_budget=total_budget,
             )
-            if delay > remaining:
-                _log_retry_exhausted(operation, attempt, elapsed, classified)
-                _emit_retry_exhausted(
+            delay: float | None = None
+            if exhaust_reason is None:
+                delay = _delay_for_user(
+                    classified=classified,
+                    attempt=attempt,
+                    budget_seconds=total_budget,
+                )
+                if delay > remaining:
+                    exhaust_reason = "delay_over_remaining"
+
+            if exhaust_reason is not None:
+                _finalize_exhaustion(
                     operation=operation,
                     attempt=attempt,
                     elapsed=elapsed,
                     classified=classified,
-                    reason="delay_over_remaining",
+                    reason=exhaust_reason,
                     tenant_id=tenant_id,
                     bot_id=bot_id,
                     exc=exc,
                     endpoint=endpoint,
                     call_type=call_type,
                     emit_chat_failed=emit_chat_failed,
-                )
-                _stamp_observation(
-                    langfuse_observation,
-                    attempt_count=attempt,
-                    was_retried=attempt > 1,
-                    retry_exhausted=True,
-                    retry_failure_kind=classified.kind.value,
+                    langfuse_observation=langfuse_observation,
                 )
                 raise
 
+            assert delay is not None  # exhaust_reason is None ⇒ delay was set
             delay = min(delay, max(remaining - _USER_BUDGET_HEADROOM_SECONDS, 0.0))
             logger.info(
                 "openai_user_retry",
@@ -428,6 +282,99 @@ async def async_call_openai_with_retry(
     if last_exc is not None:  # pragma: no cover
         raise last_exc
     raise RuntimeError("async_openai_retry_unreachable")
+
+
+def _classify_exhaustion(
+    *,
+    classified: ClassifiedError,
+    attempt: int,
+    max_attempts: int,
+    remaining: float,
+    total_budget: float,
+) -> str | None:
+    """Return the exhaustion reason string, or ``None`` if a retry is viable.
+
+    Mirrors the original 4 hard-stop branches in the retry loop:
+    ``timeout_no_retry`` / ``rate_limit_over_budget`` / ``max_attempts`` /
+    ``budget_exhausted``. ``delay_over_remaining`` is detected by the caller
+    after ``_delay_for_user`` returns, since it depends on the computed delay.
+    """
+    if classified.kind == OpenAIFailureKind.TIMEOUT:
+        return "timeout_no_retry"
+    if (
+        classified.kind == OpenAIFailureKind.RATE_LIMIT
+        and classified.retry_after_seconds is not None
+        and classified.retry_after_seconds > total_budget
+    ):
+        return "rate_limit_over_budget"
+    if attempt >= max_attempts:
+        return "max_attempts"
+    if remaining <= 0:
+        return "budget_exhausted"
+    return None
+
+
+def _finalize_exhaustion(
+    *,
+    operation: str,
+    attempt: int,
+    elapsed: float,
+    classified: ClassifiedError,
+    reason: str,
+    tenant_id: str | None,
+    bot_id: str | None,
+    exc: Exception,
+    endpoint: str | None,
+    call_type: str,
+    emit_chat_failed: bool,
+    langfuse_observation: Any | None,
+) -> None:
+    """Single exit point for transient/timeout/rate-limit/budget exhaustion.
+
+    Logs the warning, emits the PostHog ``openai_retry.exhausted`` event, and
+    stamps the Langfuse observation. Caller re-raises after returning — kept
+    separate so the original ``raise`` preserves the active traceback.
+    """
+    _log_retry_exhausted(operation, attempt, elapsed, classified)
+    _emit_retry_exhausted(
+        operation=operation,
+        attempt=attempt,
+        elapsed=elapsed,
+        classified=classified,
+        reason=reason,
+        tenant_id=tenant_id,
+        bot_id=bot_id,
+        exc=exc,
+        endpoint=endpoint,
+        call_type=call_type,
+        emit_chat_failed=emit_chat_failed,
+    )
+    _stamp_failure_observation(
+        langfuse_observation, attempt=attempt, classified=classified
+    )
+
+
+def _stamp_failure_observation(
+    observation: Any | None,
+    *,
+    attempt: int,
+    classified: ClassifiedError,
+) -> None:
+    """Stamp the observation with retry-exhaustion metadata.
+
+    Used both for PERMANENT errors (where no retry was ever attempted on this
+    failure kind) and for transient exhaustion paths. Always sets
+    ``retry_exhausted=True``; ``was_retried`` reflects the actual attempt
+    counter so PERMANENT-on-first-attempt is distinguishable from
+    PERMANENT-after-N-attempts.
+    """
+    _stamp_observation(
+        observation,
+        attempt_count=attempt,
+        was_retried=attempt > 1,
+        retry_exhausted=True,
+        retry_failure_kind=classified.kind.value,
+    )
 
 
 def _stamp_observation(observation: Any | None, **kvs: Any) -> None:

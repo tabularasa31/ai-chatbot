@@ -65,6 +65,16 @@ class SpanHandle(ABC):
     ) -> None:
         raise NotImplementedError
 
+    def update_metadata(self, **kvs: Any) -> None:
+        """Merge ``kvs`` into the span's metadata.
+
+        Default is a no-op so test doubles / fake handles don't have to
+        implement this. Concrete handles override to either push the update
+        to the Langfuse SDK in-flight (for live spans) or stash for the queued
+        ``.end()`` (for deferred spans).
+        """
+        return None
+
 
 class GenerationHandle(SpanHandle, ABC):
     """Interface for generation-like objects."""
@@ -228,6 +238,12 @@ class _NoOpTrace(TraceHandle):
 @dataclass
 class _LangfuseSpan(SpanHandle):
     span_obj: Any
+    # Local accumulator of all metadata ever set on this observation. We always
+    # send the merged dict to the SDK so that ``update_metadata`` cannot
+    # accidentally clobber the rich initial metadata (prompt / cache / model
+    # context for ``llm-generation``) — independent of whether the Langfuse
+    # SDK version treats ``update(metadata=...)`` as merge or replace.
+    _metadata: dict[str, Any] | None = None
 
     def end(
         self,
@@ -241,17 +257,25 @@ class _LangfuseSpan(SpanHandle):
         if output is not None:
             payload["output"] = output
         if metadata:
-            payload["metadata"] = metadata
+            payload["metadata"] = _merge_observation_metadata(self._metadata, metadata)
         if level is not None:
             payload["level"] = level
         if status_message is not None:
             payload["status_message"] = status_message
         _safe_invoke(self.span_obj.end, **payload)
 
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        self._metadata = _merge_observation_metadata(self._metadata, kvs)
+        _safe_invoke(self.span_obj.update, metadata=dict(self._metadata))
+
 
 @dataclass
 class _LangfuseGeneration(GenerationHandle):
     generation_obj: Any
+    # Local accumulator — see ``_LangfuseSpan._metadata`` for rationale.
+    _metadata: dict[str, Any] | None = None
 
     def end(
         self,
@@ -266,7 +290,7 @@ class _LangfuseGeneration(GenerationHandle):
         if output is not None:
             payload["output"] = output
         if metadata:
-            payload["metadata"] = metadata
+            payload["metadata"] = _merge_observation_metadata(self._metadata, metadata)
         if usage:
             payload["usage"] = usage
         if level is not None:
@@ -274,6 +298,31 @@ class _LangfuseGeneration(GenerationHandle):
         if status_message is not None:
             payload["status_message"] = status_message
         _safe_invoke(self.generation_obj.end, **payload)
+
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        self._metadata = _merge_observation_metadata(self._metadata, kvs)
+        _safe_invoke(self.generation_obj.update, metadata=dict(self._metadata))
+
+
+def _merge_observation_metadata(
+    base: dict[str, Any] | None, extra: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Shallow-merge ``extra`` into ``base`` and return a new dict.
+
+    ``extra`` keys override ``base``. Used by the live Langfuse handles to
+    accumulate metadata locally so each ``update_metadata`` / ``end`` call
+    sends the full superset to the SDK — safe regardless of whether the SDK
+    version merges or replaces ``metadata`` on observation updates.
+    """
+    if not base and not extra:
+        return {}
+    if not base:
+        return dict(extra or {})
+    if not extra:
+        return dict(base)
+    return {**base, **extra}
 
 
 @dataclass
@@ -296,7 +345,10 @@ class _LangfuseTrace(TraceHandle):
         )
         if span_obj is None:
             return _NoOpSpan()
-        return _LangfuseSpan(span_obj)
+        return _LangfuseSpan(
+            span_obj=span_obj,
+            _metadata=dict(metadata) if metadata else None,
+        )
 
     def generation(
         self,
@@ -315,7 +367,10 @@ class _LangfuseTrace(TraceHandle):
         )
         if generation_obj is None:
             return _NoOpGeneration()
-        return _LangfuseGeneration(generation_obj)
+        return _LangfuseGeneration(
+            generation_obj=generation_obj,
+            _metadata=dict(metadata) if metadata else None,
+        )
 
     def update(
         self,
@@ -375,6 +430,12 @@ class _DeferredSpan(SpanHandle):
             }
         )
 
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        existing = self._kwargs.get("metadata") or {}
+        self._kwargs["metadata"] = {**existing, **kvs}
+
 
 class _DeferredGeneration(GenerationHandle):
     def __init__(self, trace: _DeferredTrace, *, kwargs: dict[str, Any]) -> None:
@@ -403,6 +464,12 @@ class _DeferredGeneration(GenerationHandle):
                 },
             }
         )
+
+    def update_metadata(self, **kvs: Any) -> None:
+        if not kvs:
+            return
+        existing = self._kwargs.get("metadata") or {}
+        self._kwargs["metadata"] = {**existing, **kvs}
 
 
 class _DeferredTrace(TraceHandle):

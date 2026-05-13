@@ -241,6 +241,7 @@ def check_relevance_with_profile(
                 response_format={"type": "json_object"},
             ),
             endpoint="chat.completions",
+            langfuse_observation=span,
         )
         return _parse_llm_response(response.choices[0].message.content)
 
@@ -357,6 +358,7 @@ async def async_check_relevance_with_profile(
                 response_format={"type": "json_object"},
             ),
             endpoint="chat.completions",
+            langfuse_observation=span,
         )
         return _parse_llm_response(response.choices[0].message.content)
 

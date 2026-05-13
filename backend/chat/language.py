@@ -8,6 +8,7 @@ import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
@@ -778,6 +779,7 @@ def generate_greeting_in_language_result(
     api_key: str | None,
     fallback_text: str,
     operation: str = "generate_greeting",
+    langfuse_observation: Any | None = None,
 ) -> LocalizationResult:
     """Generate a support-bot greeting directly in target_language.
 
@@ -817,6 +819,7 @@ def generate_greeting_in_language_result(
                     },
                 ],
             ),
+            langfuse_observation=langfuse_observation,
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(operation=operation, target_language=normalized_target, tokens=tokens_used)
@@ -867,6 +870,7 @@ def translate_text_result(
     source_text: str,
     target_language: str,
     api_key: str | None,
+    langfuse_observation: Any | None = None,
 ) -> LocalizationResult:
     if not source_text.strip():
         return LocalizationResult(text=source_text, tokens_used=0)
@@ -905,6 +909,7 @@ def translate_text_result(
                     },
                 ],
             ),
+            langfuse_observation=langfuse_observation,
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(operation="translate", target_language=normalized_target, tokens=tokens_used)
@@ -1067,6 +1072,7 @@ def _invoke_localize_llm(
     tenant_id: str | None = None,
     bot_id: str | None = None,
     chat_id: str | None = None,
+    langfuse_observation: Any | None = None,
 ) -> LocalizationResult:
     started_at = time.monotonic()
     try:
@@ -1092,6 +1098,7 @@ def _invoke_localize_llm(
                     },
                 ],
             ),
+            langfuse_observation=langfuse_observation,
         )
         tokens_used = response.usage.total_tokens if response.usage else 0
         log_llm_tokens(operation=operation, target_language=target_language, tokens=tokens_used)

@@ -497,3 +497,221 @@ def test_deferred_trace_logs_warning_when_materialize_fails(monkeypatch, caplog)
     with caplog.at_level(logging.WARNING, logger="backend.observability.service"):
         trace.promote()
     assert not any("dropping" in r.message for r in caplog.records)
+
+
+# ── update_metadata on span/generation handles ───────────────────────────────
+
+
+class _RecordingSDKObservation:
+    """Captures the kwargs an underlying Langfuse SDK update() would receive."""
+
+    def __init__(self) -> None:
+        self.update_calls: list[dict[str, object]] = []
+
+    def update(self, **kwargs: object) -> None:
+        self.update_calls.append(dict(kwargs))
+
+    def end(self, **kwargs: object) -> None:
+        return None
+
+
+def test_langfuse_span_update_metadata_invokes_sdk_update() -> None:
+    from backend.observability.service import _LangfuseSpan
+
+    sdk = _RecordingSDKObservation()
+    span = _LangfuseSpan(span_obj=sdk)
+
+    span.update_metadata(attempt_count=2, was_retried=True)
+
+    assert sdk.update_calls == [
+        {"metadata": {"attempt_count": 2, "was_retried": True}}
+    ]
+
+
+def test_langfuse_generation_update_metadata_invokes_sdk_update() -> None:
+    from backend.observability.service import _LangfuseGeneration
+
+    sdk = _RecordingSDKObservation()
+    gen = _LangfuseGeneration(generation_obj=sdk)
+
+    gen.update_metadata(attempt_count=3, was_retried=True)
+
+    assert sdk.update_calls == [
+        {"metadata": {"attempt_count": 3, "was_retried": True}}
+    ]
+
+
+def test_langfuse_update_metadata_empty_kwargs_is_noop() -> None:
+    from backend.observability.service import _LangfuseSpan
+
+    sdk = _RecordingSDKObservation()
+    span = _LangfuseSpan(span_obj=sdk)
+
+    span.update_metadata()  # no kvs
+
+    assert sdk.update_calls == []
+
+
+def test_noop_span_update_metadata_does_nothing() -> None:
+    from backend.observability.service import _NoOpSpan
+
+    # Must not raise — no underlying object to call.
+    _NoOpSpan().update_metadata(attempt_count=1)
+
+
+def test_deferred_span_update_metadata_merges_into_queued_kwargs() -> None:
+    from backend.observability.service import _DeferredSpan, _DeferredTrace
+
+    deferred_trace = _DeferredTrace.__new__(_DeferredTrace)
+    recorded_ops: list[dict[str, object]] = []
+    deferred_trace._record = recorded_ops.append  # type: ignore[attr-defined,method-assign]
+
+    initial_metadata = {"tenant_id": "abc"}
+    span = _DeferredSpan(
+        deferred_trace,
+        kind="span",
+        kwargs={"name": "guard_relevance", "input": None, "metadata": initial_metadata},
+    )
+
+    span.update_metadata(attempt_count=2, was_retried=True)
+    span.end(output={"relevant": True})
+
+    assert len(recorded_ops) == 1
+    queued = recorded_ops[0]
+    assert queued["kwargs"]["metadata"] == {
+        "tenant_id": "abc",
+        "attempt_count": 2,
+        "was_retried": True,
+    }
+
+
+def test_langfuse_span_update_metadata_preserves_initial_metadata() -> None:
+    """SDK update must receive the merged superset, not just the retry keys.
+
+    Regression for the codex review concern: if the Langfuse SDK treats
+    `metadata` updates as replacement (vs merge), stamping only retry fields
+    would silently clobber the prompt/cache/model context attached at
+    creation time.
+    """
+    from backend.observability.service import _LangfuseSpan
+
+    sdk = _RecordingSDKObservation()
+    initial = {"tenant_id": "abc", "stage": "guard_relevance"}
+    span = _LangfuseSpan(span_obj=sdk, _metadata=dict(initial))
+
+    span.update_metadata(attempt_count=2, was_retried=True)
+
+    assert sdk.update_calls == [
+        {
+            "metadata": {
+                "tenant_id": "abc",
+                "stage": "guard_relevance",
+                "attempt_count": 2,
+                "was_retried": True,
+            }
+        }
+    ]
+
+
+def test_langfuse_generation_update_metadata_preserves_initial_metadata() -> None:
+    from backend.observability.service import _LangfuseGeneration
+
+    sdk = _RecordingSDKObservation()
+    initial = {
+        "prompt_cache_prefix_tokens_estimate": 2048,
+        "temperature": 0.2,
+    }
+    gen = _LangfuseGeneration(generation_obj=sdk, _metadata=dict(initial))
+
+    gen.update_metadata(attempt_count=1, was_retried=False)
+
+    assert sdk.update_calls == [
+        {
+            "metadata": {
+                "prompt_cache_prefix_tokens_estimate": 2048,
+                "temperature": 0.2,
+                "attempt_count": 1,
+                "was_retried": False,
+            }
+        }
+    ]
+
+
+def test_langfuse_span_update_metadata_accumulates_across_calls() -> None:
+    """Two successive updates each see the running merged superset."""
+    from backend.observability.service import _LangfuseSpan
+
+    sdk = _RecordingSDKObservation()
+    span = _LangfuseSpan(span_obj=sdk, _metadata={"tenant_id": "abc"})
+
+    span.update_metadata(attempt_count=1)
+    span.update_metadata(retry_exhausted=True, retry_failure_kind="permanent")
+
+    assert sdk.update_calls == [
+        {"metadata": {"tenant_id": "abc", "attempt_count": 1}},
+        {
+            "metadata": {
+                "tenant_id": "abc",
+                "attempt_count": 1,
+                "retry_exhausted": True,
+                "retry_failure_kind": "permanent",
+            }
+        },
+    ]
+
+
+def test_langfuse_trace_span_factory_captures_initial_metadata() -> None:
+    """The trace.span() factory must seed the handle's local metadata
+    accumulator so update_metadata can later merge against it."""
+    from backend.observability.service import _LangfuseTrace
+
+    sdk_observation = _RecordingSDKObservation()
+
+    class _FakeTraceObj:
+        def span(self, **_kwargs):
+            return sdk_observation
+
+        def generation(self, **_kwargs):
+            return sdk_observation
+
+    trace = _LangfuseTrace(trace_obj=_FakeTraceObj(), tags=[])
+
+    span = trace.span(
+        name="guard_relevance",
+        input=None,
+        metadata={"tenant_id": "abc", "question_preview": "hi"},
+    )
+    span.update_metadata(attempt_count=1, was_retried=False)
+
+    assert sdk_observation.update_calls == [
+        {
+            "metadata": {
+                "tenant_id": "abc",
+                "question_preview": "hi",
+                "attempt_count": 1,
+                "was_retried": False,
+            }
+        }
+    ]
+
+
+def test_deferred_generation_update_metadata_merges_into_queued_kwargs() -> None:
+    from backend.observability.service import _DeferredGeneration, _DeferredTrace
+
+    deferred_trace = _DeferredTrace.__new__(_DeferredTrace)
+    recorded_ops: list[dict[str, object]] = []
+    deferred_trace._record = recorded_ops.append  # type: ignore[attr-defined,method-assign]
+
+    gen = _DeferredGeneration(
+        deferred_trace,
+        kwargs={"name": "llm-generation", "model": "x", "input": None, "metadata": None},
+    )
+
+    gen.update_metadata(attempt_count=1, was_retried=False)
+    gen.end(output="ok")
+
+    assert len(recorded_ops) == 1
+    assert recorded_ops[0]["kwargs"]["metadata"] == {
+        "attempt_count": 1,
+        "was_retried": False,
+    }

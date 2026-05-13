@@ -129,7 +129,11 @@ def should_escalate(
 
 
 def detect_human_request(
-    message: str, api_key: str, tenant_id: UUID | str | None = None
+    message: str,
+    api_key: str,
+    tenant_id: UUID | str | None = None,
+    *,
+    langfuse_observation: Any | None = None,
 ) -> bool:
     """Return True if the user is requesting to speak with a human agent.
 
@@ -185,6 +189,7 @@ def detect_human_request(
                 max_completion_tokens=20,
                 response_format={"type": "json_object"},
             ),
+            langfuse_observation=langfuse_observation,
         )
         raw = response.choices[0].message.content or "{}"
         return bool(json.loads(raw).get("human_request", False))

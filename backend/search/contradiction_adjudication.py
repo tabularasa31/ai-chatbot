@@ -7,7 +7,7 @@ import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from time import perf_counter
-from typing import Literal
+from typing import Any, Literal
 
 from backend.core.openai_client import get_openai_client
 from backend.core.openai_retry import call_openai_with_retry
@@ -209,6 +209,7 @@ def adjudicate_contradictions(
     max_facts: int,
     preview_chars: int,
     max_completion_tokens: int,
+    langfuse_observation: Any | None = None,
 ) -> ContradictionAdjudicationRun:
     """Adjudicate the first N contradiction facts in one JSON-only request."""
 
@@ -266,6 +267,7 @@ def adjudicate_contradictions(
                 max_completion_tokens=max_completion_tokens,
                 response_format={"type": "json_object"},
             ),
+            langfuse_observation=langfuse_observation,
         )
         raw_content = response.choices[0].message.content or ""
         parsed = json.loads(raw_content)

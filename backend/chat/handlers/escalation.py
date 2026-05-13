@@ -29,7 +29,9 @@ from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, Pipeline
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
+    _notify_tenant_ticket_update,
     _set_escalation_clarify_flag,
+    advance_notification_marker_to_current,
     apply_collected_contact_email,
     get_latest_escalation_ticket_for_chat,
     parse_contact_email,
@@ -188,7 +190,7 @@ class EscalationStateMachine(PipelineHandler):
                     awaiting_email_span.end(
                         output={"ticket_found": True, "email_captured": True}
                     )
-                return _svc._escalation_turn_response(
+                outcome = _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -202,6 +204,22 @@ class EscalationStateMachine(PipelineHandler):
                     escalated=True,
                     ticket_number=ticket.ticket_number,
                 )
+                # The initial notify above already bundled this turn into the
+                # email body via `latest_user_text`. Advance the marker past
+                # the just-persisted message so a future follow-up notify
+                # doesn't re-send it under the threaded reply.
+                try:
+                    ctx.db.refresh(ticket)
+                    advance_notification_marker_to_current(ticket, ctx.db)
+                    ctx.db.commit()
+                except Exception as marker_exc:
+                    logger.warning(
+                        "notify marker advance failed (ticket=%s): %s",
+                        ticket.ticket_number,
+                        marker_exc,
+                    )
+                    ctx.db.rollback()
+                return outcome
             msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
             out = _svc.complete_escalation_openai_turn(
                 phase=EscalationPhase.email_parse_failed,
@@ -308,11 +326,16 @@ class EscalationStateMachine(PipelineHandler):
                     outcome="resolved",
                 )
                 return outcome
+            # Unclear means the user wrote something other than a bare yes/no —
+            # i.e. additional context for the ticket. Forward it to support as
+            # a threaded follow-up email. Bare yes/no above is administrative
+            # for the bot only; not useful for support and intentionally
+            # skipped to avoid noisy update emails.
             _set_escalation_clarify_flag(chat)
             ctx.db.add(chat)
             if followup_span is not None:
                 followup_span.end(output={"decision": decision, "chat_ended": False})
-            return _svc._escalation_turn_response(
+            outcome = _svc._escalation_turn_response(
                 db=ctx.db,
                 chat=chat,
                 tenant_id=ctx.tenant_id,
@@ -325,6 +348,17 @@ class EscalationStateMachine(PipelineHandler):
                 chat_ended=False,
                 escalated=True,
             )
+            try:
+                _notify_tenant_ticket_update(ticket, ctx.db)
+                ctx.db.commit()
+            except Exception as notify_exc:
+                logger.warning(
+                    "follow-up notify failed (ticket=%s): %s",
+                    ticket.ticket_number,
+                    notify_exc,
+                )
+                ctx.db.rollback()
+            return outcome
         except Exception as exc:
             if followup_span is not None:
                 followup_span.end(
@@ -496,7 +530,7 @@ class EscalationStateMachine(PipelineHandler):
                     plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
                     priority=ticket.priority if ticket is not None else None,
                 )
-                return _svc._escalation_turn_response(
+                outcome = _svc._escalation_turn_response(
                     db=ctx.db,
                     chat=chat,
                     tenant_id=ctx.tenant_id,
@@ -510,6 +544,21 @@ class EscalationStateMachine(PipelineHandler):
                     escalated=True,
                     ticket_number=ticket.ticket_number,
                 )
+                # `create_escalation_ticket` above sent the initial notify with
+                # this turn bundled via `latest_user_text`; advance the marker
+                # past the just-persisted message to prevent re-send.
+                try:
+                    ctx.db.refresh(ticket)
+                    advance_notification_marker_to_current(ticket, ctx.db)
+                    ctx.db.commit()
+                except Exception as marker_exc:
+                    logger.warning(
+                        "notify marker advance failed (ticket=%s): %s",
+                        ticket.ticket_number,
+                        marker_exc,
+                    )
+                    ctx.db.rollback()
+                return outcome
 
             if decision == "no":
                 chat.escalation_pre_confirm_pending = False

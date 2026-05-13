@@ -18,7 +18,7 @@ def send_email(
     *,
     reply_to: str | None = None,
     extra_headers: dict[str, str] | None = None,
-) -> None:
+) -> str | None:
     """Send email via Brevo HTTP API.
 
     - If BREVO_API_KEY or EMAIL_FROM is not configured, log email in dev mode.
@@ -29,6 +29,16 @@ def send_email(
       Mail clients quote the body when the recipient hits Reply but do NOT
       quote custom headers — this is the right channel for internal metadata
       that must not leak back to the end user via a reply-thread.
+
+    Return contract (used by escalation follow-up threading):
+      * ``None`` — send failed (HTTP 4xx/5xx, network error, exception).
+        Callers must NOT advance any "already notified" state on ``None``,
+        or the failed turn(s) will be silently dropped.
+      * ``""`` — send succeeded but no Message-ID is available (dev-mode
+        no-op, or Brevo response without ``messageId``).
+      * ``"<...>"`` — send succeeded with the RFC 5322 ``Message-ID`` from
+        Brevo. Used as the anchor for ``In-Reply-To`` / ``References`` on
+        subsequent threaded update emails.
     """
     if not settings.BREVO_API_KEY or not settings.EMAIL_FROM:
         # Dev fallback: log email instead of sending
@@ -40,7 +50,7 @@ def send_email(
             extra_headers,
             body,
         )
-        return
+        return ""
 
     payload: dict = {
         "sender": {"email": settings.EMAIL_FROM},
@@ -69,5 +79,11 @@ def send_email(
                 resp.status_code,
                 resp.text,
             )
+            return None
+        try:
+            return resp.json().get("messageId") or ""
+        except ValueError:
+            return ""
     except Exception as e:
         logger.warning("Failed to send email via Brevo: %s", e)
+        return None

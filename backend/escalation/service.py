@@ -500,6 +500,12 @@ def _build_escalation_email_headers(
     return headers
 
 
+# Window for collapsing rapid user keystrokes into a single follow-up email
+# to support. Keeps the support inbox readable when a user fires off three
+# short messages while typing out their context.
+_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS = 60
+
+
 def _notify_tenant_new_ticket(
     tenant: Tenant,
     ticket: EscalationTicket,
@@ -559,7 +565,7 @@ def _notify_tenant_new_ticket(
     # know from the bot's acknowledgement message.
     subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
     try:
-        send_email(
+        send_result = send_email(
             recipient,
             subject,
             body,
@@ -568,6 +574,246 @@ def _notify_tenant_new_ticket(
         )
     except Exception as e:
         logger.warning("Escalation email failed: %s", e)
+        return
+
+    if send_result is None:
+        # Brevo refused the send (HTTP 4xx/5xx) or the call raised internally.
+        # Do NOT advance any "already notified" markers — without this guard a
+        # failed initial notify would set ``last_notified_*`` while leaving
+        # ``notification_message_id`` empty, which makes every subsequent call
+        # to ``_notify_tenant_ticket_update`` skip (anchor missing) and
+        # permanently suppresses notifications for this ticket.
+        return
+
+    # Mark the high-water line for follow-up update emails. Empty-string
+    # ``send_result`` means the send succeeded but no Message-ID is available
+    # (dev-mode, or Brevo response without ``messageId``) — we still advance
+    # the marker so the initial-notify turns are not re-sent as delta later;
+    # the missing anchor will simply cause ``_notify_tenant_ticket_update`` to
+    # skip threaded updates, which is the right degraded behaviour.
+    now = datetime.now(UTC)
+    if isinstance(send_result, str) and send_result:
+        ticket.notification_message_id = send_result
+    ticket.last_notified_at = now
+    ticket.last_notified_message_id = _current_high_user_message_id(
+        ticket.chat_id, db, fallback_at=now
+    )
+    db.add(ticket)
+    db.flush()
+
+
+def _current_high_user_message_id(
+    chat_id: uuid.UUID | None,
+    db: Session,
+    *,
+    fallback_at: datetime,
+) -> uuid.UUID | None:
+    """ID of the most recent persisted user message for ``chat_id``.
+
+    Used to seed ``ticket.last_notified_message_id`` after the initial notify
+    so the first update email starts from turns that come *after* this one.
+    Returns ``None`` if the triggering user turn has not been persisted yet
+    (escalation notifications fire before ``_persist_turn`` runs) — the next
+    update will compare against ``last_notified_at`` instead.
+    """
+    if chat_id is None:
+        return None
+    row = (
+        db.query(Message.id)
+        .filter(Message.chat_id == chat_id, Message.role == MessageRole.user)
+        .order_by(Message.created_at.desc(), Message.id.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def advance_notification_marker_to_current(
+    ticket: EscalationTicket,
+    db: Session,
+) -> None:
+    """Advance ``last_notified_message_id`` to the chat's newest persisted user
+    message and ``last_notified_at`` to now.
+
+    Used after the initial-notify flow when the very turn that triggered the
+    notify is persisted *afterwards* (the initial email body already included
+    it via ``latest_user_text``). Without this fixup, the next call to
+    :func:`_notify_tenant_ticket_update` would treat the email-capture turn as
+    unsent delta and double-send it under the threaded reply.
+    """
+    if ticket.chat_id is None:
+        return
+    high_id = _current_high_user_message_id(ticket.chat_id, db, fallback_at=datetime.now(UTC))
+    if high_id is None:
+        return
+    ticket.last_notified_message_id = high_id
+    ticket.last_notified_at = datetime.now(UTC)
+    db.add(ticket)
+    db.flush()
+
+
+def _format_update_email_body(
+    turns: list[tuple[str, datetime | None]],
+) -> str:
+    """User-safe delta body for a follow-up notification.
+
+    Same constraint as the initial notify: support replies via plain Reply
+    and their mail client quotes the body back to the end user, so only
+    safe content goes here. Internal metadata stays in headers. Layout is
+    intentionally minimal — just the new user turns since last notify.
+    """
+    sep = "─" * 56
+    lines: list[str] = [
+        "Hello,",
+        "",
+        "The user added more context to their request:",
+        "",
+        sep,
+        "NEW MESSAGES (UTC)",
+    ]
+    last_date: date | None = None
+    for content, when in turns:
+        when_utc = _to_utc(when)
+        if when_utc is not None:
+            cur_date = when_utc.date()
+            if last_date is not None and cur_date != last_date:
+                lines.append(f"  ── {cur_date.isoformat()} ──")
+            last_date = cur_date
+            prefix = when_utc.strftime("%H:%M")
+        else:
+            prefix = "  · "
+        indented = content.replace("\n", "\n" + _TRANSCRIPT_WRAP_INDENT)
+        lines.append(f"  {prefix}  user: {indented}")
+    lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _notify_tenant_ticket_update(
+    ticket: EscalationTicket,
+    db: Session,
+    *,
+    extra_user_turn: tuple[str, datetime] | None = None,
+) -> None:
+    """Forward new user turns on an active ticket to the support inbox.
+
+    Threaded as a reply to the original notify email so support's mail client
+    groups it under the same conversation. Body is delta-only — just the user
+    turns since ``last_notified_message_id`` (or since ``last_notified_at`` if
+    the id was lost) — in the same user-safe format as the initial notify.
+
+    Skipped silently when any of the following hold:
+      * ticket is not open;
+      * the chat has ended;
+      * no contact email or recipient configured;
+      * the initial notify never went out (no anchor to thread under);
+      * we sent another update less than ``_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS``
+        ago — the next eligible user turn after the window will pick up the
+        skipped delta because ``last_notified_message_id`` has not moved;
+      * no new user turns to report.
+
+    ``extra_user_turn`` lets the caller include the current turn that has not
+    yet been persisted (escalation handlers run before ``_persist_turn``).
+    """
+    if ticket.status != EscalationStatus.open:
+        return
+    if not _is_valid_email(ticket.user_email):
+        return
+    if ticket.notification_message_id is None:
+        # Without the Message-ID anchor we cannot thread the update under the
+        # initial notify; sending a standalone email here would split the
+        # conversation in the support inbox. The initial notify also captures
+        # the full transcript so support already has this context.
+        return
+
+    chat: Chat | None = ticket.chat
+    if chat is not None and chat.ended_at is not None:
+        return
+
+    tenant = ticket.tenant
+    if tenant is None:
+        return
+    user = db.query(User).filter(User.tenant_id == tenant.id, User.role == "owner").first()
+    support_config = public_support_config_dict(
+        tenant.settings if isinstance(tenant.settings, dict) else None
+    )
+    recipient = support_config["l2_email"] or (user.email if user and user.email else None)
+    if not recipient:
+        return
+
+    now = datetime.now(UTC)
+    last_at = _to_utc(ticket.last_notified_at)
+    if last_at is not None and (now - last_at).total_seconds() < _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS:
+        return
+
+    # Build the delta: user turns persisted after the high-water mark.
+    boundary_at: datetime | None = None
+    if ticket.last_notified_message_id is not None:
+        boundary_row = (
+            db.query(Message.created_at)
+            .filter(Message.id == ticket.last_notified_message_id)
+            .first()
+        )
+        if boundary_row and boundary_row[0] is not None:
+            boundary_at = _to_utc(boundary_row[0])
+    if boundary_at is None:
+        boundary_at = last_at
+
+    new_msgs: list[Message] = []
+    if ticket.chat_id is not None:
+        q = db.query(Message).filter(
+            Message.chat_id == ticket.chat_id,
+            Message.role == MessageRole.user,
+        )
+        if boundary_at is not None:
+            q = q.filter(Message.created_at > boundary_at)
+        new_msgs = q.order_by(Message.created_at.asc(), Message.id.asc()).all()
+        # Filter out the boundary row itself in case the boundary timestamp
+        # is identical (SQLite has second-level precision in tests).
+        if ticket.last_notified_message_id is not None:
+            new_msgs = [m for m in new_msgs if m.id != ticket.last_notified_message_id]
+
+    turns: list[tuple[str, datetime | None]] = [
+        (_safe_message_content(m), m.created_at) for m in new_msgs
+    ]
+    if extra_user_turn is not None:
+        text, when = extra_user_turn
+        text = text.strip()
+        if text and not (turns and turns[-1][0].strip() == text):
+            turns.append((text, when))
+
+    turns = [(t, w) for t, w in turns if t and t.strip()]
+    if not turns:
+        return
+
+    body = _format_update_email_body(turns)
+    headers = _build_escalation_email_headers(ticket, chat=chat)
+    headers["In-Reply-To"] = ticket.notification_message_id
+    headers["References"] = ticket.notification_message_id
+    question_preview = _safe_ticket_question(ticket).replace("\n", " ").strip()[:60]
+    subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
+
+    try:
+        send_result = send_email(
+            recipient,
+            subject,
+            body,
+            reply_to=ticket.user_email,
+            extra_headers=headers,
+        )
+    except Exception as e:
+        logger.warning("Escalation follow-up email failed (ticket=%s): %s", ticket.ticket_number, e)
+        return
+
+    if send_result is None:
+        # Brevo refused the send. Do NOT advance the marker — the delta we
+        # just tried to deliver must remain eligible for a retry on the next
+        # eligible user turn.
+        return
+
+    ticket.last_notified_at = now
+    if new_msgs:
+        ticket.last_notified_message_id = new_msgs[-1].id
+    db.add(ticket)
+    db.flush()
 
 
 def create_escalation_ticket(

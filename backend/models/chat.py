@@ -185,6 +185,15 @@ class EscalationTicket(Base):
     resolution_text = Column(Text, nullable=True)
     resolved_at = Column(DateTime, nullable=True)
 
+    # Support-inbox notification threading (see escalation_followup_email_v1).
+    # `notification_message_id` is the Message-ID of the initial notify; update
+    # emails point In-Reply-To/References at it so they group as replies.
+    # `last_notified_at` / `last_notified_message_id` drive synchronous debounce
+    # and delta selection for follow-up update emails.
+    notification_message_id = Column(String(998), nullable=True)
+    last_notified_at = Column(DateTime, nullable=True)
+    last_notified_message_id = Column(PG_UUID(as_uuid=True), nullable=True)
+
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(
         DateTime,

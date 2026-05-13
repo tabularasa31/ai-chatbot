@@ -1623,6 +1623,63 @@ def test_advance_notification_marker_to_current_skips_persisted_turn(
     send_email_mock.assert_not_called()
 
 
+def test_notify_new_ticket_does_not_advance_markers_on_send_failure(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Brevo HTTP 4xx/5xx returns ``None`` from ``send_email``. The notify
+    function must NOT set ``last_notified_*`` in that case — leaving them
+    NULL keeps the ticket eligible for retry by ``apply_collected_contact_email``
+    and prevents permanent suppression via missing-anchor skip in updates.
+    """
+    cl, chat, ticket = _setup_followup_fixture(
+        tenant,
+        db_session,
+        owner_email="failure-owner@example.com",
+        notification_message_id=None,
+    )
+    assert ticket.last_notified_at is None
+    assert ticket.last_notified_message_id is None
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        send_email_mock.return_value = None
+        _notify_tenant_new_ticket(cl, ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.notification_message_id is None
+    assert ticket.last_notified_at is None
+    assert ticket.last_notified_message_id is None
+
+
+def test_notify_ticket_update_does_not_advance_marker_on_send_failure(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """A failed update send must leave ``last_notified_message_id`` untouched
+    so the delta is retried on the next eligible user turn.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    _, chat, ticket = _setup_followup_fixture(
+        tenant, db_session, owner_email="retry-owner@example.com"
+    )
+    ticket.last_notified_at = datetime.now(UTC) - timedelta(
+        seconds=_FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS + 30
+    )
+    db_session.add(ticket)
+    db_session.commit()
+    pre_marker = ticket.last_notified_message_id
+
+    _persist_user_message(db_session, chat, "context that fails to send")
+
+    with patch("backend.escalation.service.send_email") as send_email_mock:
+        send_email_mock.return_value = None
+        _notify_tenant_ticket_update(ticket, db_session)
+
+    db_session.refresh(ticket)
+    assert ticket.last_notified_message_id == pre_marker
+
+
 def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
     tenant: TestClient,
     db_session: Session,

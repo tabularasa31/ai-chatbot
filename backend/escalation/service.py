@@ -565,7 +565,7 @@ def _notify_tenant_new_ticket(
     # know from the bot's acknowledgement message.
     subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
     try:
-        message_id = send_email(
+        send_result = send_email(
             recipient,
             subject,
             body,
@@ -576,13 +576,24 @@ def _notify_tenant_new_ticket(
         logger.warning("Escalation email failed: %s", e)
         return
 
-    # Mark the high-water line for follow-up update emails. Even when Brevo
-    # didn't return a Message-ID (or we are in dev-mode), we still advance
-    # `last_notified_*` so update emails skip the turns already included in
-    # the initial notify's transcript.
+    if send_result is None:
+        # Brevo refused the send (HTTP 4xx/5xx) or the call raised internally.
+        # Do NOT advance any "already notified" markers — without this guard a
+        # failed initial notify would set ``last_notified_*`` while leaving
+        # ``notification_message_id`` empty, which makes every subsequent call
+        # to ``_notify_tenant_ticket_update`` skip (anchor missing) and
+        # permanently suppresses notifications for this ticket.
+        return
+
+    # Mark the high-water line for follow-up update emails. Empty-string
+    # ``send_result`` means the send succeeded but no Message-ID is available
+    # (dev-mode, or Brevo response without ``messageId``) — we still advance
+    # the marker so the initial-notify turns are not re-sent as delta later;
+    # the missing anchor will simply cause ``_notify_tenant_ticket_update`` to
+    # skip threaded updates, which is the right degraded behaviour.
     now = datetime.now(UTC)
-    if isinstance(message_id, str) and message_id:
-        ticket.notification_message_id = message_id
+    if isinstance(send_result, str) and send_result:
+        ticket.notification_message_id = send_result
     ticket.last_notified_at = now
     ticket.last_notified_message_id = _current_high_user_message_id(
         ticket.chat_id, db, fallback_at=now
@@ -781,7 +792,7 @@ def _notify_tenant_ticket_update(
     subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
 
     try:
-        send_email(
+        send_result = send_email(
             recipient,
             subject,
             body,
@@ -790,6 +801,12 @@ def _notify_tenant_ticket_update(
         )
     except Exception as e:
         logger.warning("Escalation follow-up email failed (ticket=%s): %s", ticket.ticket_number, e)
+        return
+
+    if send_result is None:
+        # Brevo refused the send. Do NOT advance the marker — the delta we
+        # just tried to deliver must remain eligible for a retry on the next
+        # eligible user turn.
         return
 
     ticket.last_notified_at = now

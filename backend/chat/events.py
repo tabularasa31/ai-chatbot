@@ -104,12 +104,14 @@ def _emit_chat_turn_event(
     tokens_output: int | None = None,
     model: str | None = None,
     plan_tier: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
     try:
         props: dict[str, Any] = {
             "chat_id": chat_id,
+            "session_id": session_id,
             "strategy": strategy,
             "reject_reason": reject_reason,
             "is_reject": is_reject,
@@ -131,6 +133,10 @@ def _emit_chat_turn_event(
             "cross_lingual_variants_count": cross_lingual_variants_count,
             "query_kb_language_match": query_kb_language_match,
             "retrieval_used_cross_lingual_variant": retrieval_used_cross_lingual_variant,
+            "tokens_input": tokens_input,
+            "tokens_output": tokens_output,
+            "model": model,
+            "plan_tier": plan_tier,
         }
         if decision is not None:
             props["decision"] = decision.kind.value
@@ -152,10 +158,13 @@ def _emit_chat_turn_event(
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
         # Also emit the dashboard-primary event with the enriched property set.
+        # ttft_ms is injected by the widget layer after the stream completes;
+        # it remains None here (pipeline fires before TTFT is measurable).
         _emit_chat_completed_event(
             tenant_public_id=tenant_public_id,
             bot_public_id=bot_public_id,
             chat_id=chat_id,
+            session_id=session_id,
             latency_ms=latency_ms,
             tokens_input=tokens_input,
             tokens_output=tokens_output,
@@ -194,6 +203,8 @@ def _emit_chat_completed_event(
     reliability_score: str | None = None,
     decision_branch: str | None = None,
     plan_tier: str | None = None,
+    session_id: str | None = None,
+    ttft_ms: int | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -205,6 +216,7 @@ def _emit_chat_completed_event(
             bot_id=bot_public_id,
             properties={
                 "chat_id": chat_id,
+                "session_id": session_id,
                 "latency_ms": latency_ms,
                 "tokens_input": tokens_input,
                 "tokens_output": tokens_output,
@@ -214,6 +226,7 @@ def _emit_chat_completed_event(
                 "reliability_score": reliability_score,
                 "decision_branch": decision_branch,
                 "plan_tier": plan_tier,
+                "ttft_ms": ttft_ms,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )

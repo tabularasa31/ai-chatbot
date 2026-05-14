@@ -445,14 +445,14 @@ def _apply_llm_alert_side_effect(
 def _emit_first_token_metric(
     *,
     sid: uuid.UUID,
-    t_start: float,
+    ttft_ms: int,
     tenant_public_id: str | None,
     bot_public_id: str | None,
     is_greeting: bool,
+    chat_id: str | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
-    ms = round((time.monotonic() - t_start) * 1000)
     try:
         capture_event(
             "chat_first_token_ms",
@@ -460,8 +460,10 @@ def _emit_first_token_metric(
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
             properties={
-                "chat_first_token_ms": ms,
+                "ttft_ms": ttft_ms,
+                "chat_first_token_ms": ttft_ms,  # backward-compat alias
                 "session_id": str(sid),
+                "chat_id": chat_id,
                 "is_greeting": is_greeting,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
@@ -580,12 +582,10 @@ def _widget_chat_stream(
                 kind, text = item
                 if kind == "chunk":
                     if not streamed_any:
-                        _emit_first_token_metric(
-                            sid=sid,
-                            t_start=t_start,
-                            tenant_public_id=tenant_public_id,
-                            bot_public_id=bot_public_id,
-                            is_greeting=is_greeting,
+                        # Record TTFT now (accurate wall-clock), emit after
+                        # await task so chat_id from outcome is available.
+                        result_holder["ttft_ms"] = round(
+                            (time.monotonic() - t_start) * 1000
                         )
                     streamed_any = True
                     yield f"data: {json.dumps({'type': 'chunk', 'text': text})}\n\n"
@@ -644,14 +644,21 @@ def _widget_chat_stream(
         # fallback as a "chunk" before the "done" event would leak it into
         # any naive client buffer.
         if not streamed_any and final_text and not is_llm_unavailable:
+            # Non-streaming fallback: TTFT = full pipeline latency.
+            result_holder["ttft_ms"] = round((time.monotonic() - t_start) * 1000)
+            yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
+        # Emit TTFT metric once, after pipeline completes, so chat_id from the
+        # outcome is available for joining with chat.turn / chat_completed.
+        ttft_ms = result_holder.get("ttft_ms")
+        if ttft_ms is not None and not is_llm_unavailable:
             _emit_first_token_metric(
                 sid=sid,
-                t_start=t_start,
+                ttft_ms=ttft_ms,
                 tenant_public_id=tenant_public_id,
                 bot_public_id=bot_public_id,
                 is_greeting=is_greeting,
+                chat_id=outcome.chat_id if outcome is not None else None,
             )
-            yield f"data: {json.dumps({'type': 'chunk', 'text': final_text})}\n\n"
         turn_response = WidgetChatTurnResponse(
             text=final_text,
             session_id=sid,

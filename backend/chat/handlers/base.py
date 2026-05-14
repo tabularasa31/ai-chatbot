@@ -30,6 +30,10 @@ class ChatTurnOutcome:
     # No support ticket is created automatically; the widget shows the
     # localized fallback ``text`` plus Try again / Contact support buttons.
     failure_state: LlmFailureState | None = None
+    # DB primary key of the Chat row; used by the widget layer to attach
+    # ttft_ms to the PostHog chat_first_token_ms event so it can be joined
+    # with chat.turn / chat_completed (which use chat_id as a property too).
+    chat_id: str | None = None
 
 
 @dataclass

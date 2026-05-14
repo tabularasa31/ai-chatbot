@@ -158,8 +158,6 @@ def _emit_chat_turn_event(
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
         # Also emit the dashboard-primary event with the enriched property set.
-        # ttft_ms is injected by the widget layer after the stream completes;
-        # it remains None here (pipeline fires before TTFT is measurable).
         _emit_chat_completed_event(
             tenant_public_id=tenant_public_id,
             bot_public_id=bot_public_id,
@@ -204,7 +202,6 @@ def _emit_chat_completed_event(
     decision_branch: str | None = None,
     plan_tier: str | None = None,
     session_id: str | None = None,
-    ttft_ms: int | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -226,7 +223,6 @@ def _emit_chat_completed_event(
                 "reliability_score": reliability_score,
                 "decision_branch": decision_branch,
                 "plan_tier": plan_tier,
-                "ttft_ms": ttft_ms,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )

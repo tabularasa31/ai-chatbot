@@ -1434,6 +1434,7 @@ class RagHandler(PipelineHandler):
                 tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
                 bot_public_id=ctx.bot_public_id,
                 chat_id=str(chat.id) if chat is not None else None,
+                session_id=str(chat.session_id) if chat is not None else None,
                 strategy=result.strategy,
                 reject_reason=result.reject_reason,
                 is_reject=result.is_reject,
@@ -1459,6 +1460,7 @@ class RagHandler(PipelineHandler):
                 document_ids=[],
                 tokens_used=result.tokens_used,
                 chat_ended=False,
+                chat_id=str(chat.id) if chat is not None else None,
             )
 
         # Normal RAG / faq_context path: handle escalation side effects, then persist.
@@ -1670,6 +1672,7 @@ class RagHandler(PipelineHandler):
             tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
             bot_public_id=ctx.bot_public_id,
             chat_id=str(chat.id) if chat is not None else None,
+            session_id=str(chat.session_id) if chat is not None else None,
             strategy=result.strategy,
             reject_reason=None,
             is_reject=False,
@@ -1700,6 +1703,7 @@ class RagHandler(PipelineHandler):
             tokens_used=tokens_used,
             chat_ended=bool(chat.ended_at),
             ticket_number=created_ticket_number,
+            chat_id=str(chat.id) if chat is not None else None,
         )
 
 

@@ -625,6 +625,74 @@ def _usage_cached_tokens(usage: Any) -> int:
     return _safe_int(getattr(details, "cached_tokens", 0))
 
 
+def _compute_loop_signal(
+    chat: Chat | None,
+    *,
+    window: int,
+    min_overlap: float,
+) -> tuple[bool, float | None, int]:
+    """Detect whether the last ``window`` assistant turns drew on the same
+    knowledge-base documents — a signal the user is stuck on one issue and
+    repeating the answer won't help.
+
+    Returns (loop_detected, max_pairwise_overlap, effective_window_size).
+
+    The signal is the max pairwise Jaccard overlap of ``source_documents``
+    among the trailing assistant turns. We use *max* rather than mean so
+    that two near-identical turns sandwiching a slightly different one
+    still count — the user is clearly orbiting the same documents.
+
+    Returns ``(False, None, 0)`` when:
+      - chat is None or has < window assistant turns with source documents,
+      - any of the inspected turns has an empty ``source_documents`` set
+        (we can't reason about overlap with an empty set; treating it as
+        no-loop is the safe default to avoid false-positive escalations).
+    """
+    if chat is None or window < 2:
+        return (False, None, 0)
+    persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
+    assistant_doc_sets: list[frozenset[str]] = []
+    for m in persisted:
+        if m.role != MessageRole.assistant:
+            continue
+        docs = m.source_documents or []
+        if not docs:
+            # An assistant turn without docs (greeting, escalation handoff,
+            # small_talk) breaks the loop chain — reset.
+            assistant_doc_sets = []
+            continue
+        assistant_doc_sets.append(frozenset(str(d) for d in docs))
+    if len(assistant_doc_sets) < window:
+        return (False, None, len(assistant_doc_sets))
+    inspected = assistant_doc_sets[-window:]
+    max_overlap = 0.0
+    for i in range(len(inspected)):
+        for j in range(i + 1, len(inspected)):
+            a, b = inspected[i], inspected[j]
+            union = a | b
+            if not union:
+                continue
+            overlap = len(a & b) / len(union)
+            if overlap > max_overlap:
+                max_overlap = overlap
+    return (max_overlap >= min_overlap, max_overlap, window)
+
+
+def _clarify_anchor_turn_id(chat: Chat | None) -> str | None:
+    """Return the id of the most recent persisted user message in ``chat``,
+    or None when there is no prior user turn. Used only as metadata when the
+    current turn is a clarify, to make context-drift bugs (LLM grabbing the
+    wrong prior turn) visible in Langfuse without changing decision logic.
+    """
+    if chat is None:
+        return None
+    persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
+    for m in reversed(persisted):
+        if m.role == MessageRole.user:
+            return str(m.id)
+    return None
+
+
 def _build_prior_messages_for_llm(
     chat: Chat | None,
     *,
@@ -1479,6 +1547,11 @@ class RagHandler(PipelineHandler):
         # This is the single authoritative classification of what this turn produced.
         faq_match_obj = result.faq_match
         _kb_confidence = _classify_kb_confidence(retrieval)
+        _loop_detected, _loop_overlap, _loop_window = _compute_loop_signal(
+            chat,
+            window=settings.loop_detection_window,
+            min_overlap=settings.loop_detection_min_overlap,
+        )
         _turn_ctx = DecisionTurnContext(
             session_closed=(chat.ended_at is not None),
             active_escalation=(
@@ -1502,14 +1575,20 @@ class RagHandler(PipelineHandler):
                 retrieval.reliability.cap_reason == "contradiction"
             ),
             low_retrieval_no_chunks=not chunk_texts,
+            loop_detected=_loop_detected,
+            loop_overlap_ratio=_loop_overlap,
+            loop_window_size=_loop_window,
         )
         _decision: Decision = decide(_turn_ctx)
 
-        # Enforce policy decision: clarify_loop_limit escalation must become a real escalation
-        # even when the RAG pipeline did not independently recommend it.
+        # Enforce policy decision: clarify_loop_limit and loop_detected escalations
+        # must become real escalations even when the RAG pipeline did not
+        # independently recommend it. Both route through the same pre-confirm
+        # handoff, just with a different escalate_reason in the trace.
         if (
             _decision.kind == DecisionKind.escalate
-            and _decision.escalate_reason == "clarify_loop_limit"
+            and _decision.escalate_reason
+            in ("clarify_loop_limit", "loop_detected_repeat_source_docs")
             and not escalate
         ):
             escalate = True
@@ -1659,6 +1738,20 @@ class RagHandler(PipelineHandler):
                     **build_variant_trace_metadata(retrieval),
                     # Clarification policy trace fields (spec §Trace fields)
                     **_decision.trace_dict(_clarification_count_before),
+                    # Loop-detection signals (always emitted so dashboards can
+                    # distinguish "not evaluated" from "evaluated false").
+                    **_decision.loop_trace_dict(_turn_ctx),
+                    # Clarify-anchor traceability: when this turn is a clarify,
+                    # record the id of the closest prior user message — the LLM
+                    # composes the clarify question from prior_messages, so this
+                    # is the natural anchor for debugging context drift.
+                    **(
+                        {
+                            "clarify_anchor_turn_id": _clarify_anchor_turn_id(chat),
+                        }
+                        if _decision.kind == DecisionKind.clarify
+                        else {}
+                    ),
                     "allow_clarification": ctx.allow_clarification,
                     "intent_top_class": None,   # no classifier in v1
                     "intent_top_score": None,

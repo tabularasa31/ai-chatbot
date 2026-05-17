@@ -35,6 +35,8 @@ class HttpStreamLike(Protocol):
 
     def stream(self, method: str, url: str, *, json: dict | None = ..., params: dict | None = ...) -> Any: ...
 
+    def post(self, url: str, *, params: dict | None = ...) -> Any: ...
+
 
 class ChatClient:
     """Send eval queries to the widget chat SSE endpoint."""
@@ -45,10 +47,28 @@ class ChatClient:
         http: HttpStreamLike,
         *,
         path: str = "/widget/chat",
+        session_init_path: str = "/widget/session/init",
     ) -> None:
         self.bot_public_id = bot_public_id
         self.http = http
         self.path = path
+        self.session_init_path = session_init_path
+
+    def start_session(self) -> str:
+        """POST /widget/session/init and return the new session_id. Required
+        before chain (multi-turn) calls — the widget chat endpoint rejects
+        an unknown session_id with 409 ``session_not_found``."""
+        resp = self.http.post(self.session_init_path, params={"bot_id": self.bot_public_id})
+        status = getattr(resp, "status_code", None)
+        if status != 200:
+            detail = getattr(resp, "text", "")
+            try:
+                detail = resp.json()
+            except Exception:
+                pass
+            raise RuntimeError(f"session init HTTP {status}: {detail}")
+        body = resp.json()
+        return str(body["session_id"])
 
     def ask(self, question: str, *, session_id: str | None = None) -> ChatResponse:
         # Only forward session_id when the caller explicitly passed one

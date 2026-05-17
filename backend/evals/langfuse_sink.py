@@ -66,7 +66,7 @@ def upload_dataset(dataset: Dataset, *, client: Any | None = None) -> bool:
             client.create_dataset_item(
                 dataset_name=dataset.name,
                 id=case.id,
-                input={"question": case.input, "lang": case.lang},
+                input={"question": case.input or case.turns, "lang": case.lang},
                 expected_output={"judge_rubric": case.judge_rubric} if case.judge_rubric else None,
                 metadata={
                     "category": case.category,

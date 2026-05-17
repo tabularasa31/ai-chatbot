@@ -22,6 +22,18 @@ from backend.evals.metrics import MetricResult
 
 
 @dataclass
+class TurnTrace:
+    """Per-turn record for chain (multi-turn) cases. Single-turn cases
+    have an empty trace list."""
+
+    turn: int
+    user: str
+    bot: str
+    latency_ms: int
+    escalation_offered: bool
+
+
+@dataclass
 class CaseResult:
     case_id: str
     category: str
@@ -32,6 +44,8 @@ class CaseResult:
     metrics: list[MetricResult] = field(default_factory=list)
     judge: JudgeResult | None = None
     error: str | None = None
+    turns_trace: list[TurnTrace] = field(default_factory=list)
+    escalation_offered_at_turn: int | None = None
 
     @property
     def deterministic_passed(self) -> bool:
@@ -125,6 +139,24 @@ def render_markdown(report: RunReport) -> str:
             f"| `{c.case_id}` | {c.category} | {c.lang} | {overall} | {det} | "
             f"{judge} | {c.latency_ms} | {notes} |"
         )
+    # Chain transcripts — collapsed by default, expanded only when present.
+    chain_cases = [c for c in report.cases if c.turns_trace]
+    if chain_cases:
+        lines.append("")
+        lines.append("## Chain transcripts")
+        for c in chain_cases:
+            offered = (
+                f"turn {c.escalation_offered_at_turn}"
+                if c.escalation_offered_at_turn is not None
+                else "never"
+            )
+            lines.append("")
+            lines.append(f"### `{c.case_id}` — escalation offered: {offered}")
+            for t in c.turns_trace:
+                marker = " 🚨" if t.escalation_offered else ""
+                lines.append(f"- **turn {t.turn}** ({t.latency_ms} ms){marker}")
+                lines.append(f"  - 👤 {t.user}")
+                lines.append(f"  - 🤖 {t.bot}")
     return "\n".join(lines) + "\n"
 
 
@@ -144,6 +176,8 @@ def _serializable(report: RunReport) -> dict:
             "error": c.error,
             "deterministic_passed": c.deterministic_passed,
             "overall_passed": c.overall_passed,
+            "turns_trace": [asdict(t) for t in c.turns_trace],
+            "escalation_offered_at_turn": c.escalation_offered_at_turn,
         }
 
     return {

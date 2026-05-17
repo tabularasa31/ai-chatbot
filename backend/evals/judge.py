@@ -87,7 +87,7 @@ class AnthropicJudge:
                     "content": _USER_TEMPLATE.format(
                         rubric=case.judge_rubric.strip(),
                         lang=case.lang,
-                        question=case.input,
+                        question=" | ".join(case.messages),
                         answer=output,
                     ),
                 }

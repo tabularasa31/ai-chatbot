@@ -174,6 +174,19 @@ class Settings(BaseSettings):
         alias="CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED",
     )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
+    loop_detection_window: int = Field(
+        3,
+        alias="LOOP_DETECTION_WINDOW",
+        ge=2,
+        description="Number of trailing assistant turns inspected for repeating source documents. <2 disables the heuristic implicitly (no overlap possible).",
+    )
+    loop_detection_min_overlap: float = Field(
+        0.5,
+        alias="LOOP_DETECTION_MIN_OVERLAP",
+        ge=0.0,
+        le=1.0,
+        description="Minimum Jaccard overlap of source_documents across the loop window for the bot to force-escalate instead of re-answering.",
+    )
     language_detection_reliability_threshold: float = Field(
         0.7,
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",

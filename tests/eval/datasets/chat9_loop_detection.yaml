@@ -1,0 +1,123 @@
+name: chat9_loop_detection
+description: |
+  Multi-turn (chain) regression dataset for the loop-detection
+  heuristic. Cases come in two flavours:
+
+  - **loop_***: 3–4 follow-up turns all centred on the same support
+    topic. The KB never fully resolves the issue, so the legacy bot
+    would simply re-paraphrase the same docs N times. Expectation:
+    the bot proactively offers escalation by the configured turn.
+  - **no_loop_***: control cases that exercise the false-positive
+    surface — diverse topics, normal clarify→answer flows, mid-chain
+    topic switches. Expectation: escalation is NOT offered.
+
+  Together they validate that the heuristic catches real loops
+  without firing on healthy conversations. Knowledge base = the
+  shared `_fixtures/docs/` set used by `chat9_basic`.
+cases:
+  # ─── loop chains (must offer escalation) ───────────────────────────────
+  - id: loop_widget_setup_ru_001
+    category: loop_detection
+    lang: ru
+    turns:
+      - "как установить виджет на сайт?"
+      - "я скопировал embed-snippet и вставил в <head>, виджет не показывается"
+      - "проверил data-bot-id, всё совпадает с дашбордом, всё равно пусто"
+      - "перезагружал страницу, очищал кеш — никаких признаков виджета"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      По итогу 4-го хода бот должен предложить эскалацию (вопрос-подтверждение
+      вида "открыть тикет в поддержку?" / "переслать команде?"). Не должно быть
+      четвёртой подряд парафразы одних и тех же шагов установки виджета.
+      Ответ на русском.
+
+  - id: loop_widget_setup_en_002
+    category: loop_detection
+    lang: en
+    turns:
+      - "how do I embed the widget on my page?"
+      - "I added the script tag to my <head>, no widget appears on the page"
+      - "the data-bot-id matches what my dashboard shows, still no widget"
+      - "i tried a hard reload and an incognito window, still nothing visible"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      By turn 4 the bot must proactively offer escalation (ask if the user
+      wants a support ticket / wants the team to follow up). It must NOT
+      simply re-paraphrase the same embed instructions for the fourth time.
+      Reply in English.
+
+  - id: loop_doc_upload_ru_003
+    category: loop_detection
+    lang: ru
+    turns:
+      - "загрузил pdf документ, статус остался Processing"
+      - "прошло 10 минут, статус так и Processing, ничего не меняется"
+      - "пробовал перезагрузить, статус всё ещё Processing"
+      - "уже полчаса в Processing, что делать?"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      К 4-му ходу бот должен предложить эскалацию — индексация явно
+      зависла, документация (faq/getting-started) исчерпана. Ответ
+      на русском.
+
+  - id: loop_api_auth_en_004
+    category: loop_detection
+    lang: en
+    turns:
+      - "how do I call the widget chat API from my server?"
+      - "I'm sending the bot_id but getting 401 unauthorized back"
+      - "I tried adding my OpenAI key to the request headers, still 401"
+      - "i regenerated the widget secret, still 401 on every request"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      By turn 4 the bot must offer to escalate to the support team. The KB
+      describes the public widget endpoint and the widget-secret flow, but
+      cannot diagnose this user's specific 401 — re-explaining auth a fourth
+      time is wrong behaviour. Reply in English.
+
+  # ─── control chains (must NOT offer escalation) ────────────────────────
+  - id: no_loop_diverse_topics_ru_001
+    category: loop_detection
+    lang: ru
+    turns:
+      - "сколько стоит chat9?"
+      - "какие лимиты на загруженные документы?"
+      - "как написать в поддержку?"
+    expected_escalation_offered_by_turn: -1
+    judge_rubric: |
+      Каждый turn — отдельная тема. Бот должен отвечать по существу и НЕ
+      предлагать эскалацию (нет повторяющегося контекста, нет признаков
+      зацикливания). Источники между turn'ами разные. Ответы на русском.
+
+  - id: no_loop_clarify_then_answer_en_001
+    category: loop_detection
+    lang: en
+    turns:
+      - "what file formats are supported?"
+      - "great, what's the maximum file size?"
+      - "and how long does indexing typically take?"
+    expected_escalation_offered_by_turn: -1
+    judge_rubric: |
+      A natural follow-up flow on knowledge upload: format → size → indexing
+      time. Each turn pulls a slightly different fact from the docs. Bot
+      must answer each and NOT offer escalation. Reply in English.
+
+  - id: loop_then_topic_switch_en_005
+    category: loop_detection
+    lang: en
+    turns:
+      - "I added the widget script to my site but it doesn't render"
+      - "I verified the data-bot-id matches my dashboard exactly"
+      - "no, never mind that — separate question, how do I delete an uploaded document?"
+    # The first two turns are on the same topic (widget rendering) but
+    # only 2 turns deep, below the loop_detection_window of 3. The third
+    # turn switches topic entirely, breaking the chain. Expectation: no
+    # escalation should be offered — the heuristic must not fire on a
+    # topic switch.
+    expected_escalation_offered_by_turn: -1
+    judge_rubric: |
+      The user pivots from "widget doesn't render" to a completely
+      different question about document deletion at turn 3. Bot must
+      answer the deletion question normally and NOT offer escalation
+      (no loop was actually established — only 2 widget turns, then a
+      topic switch). Reply in English.

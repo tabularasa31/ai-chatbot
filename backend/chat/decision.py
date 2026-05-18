@@ -45,6 +45,7 @@ EscalateReason = Literal[
     "explicit_human_request",
     "clarify_loop_limit",
     "low_confidence_no_path",
+    "loop_detected_repeat_source_docs",
     "guard_reject",
     "unknown",
 ]
@@ -98,6 +99,14 @@ class TurnContext:
     # True when retrieval returned zero chunks (guides escalation over clarify)
     low_retrieval_no_chunks: bool = False
 
+    # Loop-detection signals: True when the last N assistant turns drew on
+    # the same set of source documents (Jaccard overlap >= configured
+    # threshold), suggesting the user is stuck and KB cannot help further.
+    # Computed upstream from chat.messages by _compute_loop_signal.
+    loop_detected: bool = False
+    loop_overlap_ratio: float | None = None
+    loop_window_size: int = 0
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -134,6 +143,18 @@ class Decision:
             "budget_blocked": self.budget_blocked,
             "slot_asked": self.slot_asked,
             "escalation_reason": self.escalate_reason,
+        }
+
+    def loop_trace_dict(self, turn: TurnContext) -> dict:
+        """Loop-detection signals for the trace, independent of the decision kind.
+
+        Always emitted so dashboards can distinguish "loop never evaluated"
+        from "loop evaluated and was false" via loop_window_size > 0.
+        """
+        return {
+            "loop_detected": turn.loop_detected,
+            "loop_overlap_ratio": turn.loop_overlap_ratio,
+            "loop_window_size": turn.loop_window_size,
         }
 
 
@@ -178,6 +199,16 @@ def decide(turn: TurnContext) -> Decision:
     # Block rule 6: FAQ direct hit (checked before budget — FAQ never clarifies)
     if turn.faq_direct_hit:
         return Decision(kind=DecisionKind.answer_from_faq)
+
+    # Block rule 6b: Loop detected — the last N assistant turns drew on the
+    # same source documents, so re-answering won't help. Force escalation
+    # through the existing pre-confirm flow rather than emit yet another
+    # rephrased answer.
+    if turn.loop_detected:
+        return Decision(
+            kind=DecisionKind.escalate,
+            escalate_reason="loop_detected_repeat_source_docs",
+        )
 
     # KB / retrieval routing
     if turn.kb_confidence == "high":

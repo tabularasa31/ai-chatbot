@@ -58,6 +58,9 @@ def _ctx(
     kb_has_partial_answer: bool = False,
     kb_contradiction_detected: bool = False,
     low_retrieval_no_chunks: bool = False,
+    loop_detected: bool = False,
+    loop_overlap_ratio: float | None = None,
+    loop_window_size: int = 0,
 ) -> TurnContext:
     return TurnContext(
         session_closed=session_closed,
@@ -73,6 +76,9 @@ def _ctx(
         kb_has_partial_answer=kb_has_partial_answer,
         kb_contradiction_detected=kb_contradiction_detected,
         low_retrieval_no_chunks=low_retrieval_no_chunks,
+        loop_detected=loop_detected,
+        loop_overlap_ratio=loop_overlap_ratio,
+        loop_window_size=loop_window_size,
     )
 
 
@@ -350,3 +356,73 @@ def test_is_blocking_clarify_false_for_inline() -> None:
 def test_is_blocking_clarify_false_for_escalate() -> None:
     d = decide(_ctx(explicit_human_request=True))
     assert d.is_blocking_clarify() is False
+
+
+# ---------------------------------------------------------------------------
+# Loop detection (block rule 6b)
+# ---------------------------------------------------------------------------
+
+
+def test_loop_detected_escalates_even_with_high_kb_confidence() -> None:
+    """Loop signal must override the high-confidence answer path — the user
+    is stuck on one topic and re-answering won't help."""
+    d = decide(
+        _ctx(
+            kb_confidence="high",
+            loop_detected=True,
+            loop_overlap_ratio=0.75,
+            loop_window_size=3,
+        )
+    )
+    assert d.kind == DecisionKind.escalate
+    assert d.escalate_reason == "loop_detected_repeat_source_docs"
+
+
+def test_loop_detected_does_not_override_active_escalation() -> None:
+    """Block rule 4 (active escalation) is checked before loop — an existing
+    ticket flow must not be hijacked by a loop signal."""
+    d = decide(
+        _ctx(
+            active_escalation=True,
+            loop_detected=True,
+            loop_overlap_ratio=1.0,
+            loop_window_size=3,
+        )
+    )
+    assert d.kind == DecisionKind.forward_to_active_ticket
+
+
+def test_loop_detected_does_not_override_faq_direct_hit() -> None:
+    """FAQ direct hit is a fast, deterministic path that must short-circuit
+    even when source docs happen to repeat across recent turns."""
+    d = decide(
+        _ctx(
+            faq_direct_hit=True,
+            faq_top_score=0.95,
+            loop_detected=True,
+            loop_overlap_ratio=0.8,
+            loop_window_size=3,
+        )
+    )
+    assert d.kind == DecisionKind.answer_from_faq
+
+
+def test_trace_dict_carries_loop_fields() -> None:
+    turn = _ctx(
+        kb_confidence="high",
+        loop_detected=True,
+        loop_overlap_ratio=0.6,
+        loop_window_size=3,
+    )
+    d = decide(turn)
+    loop_trace = d.loop_trace_dict(turn)
+    assert loop_trace["loop_detected"] is True
+    assert loop_trace["loop_overlap_ratio"] == 0.6
+    assert loop_trace["loop_window_size"] == 3
+
+
+def test_loop_not_detected_falls_through_to_normal_routing() -> None:
+    """When loop_detected=False the block rule must not fire, and the turn
+    routes via normal kb_confidence rules."""
+    d = decide(_ctx(kb_confidence="high", loop_detected=False))
+    assert d.kind == DecisionKind.answer_with_citations

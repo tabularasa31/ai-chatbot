@@ -35,7 +35,7 @@ class HttpStreamLike(Protocol):
 
     def stream(self, method: str, url: str, *, json: dict | None = ..., params: dict | None = ...) -> Any: ...
 
-    def post(self, url: str, *, params: dict | None = ...) -> Any: ...
+    def post(self, url: str, *, json: dict | None = ..., params: dict | None = ...) -> Any: ...
 
 
 class ChatClient:
@@ -57,8 +57,12 @@ class ChatClient:
     def start_session(self) -> str:
         """POST /widget/session/init and return the new session_id. Required
         before chain (multi-turn) calls — the widget chat endpoint rejects
-        an unknown session_id with 409 ``session_not_found``."""
-        resp = self.http.post(self.session_init_path, params={"bot_id": self.bot_public_id})
+        an unknown session_id with 409 ``session_not_found``.
+
+        ``bot_id`` goes in the JSON body (WidgetSessionInitRequest), NOT
+        the query string — the endpoint binds it via ``Body()``.
+        """
+        resp = self.http.post(self.session_init_path, json={"bot_id": self.bot_public_id})
         status = getattr(resp, "status_code", None)
         if status != 200:
             detail = getattr(resp, "text", "")

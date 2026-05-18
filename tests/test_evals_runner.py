@@ -276,13 +276,29 @@ class _StubStreamResp:
         yield 'data: {"type":"done","text":"ok","chat_ended":false}'
 
 
+class _StubPostResp:
+    def __init__(self, payload: dict, status: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status
+        self.text = ""
+
+    def json(self) -> dict:
+        return self._payload
+
+
 class _StubHttp:
-    def __init__(self) -> None:
+    def __init__(self, post_payload: dict | None = None) -> None:
         self.calls: list[dict] = []
+        self.post_calls: list[dict] = []
+        self._post_payload = post_payload or {"session_id": "00000000-0000-0000-0000-0000000000ff"}
 
     def stream(self, method: str, url: str, *, json: dict | None = None, params: dict | None = None):
         self.calls.append({"method": method, "url": url, "json": json, "params": params})
         return _StubStreamResp()
+
+    def post(self, url: str, *, json: dict | None = None, params: dict | None = None):
+        self.post_calls.append({"url": url, "json": json, "params": params})
+        return _StubPostResp(self._post_payload)
 
 
 def test_chat_client_omits_session_id_when_caller_did_not_pass_one() -> None:
@@ -298,6 +314,26 @@ def test_chat_client_omits_session_id_when_caller_did_not_pass_one() -> None:
     client.ask("hello")
     assert http.calls[0]["params"] == {"bot_id": "ch_test"}
     assert "session_id" not in http.calls[0]["params"]
+
+
+def test_start_session_sends_bot_id_in_json_body_not_query_params() -> None:
+    """Regression: /widget/session/init binds bot_id via WidgetSessionInitRequest
+    (a JSON body), so sending it as a query param returns 422 and breaks the
+    multi-turn chain runner before turn 1. Spotted by codex review on PR #685."""
+
+    from backend.evals.client import ChatClient
+
+    http = _StubHttp(post_payload={"session_id": "11111111-1111-1111-1111-111111111111"})
+    client = ChatClient(bot_public_id="ch_test", http=http)
+    sid = client.start_session()
+    assert sid == "11111111-1111-1111-1111-111111111111"
+    assert http.post_calls == [
+        {
+            "url": "/widget/session/init",
+            "json": {"bot_id": "ch_test"},
+            "params": None,
+        }
+    ]
 
 
 def test_chat_client_forwards_session_id_when_caller_passes_one() -> None:

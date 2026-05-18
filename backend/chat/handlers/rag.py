@@ -650,21 +650,28 @@ def _compute_loop_signal(
     """
     if chat is None or window < 2:
         return (False, None, 0)
-    persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
-    assistant_doc_sets: list[frozenset[str]] = []
+    # Walk backwards from the most recent message and stop once we have
+    # ``window`` assistant turns or hit a doc-less assistant turn (greeting /
+    # handoff / small_talk) that resets the chain. Avoids the O(N) full-history
+    # sort and the (datetime, UUID) type-comparison risk of ``created_at or id``.
+    persisted = sorted(
+        chat.messages or [],
+        key=lambda m: (m.created_at or datetime.min, str(m.id)),
+        reverse=True,
+    )
+    inspected_reverse: list[frozenset[str]] = []
     for m in persisted:
         if m.role != MessageRole.assistant:
             continue
         docs = m.source_documents or []
         if not docs:
-            # An assistant turn without docs (greeting, escalation handoff,
-            # small_talk) breaks the loop chain — reset.
-            assistant_doc_sets = []
-            continue
-        assistant_doc_sets.append(frozenset(str(d) for d in docs))
-    if len(assistant_doc_sets) < window:
-        return (False, None, len(assistant_doc_sets))
-    inspected = assistant_doc_sets[-window:]
+            break
+        inspected_reverse.append(frozenset(str(d) for d in docs))
+        if len(inspected_reverse) >= window:
+            break
+    if len(inspected_reverse) < window:
+        return (False, None, len(inspected_reverse))
+    inspected = list(reversed(inspected_reverse))
     max_overlap = 0.0
     for i in range(len(inspected)):
         for j in range(i + 1, len(inspected)):
@@ -686,8 +693,14 @@ def _clarify_anchor_turn_id(chat: Chat | None) -> str | None:
     """
     if chat is None:
         return None
-    persisted = sorted(chat.messages or [], key=lambda m: m.created_at or m.id)
-    for m in reversed(persisted):
+    # Walk newest-first and return on the first user turn — avoids sorting
+    # the entire history twice (once asc, then reversed) on long sessions.
+    persisted = sorted(
+        chat.messages or [],
+        key=lambda m: (m.created_at or datetime.min, str(m.id)),
+        reverse=True,
+    )
+    for m in persisted:
         if m.role == MessageRole.user:
             return str(m.id)
     return None

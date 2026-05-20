@@ -168,3 +168,51 @@ async def test_caller_supplied_dedup_collision_returns_none(
     rows = (await queue_db.execute(select(BackgroundJob))).scalars().all()
     assert len(rows) == 1
     assert rows[0].arq_job_id == "dedup-key"
+
+
+@pytest.mark.asyncio
+async def test_cron_tick_sends_ok_checkin(queue_db, monkeypatch):
+    """The scheduled-crawl tick is a Sentry Crons heartbeat: every successful
+    tick must emit ``in_progress`` then ``ok``, correlated by check-in id."""
+    import backend.observability as observability_module
+    from backend.jobs import crawl_url
+
+    calls: list[dict[str, Any]] = []
+
+    def _fake_checkin(*, monitor_slug, status, check_in_id=None, **kwargs):
+        calls.append({"status": status, "check_in_id": check_in_id})
+        return "cid-1" if status == "in_progress" else check_in_id
+
+    monkeypatch.setattr(observability_module, "capture_cron_checkin", _fake_checkin)
+
+    await crawl_url._tick_scheduled_crawls({})
+
+    assert [c["status"] for c in calls] == ["in_progress", "ok"]
+    assert calls[1]["check_in_id"] == "cid-1"
+
+
+@pytest.mark.asyncio
+async def test_cron_tick_sends_error_checkin_and_reraises(queue_db, monkeypatch):
+    """A crashing tick (the dead-worker failure mode) must report ``error`` to
+    Sentry and re-raise so ARQ records the failure."""
+    import backend.observability as observability_module
+    from backend.core import db as core_db
+    from backend.jobs import crawl_url
+
+    calls: list[str] = []
+
+    def _fake_checkin(*, monitor_slug, status, check_in_id=None, **kwargs):
+        calls.append(status)
+        return "cid-1" if status == "in_progress" else check_in_id
+
+    monkeypatch.setattr(observability_module, "capture_cron_checkin", _fake_checkin)
+
+    def _raise_session():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(core_db, "AsyncSessionLocal", _raise_session)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await crawl_url._tick_scheduled_crawls({})
+
+    assert calls == ["in_progress", "error"]

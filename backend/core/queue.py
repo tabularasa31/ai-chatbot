@@ -314,6 +314,9 @@ async def _on_worker_startup(_: dict[str, Any]) -> None:
 
 
 async def _on_worker_shutdown(_: dict[str, Any]) -> None:
+    from backend.observability import shutdown_sentry
+
+    shutdown_sentry()
     logger.info("arq_worker_shutdown")
 
 

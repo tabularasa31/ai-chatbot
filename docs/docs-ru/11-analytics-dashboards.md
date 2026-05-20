@@ -114,10 +114,26 @@ Breakdown отклонённых сообщений по причине. Три 
 `latency_ms` — end-to-end время (гарды + retrieval + LLM + запись в БД). Для детального анализа: `retrieval_ms` и `llm_ms` доступны в тех же событиях `chat.turn` и позволяют понять где именно теряется время.
 
 ### OpenAI Retries — attempts vs exhausted
-- **Attempts** — каждый повторный запрос к OpenAI после ошибки (rate limit, timeout, 5xx). Один инцидент может дать несколько attempts.
-- **Exhausted** — все попытки исчерпаны, пользователь получил ошибку.
 
-В норме `exhausted` в разы меньше `attempts`. Если линии сближаются — OpenAI нестабилен или количество ретраев недостаточно.
+> ⚠️ **`openai_retry.attempt` ≠ ретрай.** Событие шлётся на **каждом** вызове OpenAI, включая первый (`is_retry=false`). Один chat turn по дизайну делает **~7-10 отдельных вызовов** OpenAI (injection guard → relevance guard → embed → semantic rewrite → generate → validate …). Поэтому `count(openai_retry.attempt) / chat turns ≈ 7-10` — это **нормальный fan-out числа вызовов, а НЕ retry storm**. Делить сырой `count(attempt)` на число turns и называть результат «ретраями на turn» — ошибка интерпретации.
+
+- **Attempts** (`openai_retry.attempt`) — каждый вызов OpenAI, включая первый. Прокси для общего числа LLM-вызовов (fan-out), а не для ретраев.
+- **Exhausted** (`openai_retry.exhausted`) — цепочка ретраев исчерпала бюджет, пользователь получил ошибку. `exhausted = 0` при высоких `attempts` — это **здоровое** состояние, а не «всё чудом обошлось».
+
+**Числитель РЕАЛЬНЫХ ретраев** (используй именно его):
+
+```
+retries_per_turn = count(openai_retry.attempt WHERE is_retry = true) / count(chat turns)
+```
+
+Эквивалентно `count(openai_retry.retry_scheduled) / count(turns)` — оба фактируют ровно один раз на каждый реальный ретрай. Норма: **< 2.0**. НЕ суммируй per-attempt счётчик вида `attempt - 1` — он переоценивает (0+1+2 = 3 для вызова, который ретраился дважды).
+
+Чек перед тем как объявлять «retry storm»:
+1. `retries_per_turn` (по формуле выше, с `is_retry = true`) — а не сырой `attempts / turns`.
+2. `openai_retry.exhausted` > 0? Если 0 — пользователи ошибок не видели, инцидента нет.
+3. Sentry `APITimeoutError` — реальный всплеск или единичные события?
+
+Если высок только сырой `attempts/turn`, а `exhausted = 0` и `is_retry=true`-доля низкая — это fan-out, норма, задачу про «шторм» заводить не нужно.
 
 ### OpenAI exhausted rate
 Одна цифра: процент цепочек ретраев, которые завершились ошибкой для пользователя (`exhausted / attempts × 100%`). Норма: < 5%. При > 10% — инцидент.

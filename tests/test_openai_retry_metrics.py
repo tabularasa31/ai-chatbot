@@ -57,6 +57,35 @@ def test_emits_attempt_on_every_call(captured_events):
     assert isinstance(attempts[0]["properties"]["elapsed_ms"], int)
 
 
+def test_attempt_is_retry_flag_pins_retry_numerator(captured_events):
+    """is_retry is the canonical retry numerator: False on first call, True after.
+
+    Locks the contract the PostHog "retries per turn" chart depends on. A call
+    that fails twice then succeeds emits three attempt events with
+    is_retry = [False, True, True] — so count(is_retry=true) == real retries (2),
+    and it matches count(openai_retry.retry_scheduled). Guards against a future
+    change that would make count(openai_retry.attempt) look like the retry count.
+    """
+    calls = {"count": 0}
+
+    def _fn() -> str:
+        calls["count"] += 1
+        if calls["count"] <= 2:
+            raise InternalServerError("boom", response=_response(500), body=None)
+        return "ok"
+
+    result = call_openai_with_retry("chat_generate", _fn, tenant_id="tnt_test")
+
+    assert result == "ok"
+    attempts = _named(captured_events, "openai_retry.attempt")
+    assert [a["properties"]["is_retry"] for a in attempts] == [False, True, True]
+
+    real_retries = [a for a in attempts if a["properties"]["is_retry"]]
+    scheduled = _named(captured_events, "openai_retry.retry_scheduled")
+    # The two retry numerators must agree.
+    assert len(real_retries) == len(scheduled) == 2
+
+
 def test_emits_retry_scheduled_when_retrying(captured_events):
     """openai_retry.retry_scheduled fires only when a sleep+retry is scheduled."""
     calls = {"count": 0}

@@ -1680,6 +1680,10 @@ class RagHandler(PipelineHandler):
                 )
                 answer = esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
+                # The reply is now the generic handoff question, not a RAG
+                # answer — drop the retrieved sources so we don't persist or
+                # return citations that don't back this message.
+                document_ids = []
                 ctx.db.add(chat)
             except Exception as e:
                 logger.warning("Escalation T-1/T-2 pre-confirm failed, returning RAG answer only: %s", e)

@@ -675,6 +675,9 @@ def test_rag_escalation_engages_pre_confirm_fsm(
     # The outgoing message is the canonical template, NOT the RAG verdict.
     assert outcome.text == "PRE_CONFIRM_QUESTION"
     assert "RAG VERDICT" not in outcome.text
+    # The handoff prompt is not a RAG answer — no retrieved sources should be
+    # attached to it (otherwise the widget shows citations that don't back it).
+    assert outcome.document_ids == []
 
     # FSM state persisted on the chat row in the same transaction.
     chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()

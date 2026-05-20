@@ -1,4 +1,22 @@
-"""In-process retry wrapper for user-facing OpenAI calls."""
+"""In-process retry wrapper for user-facing OpenAI calls.
+
+PostHog metric semantics — read before building a "retries per turn" chart:
+
+``openai_retry.attempt`` fires once per OpenAI API call, **including the first
+(non-retry) call** (``is_retry=False``). A single chat turn fans out into ~7-10
+distinct OpenAI calls by design (injection guard, relevance guard, embed,
+semantic rewrite, generate, validate, …), so ``count(openai_retry.attempt)``
+divided by chat turns lands around 7-10x even when nothing was ever retried.
+That ratio measures fan-out, not retries — do not read it as a "retry storm".
+
+The canonical numerator for *actual* retries is either of these (they agree):
+  • ``count(openai_retry.attempt WHERE is_retry = true)``
+  • ``count(openai_retry.retry_scheduled)``
+Each fires exactly once per real retry. Per-turn retry rate =
+``<one of the above> / count(chat turns)``. Do NOT sum a per-attempt counter
+like ``attempt - 1`` — summed across the attempt events of one call it
+double-counts (0+1+2 = 3 for a call that retried twice).
+"""
 
 from __future__ import annotations
 
@@ -451,6 +469,10 @@ def _emit_call_attempt(
     prev_classified: ClassifiedError | None = None,
 ) -> None:
     """Fired once per API call attempt (before fn() executes).
+
+    Fires on EVERY attempt, including the first (``is_retry=False``). This is
+    not the retry numerator — see the module docstring. To count real retries,
+    filter ``is_retry = true`` (equivalently, count ``openai_retry.retry_scheduled``).
 
     For attempt > 1, prev_exc and prev_classified describe what triggered the retry.
     """

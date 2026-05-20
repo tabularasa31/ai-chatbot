@@ -21,7 +21,10 @@ from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.chat.service import async_process_chat_message
-from backend.contact_sessions.service import start_user_session
+from backend.contact_sessions.service import (
+    start_user_session,
+    sync_user_session_identity,
+)
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
@@ -270,6 +273,11 @@ def widget_session_init(
                 existing.user_context,
                 user_context,
                 browser_locale=locale,
+            )
+            sync_user_session_identity(
+                db,
+                tenant_id=tenant.id,
+                user_context=existing.user_context,
             )
             db.commit()
             logger.info("widget_session_init_resumed")

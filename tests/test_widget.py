@@ -657,10 +657,12 @@ def test_widget_session_init_anonymous_always_new(
     assert first.json()["session_id"] != second.json()["session_id"]
 
 
-def test_widget_session_init_resumes_via_email_hint(
+def test_widget_session_init_email_only_hint_never_resumes(
     tenant: TestClient,
     db_session: Session,
 ) -> None:
+    # Email is too guessable to safely reattach over a public endpoint, so an
+    # email-only hint always starts a fresh session even on repeat init.
     bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-email@example.com")
 
     first = tenant.post(
@@ -674,8 +676,8 @@ def test_widget_session_init_resumes_via_email_hint(
         "/widget/session/init",
         json={"bot_id": bot_public_id, "user_hints": {"email": "visitor@example.com"}},
     )
-    assert second.json()["resumed"] is True
-    assert second.json()["session_id"] == first_session
+    assert second.json()["resumed"] is False
+    assert second.json()["session_id"] != first_session
 
 
 def test_widget_chat_stream_sse(

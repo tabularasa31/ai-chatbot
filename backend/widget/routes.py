@@ -231,10 +231,15 @@ def widget_session_init(
     mode: Literal["hints", "anonymous"] = "anonymous"
     locale = sanitize_locale(body.locale)
     user_context: dict | None = None
+    # Only an explicit user_id is eligible for cross-device resume. An email is
+    # too guessable to safely reattach to another visitor's live conversation
+    # over a public endpoint, so the synthesized hint:<email> id never resumes.
+    resume_eligible = False
 
     if body.user_hints:
         hints = sanitize_user_hints(body.user_hints)
         if hints:
+            resume_eligible = "user_id" in hints
             # Synthesize a stable user_id when hints carry only an email so
             # ContactSession keying works (its contact_id == user_context.user_id).
             if "user_id" not in hints and "email" in hints:
@@ -255,7 +260,7 @@ def widget_session_init(
 
     # Identified users resume their most recent still-open session so history
     # survives cleared localStorage and follows them across devices.
-    if mode == "hints" and user_context and user_context.get("user_id"):
+    if resume_eligible and user_context and user_context.get("user_id"):
         existing = (
             db.query(Chat)
             .filter(

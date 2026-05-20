@@ -8,7 +8,11 @@ from backend.observability.metrics import (
     init_metrics,
     shutdown_metrics,
 )
-from backend.observability.sentry import init_sentry, shutdown_sentry
+from backend.observability.sentry import (
+    capture_cron_checkin,
+    init_sentry,
+    shutdown_sentry,
+)
 from backend.observability.service import (
     GenerationHandle,
     ObservabilityService,
@@ -44,6 +48,7 @@ __all__ = [
     "SpanHandle",
     "TraceHandle",
     "begin_trace",
+    "capture_cron_checkin",
     "capture_event",
     "get_metrics",
     "get_observability",

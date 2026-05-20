@@ -113,6 +113,38 @@ def init_sentry() -> None:
         logger.exception("Failed to initialize Sentry; staying disabled")
 
 
+def capture_cron_checkin(
+    *,
+    monitor_slug: str,
+    status: str,
+    check_in_id: str | None = None,
+    duration: float | None = None,
+    monitor_config: dict[str, Any] | None = None,
+) -> str | None:
+    """Send a Sentry Crons check-in. No-op when Sentry is disabled.
+
+    Used as an internal heartbeat for background cron jobs: a missed sequence
+    of "ok" check-ins triggers a Sentry alert to the team. Never surfaces to
+    end users. Returns the check-in id (to correlate in_progress → ok/error),
+    or None when Sentry is not initialized.
+    """
+    if not _initialized:
+        return None
+    try:
+        import sentry_sdk
+
+        return sentry_sdk.crons.capture_checkin(
+            monitor_slug=monitor_slug,
+            status=status,
+            check_in_id=check_in_id,
+            duration=duration,
+            monitor_config=monitor_config,
+        )
+    except Exception:
+        logger.warning("sentry_cron_checkin_failed slug=%s", monitor_slug, exc_info=True)
+        return None
+
+
 def shutdown_sentry() -> None:
     global _initialized
     if not _initialized:

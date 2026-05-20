@@ -17,6 +17,7 @@ from arq.worker import run_worker
 
 from backend.core.config import settings
 from backend.core.queue import get_worker_settings
+from backend.observability import init_sentry
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ def main() -> None:
             "REDIS_URL is not configured — the ARQ worker cannot start. "
             "Set REDIS_URL in the environment (Railway add-on or local dev)."
         )
+    # Worker runs in its own process and never went through the FastAPI
+    # lifespan, so Sentry must be initialised here too — otherwise cron
+    # heartbeats and crashes in this process are invisible.
+    init_sentry()
     _load_job_modules()
     run_worker(get_worker_settings())
 

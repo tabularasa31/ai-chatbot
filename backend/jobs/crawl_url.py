@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 _JOB_NAME = "crawl_url_source"
 _MAX_CRAWL_JOBS_PER_TICK = 100
 
+# Sentry Crons heartbeat: a missed sequence of "ok" check-ins means the worker
+# process is dead and scheduled re-crawls have silently stopped (the failure
+# mode that froze every bot's KB on a stale snapshot). Internal-only alert —
+# never surfaced to tenants. ``schedule`` mirrors ``scheduled_crawl_cron``.
+_CRON_MONITOR_SLUG = "scheduled-crawl-tick"
+_CRON_MONITOR_CONFIG = {
+    "schedule": {"type": "crontab", "value": "0,15,30,45 * * * *"},
+    "checkin_margin": 5,
+    "max_runtime": 10,
+    "failure_issue_threshold": 1,
+    "recovery_threshold": 1,
+}
+
 
 @register_job(name=_JOB_NAME, max_attempts=3)
 async def crawl_url_source_job(ctx: dict[str, Any], source_id: str, api_key: str) -> None:
@@ -98,6 +111,13 @@ async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:
     picks them up.
     """
     from backend.models import SourceStatus, Tenant, UrlSource
+    from backend.observability import capture_cron_checkin
+
+    check_in_id = capture_cron_checkin(
+        monitor_slug=_CRON_MONITOR_SLUG,
+        status="in_progress",
+        monitor_config=_CRON_MONITOR_CONFIG,
+    )
 
     # Naive UTC: ``UrlSource.next_crawl_at`` is ``DateTime`` (no
     # ``timezone=True``) and this query runs through asyncpg via
@@ -107,32 +127,47 @@ async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:
     # the cron tick from failing every minute.
     now = _utcnow()
 
-    async with core_db.AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(UrlSource, Tenant.openai_api_key)
-            .join(Tenant, UrlSource.tenant_id == Tenant.id)
-            .where(
-                Tenant.openai_api_key.isnot(None),
-                UrlSource.status != SourceStatus.indexing.value,
-                (
-                    (UrlSource.next_crawl_at <= now)
-                    | (UrlSource.status == SourceStatus.queued.value)
-                ),
+    try:
+        async with core_db.AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(UrlSource, Tenant.openai_api_key)
+                .join(Tenant, UrlSource.tenant_id == Tenant.id)
+                .where(
+                    Tenant.openai_api_key.isnot(None),
+                    UrlSource.status != SourceStatus.indexing.value,
+                    (
+                        (UrlSource.next_crawl_at <= now)
+                        | (UrlSource.status == SourceStatus.queued.value)
+                    ),
+                )
+                .limit(_MAX_CRAWL_JOBS_PER_TICK)
             )
-            .limit(_MAX_CRAWL_JOBS_PER_TICK)
-        )
-        rows = result.all()
+            rows = result.all()
 
-    enqueued = 0
-    for source, api_key in rows:
-        job_id = await enqueue_crawl_for_source(
-            source_id=source.id,
-            api_key=api_key,
-            tenant_id=source.tenant_id,
+        enqueued = 0
+        for source, api_key in rows:
+            job_id = await enqueue_crawl_for_source(
+                source_id=source.id,
+                api_key=api_key,
+                tenant_id=source.tenant_id,
+            )
+            if job_id:
+                enqueued += 1
+    except Exception:
+        capture_cron_checkin(
+            monitor_slug=_CRON_MONITOR_SLUG,
+            status="error",
+            check_in_id=check_in_id,
+            duration=(_utcnow() - now).total_seconds(),
         )
-        if job_id:
-            enqueued += 1
+        raise
 
+    capture_cron_checkin(
+        monitor_slug=_CRON_MONITOR_SLUG,
+        status="ok",
+        check_in_id=check_in_id,
+        duration=(_utcnow() - now).total_seconds(),
+    )
     logger.info("scheduled_crawl_tick due=%d enqueued=%d", len(rows), enqueued)
 
 

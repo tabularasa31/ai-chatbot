@@ -579,6 +579,107 @@ def test_widget_chat_hints_session_increments_user_session_turns(
     assert row.conversation_turns == 1
 
 
+def _setup_widget_tenant(tenant: TestClient, db_session: Session, email: str) -> str:
+    """Register a verified user, create a tenant + bot, return bot public_id."""
+    token = register_and_verify_user(tenant, db_session, email=email)
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Widget Resume Co"},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    return _create_bot(tenant, token)
+
+
+def test_widget_session_init_resumes_open_session_for_identified_user(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume@example.com")
+
+    first = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-99"}},
+    )
+    assert first.status_code == 200
+    assert first.json()["resumed"] is False
+    first_session = first.json()["session_id"]
+
+    # Same identified user, fresh "device" (no localStorage) → resume.
+    second = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-99"}},
+    )
+    assert second.status_code == 200
+    assert second.json()["resumed"] is True
+    assert second.json()["session_id"] == first_session
+
+
+def test_widget_session_init_new_session_when_last_ended(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    from datetime import UTC, datetime
+
+    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-ended@example.com")
+
+    first = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-ended"}},
+    )
+    first_session = first.json()["session_id"]
+
+    chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(first_session)).one()
+    chat.ended_at = datetime.now(UTC)
+    db_session.commit()
+
+    second = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"user_id": "ext-ended"}},
+    )
+    assert second.status_code == 200
+    assert second.json()["resumed"] is False
+    assert second.json()["session_id"] != first_session
+
+
+def test_widget_session_init_anonymous_always_new(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-anon@example.com")
+
+    first = tenant.post("/widget/session/init", json={"bot_id": bot_public_id})
+    second = tenant.post("/widget/session/init", json={"bot_id": bot_public_id})
+    assert first.json()["mode"] == "anonymous"
+    assert first.json()["resumed"] is False
+    assert second.json()["resumed"] is False
+    assert first.json()["session_id"] != second.json()["session_id"]
+
+
+def test_widget_session_init_email_only_hint_never_resumes(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    # Email is too guessable to safely reattach over a public endpoint, so an
+    # email-only hint always starts a fresh session even on repeat init.
+    bot_public_id = _setup_widget_tenant(tenant, db_session, "widget-resume-email@example.com")
+
+    first = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"email": "visitor@example.com"}},
+    )
+    assert first.json()["resumed"] is False
+    first_session = first.json()["session_id"]
+
+    second = tenant.post(
+        "/widget/session/init",
+        json={"bot_id": bot_public_id, "user_hints": {"email": "visitor@example.com"}},
+    )
+    assert second.json()["resumed"] is False
+    assert second.json()["session_id"] != first_session
+
+
 def test_widget_chat_stream_sse(
     tenant: TestClient,
     db_session: Session,

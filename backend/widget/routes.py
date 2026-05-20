@@ -21,7 +21,10 @@ from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.chat.service import async_process_chat_message
-from backend.contact_sessions.service import start_user_session
+from backend.contact_sessions.service import (
+    start_user_session,
+    sync_user_session_identity,
+)
 from backend.core import db as core_db
 from backend.core.config import settings
 from backend.core.db import get_db
@@ -76,6 +79,7 @@ class WidgetSessionInitRequest(BaseModel):
 class WidgetSessionInitResponse(BaseModel):
     session_id: uuid.UUID
     mode: Literal["hints", "anonymous"]
+    resumed: bool = False
 
 
 class WidgetChatRequest(BaseModel):
@@ -227,10 +231,15 @@ def widget_session_init(
     mode: Literal["hints", "anonymous"] = "anonymous"
     locale = sanitize_locale(body.locale)
     user_context: dict | None = None
+    # Only an explicit user_id is eligible for cross-device resume. An email is
+    # too guessable to safely reattach to another visitor's live conversation
+    # over a public endpoint, so the synthesized hint:<email> id never resumes.
+    resume_eligible = False
 
     if body.user_hints:
         hints = sanitize_user_hints(body.user_hints)
         if hints:
+            resume_eligible = "user_id" in hints
             # Synthesize a stable user_id when hints carry only an email so
             # ContactSession keying works (its contact_id == user_context.user_id).
             if "user_id" not in hints and "email" in hints:
@@ -248,6 +257,38 @@ def widget_session_init(
 
     if user_context is None and locale is not None:
         user_context = {"browser_locale": locale}
+
+    # Identified users resume their most recent still-open session so history
+    # survives cleared localStorage and follows them across devices.
+    if resume_eligible and user_context and user_context.get("user_id"):
+        existing = (
+            db.query(Chat)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.bot_id == _bot.id,
+                Chat.ended_at.is_(None),
+                Chat.user_context["user_id"].as_string()
+                == user_context["user_id"],
+            )
+            .order_by(Chat.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            existing.user_context = apply_identity_context_patch(
+                existing.user_context,
+                user_context,
+                browser_locale=locale,
+            )
+            sync_user_session_identity(
+                db,
+                tenant_id=tenant.id,
+                user_context=existing.user_context,
+            )
+            db.commit()
+            logger.info("widget_session_init_resumed")
+            return WidgetSessionInitResponse(
+                session_id=existing.session_id, mode=mode, resumed=True
+            )
 
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
@@ -269,7 +310,7 @@ def widget_session_init(
         )
     db.commit()
 
-    return WidgetSessionInitResponse(session_id=session_id, mode=mode)
+    return WidgetSessionInitResponse(session_id=session_id, mode=mode, resumed=False)
 
 
 @widget_router.post(

@@ -469,6 +469,40 @@ def _emit_quick_answer_lookup_event(
         logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)
 
 
+def _emit_speculative_retrieval_event(
+    *,
+    outcome: Literal["used", "wasted_reject", "fallback"],
+    duration_ms: float | None,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+) -> None:
+    """Emit a PostHog event for one speculative-retrieval outcome.
+
+    Lets us monitor the extra pgvector load the optimization introduces:
+    ``wasted_reject`` counts the (rare) turns where retrieval ran but the guard
+    rejected, so the result was thrown away.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    from backend.chat import service as _svc
+    try:
+        _svc.capture_event(
+            "speculative_retrieval.outcome",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "outcome": outcome,
+                "duration_ms": duration_ms,
+                "chat_id": chat_id,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit speculative_retrieval.outcome event", exc_info=True)
+
+
 def _strip_thought_tags(text: str) -> str:
     """Remove <thought>...</thought> blocks the model may emit for CoT reasoning.
 
@@ -2255,6 +2289,12 @@ class _PipelineState:
     retrieval: RetrievalContext | None = None
     reranker_rescued: bool = False
 
+    # Speculative retrieval: started concurrently with the relevance guard and
+    # consumed in _run_retrieval. Cancelled/discarded if the guard rejects.
+    retrieval_question: str | None = None
+    retrieve_kwargs: dict[str, Any] = field(default_factory=dict)
+    spec_retrieval_task: asyncio.Task[RetrievalContext] | None = None
+
 
 async def async_run_chat_pipeline(
     tenant_id: uuid.UUID,
@@ -2319,6 +2359,74 @@ async def async_run_chat_pipeline(
         )
 
     state = _PipelineState()
+
+    def _build_retrieval_plan() -> tuple[str, dict[str, Any]]:
+        """Compute the retrieval question + precomputed-embedding kwargs.
+
+        Pure and deterministic, so the speculative launch and the (fallback)
+        in-stage retrieval share identical inputs. For a short follow-up the
+        query is rewritten from chat history and embeddings are recomputed
+        downstream (no precomputed kwargs).
+        """
+        contextual_retrieval_query: str | None = None
+        if chat is not None and looks_like_short_followup(question):
+            contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
+        retrieval_question = (
+            contextual_retrieval_query if contextual_retrieval_query is not None else question
+        )
+        retrieve_kwargs: dict[str, Any] = {}
+        if contextual_retrieval_query is None:
+            retrieve_kwargs = dict(
+                precomputed_query_variants=state.query_variants,
+                precomputed_variant_vectors=state.variant_vectors,
+                precomputed_embedding_api_request_count=state.embed_api_request_count,
+                rewritten_variant=state.rewritten_variant,
+            )
+        return retrieval_question, retrieve_kwargs
+
+    async def _execute_retrieval(session: AsyncSession) -> RetrievalContext:
+        # Looked up via _svc so test monkeypatches on
+        # ``backend.chat.service.async_retrieve_context`` intercept the call.
+        return await _svc.async_retrieve_context(
+            tenant_id,
+            state.retrieval_question or question,
+            session,
+            api_key,
+            top_k=5,
+            trace=trace,
+            **state.retrieve_kwargs,
+        )
+
+    async def _speculative_retrieval() -> RetrievalContext:
+        """Run retrieval on a dedicated session for the speculative path.
+
+        A separate session (never the pipeline's ``db``, which is closed while
+        the relevance guard runs) avoids concurrent-use corruption, and the
+        ``async with`` releases the connection on cancellation — so a discarded
+        speculative turn leaves no dangling connection. Retrieval issues only
+        SELECTs and never commits, so nothing is persisted either.
+        """
+        import backend.core.db as core_db
+
+        async with core_db.AsyncSessionLocal() as spec_db:
+            return await _execute_retrieval(spec_db)
+
+    async def _cancel_speculative_retrieval() -> None:
+        """Cancel and drain the speculative task; release its session."""
+        task = state.spec_retrieval_task
+        if task is None:
+            return
+        state.spec_retrieval_task = None
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        _emit_speculative_retrieval_event(
+            outcome="wasted_reject",
+            duration_ms=None,
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            chat_id=chat_id,
+        )
 
     async def _run_pre_retrieval_concurrent() -> ChatPipelineResult | None:
         """Stage 1: KB-script detection, injection guard (gating), then concurrent
@@ -2640,7 +2748,17 @@ async def async_run_chat_pipeline(
                 language_context=language_context,
             )
 
-        # --- 4. Relevance pre-check ---
+        # --- 4. Speculative retrieval ---
+        # Start retrieval now, concurrently with the relevance-guard wait. Most
+        # turns pass the guard, so overlapping BM25+vector search with the
+        # 2-10 s guard call saves ~150-500 ms on p50. On guard reject the task
+        # is cancelled and its result discarded (see _speculative_retrieval for
+        # why this leaves no DB artifacts and no dangling connections).
+        state.retrieval_question, state.retrieve_kwargs = _build_retrieval_plan()
+        if state.variant_vectors:
+            state.spec_retrieval_task = asyncio.create_task(_speculative_retrieval())
+
+        # --- 5. Relevance pre-check ---
         # async_match_faq re-acquired a connection; release it before awaiting
         # rel_task (the relevance guard OpenAI call, 2-10 s).
         await db.close()
@@ -2650,6 +2768,7 @@ async def async_run_chat_pipeline(
             relevant, state.profile = True, _guard_profile
 
         if not relevant:
+            await _cancel_speculative_retrieval()
             reject_result = await async_build_reject_response_result(
                 reason=RejectReason.NOT_RELEVANT,
                 profile=state.profile,
@@ -2699,24 +2818,13 @@ async def async_run_chat_pipeline(
         return None
 
     async def _run_retrieval() -> ChatPipelineResult | None:
-        """Stage 2: vector + lexical retrieval, plus the low-retrieval guard."""
-        contextual_retrieval_query: str | None = None
-        if chat is not None and looks_like_short_followup(question):
-            contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
+        """Stage 2: consume speculative retrieval (or run it), low-retrieval guard.
 
-        # Native async retrieval — looked up via _svc so test monkeypatches on
-        # ``backend.chat.service.async_retrieve_context`` intercept the call.
-        retrieval_question = (
-            contextual_retrieval_query if contextual_retrieval_query is not None else question
-        )
-        retrieve_kwargs: dict[str, Any] = {}
-        if contextual_retrieval_query is None:
-            retrieve_kwargs = dict(
-                precomputed_query_variants=state.query_variants,
-                precomputed_variant_vectors=state.variant_vectors,
-                precomputed_embedding_api_request_count=state.embed_api_request_count,
-                rewritten_variant=state.rewritten_variant,
-            )
+        Retrieval was started speculatively in stage 1, concurrently with the
+        relevance guard. Here we await that result; if the task is missing or
+        failed we fall back to a fresh retrieval on ``db`` so a speculative
+        glitch never degrades the answer.
+        """
         if not state.variant_vectors:
             state.retrieval = RetrievalContext(
                 chunk_texts=[],
@@ -2727,16 +2835,34 @@ async def async_run_chat_pipeline(
                 best_confidence_score=None,
                 confidence_source="none",
             )
+        elif state.spec_retrieval_task is not None:
+            task = state.spec_retrieval_task
+            state.spec_retrieval_task = None
+            try:
+                state.retrieval = await task
+                _emit_speculative_retrieval_event(
+                    outcome="used",
+                    duration_ms=state.retrieval.retrieval_duration_ms,
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                )
+            except asyncio.CancelledError:
+                # Request cancelled (e.g. client disconnect) — propagate, never
+                # treat it as a speculative failure that warrants a fallback.
+                raise
+            except Exception:
+                logger.warning("speculative_retrieval_failed_fallback", exc_info=True)
+                state.retrieval = await _execute_retrieval(db)
+                _emit_speculative_retrieval_event(
+                    outcome="fallback",
+                    duration_ms=state.retrieval.retrieval_duration_ms,
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                )
         else:
-            state.retrieval = await _svc.async_retrieve_context(
-                tenant_id,
-                retrieval_question,
-                db,
-                api_key,
-                top_k=5,
-                trace=trace,
-                **retrieve_kwargs,
-            )
+            state.retrieval = await _execute_retrieval(db)
         if state.retrieval is not None:
             record_stage_ms(
                 trace,

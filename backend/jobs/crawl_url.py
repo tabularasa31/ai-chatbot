@@ -159,6 +159,7 @@ async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:
             status="error",
             check_in_id=check_in_id,
             duration=(_utcnow() - now).total_seconds(),
+            monitor_config=_CRON_MONITOR_CONFIG,
         )
         raise
 
@@ -167,6 +168,7 @@ async def _tick_scheduled_crawls(ctx: dict[str, Any]) -> None:
         status="ok",
         check_in_id=check_in_id,
         duration=(_utcnow() - now).total_seconds(),
+        monitor_config=_CRON_MONITOR_CONFIG,
     )
     logger.info("scheduled_crawl_tick due=%d enqueued=%d", len(rows), enqueued)
 

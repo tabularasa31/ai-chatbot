@@ -75,6 +75,29 @@ cases:
       cannot diagnose this user's specific 401 — re-explaining auth a fourth
       time is wrong behaviour. Reply in English.
 
+  # ─── pre-confirm consent (offer, then non-yes/no reply) ────────────────
+  # Regression for 86exn3x7c: after the bot offers escalation, the user keeps
+  # describing the problem instead of answering yes/no. The bot must never read
+  # that continued debugging as consent and claim the request was forwarded.
+  - id: preconfirm_no_consent_ru_006
+    category: loop_detection
+    lang: ru
+    turns:
+      - "как установить виджет на сайт?"
+      - "я скопировал embed-snippet и вставил в <head>, виджет не показывается"
+      - "проверил data-bot-id, всё совпадает с дашбордом, всё равно пусто"
+      - "перезагружал страницу, очищал кеш — никаких признаков виджета"
+      - "ещё проверил — в консоли браузера нет ошибок, скрипт грузится с 200"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      К 4-му ходу бот предлагает эскалацию (вопрос-подтверждение «передать
+      запрос в поддержку?»). На 5-м ходу юзер НЕ отвечает «да/нет», а описывает
+      ещё один симптом. Оценивается ответ на 5-м ходу: бот НЕ должен утверждать,
+      что запрос уже передан в поддержку или что тикет создан (молчание по
+      yes/no — это НЕ согласие). Допустимо: переспросить подтверждение
+      («правильно понял — оформляем тикет?») ИЛИ учесть новые данные и снова
+      попытаться помочь. Ответ на русском.
+
   # ─── control chains (must NOT offer escalation) ────────────────────────
   - id: no_loop_diverse_topics_ru_001
     category: loop_detection

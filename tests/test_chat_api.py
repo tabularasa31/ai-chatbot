@@ -309,6 +309,71 @@ def test_chat_no_embeddings(
     assert data.get("chat_ended") is False
 
 
+def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for 86exn3x7c (end-to-end).
+
+    Turn 1 has no docs → bot offers escalation (pre_confirm). On turn 2 the user
+    ignores the yes/no question and describes a new symptom (classifier → None).
+    The bot must NOT silently forward the request: no ticket is created, and the
+    turn falls through to RAG (which re-offers escalation since the KB is empty).
+    """
+    from backend.models import EscalationTicket
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    # The user's turn-2 reply is a substantive new symptom, not a yes/no answer.
+    monkeypatch.setattr(
+        "backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)
+    )
+
+    token = register_and_verify_user(tenant, db_session, email="preconf-noyes@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "PreConfirm NoYes Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    api_key = cl_resp.json()["api_key"]
+
+    first = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "How does your product work?"},
+    )
+    assert first.status_code == 200
+    session_id = first.json()["session_id"]
+
+    from backend.models import Chat
+
+    chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(session_id)).one()
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is True
+
+    second = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={
+            "question": "I checked the data-bot-id, it matches the dashboard",
+            "session_id": session_id,
+        },
+    )
+    assert second.status_code == 200
+    # Crucially: no ticket minted without an explicit yes.
+    assert second.json()["ticket_number"] is None
+    assert second.json().get("chat_ended") is False
+    ticket_count = (
+        db_session.query(EscalationTicket)
+        .filter(EscalationTicket.tenant_id == tenant_id)
+        .count()
+    )
+    assert ticket_count == 0
+
+
 def test_chat_uses_context(
     mock_openai_client: Mock,
     tenant: TestClient,

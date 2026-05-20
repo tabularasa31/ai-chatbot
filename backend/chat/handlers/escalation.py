@@ -527,7 +527,7 @@ class EscalationStateMachine(PipelineHandler):
             trace_source="escalation_explicit_request",
         )
 
-    def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome:
+    def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         """Handle a pending pre-confirmation turn.
 
         Two-stage:
@@ -537,11 +537,20 @@ class EscalationStateMachine(PipelineHandler):
              it removes the prompt-mixing bug where the LLM combined a
              pre_confirm question with a handoff-style "your request has
              been forwarded" sentence in the same reply.
-          2. The user-facing message is rendered separately:
-             - ``yes``    → existing handoff-phase LLM call (after ticket
+          2. The decision drives the turn:
+             - ``yes``     → existing handoff-phase LLM call (after ticket
                creation), unchanged.
-             - ``no``     → static ``declined`` template.
-             - ``unclear`` → static ``clarify`` template.
+             - ``no``      → static ``declined`` template.
+             - ``unclear`` → static ``clarify`` template (re-ask). We never
+               auto-promote a repeated ``unclear`` to ``yes``: a support
+               ticket only gets created on an explicit user confirmation.
+             - ``null``    → the user ignored the handoff question and said
+               something substantive (kept describing the problem, or
+               switched topic). Treating that as consent would forward
+               debugging noise to support, so we clear the pre_confirm gate
+               and return ``None`` to fall through to ``RagHandler``, which
+               answers the new message afresh and re-offers escalation
+               itself if the KB still can't resolve it.
         """
         _svc = _svc_lookup()
         chat = ctx.chat
@@ -552,21 +561,13 @@ class EscalationStateMachine(PipelineHandler):
         )
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         try:
-            decision_raw, classify_tokens = await_only(
+            decision, classify_tokens = await_only(
                 asyncio.to_thread(
                     _svc.classify_pre_confirm_reply,
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                 )
             )
-            # Treat ``null`` (substantive non-yes/no reply) the same as
-            # ``unclear`` here — both drive the re-ask path on the first
-            # round and the auto-yes promotion on the second. Mirrors the
-            # pre-refactor behaviour where the LLM's ``followup_decision``
-            # also degraded to "unclear" via the ``or "unclear"`` idiom.
-            decision = decision_raw or "unclear"
-            if decision == "unclear" and _escalation_clarify_already_asked(chat):
-                decision = "yes"
 
             if decision == "yes":
                 return self._create_ticket_and_handoff(
@@ -614,7 +615,28 @@ class EscalationStateMachine(PipelineHandler):
                     escalated=False,
                 )
 
-            # unclear — ask once more; second unclear defaults to yes above
+            if decision is None:
+                # Substantive non-yes/no reply: the user kept describing their
+                # problem (new symptom) or switched topic instead of answering
+                # the handoff question. Never read continued debugging as
+                # consent — clear the pre_confirm gate and fall through to
+                # RagHandler so the new message gets a fresh KB answer (which
+                # re-offers escalation itself if it still can't resolve it).
+                # Mirrors the vanished-ticket fall-through in
+                # _handle_awaiting_email: commit on the sync session so
+                # RagHandler observes the cleared flag, then return None.
+                chat.escalation_pre_confirm_pending = False
+                chat.escalation_pre_confirm_context = None
+                _clear_escalation_clarify_flag(chat)
+                ctx.db.add(chat)
+                ctx.db.commit()
+                if pre_confirm_span is not None:
+                    pre_confirm_span.end(output={"decision": None, "fell_through": True})
+                return None
+
+            # unclear — the user is hesitating or asking a meta-question about
+            # the handoff itself. Re-ask; a ticket is only ever created on an
+            # explicit "yes", so we never auto-escalate a stuck conversation.
             _set_escalation_clarify_flag(chat)
             ctx.db.add(chat)
             if pre_confirm_span is not None:

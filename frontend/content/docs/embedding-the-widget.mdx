@@ -108,7 +108,7 @@ Conversation history is stored on the server. The widget keeps a `session_id` in
 
 When `userHints` includes `user_id` or `email`, the storage key is scoped per visitor — different users on the same device get separate sessions.
 
-Cross-device resume is not supported: the `session_id` lives in the local browser only.
+For identified visitors (those passing `user_id` or `email` in `userHints`), the conversation also resumes across devices and after `localStorage` is cleared: the server reattaches the visitor to their most recent open conversation. Anonymous visitors (no `userHints`) always start a fresh session, and a conversation that has already ended is never resumed — a new session begins instead.
 
 When the bot escalates a conversation to a human agent, the chat is marked as ended. The transcript stays visible; a "Start new chat" button appears for the visitor to open a new session.
 

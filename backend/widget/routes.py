@@ -76,6 +76,7 @@ class WidgetSessionInitRequest(BaseModel):
 class WidgetSessionInitResponse(BaseModel):
     session_id: uuid.UUID
     mode: Literal["hints", "anonymous"]
+    resumed: bool = False
 
 
 class WidgetChatRequest(BaseModel):
@@ -249,6 +250,33 @@ def widget_session_init(
     if user_context is None and locale is not None:
         user_context = {"browser_locale": locale}
 
+    # Identified users resume their most recent still-open session so history
+    # survives cleared localStorage and follows them across devices.
+    if mode == "hints" and user_context and user_context.get("user_id"):
+        existing = (
+            db.query(Chat)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.bot_id == _bot.id,
+                Chat.ended_at.is_(None),
+                Chat.user_context["user_id"].as_string()
+                == user_context["user_id"],
+            )
+            .order_by(Chat.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            existing.user_context = apply_identity_context_patch(
+                existing.user_context,
+                user_context,
+                browser_locale=locale,
+            )
+            db.commit()
+            logger.info("widget_session_init_resumed")
+            return WidgetSessionInitResponse(
+                session_id=existing.session_id, mode=mode, resumed=True
+            )
+
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
     # Stamp bot_id up front to skip the lazy backfill in widget_chat.
@@ -269,7 +297,7 @@ def widget_session_init(
         )
     db.commit()
 
-    return WidgetSessionInitResponse(session_id=session_id, mode=mode)
+    return WidgetSessionInitResponse(session_id=session_id, mode=mode, resumed=False)
 
 
 @widget_router.post(

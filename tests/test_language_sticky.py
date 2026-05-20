@@ -576,7 +576,7 @@ def test_chat_escalation_uses_user_response_language(
 
     captured: dict[str, str] = {}
 
-    def _fake_escalation_turn(**kwargs):
+    def _fake_render_pre_confirm(**kwargs):
         captured["response_language"] = kwargs.get("response_language", "")
         return type(
             "EscalationOut",
@@ -585,8 +585,8 @@ def test_chat_escalation_uses_user_response_language(
         )()
 
     monkeypatch.setattr(
-        "backend.chat.service.complete_escalation_openai_turn",
-        _fake_escalation_turn,
+        "backend.chat.service.render_pre_confirm_text",
+        _fake_render_pre_confirm,
     )
     monkeypatch.setattr("backend.chat.service.fact_from_ticket", lambda *args, **kwargs: {})
     monkeypatch.setattr("backend.chat.service.build_chat_messages_for_openai", lambda *args, **kwargs: [])
@@ -600,7 +600,7 @@ def test_chat_escalation_uses_user_response_language(
             api_key=api_key,
         )
 
-    # The escalation LLM was told to write in the user's language, not English.
+    # The pre_confirm template was localized into the user's language, not English.
     assert captured["response_language"] == "ru"
 
     # The persisted turn language is the user's language; the change log uses
@@ -614,6 +614,87 @@ def test_chat_escalation_uses_user_response_language(
         and getattr(record, "reason", None) != "escalation_override"
         for record in records
     )
+
+
+def test_rag_escalation_engages_pre_confirm_fsm(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ClickUp 86exkk96x — Variant A.
+
+    When the RAG pipeline recommends escalation, the handler must engage the
+    pre_confirm FSM: persist ``escalation_pre_confirm_pending=True`` plus a
+    populated context, and *replace* the user-facing message with the canonical
+    pre_confirm template (no RAG verdict prefix, no free-text "two voices").
+    """
+    tenant_id, api_key = _chat_test_setup(tenant, db_session, "rag-escalate@example.com")
+    session_id = uuid.uuid4()
+    _patch_process_chat_dependencies(
+        monkeypatch,
+        {"what is your support email?": _detection("en")},
+    )
+
+    async def _escalating_pipeline(*args, **kwargs) -> ChatPipelineResult:
+        result = _make_pipeline_result_for_language(kwargs["language_context"].response_language)
+        return ChatPipelineResult(
+            raw_answer=result.raw_answer,
+            final_answer="RAG VERDICT: no documents cover this.",
+            tokens_used=result.tokens_used,
+            strategy=result.strategy,
+            reject_reason=result.reject_reason,
+            is_reject=result.is_reject,
+            is_faq_direct=result.is_faq_direct,
+            retrieval=result.retrieval,
+            escalation_recommended=True,
+            escalation_trigger=EscalationTrigger.low_similarity,
+        )
+
+    monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _escalating_pipeline)
+
+    def _fake_render_pre_confirm(**kwargs):
+        return type(
+            "EscalationOut",
+            (),
+            {"message_to_user": "PRE_CONFIRM_QUESTION", "tokens_used": 1},
+        )()
+
+    monkeypatch.setattr(
+        "backend.chat.service.render_pre_confirm_text",
+        _fake_render_pre_confirm,
+    )
+
+    outcome = process_chat_message(
+        tenant_id,
+        "what is your support email?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    # The outgoing message is the canonical template, NOT the RAG verdict.
+    assert outcome.text == "PRE_CONFIRM_QUESTION"
+    assert "RAG VERDICT" not in outcome.text
+
+    # FSM state persisted on the chat row in the same transaction.
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).one()
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is True
+    assert chat.escalation_pre_confirm_context is not None
+    assert chat.escalation_pre_confirm_context["trigger"] == EscalationTrigger.low_similarity.value
+    assert (
+        chat.escalation_pre_confirm_context["primary_question"]
+        == "what is your support email?"
+    )
+
+    # The persisted assistant message matches the template, not the RAG verdict.
+    assistant_msgs = (
+        db_session.query(Message)
+        .filter(Message.chat_id == chat.id, Message.role == MessageRole.assistant)
+        .all()
+    )
+    assert any(m.content == "PRE_CONFIRM_QUESTION" for m in assistant_msgs)
+    assert all("RAG VERDICT" not in m.content for m in assistant_msgs)
 
 
 # ---------------------------------------------------------------------------

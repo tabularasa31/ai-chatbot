@@ -2847,6 +2847,10 @@ async def async_run_chat_pipeline(
                     bot_public_id=bot_public_id,
                     chat_id=chat_id,
                 )
+            except asyncio.CancelledError:
+                # Request cancelled (e.g. client disconnect) — propagate, never
+                # treat it as a speculative failure that warrants a fallback.
+                raise
             except Exception:
                 logger.warning("speculative_retrieval_failed_fallback", exc_info=True)
                 state.retrieval = await _execute_retrieval(db)

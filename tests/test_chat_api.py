@@ -273,7 +273,7 @@ def test_chat_empty_followup_after_started_session_is_rejected(
 def test_chat_no_embeddings(
     mock_openai_client: Mock, tenant: TestClient, db_session: Session
 ) -> None:
-    """No docs uploaded → answer is 'I don't have information'."""
+    """No docs uploaded → pre_confirm escalation question (Variant A)."""
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
     token = register_and_verify_user(tenant, db_session, email="noemb@example.com")
@@ -292,12 +292,20 @@ def test_chat_no_embeddings(
     )
     assert response.status_code == 200
     data = response.json()
-    # No retrieved chunks → generation short-circuits to the canonical
-    # "no info" line in async_generate_answer; pre-confirm escalation fires.
-    # Ticket is NOT created on the first turn — user must confirm first.
-    assert data["text"].startswith("I don't have information about this.")
+    # No retrieved chunks → pre-confirm escalation fires. Variant A replaces
+    # the RAG verdict with the canonical "no_answer" pre_confirm message (no
+    # "two voices"): a brief "couldn't find an answer" preamble plus the handoff
+    # question, in one reply. Ticket is NOT created on the first turn — user
+    # must confirm first.
+    assert data["text"] == (
+        "I couldn't find an answer to this in the available information. "
+        "Would you like me to forward your request to our support team "
+        "so they can reply by email?"
+    )
     assert data["ticket_number"] is None
-    assert data["tokens_used"] == 15
+    # No-chunk RAG short-circuits without an LLM call (0 tokens) and the English
+    # pre_confirm template needs no localization call (0 tokens) → 0 total.
+    assert data["tokens_used"] == 0
     assert data.get("chat_ended") is False
 
 

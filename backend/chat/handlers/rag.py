@@ -1426,7 +1426,7 @@ class RagHandler(PipelineHandler):
             TurnContext as DecisionTurnContext,
         )
         from backend.escalation.service import chunks_preview_from_results
-        from backend.models import EscalationPhase, EscalationTrigger
+        from backend.models import EscalationTrigger
         from backend.search.service import (
             build_reliability_projection,
             build_variant_trace_metadata,
@@ -1441,11 +1441,9 @@ class RagHandler(PipelineHandler):
         _persist_turn_with_response_language = _svc._persist_turn_with_response_language
         _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
         _try_ingest_gap_signal = _svc._try_ingest_gap_signal
-        complete_escalation_openai_turn = _svc.complete_escalation_openai_turn
-        build_chat_messages_for_openai = _svc.build_chat_messages_for_openai
+        render_pre_confirm_text = _svc.render_pre_confirm_text
 
         chat = ctx.chat
-        msgs = build_chat_messages_for_openai(chat, ctx.redacted_question)
         # ``_async_dispatch`` always pre-computes the async pipeline result and
         # stores it in ``ctx.extras`` before invoking the handler, so this
         # handler is now strictly a persistence + analytics + escalation step.
@@ -1650,26 +1648,30 @@ class RagHandler(PipelineHandler):
                     "best_similarity_score": retrieval.best_confidence_score,
                     "retrieved_chunks": preview,
                 }
+                # Render the canonical pre_confirm message from a static
+                # template (same path PR #681 introduced for explicit human
+                # requests) instead of letting the general escalation LLM
+                # free-text it. The "no_answer" variant leads with a brief
+                # "I couldn't find an answer" before the handoff question, so
+                # this single message *replaces* the RAG verdict rather than
+                # appending to it — no "two voices in one reply". The FSM state
+                # set above is committed together with the assistant message by
+                # the downstream _persist_turn_with_response_language call.
+                #
                 # We are inside a SQLAlchemy run_sync greenlet that runs ON the
                 # event loop thread, so a direct sync OpenAI call here would
-                # freeze the loop for the 2-5 s of the handoff completion. Bridge
-                # back to the loop via ``await_only`` + ``asyncio.to_thread``: the
-                # greenlet suspends, the OpenAI call runs in a worker thread, and
-                # other coroutines progress in the meantime.
+                # freeze the loop for the duration of the localization call.
+                # Bridge back to the loop via ``await_only`` + ``asyncio.to_thread``.
                 _esc_openai_start = perf_counter()
                 esc = await_only(
                     asyncio.to_thread(
-                        complete_escalation_openai_turn,
-                        phase=EscalationPhase.pre_confirm,
-                        chat_messages=msgs,
-                        fact_json={
-                            "trigger": esc_trigger.value,
-                            "user_email": (ctx.effective_user_ctx or {}).get("email"),
-                            "clarify_round": 0,
-                        },
-                        latest_user_text=ctx.redacted_question,
-                        api_key=ctx.api_key,
+                        render_pre_confirm_text,
+                        variant="no_answer",
                         response_language=ctx.language_context.response_language,
+                        api_key=ctx.api_key,
+                        tenant_id=str(ctx.tenant_id),
+                        bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                        chat_id=str(chat.id),
                     )
                 )
                 record_stage_ms(
@@ -1677,10 +1679,13 @@ class RagHandler(PipelineHandler):
                     "escalation_openai_ms",
                     round((perf_counter() - _esc_openai_start) * 1000, 2),
                 )
-                answer = answer + "\n\n" + esc.message_to_user
+                answer = esc.message_to_user
                 tokens_used = tokens_used + esc.tokens_used
+                # The reply is now the generic handoff question, not a RAG
+                # answer — drop the retrieved sources so we don't persist or
+                # return citations that don't back this message.
+                document_ids = []
                 ctx.db.add(chat)
-                ctx.db.commit()
             except Exception as e:
                 logger.warning("Escalation T-1/T-2 pre-confirm failed, returning RAG answer only: %s", e)
                 chat.escalation_pre_confirm_pending = False

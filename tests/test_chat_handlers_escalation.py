@@ -171,3 +171,53 @@ def test_can_handle_returns_true_when_followup_pending(db_session: Session) -> N
     db_session.flush()
     ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
     assert EscalationStateMachine().can_handle(ctx) is True
+
+
+def test_explicit_request_escalates_immediately_without_pre_confirm(
+    db_session: Session,
+) -> None:
+    """An explicit human request must create a ticket immediately, bypassing the
+    pre_confirm gate.
+
+    Regression for the silent-escalation-loss bug: when explicit requests were
+    routed through pre_confirm, users who never replied "yes" left the chat
+    stuck in ``escalation_pre_confirm_pending`` and no ticket/email was ever
+    produced. The request itself is the confirmation, so the gate must be
+    skipped here (it still applies to bot-initiated low_similarity escalations).
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="connect me to a human please",
+        explicit_human_request=True,
+    )
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def _fake_handoff(
+        _self: Any,
+        _ctx: HandlerContext,
+        *,
+        pre_confirm_ctx: dict,
+        escalation_reason: str,
+        trace_source: str,
+        **_kwargs: Any,
+    ) -> Any:
+        captured["escalation_reason"] = escalation_reason
+        captured["trigger"] = pre_confirm_ctx["trigger"]
+        captured["primary_question"] = pre_confirm_ctx["primary_question"]
+        return sentinel
+
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel, "Explicit request must route to immediate handoff"
+    assert captured["escalation_reason"] == "explicit_human_request"
+    assert captured["trigger"] == "user_request"
+    assert captured["primary_question"] == "connect me to a human please"
+    # The pre_confirm gate must NOT be engaged for an explicit human request.
+    assert not chat.escalation_pre_confirm_pending

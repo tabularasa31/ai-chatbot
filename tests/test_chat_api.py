@@ -293,10 +293,12 @@ def test_chat_no_embeddings(
     assert response.status_code == 200
     data = response.json()
     # No retrieved chunks → pre-confirm escalation fires. Variant A replaces
-    # the RAG verdict with the canonical pre_confirm question (no "two voices"),
-    # so the user sees only the localized handoff prompt. Ticket is NOT created
-    # on the first turn — user must confirm first.
+    # the RAG verdict with the canonical "no_answer" pre_confirm message (no
+    # "two voices"): a brief "couldn't find an answer" preamble plus the handoff
+    # question, in one reply. Ticket is NOT created on the first turn — user
+    # must confirm first.
     assert data["text"] == (
+        "I couldn't find an answer to this in the available information. "
         "Would you like me to forward your request to our support team "
         "so they can reply by email?"
     )

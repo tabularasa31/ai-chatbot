@@ -1884,14 +1884,17 @@ def test_render_pre_confirm_text_initial_localizes_canonical_template(
 def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The three variants must localize three different canonical strings.
+    """The variants must localize different canonical strings.
     Otherwise the ``no`` and ``unclear`` branches would echo the same text
-    as the initial question and the UX would look like a stuck loop.
+    as the initial question and the UX would look like a stuck loop. The
+    ``no_answer`` variant additionally leads with a "couldn't find an answer"
+    preamble, distinct from the bare ``initial`` question.
     """
     from backend.chat.language import LocalizationResult
     from backend.escalation.openai_escalation import (
         PRE_CONFIRM_CLARIFY_EN,
         PRE_CONFIRM_DECLINED_EN,
+        PRE_CONFIRM_NO_ANSWER_EN,
         PRE_CONFIRM_QUESTION_EN,
         render_pre_confirm_text,
     )
@@ -1908,15 +1911,17 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     )
 
     render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
+    render_pre_confirm_text(variant="no_answer", response_language="en", api_key="k")
     render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
     render_pre_confirm_text(variant="declined", response_language="en", api_key="k")
 
     assert seen == [
         PRE_CONFIRM_QUESTION_EN,
+        PRE_CONFIRM_NO_ANSWER_EN,
         PRE_CONFIRM_CLARIFY_EN,
         PRE_CONFIRM_DECLINED_EN,
     ]
-    assert len(set(seen)) == 3, "three variants must use three distinct canonicals"
+    assert len(set(seen)) == 4, "four variants must use four distinct canonicals"
 
 
 def test_classify_pre_confirm_reply_parses_decision_field(

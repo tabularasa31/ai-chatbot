@@ -1648,14 +1648,15 @@ class RagHandler(PipelineHandler):
                     "best_similarity_score": retrieval.best_confidence_score,
                     "retrieved_chunks": preview,
                 }
-                # Render the canonical pre_confirm question from a static
+                # Render the canonical pre_confirm message from a static
                 # template (same path PR #681 introduced for explicit human
                 # requests) instead of letting the general escalation LLM
-                # free-text it. This *replaces* the RAG verdict rather than
-                # appending to it, so the user sees a single clear handoff
-                # question — no "two voices in one reply". The FSM state set
-                # above is committed together with the assistant message by the
-                # downstream _persist_turn_with_response_language call.
+                # free-text it. The "no_answer" variant leads with a brief
+                # "I couldn't find an answer" before the handoff question, so
+                # this single message *replaces* the RAG verdict rather than
+                # appending to it — no "two voices in one reply". The FSM state
+                # set above is committed together with the assistant message by
+                # the downstream _persist_turn_with_response_language call.
                 #
                 # We are inside a SQLAlchemy run_sync greenlet that runs ON the
                 # event loop thread, so a direct sync OpenAI call here would
@@ -1665,7 +1666,7 @@ class RagHandler(PipelineHandler):
                 esc = await_only(
                     asyncio.to_thread(
                         render_pre_confirm_text,
-                        variant="initial",
+                        variant="no_answer",
                         response_language=ctx.language_context.response_language,
                         api_key=ctx.api_key,
                         tenant_id=str(ctx.tenant_id),

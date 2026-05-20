@@ -49,6 +49,15 @@ PRE_CONFIRM_QUESTION_EN = (
     "Would you like me to forward your request to our support team "
     "so they can reply by email?"
 )
+# Used when escalation is triggered by a failed knowledge-base lookup (the
+# bot has no answer), as opposed to an explicit "connect me to support"
+# request. Leads with a brief "I couldn't find an answer" so the handoff
+# question doesn't appear out of nowhere.
+PRE_CONFIRM_NO_ANSWER_EN = (
+    "I couldn't find an answer to this in the available information. "
+    "Would you like me to forward your request to our support team "
+    "so they can reply by email?"
+)
 PRE_CONFIRM_CLARIFY_EN = (
     "Just to confirm — should I forward your request to our support team "
     "for an email reply?"
@@ -67,7 +76,7 @@ class EscalationLlmResult(BaseModel):
 
 def render_pre_confirm_text(
     *,
-    variant: Literal["initial", "clarify", "declined"],
+    variant: Literal["initial", "no_answer", "clarify", "declined"],
     response_language: str,
     api_key: str,
     tenant_id: str | None = None,
@@ -79,11 +88,13 @@ def render_pre_confirm_text(
     Always emits an ``EscalationLlmResult`` with ``followup_decision=None``
     so callers that store ``out.message_to_user`` and ``out.tokens_used``
     keep working unchanged. The variant chooses which canonical phrase
-    gets localized — initial question, repeat after an ambiguous reply,
+    gets localized — bare initial question (explicit human request),
+    no-answer question (failed KB lookup), repeat after an ambiguous reply,
     or polite acknowledgement of a decline.
     """
     canonical = {
         "initial": PRE_CONFIRM_QUESTION_EN,
+        "no_answer": PRE_CONFIRM_NO_ANSWER_EN,
         "clarify": PRE_CONFIRM_CLARIFY_EN,
         "declined": PRE_CONFIRM_DECLINED_EN,
     }[variant]

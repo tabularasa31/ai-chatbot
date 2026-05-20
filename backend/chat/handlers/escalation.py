@@ -373,58 +373,156 @@ class EscalationStateMachine(PipelineHandler):
                 )
             raise
 
-    def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
-        """T-3: explicit human request — ask for confirmation before creating ticket.
+    def _create_ticket_and_handoff(
+        self,
+        ctx: HandlerContext,
+        *,
+        pre_confirm_ctx: dict,
+        escalation_reason: str,
+        trace_source: str,
+        extra_tokens: int = 0,
+        span: Any | None = None,
+        span_output_extra: dict | None = None,
+    ) -> ChatTurnOutcome:
+        """Create the escalation ticket and render the handoff reply.
 
-        Renders the confirmation question from a canonical English template
-        through ``localize_text_to_language_result`` rather than the
-        general-purpose escalation LLM. This eliminates the prompt-mixing bug
-        where the model emitted handoff-style text ("Ваш запрос передан…")
-        alongside the pre_confirm question in a single reply.
+        Shared by the pre_confirm "yes" branch and the explicit human-request
+        path (which skips confirmation entirely). ``pre_confirm_ctx`` carries
+        the canonical ticket question and retrieval context; for the direct
+        human-request path it is synthesised on the fly.
         """
         _svc = _svc_lookup()
         chat = ctx.chat
-        if ctx.trace is not None:
-            human_request_span = ctx.trace.span(
+        chat.escalation_pre_confirm_pending = False
+        _clear_escalation_clarify_flag(chat)
+        # Merge before ticket creation: _notify_tenant_new_ticket inside
+        # create_escalation_ticket lazy-loads ticket.chat, which would create a
+        # duplicate Chat identity in the session if we don't merge first.
+        # Merging here prevents the InvalidRequestError that would silently
+        # swallow the email notification.
+        chat = ctx.db.merge(chat)
+        ctx.chat = chat
+        ctx.db.add(chat)
+        esc_trigger = EscalationTrigger(
+            pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
+        )
+        # Keep `pre_confirm_ctx["primary_question"]` as the canonical ticket
+        # question: for low-similarity pre-confirm it holds the actual user
+        # query, whereas `ctx.question` on a confirmation turn is typically just
+        # the bare "yes". The current turn is surfaced separately via
+        # `latest_user_text`, which appends it to the email transcript.
+        ticket = _svc.create_escalation_ticket(
+            ctx.tenant_id,
+            pre_confirm_ctx.get("primary_question") or ctx.question,
+            esc_trigger,
+            ctx.db,
+            chat_id=chat.id,
+            session_id=ctx.session_id,
+            best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
+            retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
+            user_context=ctx.effective_user_ctx,
+            optional_entity_types=ctx.optional_entity_types,
+            latest_user_text=ctx.question,
+        )
+        chat.escalation_pre_confirm_context = None
+        phase = (
+            EscalationPhase.handoff_ask_email
+            if not ticket.user_email
+            else EscalationPhase.handoff_email_known
+        )
+        msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
+        out_handoff = await_only(
+            asyncio.to_thread(
+                _svc.complete_escalation_openai_turn,
+                phase=phase,
+                chat_messages=msgs,
+                fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                latest_user_text=ctx.redacted_question,
+                api_key=ctx.api_key,
+                response_language=ctx.language_context.response_language,
+            )
+        )
+        out_handoff.tokens_used += extra_tokens
+        if not ticket.user_email:
+            chat.escalation_awaiting_ticket_id = ticket.id
+        else:
+            chat.escalation_followup_pending = True
+        ctx.db.add(chat)
+        if span is not None:
+            span.end(output={**(span_output_extra or {}), "ticket": ticket.ticket_number})
+        _svc._emit_chat_escalated_event(
+            tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
+            bot_public_id=ctx.bot_public_id,
+            chat_id=str(chat.id),
+            escalation_reason=escalation_reason,
+            escalation_trigger=esc_trigger.value,
+            plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
+            priority=ticket.priority,
+        )
+        outcome = _svc._escalation_turn_response(
+            db=ctx.db,
+            chat=chat,
+            tenant_id=ctx.tenant_id,
+            language_context=ctx.language_context,
+            question=ctx.question,
+            out=out_handoff,
+            optional_entity_types=ctx.optional_entity_types,
+            trace=ctx.trace,
+            trace_source=trace_source,
+            chat_ended=False,
+            escalated=True,
+            ticket_number=ticket.ticket_number,
+        )
+        # `create_escalation_ticket` above sent the initial notify with this
+        # turn bundled via `latest_user_text`; advance the marker past the
+        # just-persisted message to prevent re-send.
+        try:
+            ctx.db.refresh(ticket)
+            advance_notification_marker_to_current(ticket, ctx.db)
+            ctx.db.commit()
+        except Exception as marker_exc:
+            logger.warning(
+                "notify marker advance failed (ticket=%s): %s",
+                ticket.ticket_number,
+                marker_exc,
+            )
+            ctx.db.rollback()
+        return outcome
+
+    def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+        """T-3: explicit human request — escalate immediately, no confirmation.
+
+        An explicit "connect me to a human" is itself the confirmation, so the
+        pre_confirm gate is skipped here: gating it only loses tickets when the
+        user abandons before answering "yes". The pre_confirm step still applies
+        to bot-initiated escalations (low_similarity / no_documents), where the
+        user has not actually asked for a human.
+        """
+        chat = ctx.chat
+        human_request_span = (
+            ctx.trace.span(
                 name="human-request-detection",
                 input={"question": ctx.redacted_question},
             )
+            if ctx.trace is not None
+            else None
+        )
+        if human_request_span is not None:
             human_request_span.end(output={"matched": True})
         try:
-            chat.escalation_pre_confirm_pending = True
-            chat.escalation_pre_confirm_context = {
-                "trigger": EscalationTrigger.user_request.value,
-                "primary_question": ctx.question,
-                "best_similarity_score": None,
-                "retrieved_chunks": None,
-            }
-            out = await_only(
-                asyncio.to_thread(
-                    _svc.render_pre_confirm_text,
-                    variant="initial",
-                    response_language=ctx.language_context.response_language,
-                    api_key=ctx.api_key,
-                    tenant_id=str(ctx.tenant_id),
-                    bot_id=str(ctx.bot_id) if ctx.bot_id else None,
-                    chat_id=str(chat.id),
-                )
-            )
-            ctx.db.add(chat)
-            return _svc._escalation_turn_response(
-                db=ctx.db,
-                chat=chat,
-                tenant_id=ctx.tenant_id,
-                language_context=ctx.language_context,
-                question=ctx.question,
-                out=out,
-                optional_entity_types=ctx.optional_entity_types,
-                trace=ctx.trace,
-                trace_source="escalation_pre_confirm_pending",
-                chat_ended=False,
-                escalated=False,
+            return self._create_ticket_and_handoff(
+                ctx,
+                pre_confirm_ctx={
+                    "trigger": EscalationTrigger.user_request.value,
+                    "primary_question": ctx.question,
+                    "best_similarity_score": None,
+                    "retrieved_chunks": None,
+                },
+                escalation_reason="explicit_human_request",
+                trace_source="escalation_explicit_request",
             )
         except Exception as e:
-            logger.warning("Escalation T-3 pre-confirm failed, falling back to RAG: %s", e)
+            logger.warning("Escalation T-3 immediate handoff failed, falling back to RAG: %s", e)
             chat.escalation_pre_confirm_pending = False
             chat.escalation_pre_confirm_context = None
             return None
@@ -471,107 +569,17 @@ class EscalationStateMachine(PipelineHandler):
                 decision = "yes"
 
             if decision == "yes":
-                chat.escalation_pre_confirm_pending = False
-                _clear_escalation_clarify_flag(chat)
-                # Merge before ticket creation: _notify_tenant_new_ticket inside
-                # create_escalation_ticket lazy-loads ticket.chat, which would
-                # create a duplicate Chat identity in the session if we don't
-                # merge first. Merging here prevents the InvalidRequestError that
-                # would silently swallow the email notification.
-                chat = ctx.db.merge(chat)
-                ctx.chat = chat
-                ctx.db.add(chat)
-                esc_trigger = EscalationTrigger(
-                    pre_confirm_ctx.get("trigger", EscalationTrigger.low_similarity.value)
-                )
-                # Keep `pre_confirm_ctx["primary_question"]` as the canonical
-                # ticket question: for low-similarity pre-confirm it holds the
-                # actual user query (e.g. "where do I download invoices"),
-                # whereas `ctx.question` on this turn is typically just the
-                # bare confirmation ("yes"). The substantive context from the
-                # current turn is surfaced separately via `latest_user_text`,
-                # which appends it to the email transcript.
-                ticket = _svc.create_escalation_ticket(
-                    ctx.tenant_id,
-                    pre_confirm_ctx.get("primary_question") or ctx.question,
-                    esc_trigger,
-                    ctx.db,
-                    chat_id=chat.id,
-                    session_id=ctx.session_id,
-                    best_similarity_score=pre_confirm_ctx.get("best_similarity_score"),
-                    retrieved_chunks=pre_confirm_ctx.get("retrieved_chunks"),
-                    user_context=ctx.effective_user_ctx,
-                    optional_entity_types=ctx.optional_entity_types,
-                    latest_user_text=ctx.question,
-                )
-                chat.escalation_pre_confirm_context = None
-                phase = (
-                    EscalationPhase.handoff_ask_email
-                    if not ticket.user_email
-                    else EscalationPhase.handoff_email_known
-                )
-                msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
-                out_handoff = await_only(
-                    asyncio.to_thread(
-                        _svc.complete_escalation_openai_turn,
-                        phase=phase,
-                        chat_messages=msgs,
-                        fact_json=_svc.fact_from_ticket(ticket, chat=chat),
-                        latest_user_text=ctx.redacted_question,
-                        api_key=ctx.api_key,
-                        response_language=ctx.language_context.response_language,
-                    )
-                )
-                # Fold the classifier tokens into the per-turn usage so
-                # analytics see the full cost of a pre_confirm→handoff turn.
-                out_handoff.tokens_used += classify_tokens
-                if not ticket.user_email:
-                    chat.escalation_awaiting_ticket_id = ticket.id
-                else:
-                    chat.escalation_followup_pending = True
-                ctx.db.add(chat)
-                if pre_confirm_span is not None:
-                    pre_confirm_span.end(
-                        output={"decision": decision, "ticket": ticket.ticket_number}
-                    )
-                _svc._emit_chat_escalated_event(
-                    tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
-                    bot_public_id=ctx.bot_public_id,
-                    chat_id=str(chat.id),
+                return self._create_ticket_and_handoff(
+                    ctx,
+                    pre_confirm_ctx=pre_confirm_ctx,
                     escalation_reason="pre_confirm_accepted",
-                    escalation_trigger=esc_trigger.value,
-                    plan_tier=(ctx.effective_user_ctx or {}).get("plan_tier"),
-                    priority=ticket.priority if ticket is not None else None,
-                )
-                outcome = _svc._escalation_turn_response(
-                    db=ctx.db,
-                    chat=chat,
-                    tenant_id=ctx.tenant_id,
-                    language_context=ctx.language_context,
-                    question=ctx.question,
-                    out=out_handoff,
-                    optional_entity_types=ctx.optional_entity_types,
-                    trace=ctx.trace,
                     trace_source="escalation_pre_confirm_accepted",
-                    chat_ended=False,
-                    escalated=True,
-                    ticket_number=ticket.ticket_number,
+                    # Fold the classifier tokens into the per-turn usage so
+                    # analytics see the full cost of a pre_confirm→handoff turn.
+                    extra_tokens=classify_tokens,
+                    span=pre_confirm_span,
+                    span_output_extra={"decision": decision},
                 )
-                # `create_escalation_ticket` above sent the initial notify with
-                # this turn bundled via `latest_user_text`; advance the marker
-                # past the just-persisted message to prevent re-send.
-                try:
-                    ctx.db.refresh(ticket)
-                    advance_notification_marker_to_current(ticket, ctx.db)
-                    ctx.db.commit()
-                except Exception as marker_exc:
-                    logger.warning(
-                        "notify marker advance failed (ticket=%s): %s",
-                        ticket.ticket_number,
-                        marker_exc,
-                    )
-                    ctx.db.rollback()
-                return outcome
 
             if decision == "no":
                 chat.escalation_pre_confirm_pending = False

@@ -101,8 +101,9 @@ class EscalationStateMachine(PipelineHandler):
         # asked for a human. Without this gate, a stale-pointer recovery
         # (vanished awaiting-ticket cleared above) would mint a fresh
         # escalation ticket on any ordinary reply, which the legacy inline
-        # flow did not do. Returns None on failure so the router retries
-        # with RagHandler.
+        # flow did not do. Escalates immediately (no pre_confirm); failures
+        # propagate rather than degrading to RagHandler once the ticket and
+        # support email have been committed.
         if ctx.explicit_human_request:
             return self._handle_explicit_request(ctx)
         return None
@@ -489,7 +490,7 @@ class EscalationStateMachine(PipelineHandler):
             ctx.db.rollback()
         return outcome
 
-    def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+    def _handle_explicit_request(self, ctx: HandlerContext) -> ChatTurnOutcome:
         """T-3: explicit human request — escalate immediately, no confirmation.
 
         An explicit "connect me to a human" is itself the confirmation, so the
@@ -497,8 +498,13 @@ class EscalationStateMachine(PipelineHandler):
         user abandons before answering "yes". The pre_confirm step still applies
         to bot-initiated escalations (low_similarity / no_documents), where the
         user has not actually asked for a human.
+
+        Failures propagate rather than falling through to RagHandler, mirroring
+        the pre_confirm "yes" branch. ``create_escalation_ticket`` commits the
+        ticket and sends the support email as its first side effect, so once we
+        are past it, degrading to a plain RAG answer would hide the escalation
+        from the user and a retry would mint a duplicate ticket.
         """
-        chat = ctx.chat
         human_request_span = (
             ctx.trace.span(
                 name="human-request-detection",
@@ -509,23 +515,17 @@ class EscalationStateMachine(PipelineHandler):
         )
         if human_request_span is not None:
             human_request_span.end(output={"matched": True})
-        try:
-            return self._create_ticket_and_handoff(
-                ctx,
-                pre_confirm_ctx={
-                    "trigger": EscalationTrigger.user_request.value,
-                    "primary_question": ctx.question,
-                    "best_similarity_score": None,
-                    "retrieved_chunks": None,
-                },
-                escalation_reason="explicit_human_request",
-                trace_source="escalation_explicit_request",
-            )
-        except Exception as e:
-            logger.warning("Escalation T-3 immediate handoff failed, falling back to RAG: %s", e)
-            chat.escalation_pre_confirm_pending = False
-            chat.escalation_pre_confirm_context = None
-            return None
+        return self._create_ticket_and_handoff(
+            ctx,
+            pre_confirm_ctx={
+                "trigger": EscalationTrigger.user_request.value,
+                "primary_question": ctx.question,
+                "best_similarity_score": None,
+                "retrieved_chunks": None,
+            },
+            escalation_reason="explicit_human_request",
+            trace_source="escalation_explicit_request",
+        )
 
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome:
         """Handle a pending pre-confirmation turn.

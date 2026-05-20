@@ -322,6 +322,47 @@ def test_pre_confirm_repeated_unclear_never_auto_escalates(
     assert chat.escalation_pre_confirm_pending is True
 
 
+def test_pre_confirm_null_reply_with_explicit_human_request_escalates(
+    db_session: Session,
+) -> None:
+    """Regression for PR #694 review (gemini medium).
+
+    If the substantive reply that clears the pre_confirm gate is *also* an
+    explicit human request, the FSM must still escalate this turn instead of
+    silently falling through to RAG. Returning None from _handle_pre_confirm
+    must drop into the explicit-request check, not bypass it.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_pre_confirm_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="still broken, just connect me to a human already",
+        explicit_human_request=True,
+    )
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def _fake_handoff(_self: Any, _ctx: HandlerContext, *, escalation_reason: str, **_kwargs: Any) -> Any:
+        captured["reason"] = escalation_reason
+        return sentinel
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)),
+        patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel, "Explicit human request in the reply must escalate"
+    assert captured["reason"] == "explicit_human_request"
+    db_session.refresh(chat)
+    # The pre_confirm gate was cleared before the explicit-request escalation.
+    assert chat.escalation_pre_confirm_pending is False
+
+
 def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
     """Sanity: an explicit ``yes`` still routes to ticket creation/handoff."""
     tenant = _make_persisted_tenant(db_session)

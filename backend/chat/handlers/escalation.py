@@ -94,7 +94,14 @@ class EscalationStateMachine(PipelineHandler):
             # in case another escalation state still applies; otherwise return
             # None so the router falls through to RagHandler.
         if chat.escalation_pre_confirm_pending:
-            return self._handle_pre_confirm(ctx)
+            outcome = self._handle_pre_confirm(ctx)
+            if outcome is not None:
+                return outcome
+            # Gate cleared on a substantive non-yes/no reply. Drop into the
+            # checks below rather than returning immediately: if that same
+            # message is also an explicit human request it must still escalate
+            # this turn; otherwise we fall through to RagHandler. Mirrors the
+            # vanished-ticket recovery in _handle_awaiting_email above.
         if chat.escalation_followup_pending:
             return self._handle_followup_yes_no(ctx)
         # Explicit human request (T-3) — only fires when the user actually

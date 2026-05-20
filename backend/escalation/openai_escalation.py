@@ -147,9 +147,13 @@ def classify_pre_confirm_reply(
 ) -> tuple[Literal["yes", "no", "unclear"] | None, int]:
     """Narrow LLM call: only returns the yes/no/unclear/null decision.
 
-    Returns ``(decision, tokens_used)``. Never raises — defaults to
-    ``(None, 0)`` on any failure so the caller can fall through to the
-    re-ask path.
+    Returns ``(decision, tokens_used)``. ``None`` is reserved for a
+    *successfully classified* substantive reply that is neither yes/no nor
+    a handoff meta-question (the caller drops the pre_confirm gate and
+    falls through to RAG on it). Any failure — API error or malformed
+    output — returns ``("unclear", 0)`` instead, so a transient outage
+    re-asks for confirmation and keeps the gate rather than silently
+    dropping it. Never raises.
     """
     model_name = model or settings.escalation_model
     _reasoning = is_reasoning_model(model_name)
@@ -181,7 +185,9 @@ def classify_pre_confirm_reply(
         return None, tokens
     except Exception as exc:
         logger.warning("classify_pre_confirm_reply failed: %s", exc)
-        return None, 0
+        # Fail safe to the re-ask path: never let a transient outage drop the
+        # pre_confirm gate (which would ignore a real yes/no and skip handoff).
+        return "unclear", 0
 
 
 ESCALATION_SYSTEM = """You are the same assistant as in the embedded support chat.

@@ -2016,9 +2016,11 @@ def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
 def test_classify_pre_confirm_reply_fails_safe_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """API blowups must degrade to ``(None, 0)`` rather than raise — the
-    handler turns ``None`` into ``unclear`` which re-asks the user, which
-    is the right fallback when we can't classify confidently.
+    """API blowups must degrade to ``("unclear", 0)`` rather than raise — and
+    must NOT degrade to ``None``. ``None`` makes the handler drop the
+    pre_confirm gate and fall through to RAG; on a transient outage that would
+    ignore a real yes/no and skip handoff. ``unclear`` re-asks and keeps the
+    gate, which is the safe fallback when we can't classify confidently.
     """
     from backend.escalation.openai_escalation import classify_pre_confirm_reply
 
@@ -2033,5 +2035,5 @@ def test_classify_pre_confirm_reply_fails_safe_on_exception(
         latest_user_text="yes",
         api_key="sk-test",
     )
-    assert decision is None
+    assert decision == "unclear"
     assert tokens == 0

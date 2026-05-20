@@ -8,9 +8,10 @@ escalation ticket on any ordinary reply).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from sqlalchemy.orm import Session
 
@@ -221,3 +222,168 @@ def test_explicit_request_escalates_immediately_without_pre_confirm(
     assert captured["primary_question"] == "connect me to a human please"
     # The pre_confirm gate must NOT be engaged for an explicit human request.
     assert not chat.escalation_pre_confirm_pending
+
+
+def _make_pre_confirm_chat(db: Session, tenant: Tenant, *, clarify: bool = False) -> Chat:
+    """A chat parked on the pre_confirm gate (bot asked 'forward to support?')."""
+    chat = Chat(
+        tenant_id=tenant.id,
+        session_id=uuid.uuid4(),
+        escalation_pre_confirm_pending=True,
+        escalation_pre_confirm_context={
+            "trigger": "low_similarity",
+            "primary_question": "my widget won't render",
+            "best_similarity_score": 0.31,
+            "retrieved_chunks": None,
+        },
+        user_context={"escalation_followup_clarify": True} if clarify else {},
+    )
+    db.add(chat)
+    db.flush()
+    return chat
+
+
+def _fail_if_ticket_created(_self: Any, _ctx: HandlerContext, **_kwargs: Any) -> Any:
+    raise AssertionError(
+        "pre_confirm escalated to a ticket without an explicit user 'yes'"
+    )
+
+
+def _drive(awaitable: Any) -> Any:
+    """Run the handler's ``await_only(asyncio.to_thread(...))`` calls in a sync
+    test, which has no SQLAlchemy greenlet context."""
+    return asyncio.run(awaitable)
+
+
+def test_pre_confirm_non_yes_no_reply_falls_through_without_ticket(
+    db_session: Session,
+) -> None:
+    """Regression for 86exn3x7c.
+
+    When the user answers the pre_confirm question with a substantive non-yes/no
+    reply (a new symptom or topic change → classifier returns ``None``), the bot
+    must NOT create a ticket. It clears the pre_confirm gate and yields to
+    RagHandler (returns None) so the new message gets a fresh KB answer.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_pre_confirm_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="I checked the data-bot-id, it matches the dashboard",
+    )
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)),
+        patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_created),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None, "Must yield to RagHandler, not answer from the FSM"
+    db_session.refresh(chat)
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.escalation_pre_confirm_context is None
+    assert (chat.user_context or {}).get("escalation_followup_clarify") is None
+
+
+def test_pre_confirm_repeated_unclear_never_auto_escalates(
+    db_session: Session,
+) -> None:
+    """Regression for 86exn3x7c.
+
+    The old flow promoted a *second* ``unclear`` reply to ``yes`` and silently
+    minted a ticket. A ticket must only be created on an explicit ``yes``, so a
+    repeated ``unclear`` (clarify flag already set) must re-ask, never escalate.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_pre_confirm_chat(db_session, tenant, clarify=True)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="wait, what do you mean by forwarding?",
+    )
+
+    sentinel = object()
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: ("unclear", 0)),
+        patch("backend.chat.service.render_pre_confirm_text", lambda **_kw: Mock(tokens_used=0)),
+        patch("backend.chat.service._escalation_turn_response", lambda **_kw: sentinel),
+        patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_created),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel, "Repeated unclear must re-ask, not escalate"
+    db_session.refresh(chat)
+    # Still parked on the gate awaiting an explicit answer.
+    assert chat.escalation_pre_confirm_pending is True
+
+
+def test_pre_confirm_null_reply_with_explicit_human_request_escalates(
+    db_session: Session,
+) -> None:
+    """Regression for PR #694 review (gemini medium).
+
+    If the substantive reply that clears the pre_confirm gate is *also* an
+    explicit human request, the FSM must still escalate this turn instead of
+    silently falling through to RAG. Returning None from _handle_pre_confirm
+    must drop into the explicit-request check, not bypass it.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_pre_confirm_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="still broken, just connect me to a human already",
+        explicit_human_request=True,
+    )
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def _fake_handoff(_self: Any, _ctx: HandlerContext, *, escalation_reason: str, **_kwargs: Any) -> Any:
+        captured["reason"] = escalation_reason
+        return sentinel
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)),
+        patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel, "Explicit human request in the reply must escalate"
+    assert captured["reason"] == "explicit_human_request"
+    db_session.refresh(chat)
+    # The pre_confirm gate was cleared before the explicit-request escalation.
+    assert chat.escalation_pre_confirm_pending is False
+
+
+def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
+    """Sanity: an explicit ``yes`` still routes to ticket creation/handoff."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_pre_confirm_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="yes please"
+    )
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def _fake_handoff(_self: Any, _ctx: HandlerContext, *, pre_confirm_ctx: dict, **_kwargs: Any) -> Any:
+        captured["trigger"] = pre_confirm_ctx["trigger"]
+        return sentinel
+
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: ("yes", 5)),
+        patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff),
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel
+    assert captured["trigger"] == "low_similarity"

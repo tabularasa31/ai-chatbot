@@ -85,6 +85,30 @@ def test_fresh_chat_is_not_swept(db_session: Session, monkeypatch) -> None:
     assert chat.ended_at is None
 
 
+def test_sweep_is_capped_and_drains_oldest_first(
+    db_session: Session, monkeypatch
+) -> None:
+    tenant = _make_tenant(db_session)
+    # Three inactive chats with distinct last-activity ages (oldest first).
+    oldest = _make_chat(db_session, tenant, age_minutes=120)
+    middle = _make_chat(db_session, tenant, age_minutes=100)
+    _make_chat(db_session, tenant, age_minutes=80)
+
+    monkeypatch.setattr(chat_session_sweeper, "_MAX_SESSIONS_PER_SWEEP", 2)
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        chat_session_sweeper,
+        "_emit_chat_session_ended_event",
+        lambda **kwargs: captured.append(kwargs),
+    )
+
+    count = sweep_inactive_chats(db_session)
+
+    assert count == 2
+    swept_sessions = {c["session_id"] for c in captured}
+    assert swept_sessions == {str(oldest.session_id), str(middle.session_id)}
+
+
 def test_already_ended_chat_is_not_re_emitted(
     db_session: Session, monkeypatch
 ) -> None:

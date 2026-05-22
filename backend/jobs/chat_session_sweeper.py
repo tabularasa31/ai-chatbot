@@ -15,7 +15,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.models import Chat
@@ -29,6 +29,9 @@ _sweeper_thread: threading.Thread | None = None
 _INACTIVITY_THRESHOLD_SECONDS = 3600  # 60 min of no activity ends a session
 _CHECK_INTERVAL_SECONDS = 300
 _STARTUP_DELAY_SECONDS = 60
+# Cap rows per pass so a large backlog drains over several passes (oldest
+# first) instead of loading every inactive chat into memory at once.
+_MAX_SESSIONS_PER_SWEEP = 500
 
 
 def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
@@ -41,30 +44,41 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     cutoff = reference - timedelta(seconds=_INACTIVITY_THRESHOLD_SECONDS)
     rows = (
         db.query(Chat)
+        .options(joinedload(Chat.tenant), joinedload(Chat.bot))
         .filter(Chat.ended_at.is_(None), Chat.updated_at < cutoff)
+        .order_by(Chat.updated_at)
+        .limit(_MAX_SESSIONS_PER_SWEEP)
         .all()
     )
     count = 0
     for chat in rows:
+        # ended_at tracks the last activity (updated_at), not the sweep time,
+        # so the reported duration reflects the real session length.
+        last_activity = chat.updated_at
+        tenant_public_id = getattr(getattr(chat, "tenant", None), "public_id", None)
+        bot_public_id = getattr(getattr(chat, "bot", None), "public_id", None)
+        session_id = str(chat.session_id) if chat.session_id else None
+        duration_ms = _session_duration_ms(chat.created_at, last_activity)
         try:
-            # ended_at tracks the last activity (updated_at), not the sweep
-            # time, so the reported duration reflects the real session length.
-            chat.ended_at = chat.updated_at
+            chat.ended_at = last_activity
             db.add(chat)
-            tenant = getattr(chat, "tenant", None)
-            bot = getattr(chat, "bot", None)
-            _emit_chat_session_ended_event(
-                tenant_public_id=getattr(tenant, "public_id", None),
-                bot_public_id=getattr(bot, "public_id", None),
-                chat_id=str(chat.id),
-                session_id=str(chat.session_id) if chat.session_id else None,
-                duration_ms=_session_duration_ms(chat.created_at, chat.ended_at),
-                outcome="timeout",
-            )
-            count += 1
+            db.commit()
         except Exception:
-            logger.exception("chat_session_sweeper failed for chat %s", chat.id)
-    db.commit()
+            logger.exception("chat_session_sweeper failed to close chat %s", chat.id)
+            db.rollback()
+            continue
+        # Emit only after the close is durably committed: a crash mid-pass can
+        # then never re-find this chat, so the event is at-most-once (no
+        # duplicate that would double-count the funnel).
+        _emit_chat_session_ended_event(
+            tenant_public_id=tenant_public_id,
+            bot_public_id=bot_public_id,
+            chat_id=str(chat.id),
+            session_id=session_id,
+            duration_ms=duration_ms,
+            outcome="timeout",
+        )
+        count += 1
     return count
 
 

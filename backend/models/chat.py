@@ -102,6 +102,11 @@ class Chat(Base):
     #          "best_similarity_score": float|null, "retrieved_chunks": list|null}
     escalation_pre_confirm_context = Column(JSON, nullable=True)
     ended_at = Column(DateTime, nullable=True)
+    # Analytics-only marker: set by the inactivity sweeper when the
+    # chat_session_ended event has been emitted. Distinct from ``ended_at``
+    # (which closes the conversation and routes the FSM to the closed handler)
+    # so reporting a session as ended does not make the chat un-resumable.
+    session_ended_event_at = Column(DateTime, nullable=True)
     clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_response_language = Column(String(16), nullable=True)
     # Once True, response_language is frozen at last_response_language and

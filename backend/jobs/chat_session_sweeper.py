@@ -1,9 +1,14 @@
-"""Background job: close inactive chat sessions and emit chat_session_ended.
+"""Background job: report inactive chat sessions via chat_session_ended.
 
 Widget chats are stateless per-turn HTTP with no explicit "close" signal, so
 the end of a session is detected by inactivity: a chat whose ``updated_at``
-(last activity) is older than the threshold and which has not been closed yet
-is marked ended and reported to PostHog.
+(last activity) is older than the threshold is reported to PostHog once.
+
+Idempotency uses ``Chat.session_ended_event_at`` (an analytics-only marker),
+NOT ``Chat.ended_at``. ``ended_at`` closes the conversation and routes later
+turns to the escalation "chat already closed" handler, so a returning user
+would be told the chat is closed. Reporting a session as ended for analytics
+must leave the chat resumable, hence the dedicated marker.
 
 Runs in a daemon thread (single-process safe — one Railway dyno), mirroring
 ``backend.jobs.kb_language_snapshot``.
@@ -35,39 +40,45 @@ _MAX_SESSIONS_PER_SWEEP = 500
 
 
 def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
-    """Close chats inactive past the threshold and emit chat_session_ended.
+    """Report chats inactive past the threshold via chat_session_ended.
 
-    Returns the number of sessions ended. The ``ended_at IS NULL`` filter makes
-    this idempotent: a chat closed in one pass is excluded from the next.
+    Returns the number of sessions reported. Idempotent via the
+    ``session_ended_event_at`` marker: a chat reported in one pass is excluded
+    from the next. Chats already closed by escalation (``ended_at`` set) are
+    skipped — that path emits its own event.
     """
     reference = now or _utcnow()
     cutoff = reference - timedelta(seconds=_INACTIVITY_THRESHOLD_SECONDS)
     rows = (
         db.query(Chat)
         .options(joinedload(Chat.tenant), joinedload(Chat.bot))
-        .filter(Chat.ended_at.is_(None), Chat.updated_at < cutoff)
+        .filter(
+            Chat.session_ended_event_at.is_(None),
+            Chat.ended_at.is_(None),
+            Chat.updated_at < cutoff,
+        )
         .order_by(Chat.updated_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)
         .all()
     )
     count = 0
     for chat in rows:
-        # ended_at tracks the last activity (updated_at), not the sweep time,
-        # so the reported duration reflects the real session length.
+        # Duration spans creation to last activity (updated_at), not the sweep
+        # time, so it reflects the real session length.
         last_activity = chat.updated_at
         tenant_public_id = getattr(getattr(chat, "tenant", None), "public_id", None)
         bot_public_id = getattr(getattr(chat, "bot", None), "public_id", None)
         session_id = str(chat.session_id) if chat.session_id else None
         duration_ms = _session_duration_ms(chat.created_at, last_activity)
         try:
-            chat.ended_at = last_activity
+            chat.session_ended_event_at = reference
             db.add(chat)
             db.commit()
         except Exception:
-            logger.exception("chat_session_sweeper failed to close chat %s", chat.id)
+            logger.exception("chat_session_sweeper failed to mark chat %s", chat.id)
             db.rollback()
             continue
-        # Emit only after the close is durably committed: a crash mid-pass can
+        # Emit only after the marker is durably committed: a crash mid-pass can
         # then never re-find this chat, so the event is at-most-once (no
         # duplicate that would double-count the funnel).
         _emit_chat_session_ended_event(

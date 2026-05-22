@@ -10,26 +10,23 @@ turns to the escalation "chat already closed" handler, so a returning user
 would be told the chat is closed. Reporting a session as ended for analytics
 must leave the chat resumable, hence the dedicated marker.
 
-Runs in a daemon thread (single-process safe — one Railway dyno), mirroring
-``backend.jobs.kb_language_snapshot``.
+Runs as a :class:`~backend.jobs._periodic.PeriodicJob` daemon thread
+(single-process safe — one Railway dyno).
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
+from backend.jobs._periodic import PeriodicJob
 from backend.models import Chat
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
-
-_shutdown_event = threading.Event()
-_sweeper_thread: threading.Thread | None = None
 
 _INACTIVITY_THRESHOLD_SECONDS = 3600  # 60 min of no activity ends a session
 _CHECK_INTERVAL_SECONDS = 300
@@ -93,37 +90,29 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     return count
 
 
-def _run_sweeper_loop() -> None:
-    _shutdown_event.wait(_STARTUP_DELAY_SECONDS)
-    while not _shutdown_event.is_set():
-        from backend.core.db import SessionLocal
+def _sweep_once() -> None:
+    from backend.core.db import SessionLocal
 
-        db = SessionLocal()
-        try:
-            count = sweep_inactive_chats(db)
-            if count:
-                logger.info("chat_session_sweeper: reported %d inactive sessions", count)
-        except Exception:
-            logger.exception("chat_session_sweeper loop error")
-        finally:
-            db.close()
-        _shutdown_event.wait(_CHECK_INTERVAL_SECONDS)
+    db = SessionLocal()
+    try:
+        count = sweep_inactive_chats(db)
+        if count:
+            logger.info("chat_session_sweeper: reported %d inactive sessions", count)
+    finally:
+        db.close()
+
+
+_job = PeriodicJob(
+    name="chat-session-sweeper",
+    work=_sweep_once,
+    interval_seconds=_CHECK_INTERVAL_SECONDS,
+    startup_delay_seconds=_STARTUP_DELAY_SECONDS,
+)
 
 
 def start_chat_session_sweeper_thread() -> None:
-    global _sweeper_thread
-    if _sweeper_thread is not None:
-        return
-    t = threading.Thread(
-        target=_run_sweeper_loop,
-        daemon=True,
-        name="chat-session-sweeper",
-    )
-    _sweeper_thread = t
-    t.start()
+    _job.start()
 
 
 def shutdown_chat_session_sweeper_thread() -> None:
-    _shutdown_event.set()
-    if _sweeper_thread is not None:
-        _sweeper_thread.join(timeout=5)
+    _job.shutdown()

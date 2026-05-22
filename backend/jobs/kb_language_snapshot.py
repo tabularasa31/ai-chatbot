@@ -13,16 +13,15 @@ from datetime import UTC, date, datetime
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from backend.jobs._periodic import PeriodicJob
 from backend.models import Document, Tenant
 from backend.observability.metrics import capture_event
 from backend.search.service import CYRILLIC_LANGUAGE_PREFIXES, LATIN_LANGUAGE_PREFIXES
 
 logger = logging.getLogger(__name__)
 
-_shutdown_event = threading.Event()
 _last_run_lock = threading.Lock()
 _last_run_date: date | None = None
-_snapshot_thread: threading.Thread | None = None
 
 _STARTUP_DELAY_SECONDS = 60
 _CHECK_INTERVAL_SECONDS = 3600
@@ -125,38 +124,31 @@ def _mark_run_today() -> None:
         _last_run_date = today
 
 
-def _run_snapshot_loop() -> None:
-    _shutdown_event.wait(_STARTUP_DELAY_SECONDS)
-    while not _shutdown_event.is_set():
-        if _should_run_today():
-            from backend.core.db import SessionLocal
+def _run_snapshot_once() -> None:
+    if not _should_run_today():
+        return
+    from backend.core.db import SessionLocal
 
-            db = SessionLocal()
-            try:
-                count = run_kb_language_snapshot_for_all_tenants(db)
-                _mark_run_today()
-                logger.info("kb_language_snapshot: emitted events for %d tenants", count)
-            except Exception:
-                logger.exception("kb_language_snapshot loop error")
-            finally:
-                db.close()
-        _shutdown_event.wait(_CHECK_INTERVAL_SECONDS)
+    db = SessionLocal()
+    try:
+        count = run_kb_language_snapshot_for_all_tenants(db)
+        _mark_run_today()
+        logger.info("kb_language_snapshot: emitted events for %d tenants", count)
+    finally:
+        db.close()
+
+
+_job = PeriodicJob(
+    name="kb-language-snapshot",
+    work=_run_snapshot_once,
+    interval_seconds=_CHECK_INTERVAL_SECONDS,
+    startup_delay_seconds=_STARTUP_DELAY_SECONDS,
+)
 
 
 def start_kb_snapshot_daily_thread() -> None:
-    global _snapshot_thread
-    if _snapshot_thread is not None:
-        return
-    t = threading.Thread(
-        target=_run_snapshot_loop,
-        daemon=True,
-        name="kb-language-snapshot",
-    )
-    _snapshot_thread = t
-    t.start()
+    _job.start()
 
 
 def shutdown_kb_snapshot_thread() -> None:
-    _shutdown_event.set()
-    if _snapshot_thread is not None:
-        _snapshot_thread.join(timeout=5)
+    _job.shutdown()

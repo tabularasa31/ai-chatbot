@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
+from datetime import datetime
 from time import monotonic
 from typing import Any
 
@@ -338,12 +339,22 @@ def _emit_ai_generation_event(
         logger.warning("Failed to emit $ai_generation event", exc_info=True)
 
 
+def _session_duration_ms(created_at: datetime | None, ended_at: datetime | None) -> int | None:
+    """Milliseconds between session creation and end, clamped to >= 0."""
+    if created_at is None or ended_at is None:
+        return None
+    delta = (ended_at - created_at).total_seconds() * 1000
+    return max(0, int(delta))
+
+
 def _emit_chat_session_ended_event(
     *,
     tenant_public_id: str | None,
     bot_public_id: str | None,
     chat_id: str | None,
     outcome: str,
+    session_id: str | None = None,
+    duration_ms: int | None = None,
 ) -> None:
     if tenant_public_id is None and bot_public_id is None:
         return
@@ -355,6 +366,8 @@ def _emit_chat_session_ended_event(
             bot_id=bot_public_id,
             properties={
                 "chat_id": chat_id,
+                "session_id": session_id,
+                "duration_ms": duration_ms,
                 "outcome": outcome,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,

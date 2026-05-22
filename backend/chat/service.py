@@ -23,6 +23,7 @@ from backend.chat.events import (
     _emit_chat_feedback_event,  # noqa: F401  (re-export)
     _emit_chat_session_ended_event,  # noqa: F401  (re-export)
     _emit_chat_turn_event,  # noqa: F401  (re-export)
+    _session_duration_ms,  # noqa: F401  (re-export)
 )
 from backend.chat.handlers import (
     ChatTurnOutcome,

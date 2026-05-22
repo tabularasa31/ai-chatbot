@@ -336,6 +336,8 @@ class EscalationStateMachine(PipelineHandler):
                     tenant_public_id=getattr(ctx.tenant_row, "public_id", None),
                     bot_public_id=ctx.bot_public_id,
                     chat_id=str(chat.id),
+                    session_id=str(chat.session_id) if chat.session_id else None,
+                    duration_ms=_svc._session_duration_ms(chat.created_at, chat.ended_at),
                     outcome="resolved",
                 )
                 return outcome

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -102,6 +103,11 @@ class Chat(Base):
     #          "best_similarity_score": float|null, "retrieved_chunks": list|null}
     escalation_pre_confirm_context = Column(JSON, nullable=True)
     ended_at = Column(DateTime, nullable=True)
+    # Analytics-only marker: set by the inactivity sweeper when the
+    # chat_session_ended event has been emitted. Distinct from ``ended_at``
+    # (which closes the conversation and routes the FSM to the closed handler)
+    # so reporting a session as ended does not make the chat un-resumable.
+    session_ended_event_at = Column(DateTime, nullable=True)
     clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
     last_response_language = Column(String(16), nullable=True)
     # Once True, response_language is frozen at last_response_language and
@@ -129,6 +135,17 @@ class Chat(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+# Partial index for the inactivity sweeper's scan (runs every few minutes).
+# Only un-reported, un-closed chats are indexed, so it stays small as the bulk
+# of chats acquire the marker; it covers both the filter and the ORDER BY.
+Index(
+    "ix_chats_sweeper_pending",
+    Chat.updated_at,
+    postgresql_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
+    sqlite_where=Chat.session_ended_event_at.is_(None) & Chat.ended_at.is_(None),
+)
 
 
 class EscalationTicket(Base):

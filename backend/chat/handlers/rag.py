@@ -1471,7 +1471,6 @@ class RagHandler(PipelineHandler):
         # Pull side-effecting helpers via the service module so tests' monkey-
         # patches against ``backend.chat.service.X`` keep affecting these calls.
         _emit_chat_escalated_event = _svc._emit_chat_escalated_event
-        _emit_chat_session_ended_event = _svc._emit_chat_session_ended_event
         _emit_chat_turn_event = _svc._emit_chat_turn_event
         _persist_turn_with_response_language = _svc._persist_turn_with_response_language
         _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold

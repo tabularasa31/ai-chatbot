@@ -35,6 +35,10 @@ from backend.escalation.routes import escalation_router
 from backend.gap_analyzer.jobs import request_graceful_shutdown as gap_graceful_shutdown
 from backend.gap_analyzer.routes import gap_analyzer_router
 from backend.jobs.analyze_chat_logs import shutdown_log_analysis_threads
+from backend.jobs.chat_session_sweeper import (
+    shutdown_chat_session_sweeper_thread,
+    start_chat_session_sweeper_thread,
+)
 from backend.jobs.kb_language_snapshot import (
     shutdown_kb_snapshot_thread,
     start_kb_snapshot_daily_thread,
@@ -75,12 +79,14 @@ async def lifespan(_: FastAPI):
     init_metrics()
     init_sentry()
     start_kb_snapshot_daily_thread()
+    start_chat_session_sweeper_thread()
     try:
         yield
     finally:
         gap_graceful_shutdown()
         shutdown_log_analysis_threads()
         shutdown_kb_snapshot_thread()
+        shutdown_chat_session_sweeper_thread()
         shutdown_metrics()
         shutdown_sentry()
         shutdown_observability()

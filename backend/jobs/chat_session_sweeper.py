@@ -102,7 +102,7 @@ def _run_sweeper_loop() -> None:
         try:
             count = sweep_inactive_chats(db)
             if count:
-                logger.info("chat_session_sweeper: ended %d inactive sessions", count)
+                logger.info("chat_session_sweeper: reported %d inactive sessions", count)
         except Exception:
             logger.exception("chat_session_sweeper loop error")
         finally:

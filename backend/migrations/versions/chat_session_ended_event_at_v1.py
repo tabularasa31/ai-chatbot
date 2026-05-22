@@ -24,6 +24,9 @@ branch_labels = None
 depends_on = None
 
 
+_SWEEPER_INDEX = "ix_chats_sweeper_pending"
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
@@ -33,12 +36,27 @@ def upgrade() -> None:
             "chats",
             sa.Column("session_ended_event_at", sa.DateTime(), nullable=True),
         )
+    indexes = {ix["name"] for ix in inspector.get_indexes("chats")}
+    if _SWEEPER_INDEX not in indexes:
+        # Partial index supporting the sweeper scan: only un-reported, un-closed
+        # chats are indexed, so it stays small and covers the ORDER BY updated_at.
+        op.create_index(
+            _SWEEPER_INDEX,
+            "chats",
+            ["updated_at"],
+            postgresql_where=sa.text(
+                "session_ended_event_at IS NULL AND ended_at IS NULL"
+            ),
+        )
 
 
 def downgrade() -> None:
     # Documented for completeness only — never run against shared DBs.
     bind = op.get_bind()
     inspector = sa.inspect(bind)
+    indexes = {ix["name"] for ix in inspector.get_indexes("chats")}
+    if _SWEEPER_INDEX in indexes:
+        op.drop_index(_SWEEPER_INDEX, table_name="chats")
     cols = {c["name"] for c in inspector.get_columns("chats")}
     if "session_ended_event_at" in cols:
         op.drop_column("chats", "session_ended_event_at")

@@ -67,6 +67,21 @@ def get_bot_by_public_id(public_id: str, db: Session) -> Bot | None:
     return db.query(Bot).filter(Bot.public_id == public_id).first()
 
 
+def get_bot_for_tenant_by_public_id(
+    tenant_id: uuid.UUID, public_id: str, db: Session
+) -> Bot | None:
+    """Tenant-scoped lookup. Returns None for unknown ids or cross-tenant ids.
+
+    Used by the public /chat API: a tenant-authenticated caller must not be
+    able to address another tenant's bot by guessing its public_id.
+    """
+    return (
+        db.query(Bot)
+        .filter(Bot.public_id == public_id, Bot.tenant_id == tenant_id)
+        .first()
+    )
+
+
 def create_bot(
     tenant_id: uuid.UUID,
     name: str,

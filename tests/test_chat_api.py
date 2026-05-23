@@ -185,6 +185,105 @@ def test_chat_stamps_default_bot_id_on_persisted_chat(
     assert chat.bot_id == expected_bot.id
 
 
+def test_chat_with_explicit_bot_public_id_uses_that_bot(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Explicit bot_public_id in the request resolves to that bot."""
+    from backend.bots.service import create_bot
+    from backend.models import Chat
+
+    token = register_and_verify_user(tenant, db_session, email="explicit@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Explicit Bot Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    extra_bot = create_bot(tenant_id, "Second Bot", db_session)
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello", "bot_public_id": extra_bot.public_id},
+    )
+    assert response.status_code == 200
+
+    session_id = uuid.UUID(response.json()["session_id"])
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert chat.bot_id == extra_bot.id
+
+
+def test_chat_with_unknown_bot_public_id_returns_404(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    token = register_and_verify_user(tenant, db_session, email="unknown-bot@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Unknown Bot Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello", "bot_public_id": "does-not-exist"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Bot not found"
+
+
+def test_chat_rejects_bot_public_id_from_another_tenant(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Cross-tenant bot_public_id must 404, not leak existence."""
+    from backend.bots.service import get_default_bot_for_tenant
+
+    # Tenant A creates its bot (auto-provisioned by POST /tenants).
+    token_a = register_and_verify_user(tenant, db_session, email="cross-a@example.com")
+    cl_resp_a = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"name": "Tenant A"},
+    )
+    tenant_a_id = uuid.UUID(cl_resp_a.json()["id"])
+    bot_a = get_default_bot_for_tenant(tenant_a_id, db_session)
+    assert bot_a is not None
+
+    # Tenant B authenticates with its own API key but tries bot A's public_id.
+    token_b = register_and_verify_user(tenant, db_session, email="cross-b@example.com")
+    cl_resp_b = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token_b}"},
+        json={"name": "Tenant B"},
+    )
+    set_client_openai_key(tenant, token_b)
+    api_key_b = cl_resp_b.json()["api_key"]
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key_b},
+        json={"question": "Hello", "bot_public_id": bot_a.public_id},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Bot not found"
+
+
 def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
     response = tenant.post(

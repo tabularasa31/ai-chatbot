@@ -54,6 +54,13 @@ class ChatRequest(BaseModel):
         default=None,
         description="Optional session ID; auto-generated if not provided",
     )
+    bot_public_id: str | None = Field(
+        default=None,
+        description=(
+            "Optional bot to address. If omitted, the tenant's default bot is "
+            "used. Must belong to the authenticated tenant."
+        ),
+    )
 
 
 class ChatTurnResponse(BaseModel):

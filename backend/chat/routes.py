@@ -13,7 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
-from backend.bots.service import get_default_bot_for_tenant
+from backend.bots.service import (
+    get_bot_for_tenant_by_public_id,
+    get_default_bot_for_tenant,
+)
 from backend.chat.events import _emit_chat_feedback_event
 from backend.chat.history_service import (
     delete_session_original_content,
@@ -152,13 +155,24 @@ async def chat(
 
     session_id = body.session_id or uuid.uuid4()
 
-    # Resolve the tenant's default bot so the persisted Chat row and emitted
-    # analytics events carry bot_id. The pipeline applies the same fallback
-    # internally, but only for in-request use — without stamping here the
-    # Chat row stays bot_id=NULL forever.
-    default_bot = await run_sync(
-        db, lambda s: get_default_bot_for_tenant(tenant.id, s)
-    )
+    # Resolve the bot for this turn. Explicit bot_public_id wins (404 if it
+    # doesn't belong to the authenticated tenant — never leak cross-tenant
+    # existence). Otherwise fall back to the tenant's default bot so the
+    # persisted Chat row and analytics events carry bot_id; the pipeline
+    # applies the same fallback in-request but never writes it back.
+    if body.bot_public_id is not None:
+        resolved_bot = await run_sync(
+            db,
+            lambda s: get_bot_for_tenant_by_public_id(
+                tenant.id, body.bot_public_id, s
+            ),
+        )
+        if resolved_bot is None:
+            raise HTTPException(status_code=404, detail="Bot not found")
+    else:
+        resolved_bot = await run_sync(
+            db, lambda s: get_default_bot_for_tenant(tenant.id, s)
+        )
 
     async with idempotent_section(
         request, tenant_id=str(tenant.id), scope="chat"
@@ -176,7 +190,7 @@ async def chat(
                 db=db,
                 api_key=tenant.openai_api_key,
                 browser_locale=x_browser_locale,
-                bot_id=default_bot.id if default_bot else None,
+                bot_id=resolved_bot.id if resolved_bot else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None

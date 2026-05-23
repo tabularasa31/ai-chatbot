@@ -51,6 +51,7 @@ from backend.core.openai_client import is_quota_exceeded
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
+    Bot,
     Chat,
     EscalationTrigger,
     Message,
@@ -157,22 +158,25 @@ async def chat(
 
     # Resolve the bot for this turn. Explicit bot_public_id wins (404 if it
     # doesn't belong to the authenticated tenant — never leak cross-tenant
-    # existence). Otherwise fall back to the tenant's default bot so the
-    # persisted Chat row and analytics events carry bot_id; the pipeline
-    # applies the same fallback in-request but never writes it back.
-    if body.bot_public_id is not None:
-        resolved_bot = await run_sync(
-            db,
-            lambda s: get_bot_for_tenant_by_public_id(
-                tenant.id, body.bot_public_id, s
-            ),
+    # existence). When omitted, prefer the bot the session is already bound
+    # to (avoids 422 "Session belongs to another bot" for continuing turns
+    # whose default may have shifted since turn 1); only fall back to the
+    # tenant default for genuinely new sessions.
+    def _resolve_bot(s: Session) -> "Bot | None":
+        if body.bot_public_id is not None:
+            return get_bot_for_tenant_by_public_id(tenant.id, body.bot_public_id, s)
+        existing = (
+            s.query(Chat)
+            .filter(Chat.session_id == session_id, Chat.tenant_id == tenant.id)
+            .first()
         )
-        if resolved_bot is None:
-            raise HTTPException(status_code=404, detail="Bot not found")
-    else:
-        resolved_bot = await run_sync(
-            db, lambda s: get_default_bot_for_tenant(tenant.id, s)
-        )
+        if existing is not None and existing.bot_id is not None:
+            return s.get(Bot, existing.bot_id)
+        return get_default_bot_for_tenant(tenant.id, s)
+
+    resolved_bot = await run_sync(db, _resolve_bot)
+    if body.bot_public_id is not None and resolved_bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
 
     # Bind the Idempotency-Key to the question + addressed bot so a retry
     # with the same key but a different bot or question doesn't replay the
@@ -200,6 +204,7 @@ async def chat(
                 api_key=tenant.openai_api_key,
                 browser_locale=x_browser_locale,
                 bot_id=resolved_bot.id if resolved_bot else None,
+                bot_public_id=resolved_bot.public_id if resolved_bot else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None

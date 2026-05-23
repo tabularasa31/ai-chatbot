@@ -364,6 +364,113 @@ def test_chat_empty_string_bot_public_id_falls_back_to_default(
     assert chat.bot_id == expected_bot.id
 
 
+def test_chat_continuation_reuses_session_bot_when_id_omitted(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """When bot_public_id is omitted on a follow-up turn, the route reuses
+    the bot already bound to the session — never silently switches to the
+    tenant's current default. Without this, a default shift between turns
+    (e.g. operator promoted/demoted bots) would trigger _ensure_chat_async's
+    422 'Session belongs to another bot' on continuation.
+    """
+    from backend.bots.service import create_bot
+    from backend.models import Chat
+
+    token = register_and_verify_user(tenant, db_session, email="continuation@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Continuation Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    secondary_bot = create_bot(tenant_id, "Secondary Bot", db_session)
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    # Turn 1: explicit bot_public_id pins the session to the secondary bot.
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello", "bot_public_id": secondary_bot.public_id},
+    )
+    assert response.status_code == 200
+    session_id = response.json()["session_id"]
+
+    # Turn 2: bot_public_id omitted. Must stay on secondary, not jump to default.
+    response2 = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Follow-up", "session_id": session_id},
+    )
+    assert response2.status_code == 200
+
+    chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(session_id)).first()
+    assert chat is not None
+    assert chat.bot_id == secondary_bot.id
+
+
+def test_chat_forwards_bot_public_id_for_event_attribution(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ctx.bot_public_id flows into in-pipeline events (chat.turn, chat_completed,
+    chat_escalated). The route must forward bot_public_id, not just bot_id, or
+    those events lose bot attribution.
+    """
+    from backend.chat import service as chat_service
+
+    captured: dict[str, str | None] = {}
+    real = chat_service.async_process_chat_message
+
+    async def _spy(**kwargs):
+        captured["bot_public_id"] = kwargs.get("bot_public_id")
+        captured["bot_id"] = kwargs.get("bot_id")
+        return await real(**kwargs)
+
+    monkeypatch.setattr("backend.chat.routes.async_process_chat_message", _spy)
+
+    token = register_and_verify_user(tenant, db_session, email="forward@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Forward Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    from backend.bots.service import get_default_bot_for_tenant
+
+    default_bot = get_default_bot_for_tenant(tenant_id, db_session)
+    assert default_bot is not None
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello"},
+    )
+    assert response.status_code == 200
+    assert captured["bot_public_id"] == default_bot.public_id
+    assert captured["bot_id"] == default_bot.id
+
+
 def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
     response = tenant.post(

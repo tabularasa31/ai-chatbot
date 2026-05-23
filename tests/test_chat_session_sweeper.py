@@ -142,10 +142,14 @@ def test_already_reported_chat_is_not_re_emitted(
     assert captured == []
 
 
-def test_empty_chat_is_skipped(db_session: Session, monkeypatch) -> None:
+def test_empty_chat_is_marked_but_not_emitted(
+    db_session: Session, monkeypatch
+) -> None:
     # /widget/session/init creates a Chat row on every widget mount before the
     # user writes anything. Emitting chat_session_ended for those would inflate
     # the funnel with widget-impressions (observed 154 "sessions" per 1 turn).
+    # The marker is still set so the row exits ix_chats_sweeper_pending and
+    # isn't re-evaluated on every pass.
     tenant = _make_tenant(db_session)
     chat = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
 
@@ -161,9 +165,36 @@ def test_empty_chat_is_skipped(db_session: Session, monkeypatch) -> None:
     assert count == 0
     assert captured == []
     db_session.refresh(chat)
-    # Marker stays NULL so the empty chat is naturally excluded by the
-    # partial index in future passes too — no need to mark it.
-    assert chat.session_ended_event_at is None
+    assert chat.session_ended_event_at is not None
+    assert chat.ended_at is None
+
+
+def test_mixed_pass_emits_only_for_chats_with_messages(
+    db_session: Session, monkeypatch
+) -> None:
+    # The has_messages EXISTS column must correlate per row: a pass holding
+    # both an empty and a non-empty chat must emit exactly once (for the
+    # non-empty one) and mark both. An uncorrelated EXISTS would emit for
+    # both as long as any message exists anywhere.
+    tenant = _make_tenant(db_session)
+    empty = _make_chat(db_session, tenant, age_minutes=90, with_message=False)
+    nonempty = _make_chat(db_session, tenant, age_minutes=90, with_message=True)
+
+    captured: list[dict] = []
+    monkeypatch.setattr(
+        chat_session_sweeper,
+        "_emit_chat_session_ended_event",
+        lambda **kwargs: captured.append(kwargs),
+    )
+
+    count = sweep_inactive_chats(db_session)
+
+    assert count == 1
+    assert [c["session_id"] for c in captured] == [str(nonempty.session_id)]
+    db_session.refresh(empty)
+    db_session.refresh(nonempty)
+    assert empty.session_ended_event_at is not None
+    assert nonempty.session_ended_event_at is not None
 
 
 def test_escalation_closed_chat_is_skipped(

@@ -19,11 +19,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.jobs._periodic import PeriodicJob
-from backend.models import Chat
+from backend.models import Chat, Message
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,11 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
             Chat.session_ended_event_at.is_(None),
             Chat.ended_at.is_(None),
             Chat.updated_at < cutoff,
+            # Skip empty chats. /widget/session/init creates a Chat row on
+            # every widget mount before the user writes anything; emitting
+            # chat_session_ended for those would inflate the funnel with
+            # widget-impressions (observed 154 "sessions" per 1 turn in prod).
+            select(Message.id).where(Message.chat_id == Chat.id).exists(),
         )
         .order_by(Chat.updated_at)
         .limit(_MAX_SESSIONS_PER_SWEEP)

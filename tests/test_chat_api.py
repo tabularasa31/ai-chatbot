@@ -139,6 +139,52 @@ def test_chat_creates_messages_in_db(
     assert user_message.content_redacted == "Hello"
 
 
+def test_chat_stamps_default_bot_id_on_persisted_chat(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """Public /chat resolves the tenant's default bot and persists bot_id.
+
+    Without this, every API-driven Chat row stays bot_id=NULL and PostHog
+    events lose the bot dimension (observed 68% NULL bot_id in prod).
+    """
+    from backend.bots.service import get_default_bot_for_tenant
+    from backend.models import Chat
+
+    token = register_and_verify_user(tenant, db_session, email="botid@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bot ID Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    expected_bot = get_default_bot_for_tenant(tenant_id, db_session)
+    assert expected_bot is not None, "tenant fixture must auto-provision a default bot"
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello"},
+    )
+    assert response.status_code == 200
+
+    session_id = uuid.UUID(response.json()["session_id"])
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert chat.bot_id is not None
+    assert chat.bot_id == expected_bot.id
+
+
 def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
     response = tenant.post(

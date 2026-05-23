@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.bots.service import get_default_bot_for_tenant
 from backend.chat.events import _emit_chat_feedback_event
 from backend.chat.history_service import (
     delete_session_original_content,
@@ -151,6 +152,14 @@ async def chat(
 
     session_id = body.session_id or uuid.uuid4()
 
+    # Resolve the tenant's default bot so the persisted Chat row and emitted
+    # analytics events carry bot_id. The pipeline applies the same fallback
+    # internally, but only for in-request use — without stamping here the
+    # Chat row stays bot_id=NULL forever.
+    default_bot = await run_sync(
+        db, lambda s: get_default_bot_for_tenant(tenant.id, s)
+    )
+
     async with idempotent_section(
         request, tenant_id=str(tenant.id), scope="chat"
     ) as section:
@@ -167,6 +176,7 @@ async def chat(
                 db=db,
                 api_key=tenant.openai_api_key,
                 browser_locale=x_browser_locale,
+                bot_id=default_bot.id if default_bot else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None

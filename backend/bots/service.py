@@ -40,6 +40,22 @@ def get_bots_for_tenant(tenant_id: uuid.UUID, db: Session) -> list[Bot]:
     return db.query(Bot).filter(Bot.tenant_id == tenant_id).order_by(Bot.created_at.asc()).all()
 
 
+def get_default_bot_for_tenant(tenant_id: uuid.UUID, db: Session) -> Bot | None:
+    """Oldest active bot for the tenant, or None if the tenant has no active bots.
+
+    Mirrors the fallback the chat pipeline uses internally so the public /chat
+    route can stamp ``Chat.bot_id`` up front; otherwise every API-driven
+    session is persisted with ``bot_id=NULL`` and analytics cannot segment by
+    bot.
+    """
+    return (
+        db.query(Bot)
+        .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
+        .order_by(Bot.created_at.asc())
+        .first()
+    )
+
+
 def get_bot_by_id(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> Bot:
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
     if not bot:

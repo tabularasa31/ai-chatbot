@@ -19,11 +19,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
 from backend.jobs._periodic import PeriodicJob
-from backend.models import Chat
+from backend.models import Chat, Message
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
@@ -39,15 +40,28 @@ _MAX_SESSIONS_PER_SWEEP = 500
 def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     """Report chats inactive past the threshold via chat_session_ended.
 
-    Returns the number of sessions reported. Idempotent via the
-    ``session_ended_event_at`` marker: a chat reported in one pass is excluded
-    from the next. Chats already closed by escalation (``ended_at`` set) are
-    skipped — that path emits its own event.
+    Returns the number of sessions for which an event was emitted. Chats with
+    at least one ``Message`` emit ``chat_session_ended outcome=timeout``;
+    empty chats — /widget/session/init creates a Chat per widget mount before
+    the user writes anything, observed 154 mounts per real session in prod —
+    are stamped silently. Both branches set ``session_ended_event_at`` so the
+    row drops out of the partial index ``ix_chats_sweeper_pending`` and is
+    excluded from the next pass; otherwise the empty-chat backlog would
+    accumulate in the index unbounded as widget impressions add up.
+
+    Chats already closed by escalation (``ended_at`` set) are skipped — that
+    path emits its own event.
     """
     reference = now or _utcnow()
     cutoff = reference - timedelta(seconds=_INACTIVITY_THRESHOLD_SECONDS)
+    has_messages_expr = (
+        select(Message.id)
+        .where(Message.chat_id == Chat.id)
+        .exists()
+        .label("has_messages")
+    )
     rows = (
-        db.query(Chat)
+        db.query(Chat, has_messages_expr)
         .options(joinedload(Chat.tenant), joinedload(Chat.bot))
         .filter(
             Chat.session_ended_event_at.is_(None),
@@ -59,7 +73,7 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         .all()
     )
     count = 0
-    for chat in rows:
+    for chat, has_messages in rows:
         # Duration spans creation to last activity (updated_at), not the sweep
         # time, so it reflects the real session length.
         last_activity = chat.updated_at
@@ -74,6 +88,11 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         except Exception:
             logger.exception("chat_session_sweeper failed to mark chat %s", chat.id)
             db.rollback()
+            continue
+        if not has_messages:
+            # Empty chat: marker set so it exits the partial index, but no
+            # analytics event — emitting would inflate the funnel with
+            # widget-impressions a real user never participated in.
             continue
         # Emit only after the marker is durably committed: a crash mid-pass can
         # then never re-find this chat, so the event is at-most-once (no

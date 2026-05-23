@@ -284,6 +284,86 @@ def test_chat_rejects_bot_public_id_from_another_tenant(
     assert response.json()["detail"] == "Bot not found"
 
 
+def test_chat_rejects_inactive_bot_public_id(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """An explicit bot_public_id pointing at a deactivated bot 404s.
+
+    Operator deactivation is meant as a kill switch; the explicit-id path
+    must respect it just like the default-fallback and the widget gate do.
+    """
+    from backend.bots.service import create_bot
+    from backend.models import Bot
+
+    token = register_and_verify_user(tenant, db_session, email="inactive@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Inactive Bot Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+
+    extra_bot = create_bot(tenant_id, "Secondary Bot", db_session)
+    db_session.query(Bot).filter(Bot.id == extra_bot.id).update(
+        {"is_active": False}
+    )
+    db_session.commit()
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello", "bot_public_id": extra_bot.public_id},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Bot not found"
+
+
+def test_chat_empty_string_bot_public_id_falls_back_to_default(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """`"bot_public_id": ""` is treated as omitted, not as an explicit lookup.
+
+    Many JS form serializers send "" for missing fields; behaving the same
+    as null avoids a guaranteed 404 on those clients.
+    """
+    from backend.bots.service import get_default_bot_for_tenant
+    from backend.models import Chat
+
+    token = register_and_verify_user(tenant, db_session, email="empty-bot@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Empty Bot ID Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+    tenant_id = uuid.UUID(cl_resp.json()["id"])
+    expected_bot = get_default_bot_for_tenant(tenant_id, db_session)
+    assert expected_bot is not None
+
+    mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
+    mock_openai_client.chat.completions.create.return_value.choices = [
+        Mock(message=Mock(content="Reply"))
+    ]
+    mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=10)
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": "Hello", "bot_public_id": "   "},
+    )
+    assert response.status_code == 200
+    session_id = uuid.UUID(response.json()["session_id"])
+    chat = db_session.query(Chat).filter(Chat.session_id == session_id).first()
+    assert chat is not None
+    assert chat.bot_id == expected_bot.id
+
+
 def test_chat_invalid_api_key(tenant: TestClient) -> None:
     """Wrong api_key → 401."""
     response = tenant.post(

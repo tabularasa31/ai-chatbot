@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.chat.llm_unavailable import LlmFailureState
 
@@ -56,11 +56,22 @@ class ChatRequest(BaseModel):
     )
     bot_public_id: str | None = Field(
         default=None,
+        max_length=64,
         description=(
-            "Optional bot to address. If omitted, the tenant's default bot is "
-            "used. Must belong to the authenticated tenant."
+            "Optional bot to address. If omitted (or empty), the tenant's "
+            "default bot is used. Must belong to the authenticated tenant "
+            "and be active."
         ),
     )
+
+    @field_validator("bot_public_id", mode="before")
+    @classmethod
+    def _blank_bot_public_id_means_default(cls, value: object) -> object:
+        # JS form clients commonly send "" for missing inputs; treat that as
+        # "omitted" rather than letting it fall through to a guaranteed 404.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class ChatTurnResponse(BaseModel):

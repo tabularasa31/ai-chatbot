@@ -174,8 +174,17 @@ async def chat(
             db, lambda s: get_default_bot_for_tenant(tenant.id, s)
         )
 
+    # Bind the Idempotency-Key to the question + addressed bot so a retry
+    # with the same key but a different bot or question doesn't replay the
+    # stale response under the caller's nose.
+    body_fingerprint = (
+        f"{resolved_bot.id if resolved_bot else ''}\0{body.question}"
+    )
     async with idempotent_section(
-        request, tenant_id=str(tenant.id), scope="chat"
+        request,
+        tenant_id=str(tenant.id),
+        scope="chat",
+        body_fingerprint=body_fingerprint,
     ) as section:
         if section.cached is not None:
             return JSONResponse(

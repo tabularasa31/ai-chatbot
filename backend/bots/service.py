@@ -70,14 +70,21 @@ def get_bot_by_public_id(public_id: str, db: Session) -> Bot | None:
 def get_bot_for_tenant_by_public_id(
     tenant_id: uuid.UUID, public_id: str, db: Session
 ) -> Bot | None:
-    """Tenant-scoped lookup. Returns None for unknown ids or cross-tenant ids.
+    """Tenant-scoped active-bot lookup. Returns None for unknown ids,
+    cross-tenant ids, or bots the operator has deactivated.
 
-    Used by the public /chat API: a tenant-authenticated caller must not be
-    able to address another tenant's bot by guessing its public_id.
+    Used by the public /chat API. A tenant-authenticated caller must not be
+    able to address another tenant's bot by guessing its public_id, and
+    deactivation must drop traffic to match the widget gate's behavior
+    (``backend/tenants/widget_chat_gate.py`` rejects inactive bots).
     """
     return (
         db.query(Bot)
-        .filter(Bot.public_id == public_id, Bot.tenant_id == tenant_id)
+        .filter(
+            Bot.public_id == public_id,
+            Bot.tenant_id == tenant_id,
+            Bot.is_active.is_(True),
+        )
         .first()
     )
 

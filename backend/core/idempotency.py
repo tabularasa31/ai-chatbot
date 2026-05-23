@@ -30,6 +30,7 @@ have different semantics and are handled separately.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -77,12 +78,30 @@ def _read_header(request: Request) -> str | None:
     return key
 
 
-def _response_cache_key(scope: str, tenant_id: str, key: str) -> str:
-    return f"idempotency:{scope}:{tenant_id}:{key}:response"
+def _scoped_key_with_fingerprint(key: str, body_fingerprint: str | None) -> str:
+    """Bind the caller-supplied Idempotency-Key to a hash of body bits that
+    must match across retries. A retry with the same header but a divergent
+    fingerprint forms a different cache key, so the stale response from the
+    prior body is not replayed and a fresh handler runs.
+    """
+    if body_fingerprint is None:
+        return key
+    digest = hashlib.sha256(body_fingerprint.encode("utf-8")).hexdigest()[:16]
+    return f"{key}:{digest}"
 
 
-def _lock_cache_key(scope: str, tenant_id: str, key: str) -> str:
-    return f"idempotency:{scope}:{tenant_id}:{key}:lock"
+def _response_cache_key(
+    scope: str, tenant_id: str, key: str, body_fingerprint: str | None = None
+) -> str:
+    scoped = _scoped_key_with_fingerprint(key, body_fingerprint)
+    return f"idempotency:{scope}:{tenant_id}:{scoped}:response"
+
+
+def _lock_cache_key(
+    scope: str, tenant_id: str, key: str, body_fingerprint: str | None = None
+) -> str:
+    scoped = _scoped_key_with_fingerprint(key, body_fingerprint)
+    return f"idempotency:{scope}:{tenant_id}:{scoped}:lock"
 
 
 async def _load_cached(cache_key: str) -> CachedResponse | None:
@@ -178,6 +197,7 @@ async def idempotent_section(
     *,
     tenant_id: str,
     scope: str,
+    body_fingerprint: str | None = None,
     response_ttl_seconds: int = DEFAULT_RESPONSE_TTL_SECONDS,
     lock_ttl_seconds: int = DEFAULT_LOCK_TTL_SECONDS,
 ) -> AsyncIterator[IdempotencySection]:
@@ -210,8 +230,8 @@ async def idempotent_section(
         )
         return
 
-    response_key = _response_cache_key(scope, tenant_id, key)
-    lock_key = _lock_cache_key(scope, tenant_id, key)
+    response_key = _response_cache_key(scope, tenant_id, key, body_fingerprint)
+    lock_key = _lock_cache_key(scope, tenant_id, key, body_fingerprint)
 
     cached = await _load_cached(response_key)
     if cached is not None:

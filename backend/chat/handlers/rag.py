@@ -528,25 +528,48 @@ def _strip_thought_tags(text: str) -> str:
 OFFER_MARKER = "<offered_ticket/>"
 
 
+_OFFER_MARKER_TERMINAL_RE = re.compile(
+    re.escape(OFFER_MARKER) + r"[\s\.,!?;:\"'»)\]]*\Z"
+)
+
+
 def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
     """Return (text with terminal OFFER_MARKER removed, True if it was the suffix).
 
     The prompt contract says the marker is appended as the very last token of
-    the reply. We deliberately only honour that terminal position: a marker
-    appearing mid-text (e.g. the docs quote the literal token, the LLM echoes
-    a user question that mentioned it, etc.) is left untouched and does NOT
-    arm pre_confirm. That avoids two failure modes:
+    the reply. In practice the LLM often appends an extra period, quote, or
+    whitespace right after the marker (a common LLM tic when the sentinel
+    gets templated into a sentence). We tolerate any trailing punctuation /
+    whitespace, but a marker followed by substantive text is treated as
+    mid-text and ignored — to avoid two failure modes:
       * silently rewriting legitimate content that happens to contain the
         literal string;
       * false-arming escalation_pre_confirm_pending on the next user turn.
+
+    Defensive UX cleanup of mid-text occurrences (so the literal never reaches
+    the UI even when the LLM misplaces it) happens separately at the call
+    site, by ``replace`` on the returned text. Detection itself stays strict.
     """
     if not text:
         return text, False
-    stripped = text.rstrip()
-    if not stripped.endswith(OFFER_MARKER):
+    match = _OFFER_MARKER_TERMINAL_RE.search(text)
+    if not match:
         return text, False
-    cleaned = stripped[: -len(OFFER_MARKER)].rstrip()
+    cleaned = text[: match.start()].rstrip()
     return cleaned, True
+
+
+def _scrub_offer_marker_literal(text: str) -> str:
+    """Belt-and-suspenders strip of any remaining OFFER_MARKER occurrences.
+
+    Used after detection on assembled (non-streamed) answer text so a marker
+    the LLM mis-emitted mid-reply cannot leak to the user even though it
+    didn't arm pre_confirm. The streaming path has its own filter
+    (OfferMarkerStreamFilter) that does the equivalent for SSE chunks.
+    """
+    if not text or OFFER_MARKER not in text:
+        return text
+    return text.replace(OFFER_MARKER, "")
 
 
 class OfferMarkerStreamFilter:
@@ -590,9 +613,21 @@ class OfferMarkerStreamFilter:
             break
 
     def flush_end(self) -> None:
-        # Any leftover that is NOT a full marker is real content — emit it.
-        if self._buf and self._buf != OFFER_MARKER:
-            self._emit(self._buf)
+        # Leftover possibilities:
+        #   * Exact full marker → drop (detected, never emit).
+        #   * A non-empty *prefix* of the marker (split-boundary suffix that
+        #     `feed` was holding back in case the rest arrived) → drop. This
+        #     covers truncated streams (max_completion_tokens, client
+        #     disconnect, OpenAI 5xx mid-stream) where the rest of the marker
+        #     will never arrive; emitting the partial would leak '<offered_tic'
+        #     to the user.
+        #   * Anything else → real content, emit it.
+        if not self._buf:
+            return
+        if self._buf == OFFER_MARKER or OFFER_MARKER.startswith(self._buf):
+            self._buf = ""
+            return
+        self._emit(self._buf)
         self._buf = ""
 
 
@@ -1015,8 +1050,14 @@ def build_rag_prompt(
         "- If sources in the provided context appear inconsistent, say the information is inconsistent and answer conservatively from the clearest supported part only.\n"
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
+        "- Only make that ticket offer when you genuinely cannot answer from the provided context. When you HAVE answered the question, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one — the backend only routes such confirmations on turns it has itself flagged as unanswered, so a confirmation offered after a complete answer would never be acted on.\n"
+        # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
+        # it earlier would invalidate the OpenAI prompt-cache prefix that
+        # covers every preceding original bullet. With it at the end, only
+        # the suffix (this bullet + appended client_guard / disclosure /
+        # COT blocks) cache-misses on the first turn after deploy until the
+        # new prefix re-warms.
         "- When (and ONLY when) your reply contains such a ticket offer, append the literal marker `<offered_ticket/>` as the very last token of your reply, after all natural-language text. The marker is machine-readable, language-agnostic, and stripped by the backend before the reply is shown to the user; without it, the user's next \"yes\" / confirmation will not be wired to the support handoff. Do NOT emit the marker on any reply that does not offer a ticket.\n"
-        "- Only make that ticket offer when you genuinely cannot answer from the provided context. When you HAVE answered the question, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one.\n"
     )
 
     if agent_instructions and settings.enable_agent_instructions:
@@ -1369,8 +1410,11 @@ def generate_answer(
         # Strip the language-agnostic ticket-offer marker before any downstream
         # processing (telemetry, language guard, return). The sync path doesn't
         # need the detection boolean — only async_generate_answer surfaces it
-        # for the runtime escalation arming.
+        # for the runtime escalation arming. The follow-up scrub removes any
+        # mid-text occurrence the LLM may have mis-placed against the prompt
+        # contract, so the literal never reaches the UI.
         answer_text, _ = _strip_and_detect_offer_marker(answer_text)
+        answer_text = _scrub_offer_marker_literal(answer_text)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -1831,7 +1875,7 @@ class RagHandler(PipelineHandler):
         ):
             chat.escalation_pre_confirm_pending = True
             chat.escalation_pre_confirm_context = {
-                "trigger": EscalationTrigger.low_similarity.value,
+                "trigger": EscalationTrigger.llm_self_offer.value,
                 "primary_question": ctx.question,
                 "best_similarity_score": retrieval.best_confidence_score,
                 "retrieved_chunks": chunks_preview_from_results(
@@ -2271,8 +2315,11 @@ async def _async_generate_answer_native(
         # support-ticket offer. Detect once on the post-thought-strip text;
         # the boolean is surfaced through the return tuple so
         # _handle_sync can arm escalation_pre_confirm_pending without
-        # natural-language pattern matching.
+        # natural-language pattern matching. The follow-up scrub removes
+        # any mid-text occurrence (against prompt contract) so the literal
+        # never reaches the UI even when detection itself stayed False.
         answer_text, offered_ticket = _strip_and_detect_offer_marker(answer_text)
+        answer_text = _scrub_offer_marker_literal(answer_text)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -3149,9 +3196,16 @@ async def async_run_chat_pipeline(
             tokens_used += retry_tokens
             _input_toks += retry_in
             _output_toks += retry_out
-            # The retry re-generates the entire reply; trust its marker over
-            # the first attempt's, since this is the answer that ships.
-            llm_offered_ticket = retry_offered_ticket
+            # OR the markers — never reset to False. On the streaming path
+            # the user has ALREADY seen the first attempt's reply via
+            # stream_callback by the time we run the language guard; if that
+            # reply ended with a ticket offer, the user can legitimately
+            # answer "yes" on the next turn even though the retry text we
+            # persist no longer contains the offer. Losing the signal here
+            # would re-introduce the exact greeting-instead-of-handoff bug
+            # this PR fixes, just through a narrower (language-mismatch)
+            # trigger.
+            llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
             _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
             record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
             if lang_span is not None:

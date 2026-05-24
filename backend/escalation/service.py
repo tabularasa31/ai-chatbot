@@ -227,7 +227,11 @@ def compute_priority(
         return EscalationPriority.critical
     if trigger == EscalationTrigger.user_request:
         return EscalationPriority.high
-    if trigger in (EscalationTrigger.low_similarity, EscalationTrigger.no_documents) and enterprise:
+    if trigger in (
+        EscalationTrigger.low_similarity,
+        EscalationTrigger.no_documents,
+        EscalationTrigger.llm_self_offer,
+    ) and enterprise:
         return EscalationPriority.high
     if trigger == EscalationTrigger.answer_rejected:
         return EscalationPriority.medium

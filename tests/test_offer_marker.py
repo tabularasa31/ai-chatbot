@@ -8,6 +8,7 @@ the natural-language regex on the live request path.
 from backend.chat.handlers.rag import (
     OFFER_MARKER,
     OfferMarkerStreamFilter,
+    _scrub_offer_marker_literal,
     _strip_and_detect_offer_marker,
 )
 
@@ -100,3 +101,59 @@ def test_stream_filter_marker_only():
     f.feed(OFFER_MARKER)
     f.flush_end()
     assert "".join(out) == ""
+
+
+def test_strip_marker_with_trailing_period():
+    # Common LLM tic: appends a stray period after the sentinel.
+    text = "Want me to open a support ticket?" + OFFER_MARKER + "."
+    cleaned, offered = _strip_and_detect_offer_marker(text)
+    assert offered is True
+    assert OFFER_MARKER not in cleaned
+    assert cleaned == "Want me to open a support ticket?"
+
+
+def test_strip_marker_with_trailing_quote_and_punct():
+    text = "Хотите тикет?" + OFFER_MARKER + '".'
+    cleaned, offered = _strip_and_detect_offer_marker(text)
+    assert offered is True
+    assert OFFER_MARKER not in cleaned
+
+
+def test_strip_marker_followed_by_substantive_text_not_detected():
+    # If real natural-language text follows the marker, the LLM violated the
+    # "very last token" contract — don't treat it as a terminal offer.
+    text = "Want a ticket?" + OFFER_MARKER + " By the way, here are other tips."
+    cleaned, offered = _strip_and_detect_offer_marker(text)
+    assert offered is False
+    # The detector leaves the text alone; the caller is expected to run
+    # _scrub_offer_marker_literal as a UX safety net.
+    assert cleaned == text
+
+
+def test_scrub_removes_mid_text_literal():
+    text = "Before " + OFFER_MARKER + " middle " + OFFER_MARKER + " end"
+    scrubbed = _scrub_offer_marker_literal(text)
+    assert OFFER_MARKER not in scrubbed
+    assert scrubbed == "Before  middle  end"
+
+
+def test_scrub_noop_when_no_marker():
+    text = "Plain answer."
+    assert _scrub_offer_marker_literal(text) is text
+
+
+def test_stream_filter_truncated_stream_drops_partial_marker():
+    # Stream ends with a partial marker prefix buffered (max_completion_tokens
+    # hit, client disconnect, OpenAI 5xx mid-stream). The rest of the marker
+    # will never arrive — emitting '<offered_tic' would leak garbage to the UI.
+    out: list[str] = []
+    f = OfferMarkerStreamFilter(out.append)
+    half = len(OFFER_MARKER) // 2
+    f.feed("Want a ticket? " + OFFER_MARKER[:half])
+    # No second feed — simulate truncated stream.
+    f.flush_end()
+    emitted = "".join(out)
+    # The visible text was emitted, the partial marker was discarded.
+    assert emitted == "Want a ticket? "
+    # Belt-and-suspenders: no fragment of the marker leaks.
+    assert "<" not in emitted

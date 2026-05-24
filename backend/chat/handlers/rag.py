@@ -529,27 +529,44 @@ OFFER_MARKER = "<offered_ticket/>"
 
 
 def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
-    """Return (text with OFFER_MARKER removed, True if marker was present)."""
-    if not text or OFFER_MARKER not in text:
+    """Return (text with terminal OFFER_MARKER removed, True if it was the suffix).
+
+    The prompt contract says the marker is appended as the very last token of
+    the reply. We deliberately only honour that terminal position: a marker
+    appearing mid-text (e.g. the docs quote the literal token, the LLM echoes
+    a user question that mentioned it, etc.) is left untouched and does NOT
+    arm pre_confirm. That avoids two failure modes:
+      * silently rewriting legitimate content that happens to contain the
+        literal string;
+      * false-arming escalation_pre_confirm_pending on the next user turn.
+    """
+    if not text:
         return text, False
-    cleaned = text.replace(OFFER_MARKER, "").rstrip()
+    stripped = text.rstrip()
+    if not stripped.endswith(OFFER_MARKER):
+        return text, False
+    cleaned = stripped[: -len(OFFER_MARKER)].rstrip()
     return cleaned, True
 
 
 class OfferMarkerStreamFilter:
-    """Strip ``OFFER_MARKER`` from a streamed SSE token sequence.
+    """Strip ``OFFER_MARKER`` from a streamed SSE token sequence (defensive UX).
 
     Wraps the downstream emit callback and buffers up to ``len(OFFER_MARKER)-1``
     trailing chars so a marker arriving across two SSE chunks is never partially
-    emitted to the user. The ``detected`` flag flips True the moment a full
-    marker passes through, so the caller can arm the pre-confirm gate without
-    re-scanning the raw text.
+    emitted to the user. Removes every occurrence (not only the terminal one)
+    so a hallucinated or echoed literal in mid-reply never reaches the UI.
+
+    The filter does NOT decide whether the reply was a ticket offer — that
+    decision is terminal-only and lives in :func:`_strip_and_detect_offer_marker`,
+    which runs on the assembled raw text after the stream completes. This
+    separation prevents a mid-text literal from false-arming the pre-confirm
+    gate while still keeping the UI clean.
     """
 
     def __init__(self, emit: Callable[[str], None]) -> None:
         self._emit = emit
         self._buf = ""
-        self.detected = False
 
     def feed(self, text: str) -> None:
         self._buf += text
@@ -559,7 +576,6 @@ class OfferMarkerStreamFilter:
                 if idx > 0:
                     self._emit(self._buf[:idx])
                 self._buf = self._buf[idx + len(OFFER_MARKER):]
-                self.detected = True
                 continue
             # Preserve a possible split-boundary suffix so the marker isn't
             # partially leaked when it straddles two chunks.
@@ -577,8 +593,6 @@ class OfferMarkerStreamFilter:
         # Any leftover that is NOT a full marker is real content — emit it.
         if self._buf and self._buf != OFFER_MARKER:
             self._emit(self._buf)
-        elif self._buf == OFFER_MARKER:
-            self.detected = True
         self._buf = ""
 
 

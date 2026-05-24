@@ -34,6 +34,18 @@ def test_strip_no_marker():
     assert cleaned == text
 
 
+def test_strip_marker_in_middle_is_not_detected():
+    # The prompt contract is "marker is the very last token". A literal that
+    # appears mid-text (LLM echoes a user question, docs quote the token, …)
+    # must NOT arm pre_confirm and must NOT have its surrounding content
+    # rewritten by the detector. Defensive UX stripping for the streaming
+    # path is the OfferMarkerStreamFilter's job, not this one.
+    text = "Here is what the marker " + OFFER_MARKER + " looks like in docs."
+    cleaned, offered = _strip_and_detect_offer_marker(text)
+    assert offered is False
+    assert cleaned == text
+
+
 def test_strip_empty_string():
     cleaned, offered = _strip_and_detect_offer_marker("")
     assert offered is False
@@ -45,7 +57,6 @@ def test_stream_filter_marker_in_single_chunk():
     f = OfferMarkerStreamFilter(out.append)
     f.feed("Offer text here. " + OFFER_MARKER)
     f.flush_end()
-    assert f.detected is True
     assert "".join(out) == "Offer text here. "
 
 
@@ -57,7 +68,6 @@ def test_stream_filter_marker_split_across_chunks():
     f.feed("Hello world. " + OFFER_MARKER[:half])
     f.feed(OFFER_MARKER[half:])
     f.flush_end()
-    assert f.detected is True
     emitted = "".join(out)
     assert OFFER_MARKER not in emitted
     assert emitted == "Hello world. "
@@ -69,19 +79,18 @@ def test_stream_filter_no_marker_passes_through_unchanged():
     f.feed("Here is a plain ")
     f.feed("answer with no offer.")
     f.flush_end()
-    assert f.detected is False
     assert "".join(out) == "Here is a plain answer with no offer."
 
 
 def test_stream_filter_text_then_marker_then_more_text():
-    # Defensive: even if the LLM puts text after the marker (against the
-    # prompt), the filter must still strip the marker and not lose either
-    # the leading or trailing real text.
+    # Defensive UX: even if the LLM puts text after the marker (against the
+    # prompt contract), the filter still strips the marker from the visible
+    # stream so the user never sees the literal. Detection (= whether to arm
+    # pre_confirm) is terminal-only and lives in _strip_and_detect_offer_marker.
     out: list[str] = []
     f = OfferMarkerStreamFilter(out.append)
     f.feed("Before. " + OFFER_MARKER + "After.")
     f.flush_end()
-    assert f.detected is True
     assert "".join(out) == "Before. After."
 
 
@@ -90,5 +99,4 @@ def test_stream_filter_marker_only():
     f = OfferMarkerStreamFilter(out.append)
     f.feed(OFFER_MARKER)
     f.flush_end()
-    assert f.detected is True
     assert "".join(out) == ""

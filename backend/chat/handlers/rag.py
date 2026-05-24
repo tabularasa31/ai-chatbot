@@ -252,6 +252,12 @@ class ChatPipelineResult:
     # escalation (pure computation, no side effects)
     escalation_recommended: bool
     escalation_trigger: Any  # EscalationTrigger | None
+    # Language-agnostic signal from the LLM: True when the generated answer
+    # ended with the OFFER_MARKER sentinel, meaning the LLM offered to open
+    # a support ticket. Surfaced so _handle_sync can arm pre_confirm even
+    # when decide()'s confidence classification disagreed with the LLM's
+    # self-assessment that it couldn't answer from the docs.
+    llm_offered_ticket: bool = False
     # pipeline timing (ms); 0 means the stage was skipped
     retrieval_ms: int = 0
     llm_ms: int = 0
@@ -513,6 +519,116 @@ def _strip_thought_tags(text: str) -> str:
             "thought_tag_truncated: <thought> without closing tag — max_tokens likely cut off CoT block"
         )
     return re.sub(r"<thought>.*?(?:</thought>|\Z)\s*", "", text, flags=re.DOTALL).strip()
+
+
+# Sentinel the LLM appends when it ends its reply with an offer to open a
+# support ticket. Detecting this lets us arm escalation_pre_confirm_pending
+# in any language without natural-language pattern matching — the marker is
+# machine-emitted and stripped before the reply reaches the user.
+OFFER_MARKER = "<offered_ticket/>"
+
+
+_OFFER_MARKER_TERMINAL_RE = re.compile(
+    re.escape(OFFER_MARKER) + r"[\s\.,!?;:\"'»)\]]*\Z"
+)
+
+
+def _strip_and_detect_offer_marker(text: str) -> tuple[str, bool]:
+    """Return (text with terminal OFFER_MARKER removed, True if it was the suffix).
+
+    The prompt contract says the marker is appended as the very last token of
+    the reply. In practice the LLM often appends an extra period, quote, or
+    whitespace right after the marker (a common LLM tic when the sentinel
+    gets templated into a sentence). We tolerate any trailing punctuation /
+    whitespace, but a marker followed by substantive text is treated as
+    mid-text and ignored — to avoid two failure modes:
+      * silently rewriting legitimate content that happens to contain the
+        literal string;
+      * false-arming escalation_pre_confirm_pending on the next user turn.
+
+    Defensive UX cleanup of mid-text occurrences (so the literal never reaches
+    the UI even when the LLM misplaces it) happens separately at the call
+    site, by ``replace`` on the returned text. Detection itself stays strict.
+    """
+    if not text:
+        return text, False
+    match = _OFFER_MARKER_TERMINAL_RE.search(text)
+    if not match:
+        return text, False
+    cleaned = text[: match.start()].rstrip()
+    return cleaned, True
+
+
+def _scrub_offer_marker_literal(text: str) -> str:
+    """Belt-and-suspenders strip of any remaining OFFER_MARKER occurrences.
+
+    Used after detection on assembled (non-streamed) answer text so a marker
+    the LLM mis-emitted mid-reply cannot leak to the user even though it
+    didn't arm pre_confirm. The streaming path has its own filter
+    (OfferMarkerStreamFilter) that does the equivalent for SSE chunks.
+    """
+    if not text or OFFER_MARKER not in text:
+        return text
+    return text.replace(OFFER_MARKER, "")
+
+
+class OfferMarkerStreamFilter:
+    """Strip ``OFFER_MARKER`` from a streamed SSE token sequence (defensive UX).
+
+    Wraps the downstream emit callback and buffers up to ``len(OFFER_MARKER)-1``
+    trailing chars so a marker arriving across two SSE chunks is never partially
+    emitted to the user. Removes every occurrence (not only the terminal one)
+    so a hallucinated or echoed literal in mid-reply never reaches the UI.
+
+    The filter does NOT decide whether the reply was a ticket offer — that
+    decision is terminal-only and lives in :func:`_strip_and_detect_offer_marker`,
+    which runs on the assembled raw text after the stream completes. This
+    separation prevents a mid-text literal from false-arming the pre-confirm
+    gate while still keeping the UI clean.
+    """
+
+    def __init__(self, emit: Callable[[str], None]) -> None:
+        self._emit = emit
+        self._buf = ""
+
+    def feed(self, text: str) -> None:
+        self._buf += text
+        while True:
+            idx = self._buf.find(OFFER_MARKER)
+            if idx >= 0:
+                if idx > 0:
+                    self._emit(self._buf[:idx])
+                self._buf = self._buf[idx + len(OFFER_MARKER):]
+                continue
+            # Preserve a possible split-boundary suffix so the marker isn't
+            # partially leaked when it straddles two chunks.
+            safe_end = len(self._buf)
+            for prefix_len in range(min(len(OFFER_MARKER) - 1, len(self._buf)), 0, -1):
+                if self._buf[-prefix_len:] == OFFER_MARKER[:prefix_len]:
+                    safe_end = len(self._buf) - prefix_len
+                    break
+            if safe_end > 0:
+                self._emit(self._buf[:safe_end])
+            self._buf = self._buf[safe_end:]
+            break
+
+    def flush_end(self) -> None:
+        # Leftover possibilities:
+        #   * Exact full marker → drop (detected, never emit).
+        #   * A non-empty *prefix* of the marker (split-boundary suffix that
+        #     `feed` was holding back in case the rest arrived) → drop. This
+        #     covers truncated streams (max_completion_tokens, client
+        #     disconnect, OpenAI 5xx mid-stream) where the rest of the marker
+        #     will never arrive; emitting the partial would leak '<offered_tic'
+        #     to the user.
+        #   * Anything else → real content, emit it.
+        if not self._buf:
+            return
+        if self._buf == OFFER_MARKER or OFFER_MARKER.startswith(self._buf):
+            self._buf = ""
+            return
+        self._emit(self._buf)
+        self._buf = ""
 
 
 class ThoughtStreamFilter:
@@ -935,6 +1051,13 @@ def build_rag_prompt(
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
         "- Only make that ticket offer when you genuinely cannot answer from the provided context. When you HAVE answered the question, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one — the backend only routes such confirmations on turns it has itself flagged as unanswered, so a confirmation offered after a complete answer would never be acted on.\n"
+        # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
+        # it earlier would invalidate the OpenAI prompt-cache prefix that
+        # covers every preceding original bullet. With it at the end, only
+        # the suffix (this bullet + appended client_guard / disclosure /
+        # COT blocks) cache-misses on the first turn after deploy until the
+        # new prefix re-warms.
+        "- When (and ONLY when) your reply contains such a ticket offer, append the literal marker `<offered_ticket/>` as the very last token of your reply, after all natural-language text. The marker is machine-readable, language-agnostic, and stripped by the backend before the reply is shown to the user; without it, the user's next \"yes\" / confirmation will not be wired to the support handoff. Do NOT emit the marker on any reply that does not offer a ticket.\n"
     )
 
     if agent_instructions and settings.enable_agent_instructions:
@@ -1234,7 +1357,10 @@ def generate_answer(
             )
             chunks: list[str] = []
             total_tokens = 0
-            _filter = ThoughtStreamFilter(stream_callback, on_phase_change=status_callback)
+            # Chain: chunks → ThoughtStreamFilter (strip <thought>) →
+            # OfferMarkerStreamFilter (strip <offered_ticket/>) → stream_callback.
+            _offer_filter = OfferMarkerStreamFilter(stream_callback)
+            _filter = ThoughtStreamFilter(_offer_filter.feed, on_phase_change=status_callback)
             for chunk in stream:
                 if isinstance(getattr(chunk, "model", None), str):
                     actual_model = chunk.model
@@ -1253,6 +1379,7 @@ def generate_answer(
                     chunks.append(delta)
                     _filter.feed(delta)
             _filter.flush_end()
+            _offer_filter.flush_end()
             _raw_answer = "".join(chunks)
             _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
             answer_text = _strip_thought_tags(_raw_answer)
@@ -1280,6 +1407,14 @@ def generate_answer(
                 cached_tokens_raw = _usage_cached_tokens(response.usage)
             if response.choices:
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
+        # Strip the language-agnostic ticket-offer marker before any downstream
+        # processing (telemetry, language guard, return). The sync path doesn't
+        # need the detection boolean — only async_generate_answer surfaces it
+        # for the runtime escalation arming. The follow-up scrub removes any
+        # mid-text occurrence the LLM may have mis-placed against the prompt
+        # contract, so the literal never reaches the UI.
+        answer_text, _ = _strip_and_detect_offer_marker(answer_text)
+        answer_text = _scrub_offer_marker_literal(answer_text)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -1725,6 +1860,36 @@ class RagHandler(PipelineHandler):
                 chat.escalation_pre_confirm_pending = False
                 chat.escalation_pre_confirm_context = None
 
+        # Safety net: decide() may classify a turn as a confident answer while
+        # the LLM still ends its reply with a ticket offer (the system prompt
+        # allows this when it judges the docs incomplete). The LLM signals
+        # the offer by appending OFFER_MARKER, which generate_answer strips
+        # and surfaces as ``result.llm_offered_ticket``. Without arming
+        # pre_confirm here, the user's "yes" / "да" / "ja" / "oui" falls into
+        # SmallTalkHandler and gets greeted instead of escalated. The marker
+        # is machine-emitted, so this works in any response language.
+        if (
+            not escalate
+            and not chat.escalation_pre_confirm_pending
+            and result.llm_offered_ticket
+        ):
+            chat.escalation_pre_confirm_pending = True
+            chat.escalation_pre_confirm_context = {
+                "trigger": EscalationTrigger.llm_self_offer.value,
+                "primary_question": ctx.question,
+                "best_similarity_score": retrieval.best_confidence_score,
+                "retrieved_chunks": chunks_preview_from_results(
+                    document_ids, scores, chunk_texts
+                ),
+            }
+            ctx.db.add(chat)
+            logger.info(
+                "Armed escalation_pre_confirm_pending from LLM-offered ticket "
+                "(decide=%s, escalate=False) chat_id=%s",
+                _decision.kind.value,
+                chat.id,
+            )
+
         # Both branches (RAG answer or escalation handoff) write to the user in
         # response_language. escalation_language stays for tenant-side artifacts
         # only and must not leak into the chat reply.
@@ -1984,7 +2149,7 @@ async def _async_generate_answer_native(
     metrics_tenant_id: str | None = None,
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
-) -> tuple[str, int, int, int]:
+) -> tuple[str, int, int, int, bool]:
     """Native async port of :func:`generate_answer`.
 
     Same behaviour and telemetry shape as the sync version, but uses
@@ -2009,7 +2174,7 @@ async def _async_generate_answer_native(
             target_language=response_language,
             api_key=api_key,
         )
-        return (result.text, 0, 0, 0)
+        return (result.text, 0, 0, 0, False)
 
     system_prompt, user_message = build_rag_messages(
         question,
@@ -2097,7 +2262,8 @@ async def _async_generate_answer_native(
             )
             chunks: list[str] = []
             total_tokens = 0
-            _filter = ThoughtStreamFilter(stream_callback, on_phase_change=status_callback)
+            _offer_filter = OfferMarkerStreamFilter(stream_callback)
+            _filter = ThoughtStreamFilter(_offer_filter.feed, on_phase_change=status_callback)
             async for chunk in stream:
                 if isinstance(getattr(chunk, "model", None), str):
                     actual_model = chunk.model
@@ -2116,6 +2282,7 @@ async def _async_generate_answer_native(
                     chunks.append(delta)
                     _filter.feed(delta)
             _filter.flush_end()
+            _offer_filter.flush_end()
             _raw_answer = "".join(chunks)
             _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
             answer_text = _strip_thought_tags(_raw_answer)
@@ -2143,6 +2310,16 @@ async def _async_generate_answer_native(
                 cached_tokens_raw = _usage_cached_tokens(response.usage)
             if response.choices:
                 finish_reason = getattr(response.choices[0], "finish_reason", None)
+        # Language-agnostic ticket-offer signal: the LLM appends
+        # OFFER_MARKER when (and only when) it ends its reply with a
+        # support-ticket offer. Detect once on the post-thought-strip text;
+        # the boolean is surfaced through the return tuple so
+        # _handle_sync can arm escalation_pre_confirm_pending without
+        # natural-language pattern matching. The follow-up scrub removes
+        # any mid-text occurrence (against prompt contract) so the literal
+        # never reaches the UI even when detection itself stayed False.
+        answer_text, offered_ticket = _strip_and_detect_offer_marker(answer_text)
+        answer_text = _scrub_offer_marker_literal(answer_text)
         log_llm_tokens(
             operation="generate",
             target_language=response_language,
@@ -2213,7 +2390,7 @@ async def _async_generate_answer_native(
             _output_tokens += extra_tokens
         else:
             final_text = answer_text.strip()
-        return (final_text, total_tokens, _input_tokens, _output_tokens)
+        return (final_text, total_tokens, _input_tokens, _output_tokens, offered_ticket)
     except Exception as exc:
         log_llm_tokens(
             operation="generate",
@@ -2236,14 +2413,17 @@ async def async_generate_answer(
     question: str,
     context_chunks: list[str],
     **kwargs: Any,
-) -> tuple[str, int, int, int]:
+) -> tuple[str, int, int, int, bool]:
     """Native-async generation entry point.
 
     Production path uses :func:`_async_generate_answer_native` to avoid the
     ``to_thread`` hop on the dominant LLM call. When tests monkeypatch
     ``backend.chat.service.generate_answer`` (the sync sibling), the patch is
     honoured by falling back to ``asyncio.to_thread`` of the patched function
-    so existing test fakes continue to work without modification.
+    so existing test fakes continue to work without modification. The
+    monkeypatched sync path doesn't surface the offered-ticket signal, so
+    that boolean is reported as False — test fakes never emit OFFER_MARKER
+    anyway, so this matches actual behaviour.
     """
     from backend.chat import service as _svc
 
@@ -2253,7 +2433,7 @@ async def async_generate_answer(
     # thread for ~5-15 s per turn.
     if _svc.generate_answer is not generate_answer:
         text, total = await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
-        return (text, total, 0, 0)
+        return (text, total, 0, 0, False)
     return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
@@ -2927,7 +3107,7 @@ async def async_run_chat_pipeline(
                 logger.debug("status_callback(writing) failed", exc_info=True)
 
         llm_start = perf_counter()
-        raw_answer, tokens_used, _input_toks, _output_toks = await async_generate_answer(
+        raw_answer, tokens_used, _input_toks, _output_toks, llm_offered_ticket = await async_generate_answer(
             question,
             retrieval.chunk_texts,
             api_key=api_key,
@@ -2991,7 +3171,7 @@ async def async_run_chat_pipeline(
                         "answer_lang": a_lang.detected_language,
                     },
                 )
-            retry_answer, retry_tokens, retry_in, retry_out = await async_generate_answer(
+            retry_answer, retry_tokens, retry_in, retry_out, retry_offered_ticket = await async_generate_answer(
                 question,
                 retrieval.chunk_texts,
                 api_key=api_key,
@@ -3016,6 +3196,16 @@ async def async_run_chat_pipeline(
             tokens_used += retry_tokens
             _input_toks += retry_in
             _output_toks += retry_out
+            # OR the markers — never reset to False. On the streaming path
+            # the user has ALREADY seen the first attempt's reply via
+            # stream_callback by the time we run the language guard; if that
+            # reply ended with a ticket offer, the user can legitimately
+            # answer "yes" on the next turn even though the retry text we
+            # persist no longer contains the offer. Losing the signal here
+            # would re-introduce the exact greeting-instead-of-handoff bug
+            # this PR fixes, just through a narrower (language-mismatch)
+            # trigger.
+            llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
             _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
             record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
             if lang_span is not None:
@@ -3051,6 +3241,7 @@ async def async_run_chat_pipeline(
             retrieval=retrieval,
             escalation_recommended=escalate,
             escalation_trigger=esc_trigger,
+            llm_offered_ticket=llm_offered_ticket,
             retrieval_ms=int(retrieval.retrieval_duration_ms),
             llm_ms=llm_ms,
             llm_lang_retry_ms=_lang_retry_ms,

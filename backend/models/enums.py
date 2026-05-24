@@ -51,6 +51,12 @@ class EscalationTrigger(str, enum.Enum):
     user_request = "user_request"
     answer_rejected = "answer_rejected"
     llm_unavailable = "llm_unavailable"
+    # The LLM ended its reply with the OFFER_MARKER sentinel even though the
+    # retrieval classifier (decide()) judged the turn answerable. Distinct
+    # from low_similarity so support-team handoff emails and PostHog funnels
+    # don't conflate "retrieval was poor" with "model judged itself short on
+    # information despite a healthy KB hit".
+    llm_self_offer = "llm_self_offer"
 
 
 class EscalationPriority(str, enum.Enum):

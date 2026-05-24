@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import re
 from dataclasses import dataclass
 
+from backend.escalation.offer_detector import looks_like_escalation_offer
 from backend.evals.client import ChatClient
 from backend.evals.dataset import Dataset, GoldenCase
 from backend.evals.judge import AnthropicJudge
@@ -14,27 +14,6 @@ from backend.evals.metrics import MetricResult, run_deterministic_metrics
 from backend.evals.report import CaseResult, RunReport, TurnTrace
 
 logger = logging.getLogger(__name__)
-
-
-# Escalation-offer detector. We don't have an explicit `escalation_offered`
-# flag in the widget response, so we match the pre-confirm prompt heuristic:
-# the bot ends a turn by asking whether to forward to support / open a ticket.
-# Patterns are intentionally permissive (the LLM phrases vary) but require
-# both an action verb (forward/open/translate to ticket) and a support-team
-# noun so that an unrelated mention of "ticket" in an answer body doesn't
-# trip the check.
-_ESCALATION_OFFER_PATTERNS = [
-    # Russian
-    re.compile(r"(перешл[аёе]?|откр[ыо]ть?|создать?|отправ[ит]ь?).{0,40}(тикет|поддержк|обращени)", re.IGNORECASE),
-    re.compile(r"(передать|переслать).{0,40}(поддержк|команд)", re.IGNORECASE),
-    # English
-    re.compile(r"(open|file|create|raise|forward).{0,40}(ticket|support|case)", re.IGNORECASE),
-    re.compile(r"(would you like|want me to|shall i).{0,80}(support|ticket|team)", re.IGNORECASE),
-]
-
-
-def _looks_like_escalation_offer(text: str) -> bool:
-    return any(p.search(text) for p in _ESCALATION_OFFER_PATTERNS)
 
 
 @dataclass
@@ -112,7 +91,7 @@ def _run_case(case: GoldenCase, config: RunnerConfig) -> CaseResult:
             )
         last_response = chat_response
         total_latency_ms += chat_response.latency_ms
-        offered = _looks_like_escalation_offer(chat_response.text)
+        offered = looks_like_escalation_offer(chat_response.text)
         turns_trace.append(
             TurnTrace(
                 turn=turn_idx,

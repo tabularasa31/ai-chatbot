@@ -13,6 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.bots.service import (
+    get_bot_for_tenant_by_public_id,
+    get_default_bot_for_tenant,
+)
 from backend.chat.events import _emit_chat_feedback_event
 from backend.chat.history_service import (
     delete_session_original_content,
@@ -47,6 +51,7 @@ from backend.core.openai_client import is_quota_exceeded
 from backend.escalation.schemas import ManualEscalateRequest, ManualEscalateResponse
 from backend.escalation.service import perform_manual_escalation
 from backend.models import (
+    Bot,
     Chat,
     EscalationTrigger,
     Message,
@@ -151,8 +156,39 @@ async def chat(
 
     session_id = body.session_id or uuid.uuid4()
 
+    # Resolve the bot for this turn. Explicit bot_public_id wins (404 if it
+    # doesn't belong to the authenticated tenant — never leak cross-tenant
+    # existence). When omitted, prefer the bot the session is already bound
+    # to (avoids 422 "Session belongs to another bot" for continuing turns
+    # whose default may have shifted since turn 1); only fall back to the
+    # tenant default for genuinely new sessions.
+    def _resolve_bot(s: Session) -> "Bot | None":
+        if body.bot_public_id is not None:
+            return get_bot_for_tenant_by_public_id(tenant.id, body.bot_public_id, s)
+        existing = (
+            s.query(Chat)
+            .filter(Chat.session_id == session_id, Chat.tenant_id == tenant.id)
+            .first()
+        )
+        if existing is not None and existing.bot_id is not None:
+            return s.get(Bot, existing.bot_id)
+        return get_default_bot_for_tenant(tenant.id, s)
+
+    resolved_bot = await run_sync(db, _resolve_bot)
+    if body.bot_public_id is not None and resolved_bot is None:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # Bind the Idempotency-Key to the question + addressed bot so a retry
+    # with the same key but a different bot or question doesn't replay the
+    # stale response under the caller's nose.
+    body_fingerprint = (
+        f"{resolved_bot.id if resolved_bot else ''}\0{body.question}"
+    )
     async with idempotent_section(
-        request, tenant_id=str(tenant.id), scope="chat"
+        request,
+        tenant_id=str(tenant.id),
+        scope="chat",
+        body_fingerprint=body_fingerprint,
     ) as section:
         if section.cached is not None:
             return JSONResponse(
@@ -167,6 +203,8 @@ async def chat(
                 db=db,
                 api_key=tenant.openai_api_key,
                 browser_locale=x_browser_locale,
+                bot_id=resolved_bot.id if resolved_bot else None,
+                bot_public_id=resolved_bot.public_id if resolved_bot else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None

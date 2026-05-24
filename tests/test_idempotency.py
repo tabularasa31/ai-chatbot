@@ -158,6 +158,30 @@ async def test_replay_returns_cached_response(fake_redis: _FakeRedis) -> None:
 
 
 @pytest.mark.asyncio
+async def test_body_fingerprint_isolates_replay(fake_redis: _FakeRedis) -> None:
+    # Same Idempotency-Key + same tenant + DIFFERENT body fingerprint must
+    # NOT replay the prior response — otherwise a caller switching
+    # bot_public_id (or any body field included in the fingerprint) would
+    # silently get the stale answer for the previous body.
+    async with idempotent_section(
+        _request("k1"), tenant_id="t1", scope="chat", body_fingerprint="bot=A"
+    ) as section:
+        await section.record(status_code=200, body={"answer": "from A"})
+
+    async with idempotent_section(
+        _request("k1"), tenant_id="t1", scope="chat", body_fingerprint="bot=B"
+    ) as section:
+        assert section.cached is None, "different fingerprint must not replay"
+
+    # Same key, same fingerprint replays as before.
+    async with idempotent_section(
+        _request("k1"), tenant_id="t1", scope="chat", body_fingerprint="bot=A"
+    ) as section:
+        assert section.cached is not None
+        assert section.cached.body == {"answer": "from A"}
+
+
+@pytest.mark.asyncio
 async def test_keys_scoped_per_tenant(fake_redis: _FakeRedis) -> None:
     async with idempotent_section(_request("k1"), tenant_id="t1", scope="chat") as section:
         await section.record(status_code=200, body={"who": "tenant-1"})

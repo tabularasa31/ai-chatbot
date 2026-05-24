@@ -40,6 +40,22 @@ def get_bots_for_tenant(tenant_id: uuid.UUID, db: Session) -> list[Bot]:
     return db.query(Bot).filter(Bot.tenant_id == tenant_id).order_by(Bot.created_at.asc()).all()
 
 
+def get_default_bot_for_tenant(tenant_id: uuid.UUID, db: Session) -> Bot | None:
+    """Oldest active bot for the tenant, or None if the tenant has no active bots.
+
+    Mirrors the fallback the chat pipeline uses internally so the public /chat
+    route can stamp ``Chat.bot_id`` up front; otherwise every API-driven
+    session is persisted with ``bot_id=NULL`` and analytics cannot segment by
+    bot.
+    """
+    return (
+        db.query(Bot)
+        .filter(Bot.tenant_id == tenant_id, Bot.is_active.is_(True))
+        .order_by(Bot.created_at.asc())
+        .first()
+    )
+
+
 def get_bot_by_id(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> Bot:
     bot = db.query(Bot).filter(Bot.id == bot_id, Bot.tenant_id == tenant_id).first()
     if not bot:
@@ -49,6 +65,28 @@ def get_bot_by_id(bot_id: uuid.UUID, tenant_id: uuid.UUID, db: Session) -> Bot:
 
 def get_bot_by_public_id(public_id: str, db: Session) -> Bot | None:
     return db.query(Bot).filter(Bot.public_id == public_id).first()
+
+
+def get_bot_for_tenant_by_public_id(
+    tenant_id: uuid.UUID, public_id: str, db: Session
+) -> Bot | None:
+    """Tenant-scoped active-bot lookup. Returns None for unknown ids,
+    cross-tenant ids, or bots the operator has deactivated.
+
+    Used by the public /chat API. A tenant-authenticated caller must not be
+    able to address another tenant's bot by guessing its public_id, and
+    deactivation must drop traffic to match the widget gate's behavior
+    (``backend/tenants/widget_chat_gate.py`` rejects inactive bots).
+    """
+    return (
+        db.query(Bot)
+        .filter(
+            Bot.public_id == public_id,
+            Bot.tenant_id == tenant_id,
+            Bot.is_active.is_(True),
+        )
+        .first()
+    )
 
 
 def create_bot(

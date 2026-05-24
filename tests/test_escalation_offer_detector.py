@@ -44,3 +44,17 @@ def test_incidental_ticket_mention_does_not_trigger():
 def test_empty_input():
     assert not looks_like_escalation_offer("")
     assert not looks_like_escalation_offer(None)  # type: ignore[arg-type]
+
+
+def test_offer_split_across_newlines_russian():
+    # LLMs sometimes break the offer across lines; re.DOTALL keeps the bridge
+    # `.{0,40}` matching across `\n` so we don't miss those cases.
+    assert looks_like_escalation_offer(
+        "Информации в документации нет.\n\nХотите, я открою\nтикет в поддержку?"
+    )
+
+
+def test_offer_split_across_newlines_english():
+    assert looks_like_escalation_offer(
+        "I couldn't find that.\nWant me to open\na support ticket?"
+    )

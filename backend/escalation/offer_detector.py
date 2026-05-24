@@ -24,15 +24,26 @@ _ESCALATION_OFFER_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Russian — verb stems with permissive endings so we catch infinitives,
     # past-tense and other conjugations ("открыл", "открыть", "отправил",
     # "отправить", "создам", "создаст" …) without enumerating each form.
+    # re.DOTALL so the .{0,40} bridge tolerates a newline between the verb
+    # and the noun ("открыть\nтикет"), which LLMs do emit on multi-line offers.
     re.compile(
         r"(перешл[а-яё]*|откр[ыо][а-яё]*|созда[а-яё]*|отправ[а-яё]*)"
         r".{0,40}(тикет|поддержк|обращени)",
-        re.IGNORECASE,
+        re.IGNORECASE | re.DOTALL,
     ),
-    re.compile(r"(перед[а-яё]*|пересл[а-яё]*).{0,40}(поддержк|команд)", re.IGNORECASE),
+    re.compile(
+        r"(перед[а-яё]*|пересл[а-яё]*).{0,40}(поддержк|команд)",
+        re.IGNORECASE | re.DOTALL,
+    ),
     # English
-    re.compile(r"(open|file|create|raise|forward).{0,40}(ticket|support|case)", re.IGNORECASE),
-    re.compile(r"(would you like|want me to|shall i).{0,80}(support|ticket|team)", re.IGNORECASE),
+    re.compile(
+        r"(open|file|create|raise|forward).{0,40}(ticket|support|case)",
+        re.IGNORECASE | re.DOTALL,
+    ),
+    re.compile(
+        r"(would you like|want me to|shall i).{0,80}(support|ticket|team)",
+        re.IGNORECASE | re.DOTALL,
+    ),
 )
 
 

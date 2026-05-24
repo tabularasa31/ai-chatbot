@@ -58,6 +58,7 @@ from backend.core.config import settings
 from backend.core.openai_client import is_reasoning_model
 from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
 from backend.disclosure_config import resolve_level
+from backend.escalation.offer_detector import looks_like_escalation_offer
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
     RejectReason,
@@ -1724,6 +1725,35 @@ class RagHandler(PipelineHandler):
                 logger.warning("Escalation T-1/T-2 pre-confirm failed, returning RAG answer only: %s", e)
                 chat.escalation_pre_confirm_pending = False
                 chat.escalation_pre_confirm_context = None
+
+        # Safety net: decide() may classify a turn as a confident answer while
+        # the LLM still ends its reply with "do you want me to open a support
+        # ticket?" (the system prompt allows this when it judges the docs
+        # incomplete). Without arming pre_confirm here, the user's "yes" / "да"
+        # falls into SmallTalkHandler and gets greeted instead of escalated.
+        # Detect the offer in the rendered answer and arm the flag so the next
+        # turn reaches EscalationStateMachine.
+        if (
+            not escalate
+            and not chat.escalation_pre_confirm_pending
+            and looks_like_escalation_offer(answer)
+        ):
+            chat.escalation_pre_confirm_pending = True
+            chat.escalation_pre_confirm_context = {
+                "trigger": EscalationTrigger.low_similarity.value,
+                "primary_question": ctx.question,
+                "best_similarity_score": retrieval.best_confidence_score,
+                "retrieved_chunks": chunks_preview_from_results(
+                    document_ids, scores, chunk_texts
+                ),
+            }
+            ctx.db.add(chat)
+            logger.info(
+                "Armed escalation_pre_confirm_pending from LLM-offered ticket "
+                "(decide=%s, escalate=False) chat_id=%s",
+                _decision.kind.value,
+                chat.id,
+            )
 
         # Both branches (RAG answer or escalation handoff) write to the user in
         # response_language. escalation_language stays for tenant-side artifacts

@@ -1,15 +1,15 @@
 """Heuristic detector for "do you want me to open a support ticket?" offers.
 
-The RAG system prompt instructs the LLM to offer a support ticket when it
-genuinely can't answer from the documentation, and to wait for the user's
-confirmation. The backend arms ``chat.escalation_pre_confirm_pending`` so that
-the next user reply ("yes" / "да") is routed to the escalation state machine.
+**Eval-only.** The production runtime uses a language-agnostic
+machine-readable sentinel (``OFFER_MARKER`` in ``backend.chat.handlers.rag``)
+that the LLM appends to its reply and the backend strips before persisting.
+That signal is unavailable to ``backend.evals``: the eval driver consumes
+the cleaned answer text from the chat API, so it has to fall back to
+natural-language matching to score whether a turn offered a ticket.
 
-The arming happens through ``decide()`` in the policy layer. When the LLM
-disagrees with the classifier — typing "I don't have this in the docs, want a
-ticket?" on a turn the classifier scored as a confident answer — the flag is
-never set, and the user's "да" falls through to ``SmallTalkHandler``. This
-detector catches that mismatch by inspecting the rendered answer text.
+This module keeps the heuristic for that single eval use case. Do NOT
+reintroduce it on the live request path — it only covers RU and EN and would
+silently miss ticket offers in other languages.
 
 The patterns require both an action verb (open/forward/create) AND a
 support-team noun (ticket/support) so that an unrelated mention of "ticket" in

@@ -1674,15 +1674,11 @@ class RagHandler(PipelineHandler):
 
         # Guard rejects and faq_direct: persist and return immediately (no escalation).
         if result.is_reject or result.is_faq_direct:
-            # Arm/clear the rephrase-prompt tracker so the *next* turn knows
-            # whether this reply was the zero-hits soft-reply. Any other
-            # reject (injection / not_relevant / low_retrieval) and faq_direct
-            # clears it. Committed in the same transaction as the assistant
-            # message below.
-            _new_rephrase_flag = (result.reject_reason == "rephrase")
-            if chat.last_reply_was_rephrase_prompt != _new_rephrase_flag:
-                chat.last_reply_was_rephrase_prompt = _new_rephrase_flag
-                ctx.db.add(chat)
+            # Arm the rephrase-prompt tracker only on the zero-hits soft reply.
+            # Every other reply path (including other reject reasons and
+            # faq_direct) is implicitly reset to False by the persistence
+            # layer's default argument — handlers that bypass RagHandler
+            # (Greeting, SmallTalk, Escalation) get the same reset for free.
             user_message, assistant_message = _persist_turn_with_response_language(
                 db=ctx.db,
                 chat=chat,
@@ -1696,6 +1692,7 @@ class RagHandler(PipelineHandler):
                 optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
                 trace=ctx.trace,
+                set_rephrase_flag=(result.reject_reason == "rephrase"),
             )
             _try_ingest_gap_signal(
                 chat=chat,
@@ -1770,13 +1767,8 @@ class RagHandler(PipelineHandler):
         # Normal RAG / faq_context path: handle escalation side effects, then persist.
         retrieval = result.retrieval
         assert retrieval is not None  # only None for guard_reject / faq_direct
-        # Any non-zero-hits success — or an escalation driven by the
-        # consecutive-failure branch in the pipeline — clears the rephrase
-        # tracker so two unrelated zero-hits turns in the same session don't
-        # collapse into the escalation path.
-        if chat.last_reply_was_rephrase_prompt:
-            chat.last_reply_was_rephrase_prompt = False
-            ctx.db.add(chat)
+        # The rephrase tracker is reset centrally by the persistence layer
+        # (set_rephrase_flag defaults to False) when this turn commits.
         document_ids = list(dict.fromkeys(retrieval.document_ids))
         scores = retrieval.scores
         chunk_texts = retrieval.chunk_texts
@@ -3219,9 +3211,21 @@ async def async_run_chat_pipeline(
         # question is in-domain we escalate via the existing pre-confirm gate;
         # otherwise we fall back to the standard NOT_RELEVANT reject.
         #
-        # The flag ``chat.last_reply_was_rephrase_prompt`` is set/reset by
-        # ``RagHandler._handle_sync`` after the assistant message is persisted.
-        if not retrieval.chunk_texts:
+        # The flag ``chat.last_reply_was_rephrase_prompt`` is authoritatively
+        # set/cleared by the persistence layer (``set_rephrase_flag`` param on
+        # ``_persist_turn_with_response_language``), so handlers that bypass
+        # the RAG path (Greeting, SmallTalk, Escalation) also reset it.
+        #
+        # Fast path only applies when there is truly nothing for the LLM to
+        # answer from: empty retrieval AND no FAQ context items AND no Quick
+        # Answer items. If any auxiliary knowledge source matched, fall through
+        # so the answer LLM can still produce a real reply.
+        _retrieval_ms = int(retrieval.retrieval_duration_ms)
+        if (
+            not retrieval.chunk_texts
+            and not state.faq_context_items
+            and not state.quick_answer_items
+        ):
             from backend.models import EscalationTrigger
 
             is_consecutive = bool(
@@ -3249,7 +3253,8 @@ async def async_run_chat_pipeline(
                     reject_reason="rephrase",
                     is_reject=True,
                     is_faq_direct=False,
-                    retrieval=None,
+                    retrieval=retrieval,
+                    retrieval_ms=_retrieval_ms,
                     escalation_recommended=False,
                     escalation_trigger=None,
                     faq_match=state.faq_match,
@@ -3265,6 +3270,20 @@ async def async_run_chat_pipeline(
                 force_llm_check=True,
             )
             if relevant:
+                # Localized fallback that keeps the reply non-empty if the
+                # handler's ``render_pre_confirm_text`` call fails (e.g.
+                # OpenAI timeout): the catch in _handle_sync flips
+                # ``escalation_pre_confirm_pending`` back to False and reuses
+                # ``result.final_answer`` as the user-facing reply. Using the
+                # rephrase soft-reply as fallback keeps the bot polite and
+                # in-language instead of returning an empty string.
+                fallback = await async_build_reject_response_result(
+                    reason=RejectReason.REPHRASE_REQUEST,
+                    profile=state.profile,
+                    response_language=language_context.response_language,
+                    api_key=api_key,
+                    question=question,
+                )
                 _emit_no_rag_hits_event(
                     outcome="escalation",
                     tenant_public_id=tenant_public_id,
@@ -3272,19 +3291,16 @@ async def async_run_chat_pipeline(
                     chat_id=chat_id,
                     relevance_reason=relevance_reason,
                 )
-                # Signal escalation; ``RagHandler._handle_sync`` renders the
-                # pre-confirm text and writes the chat FSM state. ``retrieval``
-                # stays non-None (empty) because the handler's escalation
-                # branch dereferences it.
                 return ChatPipelineResult(
-                    raw_answer="",
-                    final_answer="",
-                    tokens_used=0,
+                    raw_answer=fallback.text,
+                    final_answer=fallback.text,
+                    tokens_used=fallback.tokens_used,
                     strategy="rag_only",
                     reject_reason=None,
                     is_reject=False,
                     is_faq_direct=False,
                     retrieval=retrieval,
+                    retrieval_ms=_retrieval_ms,
                     escalation_recommended=True,
                     escalation_trigger=EscalationTrigger.no_documents,
                     faq_match=state.faq_match,
@@ -3313,7 +3329,8 @@ async def async_run_chat_pipeline(
                 reject_reason="not_relevant",
                 is_reject=True,
                 is_faq_direct=False,
-                retrieval=None,
+                retrieval=retrieval,
+                retrieval_ms=_retrieval_ms,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 faq_match=state.faq_match,

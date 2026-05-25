@@ -357,6 +357,61 @@ def test_successful_turn_resets_rephrase_flag(
     assert chat.last_reply_was_rephrase_prompt is False
 
 
+def test_intervening_non_rag_turn_resets_rephrase_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the codex P1: handlers other than RagHandler (SmallTalk,
+    Greeting, Escalation) must also clear ``last_reply_was_rephrase_prompt``
+    when they persist a turn. Otherwise a one-word "hi" between two unrelated
+    zero-hits turns would mis-classify the second as a *consecutive* miss and
+    trigger forced relevance/escalation.
+
+    Verified by simulating an intervening turn that persists via the same
+    ``_persist_turn_with_response_language`` codepath without touching the
+    flag explicitly: the centralized reset in ``_finalize_persisted_messages``
+    must clear it.
+    """
+    from backend.chat.persistence import _persist_turn_with_response_language
+
+    cl_row, _api_key = _create_client(
+        tenant, db_session, email="zh-intervene@example.com"
+    )
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    # Simulate a non-Rag handler (e.g. SmallTalk) persisting a turn with the
+    # default ``set_rephrase_flag=False`` — the same call signature these
+    # handlers already use, no opt-in needed.
+    _persist_turn_with_response_language(
+        db=db_session,
+        chat=chat,
+        tenant_id=cl_row.id,
+        response_language="en",
+        resolution_reason="default",
+        user_content="hi",
+        assistant_content="Hello!",
+        document_ids=[],
+        extra_tokens=0,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is False
+
+
 def test_relevance_checker_comment_hygiene() -> None:
     """The misleading 'Exception: queries that match an explicit off-topic
     pattern are still rejected' comment described unimplemented behavior;

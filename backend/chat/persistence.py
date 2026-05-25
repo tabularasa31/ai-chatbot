@@ -70,8 +70,15 @@ def _finalize_persisted_messages(
     chat: Chat,
     tenant_id: uuid.UUID,
     extra_tokens: int,
+    set_rephrase_flag: bool = False,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
+    # Authoritative single write point for the zero-RAG-hits tracker so the
+    # flag stays consistent regardless of which handler (Greeting, SmallTalk,
+    # Escalation, Rag) persisted this turn. Defaults to False: any successful
+    # reply resets the tracker, so two unrelated zero-hits turns separated by
+    # an unrelated turn don't collapse into the consecutive-failure path.
+    chat.last_reply_was_rephrase_prompt = set_rephrase_flag
     db.add(chat)
     try:
         with db.begin_nested():
@@ -101,6 +108,7 @@ def _persist_turn(
     extra_tokens: int,
     optional_entity_types: set[str] | None = None,
     trace: TraceHandle | None = None,
+    set_rephrase_flag: bool = False,
 ) -> tuple[Message, Message]:
     _persist_start = perf_counter()
     _persist_span = None
@@ -131,6 +139,7 @@ def _persist_turn(
         chat=chat,
         tenant_id=tenant_id,
         extra_tokens=extra_tokens,
+        set_rephrase_flag=set_rephrase_flag,
     )
     if _persist_span is not None:
         _persist_span.end(
@@ -154,6 +163,7 @@ def _persist_turn_with_response_language(
     optional_entity_types: set[str] | None = None,
     language_context: ResolvedLanguageContext | None = None,
     trace: TraceHandle | None = None,
+    set_rephrase_flag: bool = False,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -173,6 +183,7 @@ def _persist_turn_with_response_language(
         extra_tokens,
         optional_entity_types=optional_entity_types,
         trace=trace,
+        set_rephrase_flag=set_rephrase_flag,
     )
 
 

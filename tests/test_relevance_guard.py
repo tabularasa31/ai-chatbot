@@ -355,6 +355,47 @@ async def test_async_relevance_short_query_bypass() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_relevance_force_llm_check_bypasses_short_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``force_llm_check=True`` must skip the short-query fast path and hit the LLM,
+    so the chat pipeline can get a real verdict on ≤4-word zero-RAG-hits questions.
+    """
+    from backend.guards.relevance_checker import (
+        _cache,
+        async_check_relevance_with_profile,
+    )
+
+    _cache.clear()
+
+    async_mock = AsyncMock(
+        return_value=Mock(
+            choices=[Mock(message=Mock(content='{"relevant": false, "reason": "off_topic"}'))]
+        )
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+
+    relevant, reason, _p = await async_check_relevance_with_profile(
+        tenant_id=tid,
+        user_question="hi",
+        profile=profile,
+        api_key="sk-test",
+        force_llm_check=True,
+    )
+    assert relevant is False
+    assert reason == "off_topic"
+    assert async_mock.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_async_relevance_llm_returns_relevant(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
 

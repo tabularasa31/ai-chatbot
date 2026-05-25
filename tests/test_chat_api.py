@@ -605,7 +605,11 @@ def test_chat_empty_followup_after_started_session_is_rejected(
 def test_chat_no_embeddings(
     mock_openai_client: Mock, tenant: TestClient, db_session: Session
 ) -> None:
-    """No docs uploaded → pre_confirm escalation question (Variant A)."""
+    """No docs uploaded → strict zero-hits fast path returns a soft "rephrase"
+    prompt rather than an immediate escalation. Escalation only fires on a
+    *second* consecutive zero-hits turn (covered in
+    ``test_chat_pre_confirm_non_yes_no_reply_does_not_escalate``).
+    """
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
 
     token = register_and_verify_user(tenant, db_session, email="noemb@example.com")
@@ -624,21 +628,28 @@ def test_chat_no_embeddings(
     )
     assert response.status_code == 200
     data = response.json()
-    # No retrieved chunks → pre-confirm escalation fires. Variant A replaces
-    # the RAG verdict with the canonical "no_answer" pre_confirm message (no
-    # "two voices"): a brief "couldn't find an answer" preamble plus the handoff
-    # question, in one reply. Ticket is NOT created on the first turn — user
-    # must confirm first.
+    # Zero-hits fast path: canonical English soft-reply (no localization call
+    # needed because response_language is English in this test setup), no
+    # escalation, no ticket. The next turn checks the LLM relevance model.
     assert data["text"] == (
-        "I couldn't find an answer to this in the available information. "
-        "Would you like me to forward your request to our support team "
-        "so they can reply by email?"
+        "I couldn't find an answer to that in the knowledge base. "
+        "Could you rephrase your question?"
     )
     assert data["ticket_number"] is None
     # No-chunk RAG short-circuits without an LLM call (0 tokens) and the English
-    # pre_confirm template needs no localization call (0 tokens) → 0 total.
+    # soft-reply template needs no localization call (0 tokens) → 0 total.
     assert data["tokens_used"] == 0
     assert data.get("chat_ended") is False
+    # Verify the rephrase tracker is now armed for the next turn.
+    from backend.models import Chat as _Chat
+
+    chat = (
+        db_session.query(_Chat)
+        .filter(_Chat.session_id == uuid.UUID(data["session_id"]))
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is True
+    assert chat.escalation_pre_confirm_pending is False
 
 
 def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
@@ -649,17 +660,30 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
 ) -> None:
     """Regression for 86exn3x7c (end-to-end).
 
-    Turn 1 has no docs → bot offers escalation (pre_confirm). On turn 2 the user
-    ignores the yes/no question and describes a new symptom (classifier → None).
-    The bot must NOT silently forward the request: no ticket is created, and the
-    turn falls through to RAG (which re-offers escalation since the KB is empty).
+    With the zero-RAG-hits fast path, turn 1 on an empty KB returns a soft
+    "rephrase" reply (sets ``last_reply_was_rephrase_prompt``). A second
+    consecutive zero-hits turn runs the LLM relevance check, which fails
+    open to "relevant" under the mock and triggers escalation pre_confirm.
+    On turn 3 the user ignores the yes/no question and describes a new
+    symptom (classifier → None). The bot must NOT silently forward the
+    request: no ticket is created.
     """
     from backend.models import EscalationTicket
 
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=[0.1] * 1536)]
-    # The user's turn-2 reply is a substantive new symptom, not a yes/no answer.
+    # The user's reply to the pre_confirm question is a substantive new
+    # symptom, not a yes/no answer.
     monkeypatch.setattr(
         "backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)
+    )
+    # Force the consecutive-zero-hits relevance verdict to "relevant" so the
+    # pipeline reliably arms pre_confirm (without depending on the fail-open
+    # path of the relevance LLM mock).
+    from tests._async_utils import as_async as _as_async_local
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _as_async_local(lambda **_kw: (True, "in_domain", _kw.get("profile"))),
     )
 
     token = register_and_verify_user(tenant, db_session, email="preconf-noyes@example.com")
@@ -672,6 +696,7 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
     tenant_id = uuid.UUID(cl_resp.json()["id"])
     api_key = cl_resp.json()["api_key"]
 
+    # Turn 1: zero-RAG-hits on an empty KB → soft rephrase reply.
     first = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
@@ -684,9 +709,24 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
 
     chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(session_id)).one()
     db_session.refresh(chat)
+    assert chat.last_reply_was_rephrase_prompt is True
+    assert chat.escalation_pre_confirm_pending is False
+
+    # Turn 2: consecutive zero hits + relevance=relevant → escalation pre_confirm.
+    second_setup = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={
+            "question": "And what about the dashboard widget?",
+            "session_id": session_id,
+        },
+    )
+    assert second_setup.status_code == 200
+    db_session.expire_all()
+    chat = db_session.query(Chat).filter(Chat.session_id == uuid.UUID(session_id)).one()
     assert chat.escalation_pre_confirm_pending is True
 
-    second = tenant.post(
+    third = tenant.post(
         "/chat",
         headers={"X-API-Key": api_key},
         json={
@@ -694,10 +734,10 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
             "session_id": session_id,
         },
     )
-    assert second.status_code == 200
+    assert third.status_code == 200
     # Crucially: no ticket minted without an explicit yes.
-    assert second.json()["ticket_number"] is None
-    assert second.json().get("chat_ended") is False
+    assert third.json()["ticket_number"] is None
+    assert third.json().get("chat_ended") is False
     ticket_count = (
         db_session.query(EscalationTicket)
         .filter(EscalationTicket.tenant_id == tenant_id)

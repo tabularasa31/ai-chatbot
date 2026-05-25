@@ -109,6 +109,17 @@ class Chat(Base):
     # so reporting a session as ended does not make the chat un-resumable.
     session_ended_event_at = Column(DateTime, nullable=True)
     clarification_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # True iff the immediately preceding assistant reply was the "soft rephrase"
+    # prompt emitted on a zero-RAG-hits turn. Read on the next turn to decide
+    # whether a second consecutive zero-hits turn should fall through to the
+    # LLM relevance model (and possibly escalate) instead of repeating the
+    # soft-reply. Reset to False on any non-zero-hits assistant reply.
+    last_reply_was_rephrase_prompt = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     last_response_language = Column(String(16), nullable=True)
     # Once True, response_language is frozen at last_response_language and
     # detection is bypassed. Set by lock heuristic in backend/chat/language.py

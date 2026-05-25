@@ -244,7 +244,7 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval"] | None
+    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "rephrase"] | None
     is_reject: bool
     is_faq_direct: bool
     # retrieval
@@ -507,6 +507,48 @@ def _emit_speculative_retrieval_event(
         )
     except Exception:
         logger.warning("Failed to emit speculative_retrieval.outcome event", exc_info=True)
+
+
+def _emit_no_rag_hits_event(
+    *,
+    outcome: Literal["soft_reply", "escalation", "offtopic_reply"],
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    relevance_reason: str | None = None,
+) -> None:
+    """Emit a PostHog event for one strict-zero-hits outcome.
+
+    Fires from the chat pipeline's zero-RAG-hits fast path:
+
+    * ``soft_reply``      — first zero-hits turn, returned a "couldn't find an
+                            answer, please rephrase" prompt instead of calling
+                            the answer LLM.
+    * ``escalation``      — second consecutive zero-hits turn AND the relevance
+                            model judged the question in-domain; pre-confirm
+                            handoff was triggered.
+    * ``offtopic_reply``  — second consecutive zero-hits turn AND the relevance
+                            model judged it off-topic; standard NOT_RELEVANT
+                            reject was emitted.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    from backend.chat import service as _svc
+    try:
+        _svc.capture_event(
+            "no_rag_hits.outcome",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "outcome": outcome,
+                "chat_id": chat_id,
+                "relevance_reason": relevance_reason,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit no_rag_hits.outcome event", exc_info=True)
 
 
 def _strip_thought_tags(text: str) -> str:
@@ -1632,6 +1674,15 @@ class RagHandler(PipelineHandler):
 
         # Guard rejects and faq_direct: persist and return immediately (no escalation).
         if result.is_reject or result.is_faq_direct:
+            # Arm/clear the rephrase-prompt tracker so the *next* turn knows
+            # whether this reply was the zero-hits soft-reply. Any other
+            # reject (injection / not_relevant / low_retrieval) and faq_direct
+            # clears it. Committed in the same transaction as the assistant
+            # message below.
+            _new_rephrase_flag = (result.reject_reason == "rephrase")
+            if chat.last_reply_was_rephrase_prompt != _new_rephrase_flag:
+                chat.last_reply_was_rephrase_prompt = _new_rephrase_flag
+                ctx.db.add(chat)
             user_message, assistant_message = _persist_turn_with_response_language(
                 db=ctx.db,
                 chat=chat,
@@ -1665,6 +1716,7 @@ class RagHandler(PipelineHandler):
                 "injection": "guard_reject_injection",
                 "not_relevant": "guard_reject_not_relevant",
                 "low_retrieval": "guard_reject_low_retrieval",
+                "rephrase": "guard_reject_rephrase",
             }
             if result.is_reject:
                 source = source_map.get(result.reject_reason or "", "guard_reject")
@@ -1718,6 +1770,13 @@ class RagHandler(PipelineHandler):
         # Normal RAG / faq_context path: handle escalation side effects, then persist.
         retrieval = result.retrieval
         assert retrieval is not None  # only None for guard_reject / faq_direct
+        # Any non-zero-hits success — or an escalation driven by the
+        # consecutive-failure branch in the pipeline — clears the rephrase
+        # tracker so two unrelated zero-hits turns in the same session don't
+        # collapse into the escalation path.
+        if chat.last_reply_was_rephrase_prompt:
+            chat.last_reply_was_rephrase_prompt = False
+            ctx.db.add(chat)
         document_ids = list(dict.fromkeys(retrieval.document_ids))
         scores = retrieval.scores
         chunk_texts = retrieval.chunk_texts
@@ -3146,6 +3205,121 @@ async def async_run_chat_pipeline(
         threshold = settings.relevance_retrieval_threshold
         retrieval = state.retrieval
         assert retrieval is not None  # set above on every branch
+
+        # --- 6a. Strict zero-hits fast path ---
+        # The bot is language-agnostic, so the soft-reply / off-topic / escalation
+        # decision below uses canonical English templates routed through the
+        # existing localization layer — no hardcoded per-language strings.
+        #
+        # On the first zero-RAG-hits turn in a session we short-circuit before
+        # the expensive answer LLM and return a "couldn't find an answer in the
+        # knowledge base, please rephrase" prompt. On a *second consecutive*
+        # zero-hits turn we ask the LLM relevance model (force_llm_check=True
+        # so short queries still get a real verdict). If the model says the
+        # question is in-domain we escalate via the existing pre-confirm gate;
+        # otherwise we fall back to the standard NOT_RELEVANT reject.
+        #
+        # The flag ``chat.last_reply_was_rephrase_prompt`` is set/reset by
+        # ``RagHandler._handle_sync`` after the assistant message is persisted.
+        if not retrieval.chunk_texts:
+            from backend.models import EscalationTrigger
+
+            is_consecutive = bool(
+                chat is not None and chat.last_reply_was_rephrase_prompt
+            )
+            if not is_consecutive:
+                soft_reply = await async_build_reject_response_result(
+                    reason=RejectReason.REPHRASE_REQUEST,
+                    profile=state.profile,
+                    response_language=language_context.response_language,
+                    api_key=api_key,
+                    question=question,
+                )
+                _emit_no_rag_hits_event(
+                    outcome="soft_reply",
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                )
+                return ChatPipelineResult(
+                    raw_answer=soft_reply.text,
+                    final_answer=soft_reply.text,
+                    tokens_used=soft_reply.tokens_used,
+                    strategy="guard_reject",
+                    reject_reason="rephrase",
+                    is_reject=True,
+                    is_faq_direct=False,
+                    retrieval=None,
+                    escalation_recommended=False,
+                    escalation_trigger=None,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                )
+
+            relevant, relevance_reason, _ = await async_check_relevance_with_profile(
+                tenant_id=tenant_id,
+                user_question=question,
+                profile=state.profile,
+                api_key=api_key,
+                trace=trace,
+                force_llm_check=True,
+            )
+            if relevant:
+                _emit_no_rag_hits_event(
+                    outcome="escalation",
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                    relevance_reason=relevance_reason,
+                )
+                # Signal escalation; ``RagHandler._handle_sync`` renders the
+                # pre-confirm text and writes the chat FSM state. ``retrieval``
+                # stays non-None (empty) because the handler's escalation
+                # branch dereferences it.
+                return ChatPipelineResult(
+                    raw_answer="",
+                    final_answer="",
+                    tokens_used=0,
+                    strategy="rag_only",
+                    reject_reason=None,
+                    is_reject=False,
+                    is_faq_direct=False,
+                    retrieval=retrieval,
+                    escalation_recommended=True,
+                    escalation_trigger=EscalationTrigger.no_documents,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                )
+
+            offtopic_reply = await async_build_reject_response_result(
+                reason=RejectReason.NOT_RELEVANT,
+                profile=state.profile,
+                response_language=language_context.response_language,
+                api_key=api_key,
+                question=question,
+            )
+            _emit_no_rag_hits_event(
+                outcome="offtopic_reply",
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                chat_id=chat_id,
+                relevance_reason=relevance_reason,
+            )
+            return ChatPipelineResult(
+                raw_answer=offtopic_reply.text,
+                final_answer=offtopic_reply.text,
+                tokens_used=offtopic_reply.tokens_used,
+                strategy="guard_reject",
+                reject_reason="not_relevant",
+                is_reject=True,
+                is_faq_direct=False,
+                retrieval=None,
+                escalation_recommended=False,
+                escalation_trigger=None,
+                faq_match=state.faq_match,
+                language_context=language_context,
+            )
+
         state.reranker_rescued = (
             retrieval.best_rank_score is not None
             and retrieval.best_rank_score >= settings.reranker_bypass_threshold

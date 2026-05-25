@@ -21,6 +21,11 @@ class RejectReason(enum.Enum):
     NOT_RELEVANT = "not_relevant"
     LOW_RETRIEVAL_SCORE = "low_retrieval"
     INSUFFICIENT_CONFIDENCE = "insufficient_confidence"
+    # Strict zero documents after RAG (vector + BM25 + RRF). Emitted as a soft
+    # "couldn't find an answer, please rephrase" prompt rather than a blunt
+    # off-topic refusal — at this point we don't yet know whether the question
+    # is off-topic or just poorly worded.
+    REPHRASE_REQUEST = "rephrase"
 
 
 def _resolve_reject_target_language(
@@ -55,6 +60,12 @@ def _build_canonical_reject_response(
         return (
             f"Sorry, but I can't help with that request. "
             f"I can answer questions about {product_name} if helpful."
+        )
+
+    if reason == RejectReason.REPHRASE_REQUEST:
+        return (
+            "I couldn't find an answer to that in the knowledge base. "
+            "Could you rephrase your question?"
         )
 
     if reason == RejectReason.INSUFFICIENT_CONFIDENCE:

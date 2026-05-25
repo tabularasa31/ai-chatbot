@@ -51,9 +51,17 @@ _cb_lock = threading.Lock()
 _consecutive_failures: int = 0
 _circuit_opened_at: float | None = None
 
-# Short queries (≤ SHORT_QUERY_WORD_LIMIT words) are passed through as relevant so the
-# LLM can ask a clarifying question rather than the guard blindly rejecting them.
-# Exception: queries that match an explicit off-topic pattern are still rejected.
+# Short queries (≤ SHORT_QUERY_WORD_LIMIT words) bypass the LLM relevance check
+# and are passed through as relevant so the answer LLM can ask a clarifying
+# question rather than the guard blindly rejecting them. Callers that need the
+# LLM verdict regardless of length (e.g. the chat pipeline on a *second*
+# consecutive zero-RAG-hits turn) can opt out of this fast path by passing
+# ``force_llm_check=True``.
+#
+# Note: there is no off-topic pattern allowlist here — the bot is
+# language-agnostic and per-language keyword lists are explicitly out of scope.
+# Off-topic short queries are caught downstream by the zero-RAG-hits fast path
+# in the chat pipeline, which doesn't depend on the question's surface form.
 SHORT_QUERY_WORD_LIMIT = 4
 
 _cache: dict[str, tuple[float, bool, str]] = {}
@@ -180,6 +188,7 @@ def check_relevance_with_profile(
     profile: TenantProfileModel | None,
     api_key: str,
     trace: TraceHandle | None = None,
+    force_llm_check: bool = False,
 ) -> tuple[bool, str, TenantProfileModel | None]:
     """Relevance pre-check using an already-loaded profile (no DB access).
 
@@ -187,20 +196,24 @@ def check_relevance_with_profile(
     on the main thread and pass it here to avoid sharing a SQLAlchemy session
     across threads.
 
+    When ``force_llm_check`` is True, the short-query and circuit-breaker
+    fast-paths are skipped and the LLM is always consulted. Used by the chat
+    pipeline on a second consecutive zero-RAG-hits turn, where we need the
+    model's verdict on domain relevance even for ≤4-word questions.
+
     Returns: (relevant, reason, profile_for_guard)
     """
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
 
-    # Very short queries are ambiguous — let the LLM ask for clarification instead of
-    # the guard blindly rejecting. Skip only if the query matches a clear off-topic pattern.
-    word_count = len(user_question.split())
-    if word_count <= SHORT_QUERY_WORD_LIMIT:
-        return True, "short_query_bypass", profile
+    if not force_llm_check:
+        word_count = len(user_question.split())
+        if word_count <= SHORT_QUERY_WORD_LIMIT:
+            return True, "short_query_bypass", profile
 
-    cb = _check_circuit_breaker()
-    if cb is not None:
-        return cb[0], cb[1], None
+        cb = _check_circuit_breaker()
+        if cb is not None:
+            return cb[0], cb[1], None
 
     start = time.perf_counter()
     span = None
@@ -260,7 +273,11 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-        _record_failure()
+        # See async variant: force callers must not contribute to the shared
+        # CB counter, otherwise one tenant's pathological force-stream during
+        # an OpenAI outage trips the breaker for every other tenant.
+        if not force_llm_check:
+            _record_failure()
         return True, "timeout", None
     except Exception:
         if span is not None:
@@ -269,7 +286,8 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False)
         except Exception:
             pass
-        _record_failure()
+        if not force_llm_check:
+            _record_failure()
         return True, "error", None
     else:
         try:
@@ -277,7 +295,8 @@ def check_relevance_with_profile(
         except Exception:
             pass
 
-    _record_success()
+    if not force_llm_check:
+        _record_success()
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 
@@ -301,24 +320,28 @@ async def async_check_relevance_with_profile(
     profile: TenantProfileModel | None,
     api_key: str,
     trace: TraceHandle | None = None,
+    force_llm_check: bool = False,
 ) -> tuple[bool, str, TenantProfileModel | None]:
     """Async counterpart of :func:`check_relevance_with_profile`.
 
     Replaces the ThreadPoolExecutor timeout pattern with ``asyncio.wait_for``
     so the event loop is not blocked during the OpenAI HTTP call.
 
+    See :func:`check_relevance_with_profile` for ``force_llm_check`` semantics.
+
     Returns: (relevant, reason, profile_for_guard)
     """
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
 
-    word_count = len(user_question.split())
-    if word_count <= SHORT_QUERY_WORD_LIMIT:
-        return True, "short_query_bypass", profile
+    if not force_llm_check:
+        word_count = len(user_question.split())
+        if word_count <= SHORT_QUERY_WORD_LIMIT:
+            return True, "short_query_bypass", profile
 
-    cb = _check_circuit_breaker()
-    if cb is not None:
-        return cb[0], cb[1], None
+        cb = _check_circuit_breaker()
+        if cb is not None:
+            return cb[0], cb[1], None
 
     start = time.perf_counter()
     span = None
@@ -372,15 +395,23 @@ async def async_check_relevance_with_profile(
                 output={"relevant": True, "reason": "timeout"},
                 metadata={"timeout": True},
             )
-        _record_failure()
+        # Force callers (chat pipeline consecutive-zero-hits path) deliberately
+        # bypass the circuit breaker on the read side; their failures must NOT
+        # pollute the shared CB counter — otherwise one tenant's pathological
+        # zero-hits stream can trip the breaker for every other tenant's
+        # regular relevance checks during an OpenAI outage.
+        if not force_llm_check:
+            _record_failure()
         return True, "timeout", None
     except Exception:
         if span is not None:
             span.end(output={"relevant": True, "reason": "error"}, metadata={"error": True})
-        _record_failure()
+        if not force_llm_check:
+            _record_failure()
         return True, "error", None
 
-    _record_success()
+    if not force_llm_check:
+        _record_success()
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 

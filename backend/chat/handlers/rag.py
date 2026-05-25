@@ -1467,9 +1467,9 @@ def generate_answer(
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",
-                trace_id=generation.posthog_trace_id if generation is not None else None,
-                span_id=generation.posthog_span_id if generation is not None else None,
-                parent_id=generation.posthog_parent_id if generation is not None else None,
+                trace_id=getattr(generation, "posthog_trace_id", None),
+                span_id=getattr(generation, "posthog_span_id", None),
+                parent_id=getattr(generation, "posthog_parent_id", None),
             )
         # Post-gen language guard runs only on non-streamed generation. In the
         # streaming path the answer was already emitted to the client chunk-by-
@@ -2375,9 +2375,9 @@ async def _async_generate_answer_native(
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",
-                trace_id=generation.posthog_trace_id if generation is not None else None,
-                span_id=generation.posthog_span_id if generation is not None else None,
-                parent_id=generation.posthog_parent_id if generation is not None else None,
+                trace_id=getattr(generation, "posthog_trace_id", None),
+                span_id=getattr(generation, "posthog_span_id", None),
+                parent_id=getattr(generation, "posthog_parent_id", None),
             )
         # Post-gen language guard runs only on non-streamed generation. In
         # the streaming path the answer was already emitted to the client
@@ -2691,7 +2691,7 @@ async def async_run_chat_pipeline(
         _inj_ms = round((perf_counter() - _inj_start) * 1000, 2)
         if tenant_public_id is not None or bot_public_id is not None:
             from backend.chat.events import _emit_ai_span_event
-            _inj_trace_id = trace.posthog_trace_id if trace is not None else None
+            _inj_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
             _emit_ai_span_event(
                 tenant_public_id=tenant_public_id,
                 bot_public_id=bot_public_id,
@@ -2901,9 +2901,9 @@ async def async_run_chat_pipeline(
                 input_tokens=_input_tokens_est,
                 latency_s=embed_ms / 1000.0,
                 operation="chat/embed",
-                trace_id=embed_span.posthog_trace_id if embed_span is not None else None,
-                span_id=embed_span.posthog_span_id if embed_span is not None else None,
-                parent_id=embed_span.posthog_parent_id if embed_span is not None else None,
+                trace_id=getattr(embed_span, "posthog_trace_id", None),
+                span_id=getattr(embed_span, "posthog_span_id", None),
+                parent_id=getattr(embed_span, "posthog_parent_id", None),
                 input_count=len(_embedded_variants),
             )
         base_question_embedding = state.variant_vectors[0] if state.variant_vectors else []
@@ -2999,7 +2999,7 @@ async def async_run_chat_pipeline(
         _rel_ms = round((perf_counter() - _rel_start) * 1000, 2)
         if tenant_public_id is not None or bot_public_id is not None:
             from backend.chat.events import _emit_ai_span_event
-            _rel_trace_id = trace.posthog_trace_id if trace is not None else None
+            _rel_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
             _emit_ai_span_event(
                 tenant_public_id=tenant_public_id,
                 bot_public_id=bot_public_id,
@@ -3115,7 +3115,7 @@ async def async_run_chat_pipeline(
             )
             if tenant_public_id is not None or bot_public_id is not None:
                 from backend.chat.events import _emit_ai_span_event
-                _retrieval_trace_id = trace.posthog_trace_id if trace is not None else None
+                _retrieval_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
                 _emit_ai_span_event(
                     tenant_public_id=tenant_public_id,
                     bot_public_id=bot_public_id,

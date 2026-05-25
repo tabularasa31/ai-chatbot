@@ -482,16 +482,29 @@ def _emit_speculative_retrieval_event(
     tenant_public_id: str | None,
     bot_public_id: str | None,
     chat_id: str | None,
+    cross_lingual: bool | None = None,
+    variant_mode: str | None = None,
+    retrieval_mode: str | None = None,
 ) -> None:
     """Emit a PostHog event for one speculative-retrieval outcome.
 
     Lets us monitor the extra pgvector load the optimization introduces:
     ``wasted_reject`` counts the (rare) turns where retrieval ran but the guard
     rejected, so the result was thrown away.
+
+    ``strategy`` derives from ``outcome`` and labels the retrieval path
+    ("speculative" / "fallback" / "speculative_cancelled") so PostHog breakdowns
+    can distinguish which path each turn took. ``cross_lingual``, ``variant_mode``
+    and ``retrieval_mode`` add orthogonal dimensions for richer breakdowns.
     """
     if tenant_public_id is None and bot_public_id is None:
         return
     from backend.chat import service as _svc
+    strategy = {
+        "used": "speculative",
+        "fallback": "fallback",
+        "wasted_reject": "speculative_cancelled",
+    }[outcome]
     try:
         _svc.capture_event(
             "speculative_retrieval.outcome",
@@ -500,8 +513,12 @@ def _emit_speculative_retrieval_event(
             bot_id=bot_public_id,
             properties={
                 "outcome": outcome,
+                "strategy": strategy,
                 "duration_ms": duration_ms,
                 "chat_id": chat_id,
+                "cross_lingual": cross_lingual,
+                "variant_mode": variant_mode,
+                "retrieval_mode": retrieval_mode,
             },
             groups={"tenant": tenant_public_id} if tenant_public_id else None,
         )
@@ -2613,6 +2630,8 @@ async def async_run_chat_pipeline(
             tenant_public_id=tenant_public_id,
             bot_public_id=bot_public_id,
             chat_id=chat_id,
+            cross_lingual=state.cross_lingual_triggered,
+            variant_mode="multi" if state.variant_vectors and len(state.variant_vectors) > 1 else "single",
         )
 
     async def _run_pre_retrieval_concurrent() -> ChatPipelineResult | None:
@@ -3101,6 +3120,9 @@ async def async_run_chat_pipeline(
                     tenant_public_id=tenant_public_id,
                     bot_public_id=bot_public_id,
                     chat_id=chat_id,
+                    cross_lingual=state.cross_lingual_triggered,
+                    variant_mode=state.retrieval.variant_mode,
+                    retrieval_mode=state.retrieval.mode,
                 )
             except asyncio.CancelledError:
                 # Request cancelled (e.g. client disconnect) — propagate, never
@@ -3115,6 +3137,9 @@ async def async_run_chat_pipeline(
                     tenant_public_id=tenant_public_id,
                     bot_public_id=bot_public_id,
                     chat_id=chat_id,
+                    cross_lingual=state.cross_lingual_triggered,
+                    variant_mode=state.retrieval.variant_mode,
+                    retrieval_mode=state.retrieval.mode,
                 )
         else:
             state.retrieval = await _execute_retrieval(db)

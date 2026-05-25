@@ -1468,6 +1468,9 @@ def generate_answer(
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",
+                trace_id=getattr(generation, "posthog_trace_id", None),
+                span_id=getattr(generation, "posthog_span_id", None),
+                parent_id=getattr(generation, "posthog_parent_id", None),
             )
         # Post-gen language guard runs only on non-streamed generation. In the
         # streaming path the answer was already emitted to the client chunk-by-
@@ -2373,6 +2376,9 @@ async def _async_generate_answer_native(
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",
+                trace_id=getattr(generation, "posthog_trace_id", None),
+                span_id=getattr(generation, "posthog_span_id", None),
+                parent_id=getattr(generation, "posthog_parent_id", None),
             )
         # Post-gen language guard runs only on non-streamed generation. In
         # the streaming path the answer was already emitted to the client
@@ -2676,12 +2682,31 @@ async def async_run_chat_pipeline(
 
         # Injection guard BEFORE the concurrent task launch — see docstring.
         # On detection (25% of traffic) we skip every downstream LLM call.
+        _inj_start = perf_counter()
         injection_result = await async_detect_injection(
             question,
             tenant_id=str(tenant_id),
             api_key=api_key,
             trace=trace,
         )
+        _inj_latency_s = perf_counter() - _inj_start
+        if tenant_public_id is not None or bot_public_id is not None:
+            from backend.chat.events import _emit_ai_span_event
+            _inj_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
+            _emit_ai_span_event(
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                span_name="injection_guard",
+                latency_s=_inj_latency_s,
+                trace_id=_inj_trace_id,
+                span_id=uuid.uuid4().hex if _inj_trace_id else None,
+                parent_id=_inj_trace_id,
+                extra_properties={
+                    "detected": injection_result.detected,
+                    "level": injection_result.level,
+                    "method": injection_result.method,
+                },
+            )
         if injection_result.detected:
             reject_result = await async_build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
@@ -2710,6 +2735,11 @@ async def async_run_chat_pipeline(
                 logger.debug("status_callback(searching) failed", exc_info=True)
 
         # Launch guard + embedding tasks concurrently — event loop handles all I/O.
+        # Mark guard start at task creation, not at the later ``await`` site, so
+        # the PostHog `$ai_span` latency reflects the guard's full wall-clock
+        # (2-10 s OpenAI call) rather than the residual wait after FAQ/embed
+        # work already overlapped with it.
+        _rel_start = perf_counter()
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
             async_check_relevance_with_profile(
                 tenant_id=tenant_id,
@@ -2814,6 +2844,11 @@ async def async_run_chat_pipeline(
                 },
             )
 
+        # Track embedding-API wall-clock separately from ``embed_ms`` (which
+        # also includes the upstream rewrite/cross-lingual rewrite wait). The
+        # ``$ai_embedding`` event reports only this narrower window so PostHog
+        # latency dashboards reflect the embedding service, not rewrite delay.
+        _embed_api_start = perf_counter()
         try:
             base_variant_vectors = await asyncio.wait_for(
                 base_embed_task,
@@ -2836,6 +2871,7 @@ async def async_run_chat_pipeline(
             except (APITimeoutError, APIConnectionError, RateLimitError):
                 logger.warning("async_run_chat_pipeline_embed_extras_failed", exc_info=True)
                 extra_variant_vectors = []
+        _embed_api_latency_s = perf_counter() - _embed_api_start
 
         if extra_variant_vectors and len(extra_variant_vectors) == len(extra_variants):
             state.query_variants = [*query_variants, *extra_variants]
@@ -2858,6 +2894,30 @@ async def async_run_chat_pipeline(
             )
         if trace is not None:
             record_stage_ms(trace, "embed_ms", embed_ms)
+        if (
+            (tenant_public_id is not None or bot_public_id is not None)
+            and state.embed_api_request_count > 0
+        ):
+            # Char-based token estimate — embedding API does not surface usage
+            # through ``async_embed_queries``, and PostHog only needs an
+            # order-of-magnitude figure for latency-vs-volume dashboards. Avoids
+            # importing tiktoken on the hot path.
+            _embedded_variants = [*query_variants, *extra_variants]
+            _input_chars = sum(len(v) for v in _embedded_variants)
+            _input_tokens_est = max(_input_chars // 4, 1)
+            from backend.chat.events import _emit_ai_embedding_event
+            _emit_ai_embedding_event(
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                model=settings.embedding_model,
+                input_tokens=_input_tokens_est,
+                latency_s=_embed_api_latency_s,
+                operation="chat/embed",
+                trace_id=getattr(embed_span, "posthog_trace_id", None),
+                span_id=getattr(embed_span, "posthog_span_id", None),
+                parent_id=getattr(embed_span, "posthog_parent_id", None),
+                input_count=len(_embedded_variants),
+            )
         base_question_embedding = state.variant_vectors[0] if state.variant_vectors else []
 
         # --- 3. FAQ matching ---
@@ -2947,6 +3007,20 @@ async def async_run_chat_pipeline(
             relevant, _, state.profile = await rel_task
         except asyncio.CancelledError:
             relevant, state.profile = True, _guard_profile
+        _rel_latency_s = perf_counter() - _rel_start
+        if tenant_public_id is not None or bot_public_id is not None:
+            from backend.chat.events import _emit_ai_span_event
+            _rel_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
+            _emit_ai_span_event(
+                tenant_public_id=tenant_public_id,
+                bot_public_id=bot_public_id,
+                span_name="relevance_guard",
+                latency_s=_rel_latency_s,
+                trace_id=_rel_trace_id,
+                span_id=uuid.uuid4().hex if _rel_trace_id else None,
+                parent_id=_rel_trace_id,
+                extra_properties={"blocked": not relevant},
+            )
 
         if not relevant:
             await _cancel_speculative_retrieval()
@@ -3050,6 +3124,23 @@ async def async_run_chat_pipeline(
                 "retrieval_ms",
                 state.retrieval.retrieval_duration_ms or 0.0,
             )
+            if tenant_public_id is not None or bot_public_id is not None:
+                from backend.chat.events import _emit_ai_span_event
+                _retrieval_trace_id = getattr(trace, "posthog_trace_id", None) if trace is not None else None
+                _emit_ai_span_event(
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    span_name="retrieval",
+                    latency_s=(state.retrieval.retrieval_duration_ms or 0.0) / 1000.0,
+                    trace_id=_retrieval_trace_id,
+                    span_id=uuid.uuid4().hex if _retrieval_trace_id else None,
+                    parent_id=_retrieval_trace_id,
+                    extra_properties={
+                        "chunk_count": len(state.retrieval.chunk_texts),
+                        "mode": state.retrieval.mode,
+                        "best_confidence_score": state.retrieval.best_confidence_score,
+                    },
+                )
 
         # --- 6. Low-retrieval guard ---
         threshold = settings.relevance_retrieval_threshold

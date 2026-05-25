@@ -306,37 +306,155 @@ def _emit_ai_generation_event(
     http_status: int = 200,
     cached_tokens: int = 0,
     prompt_cache_prefix_tokens_estimate: int | None = None,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_id: str | None = None,
 ) -> None:
-    """Emit a PostHog $ai_generation event for LLM Observability cost tracking."""
+    """Emit a PostHog $ai_generation event for LLM Observability cost tracking.
+
+    ``trace_id``/``span_id``/``parent_id`` are the PostHog LLM-observability
+    identifiers; when supplied, PostHog stitches this event into a span tree
+    keyed by ``$ai_trace_id`` (``query-llm-traces-list`` becomes non-empty).
+    Omit them for legacy / non-chat-pipeline call sites — the event still
+    captures cost but won't appear in the trace tree.
+    """
     if tenant_public_id is None and bot_public_id is None:
         return
     try:
+        properties: dict[str, Any] = {
+            "$ai_provider": "openai",
+            "$ai_model": model,
+            "$ai_input_tokens": input_tokens,
+            "$ai_output_tokens": output_tokens,
+            "$ai_cached_tokens": cached_tokens,
+            "$ai_total_cost_usd": cost_usd,
+            "$ai_latency": latency_s,
+            "$ai_http_status": http_status,
+            "operation": operation,
+            "prompt_cache_cached_tokens": cached_tokens,
+            "prompt_cache_hit": cached_tokens > 0,
+            "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
+            "prompt_cache_prefix_meets_minimum": (
+                prompt_cache_prefix_tokens_estimate is not None
+                and prompt_cache_prefix_tokens_estimate >= 1024
+            ),
+        }
+        if trace_id is not None:
+            properties["$ai_trace_id"] = trace_id
+        if span_id is not None:
+            properties["$ai_span_id"] = span_id
+        if parent_id is not None:
+            properties["$ai_parent_id"] = parent_id
         capture_event(
             "$ai_generation",
             distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
             tenant_id=tenant_public_id,
             bot_id=bot_public_id,
-            properties={
-                "$ai_provider": "openai",
-                "$ai_model": model,
-                "$ai_input_tokens": input_tokens,
-                "$ai_output_tokens": output_tokens,
-                "$ai_cached_tokens": cached_tokens,
-                "$ai_total_cost_usd": cost_usd,
-                "$ai_latency": latency_s,
-                "$ai_http_status": http_status,
-                "operation": operation,
-                "prompt_cache_cached_tokens": cached_tokens,
-                "prompt_cache_hit": cached_tokens > 0,
-                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
-                "prompt_cache_prefix_meets_minimum": (
-                    prompt_cache_prefix_tokens_estimate is not None
-                    and prompt_cache_prefix_tokens_estimate >= 1024
-                ),
-            },
+            properties=properties,
         )
     except Exception:
         logger.warning("Failed to emit $ai_generation event", exc_info=True)
+
+
+def _emit_ai_embedding_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    model: str,
+    input_tokens: int,
+    latency_s: float,
+    operation: str,
+    trace_id: str | None = None,
+    span_id: str | None = None,
+    parent_id: str | None = None,
+    cost_usd: float | None = None,
+    input_count: int | None = None,
+) -> None:
+    """Emit a PostHog ``$ai_embedding`` event for embedding-call observability.
+
+    ``input_count`` is the number of strings embedded in this call (variants).
+    ``latency_s`` is wall-clock for the embedding API call. Surfaces embedding
+    latency as a first-class metric in PostHog trends, separately from
+    ``$ai_generation`` cost.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    try:
+        properties: dict[str, Any] = {
+            "$ai_provider": "openai",
+            "$ai_model": model,
+            "$ai_input_tokens": input_tokens,
+            "$ai_latency": latency_s,
+            "operation": operation,
+        }
+        if cost_usd is not None:
+            properties["$ai_total_cost_usd"] = cost_usd
+        if input_count is not None:
+            properties["$ai_input_count"] = input_count
+        if trace_id is not None:
+            properties["$ai_trace_id"] = trace_id
+        if span_id is not None:
+            properties["$ai_span_id"] = span_id
+        if parent_id is not None:
+            properties["$ai_parent_id"] = parent_id
+        capture_event(
+            "$ai_embedding",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties=properties,
+        )
+    except Exception:
+        logger.warning("Failed to emit $ai_embedding event", exc_info=True)
+
+
+def _emit_ai_span_event(
+    *,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    span_name: str,
+    latency_s: float,
+    trace_id: str | None,
+    span_id: str | None,
+    parent_id: str | None,
+    extra_properties: dict[str, Any] | None = None,
+) -> None:
+    """Emit a PostHog ``$ai_span`` event for non-LLM pipeline stages.
+
+    Used for guards (injection/relevance), retrieval, query rewrite, etc. —
+    anything visible as a Langfuse span that we want stitched into the PostHog
+    trace tree. ``extra_properties`` carries stage-specific signals (e.g.
+    ``blocked``, ``level``, ``chunk_count``).
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    # No trace context → span event has nothing to attach to; skip rather than
+    # pollute PostHog with orphan spans.
+    if trace_id is None:
+        return
+    try:
+        properties: dict[str, Any] = {
+            "$ai_span_name": span_name,
+            "$ai_latency": latency_s,
+            "$ai_trace_id": trace_id,
+        }
+        if span_id is not None:
+            properties["$ai_span_id"] = span_id
+        if parent_id is not None:
+            properties["$ai_parent_id"] = parent_id
+        if extra_properties:
+            for key, value in extra_properties.items():
+                if key not in properties:
+                    properties[key] = value
+        capture_event(
+            "$ai_span",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties=properties,
+        )
+    except Exception:
+        logger.warning("Failed to emit $ai_span event", exc_info=True)
 
 
 def _session_duration_ms(created_at: datetime | None, ended_at: datetime | None) -> int | None:

@@ -6,6 +6,7 @@ import logging
 import random
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass
@@ -54,6 +55,18 @@ class _TraceClientProtocol(Protocol):
 class SpanHandle(ABC):
     """Interface for span-like objects."""
 
+    # PostHog LLM-observability identifiers. These are bridge-only fields:
+    # ``posthog_trace_id`` is the per-chat-turn trace UUID minted at
+    # ``begin_trace``; ``posthog_span_id`` is unique per observation;
+    # ``posthog_parent_id`` points at the containing span or the trace root.
+    # Set to ``None`` on no-op handles so emitter call sites can safely skip
+    # capture when the trace was never materialised. Independent of Langfuse
+    # SDK identifiers — we own them so the PostHog event tree is reconstructable
+    # even when Langfuse is disabled.
+    posthog_trace_id: str | None = None
+    posthog_span_id: str | None = None
+    posthog_parent_id: str | None = None
+
     @abstractmethod
     def end(
         self,
@@ -94,6 +107,11 @@ class GenerationHandle(SpanHandle, ABC):
 
 class TraceHandle(ABC):
     """Interface for trace-like objects."""
+
+    # PostHog trace identifier — minted in ``begin_trace`` and propagated to
+    # every child span/generation/embedding for ``$ai_trace_id`` tagging.
+    # ``None`` on no-op handles (no trace started).
+    posthog_trace_id: str | None = None
 
     def record_stage_ms(self, stage: str, duration_ms: float) -> None:
         """Aggregate a per-stage wall-clock duration on the trace.
@@ -244,6 +262,9 @@ class _LangfuseSpan(SpanHandle):
     # context for ``llm-generation``) — independent of whether the Langfuse
     # SDK version treats ``update(metadata=...)`` as merge or replace.
     _metadata: dict[str, Any] | None = None
+    posthog_trace_id: str | None = None
+    posthog_span_id: str | None = None
+    posthog_parent_id: str | None = None
 
     def end(
         self,
@@ -276,6 +297,9 @@ class _LangfuseGeneration(GenerationHandle):
     generation_obj: Any
     # Local accumulator — see ``_LangfuseSpan._metadata`` for rationale.
     _metadata: dict[str, Any] | None = None
+    posthog_trace_id: str | None = None
+    posthog_span_id: str | None = None
+    posthog_parent_id: str | None = None
 
     def end(
         self,
@@ -329,6 +353,7 @@ def _merge_observation_metadata(
 class _LangfuseTrace(TraceHandle):
     trace_obj: Any
     tags: list[str]
+    posthog_trace_id: str | None = None
 
     def span(
         self,
@@ -348,6 +373,9 @@ class _LangfuseTrace(TraceHandle):
         return _LangfuseSpan(
             span_obj=span_obj,
             _metadata=dict(metadata) if metadata else None,
+            posthog_trace_id=self.posthog_trace_id,
+            posthog_span_id=uuid.uuid4().hex if self.posthog_trace_id else None,
+            posthog_parent_id=self.posthog_trace_id,
         )
 
     def generation(
@@ -370,6 +398,9 @@ class _LangfuseTrace(TraceHandle):
         return _LangfuseGeneration(
             generation_obj=generation_obj,
             _metadata=dict(metadata) if metadata else None,
+            posthog_trace_id=self.posthog_trace_id,
+            posthog_span_id=uuid.uuid4().hex if self.posthog_trace_id else None,
+            posthog_parent_id=self.posthog_trace_id,
         )
 
     def update(
@@ -404,10 +435,21 @@ class _LangfuseTrace(TraceHandle):
 
 
 class _DeferredSpan(SpanHandle):
-    def __init__(self, trace: _DeferredTrace, *, kind: str, kwargs: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        trace: _DeferredTrace,
+        *,
+        kind: str,
+        kwargs: dict[str, Any],
+        posthog_trace_id: str | None = None,
+        posthog_parent_id: str | None = None,
+    ) -> None:
         self._trace = trace
         self._kind = kind
         self._kwargs = kwargs
+        self.posthog_trace_id = posthog_trace_id
+        self.posthog_span_id = uuid.uuid4().hex if posthog_trace_id else None
+        self.posthog_parent_id = posthog_parent_id
 
     def end(
         self,
@@ -438,9 +480,19 @@ class _DeferredSpan(SpanHandle):
 
 
 class _DeferredGeneration(GenerationHandle):
-    def __init__(self, trace: _DeferredTrace, *, kwargs: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        trace: _DeferredTrace,
+        *,
+        kwargs: dict[str, Any],
+        posthog_trace_id: str | None = None,
+        posthog_parent_id: str | None = None,
+    ) -> None:
         self._trace = trace
         self._kwargs = kwargs
+        self.posthog_trace_id = posthog_trace_id
+        self.posthog_span_id = uuid.uuid4().hex if posthog_trace_id else None
+        self.posthog_parent_id = posthog_parent_id
 
     def end(
         self,
@@ -480,6 +532,7 @@ class _DeferredTrace(TraceHandle):
         init_kwargs: dict[str, Any],
         sampled: bool,
         sampling_reason: str,
+        posthog_trace_id: str | None = None,
     ) -> None:
         self._service = service
         self._init_kwargs = init_kwargs
@@ -488,6 +541,7 @@ class _DeferredTrace(TraceHandle):
         self._operations: deque[dict[str, Any]] = deque(maxlen=_DEFERRED_OPS_MAXLEN)
         self._ops_added: int = 0
         self._materialized: TraceHandle | None = None
+        self.posthog_trace_id = posthog_trace_id
 
     def _record(self, op: dict[str, Any]) -> None:
         self._ops_added += 1
@@ -506,6 +560,8 @@ class _DeferredTrace(TraceHandle):
             self,
             kind="span",
             kwargs={"name": name, "input": input, "metadata": metadata},
+            posthog_trace_id=self.posthog_trace_id,
+            posthog_parent_id=self.posthog_trace_id,
         )
 
     def generation(
@@ -526,6 +582,8 @@ class _DeferredTrace(TraceHandle):
         return _DeferredGeneration(
             self,
             kwargs={"name": name, "model": model, "input": input, "metadata": metadata},
+            posthog_trace_id=self.posthog_trace_id,
+            posthog_parent_id=self.posthog_trace_id,
         )
 
     def update(
@@ -577,6 +635,7 @@ class _DeferredTrace(TraceHandle):
             metadata=metadata,
             tags=tags,
             sampling_reason=self._sampling_reason,
+            posthog_trace_id=self.posthog_trace_id,
         )
         if materialized is None:
             if self._operations:
@@ -797,6 +856,7 @@ class ObservabilityService:
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
         sampling_reason: str,
+        posthog_trace_id: str | None = None,
     ) -> TraceHandle | None:
         if self._client is None:
             return None
@@ -826,7 +886,11 @@ class ObservabilityService:
         )
         if trace_obj is None:
             return None
-        return _LangfuseTrace(trace_obj, tags=merged_tags)
+        return _LangfuseTrace(
+            trace_obj,
+            tags=merged_tags,
+            posthog_trace_id=posthog_trace_id,
+        )
 
     def begin_trace(
         self,
@@ -846,6 +910,11 @@ class ObservabilityService:
             tenant_id=tenant_id,
             force_trace=force_trace,
         )
+        # Mint a per-turn trace UUID even when sampling is deferred — PostHog
+        # `$ai_*` events ride on this regardless of Langfuse materialisation, so
+        # the event tree in PostHog stays reconstructable even on traces we
+        # never push to Langfuse.
+        posthog_trace_id = uuid.uuid4().hex
         init_kwargs = {
             "name": name,
             "session_id": session_id,
@@ -858,6 +927,7 @@ class ObservabilityService:
             materialized = self._materialize_trace(
                 init_kwargs=init_kwargs,
                 sampling_reason=sampling_reason,
+                posthog_trace_id=posthog_trace_id,
             )
             if materialized is not None:
                 return materialized
@@ -866,6 +936,7 @@ class ObservabilityService:
             init_kwargs=init_kwargs,
             sampled=sampled,
             sampling_reason=sampling_reason,
+            posthog_trace_id=posthog_trace_id,
         )
 
 

@@ -1051,6 +1051,7 @@ def build_rag_prompt(
         "- For questions asking which setting or field to use, name the exact setting or field as written in the documentation and say where it appears if the context contains that detail.\n"
         "- When the documentation does not cover the question, say so honestly and offer to open a support ticket so the team can follow up by email — for example: \"I don't have that in the documentation. Want me to open a support ticket so the team can email you back?\". Wait for the user to confirm; the backend detects their agreement and routes the escalation. Never deflect with vague phrasing such as \"reach out to the support team\" without offering this explicit ticket. Phrase the offer in the user's language.\n"
         "- Only make that ticket offer when you genuinely cannot answer from the provided context. When you HAVE answered the question, do NOT offer to open a support ticket and do NOT ask the user to reply \"yes\" to confirm one — the backend only routes such confirmations on turns it has itself flagged as unanswered, so a confirmation offered after a complete answer would never be acted on.\n"
+        "- Keep answers concise: aim for 2-4 short paragraphs, under ~400 words. Use bullet lists for multi-step instructions. Expand only when the user explicitly asks for more depth.\n"
         # NOTE: the marker bullet must stay the LAST bullet in Rules:. Inserting
         # it earlier would invalidate the OpenAI prompt-cache prefix that
         # covers every preceding original bullet. With it at the end, only

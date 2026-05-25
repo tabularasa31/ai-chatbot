@@ -430,7 +430,7 @@ class Settings(BaseSettings):
 
     # ── Agent instructions ─────────────────────────────────────────────────
     enable_agent_instructions: bool = Field(True, alias="ENABLE_AGENT_INSTRUCTIONS")
-    enable_cot_reasoning: bool = Field(True, alias="ENABLE_COT_REASONING")
+    enable_cot_reasoning: bool = Field(False, alias="ENABLE_COT_REASONING")
 
     @field_validator("database_url", mode="before")
     @classmethod

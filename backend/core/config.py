@@ -207,7 +207,13 @@ class Settings(BaseSettings):
         4096,
         alias="CHAT_RESPONSE_MAX_TOKENS_REASONING",
         ge=1,
-        description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family) that consume tokens for internal chain-of-thought. NOTE: PR #708 tried 1200 to bring avg output down but produced real finish_reason='length' truncations in prod (e.g. session d8a0823d-...). Pulling avg output down should be driven by the prompt brevity rule, not by a hard cap below typical reasoning+answer budget.",
+        description=(
+            "max_completion_tokens for reasoning models (o1/o3/o4/gpt-5 family) that "
+            "consume tokens for internal chain-of-thought. This budget covers both "
+            "internal reasoning and the visible reply, so a tight cap can truncate "
+            "answers (see PR #708 post-mortem). Control output length via prompt "
+            "instructions, not by lowering this cap."
+        ),
     )
     chat_history_turns: int = Field(
         6,

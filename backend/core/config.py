@@ -204,10 +204,16 @@ class Settings(BaseSettings):
     widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)
     chat_response_max_tokens: int = Field(800, alias="CHAT_RESPONSE_MAX_TOKENS", ge=1)
     chat_response_max_tokens_reasoning: int = Field(
-        1200,
+        4096,
         alias="CHAT_RESPONSE_MAX_TOKENS_REASONING",
         ge=1,
-        description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family). Budget covers BOTH internal reasoning tokens AND the visible reply; 1200 leaves ~600-800 tokens for the visible answer after ~200-500 internal reasoning tokens on gpt-5-mini.",
+        description=(
+            "max_completion_tokens for reasoning models (o1/o3/o4/gpt-5 family) that "
+            "consume tokens for internal chain-of-thought. This budget covers both "
+            "internal reasoning and the visible reply, so a tight cap can truncate "
+            "answers (see PR #708 post-mortem). Control output length via prompt "
+            "instructions, not by lowering this cap."
+        ),
     )
     chat_history_turns: int = Field(
         6,

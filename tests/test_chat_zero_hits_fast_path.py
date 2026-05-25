@@ -412,6 +412,183 @@ def test_intervening_non_rag_turn_resets_rephrase_flag(
     assert chat.last_reply_was_rephrase_prompt is False
 
 
+def test_no_profile_relevance_verdict_does_not_escalate(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #3: ``async_check_relevance_with_profile`` returns
+    ``(True, "no_profile", None)`` for tenants without a profile, even with
+    ``force_llm_check=True``. That fail-open verdict must NOT escalate —
+    fresh tenants without an onboarded profile would otherwise get a support
+    handoff armed on every consecutive zero-hits turn.
+    """
+    cl_row, api_key = _create_client(tenant, db_session, email="zh-nopro@example.com")
+    _insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _stub_pre_retrieval(monkeypatch)
+
+    async def _no_profile_relevance(**_kwargs):
+        return (True, "no_profile", None)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _no_profile_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    process_chat_message(
+        cl_row.id, "Q two", session_id, db_session, api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    # no_profile fail-open must NOT escalate — must fall through to off-topic.
+    assert chat.escalation_pre_confirm_pending is False
+    assert chat.last_reply_was_rephrase_prompt is False
+
+
+def test_session_ended_event_stales_rephrase_flag(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #2: a resumed chat session — sweeper has reported it
+    ``session_ended_event_at`` — must treat the persisted rephrase flag as
+    stale, so the user's first question after returning gets a fresh soft
+    reply instead of jumping straight to escalation.
+    """
+    from datetime import datetime
+
+    cl_row, api_key = _create_client(tenant, db_session, email="zh-stale@example.com")
+    _insert_chunk(db_session, tenant_id=cl_row.id)
+
+    _stub_pre_retrieval(monkeypatch)
+
+    # If the stale guard fails, the pipeline would invoke the post-retrieval
+    # relevance check with ``force_llm_check=True`` — assert that never
+    # happens on a freshly resumed session. The pre-retrieval check (called
+    # without ``force_llm_check``) still runs normally and returns relevant.
+    async def _no_force_check_allowed(**kwargs):
+        if kwargs.get("force_llm_check"):
+            raise AssertionError(
+                "Force relevance check must not fire when the previous session "
+                "was already reported ended by the sweeper"
+            )
+        return (True, "ok", kwargs.get("profile"))
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _no_force_check_allowed,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+        session_ended_event_at=datetime.utcnow(),
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    outcome = process_chat_message(
+        cl_row.id, "Returning question", session_id, db_session, api_key=api_key,
+    )
+
+    # New soft-reply, not escalation. last_reply_was_rephrase_prompt re-armed
+    # for the freshly observed zero-hits turn.
+    assert outcome.text
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.last_reply_was_rephrase_prompt is True
+    assert chat.escalation_pre_confirm_pending is False
+
+
+def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Code review #4: a timeout on a forced relevance call must not
+    increment the shared circuit-breaker counter — otherwise one tenant's
+    pathological zero-hits stream during an OpenAI outage trips the
+    breaker for every other tenant's regular relevance checks.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from backend.guards import relevance_checker
+    from backend.guards.relevance_checker import (
+        _cache,
+        async_check_relevance_with_profile,
+    )
+
+    _cache.clear()
+
+    # Reset shared CB state.
+    monkeypatch.setattr(relevance_checker, "_consecutive_failures", 0)
+    monkeypatch.setattr(relevance_checker, "_circuit_opened_at", None)
+
+    async def _always_timeout(*_a, **_kw):  # type: ignore[no-untyped-def]
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.async_call_openai_with_retry",
+        _always_timeout,
+    )
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: Mock(chat=Mock(completions=Mock(create=AsyncMock()))),
+    )
+
+    profile = Mock(product_name="Acme", topics=["billing"])
+    tid = uuid.uuid4()
+
+    async def _run():
+        # 10 forced calls all time out — counter must NOT advance.
+        for _ in range(10):
+            relevant, reason, _p = await async_check_relevance_with_profile(
+                tenant_id=tid,
+                user_question="any short q",
+                profile=profile,
+                api_key="sk-test",
+                force_llm_check=True,
+            )
+            assert relevant is True
+            assert reason == "timeout"
+
+    asyncio.run(_run())
+
+    # No failures recorded, breaker still closed.
+    assert relevance_checker._consecutive_failures == 0
+    assert relevance_checker._circuit_opened_at is None
+
+
 def test_relevance_checker_comment_hygiene() -> None:
     """The misleading 'Exception: queries that match an explicit off-topic
     pattern are still rejected' comment described unimplemented behavior;

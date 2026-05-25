@@ -273,7 +273,11 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-        _record_failure()
+        # See async variant: force callers must not contribute to the shared
+        # CB counter, otherwise one tenant's pathological force-stream during
+        # an OpenAI outage trips the breaker for every other tenant.
+        if not force_llm_check:
+            _record_failure()
         return True, "timeout", None
     except Exception:
         if span is not None:
@@ -282,7 +286,8 @@ def check_relevance_with_profile(
             ex.shutdown(wait=False)
         except Exception:
             pass
-        _record_failure()
+        if not force_llm_check:
+            _record_failure()
         return True, "error", None
     else:
         try:
@@ -290,7 +295,8 @@ def check_relevance_with_profile(
         except Exception:
             pass
 
-    _record_success()
+    if not force_llm_check:
+        _record_success()
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 
@@ -389,15 +395,23 @@ async def async_check_relevance_with_profile(
                 output={"relevant": True, "reason": "timeout"},
                 metadata={"timeout": True},
             )
-        _record_failure()
+        # Force callers (chat pipeline consecutive-zero-hits path) deliberately
+        # bypass the circuit breaker on the read side; their failures must NOT
+        # pollute the shared CB counter — otherwise one tenant's pathological
+        # zero-hits stream can trip the breaker for every other tenant's
+        # regular relevance checks during an OpenAI outage.
+        if not force_llm_check:
+            _record_failure()
         return True, "timeout", None
     except Exception:
         if span is not None:
             span.end(output={"relevant": True, "reason": "error"}, metadata={"error": True})
-        _record_failure()
+        if not force_llm_check:
+            _record_failure()
         return True, "error", None
 
-    _record_success()
+    if not force_llm_check:
+        _record_success()
 
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
 

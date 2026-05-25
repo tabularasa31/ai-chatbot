@@ -1860,6 +1860,14 @@ class RagHandler(PipelineHandler):
                     }
                 )
         created_ticket_number: str | None = None
+        # When True, render_pre_confirm_text failed below and the user-facing
+        # reply remained the rephrase-prompt fallback that the pipeline pinned
+        # to ``result.final_answer``. The persistence call at the end of this
+        # method threads this through ``set_rephrase_flag`` so the next turn
+        # still treats the chat as in the consecutive-zero-hits state and
+        # retries escalation once OpenAI recovers, rather than restarting from
+        # a fresh "first rephrase" prompt.
+        _escalation_render_failed_on_zero_hits = False
         if escalate and esc_trigger is not None:
             try:
                 preview = chunks_preview_from_results(document_ids, scores, chunk_texts)
@@ -1914,6 +1922,17 @@ class RagHandler(PipelineHandler):
                 logger.warning("Escalation T-1/T-2 pre-confirm failed, returning RAG answer only: %s", e)
                 chat.escalation_pre_confirm_pending = False
                 chat.escalation_pre_confirm_context = None
+                # If this escalation came from the consecutive-zero-hits fast
+                # path, ``answer`` is the rephrase-prompt fallback, not a real
+                # RAG verdict. Preserve the rephrase tracker so the next turn
+                # can still detect a consecutive zero-hits state and retry
+                # escalation when OpenAI recovers — otherwise the user is
+                # stuck looping on the same soft-reply.
+                if (
+                    esc_trigger == EscalationTrigger.no_documents
+                    and not chunk_texts
+                ):
+                    _escalation_render_failed_on_zero_hits = True
 
         # Safety net: decide() may classify a turn as a confident answer while
         # the LLM still ends its reply with a ticket offer (the system prompt
@@ -1956,6 +1975,7 @@ class RagHandler(PipelineHandler):
             resolution_reason=ctx.language_context.response_language_resolution_reason,
             user_content=ctx.question,
             assistant_content=answer,
+            set_rephrase_flag=_escalation_render_failed_on_zero_hits,
             document_ids=document_ids,
             extra_tokens=tokens_used,
             optional_entity_types=ctx.optional_entity_types,
@@ -3228,9 +3248,36 @@ async def async_run_chat_pipeline(
         ):
             from backend.models import EscalationTrigger
 
+            # Session-window guard: the flag is a persistent DB column, so we
+            # treat it as stale once the inactivity sweeper has reported the
+            # session ended (``session_ended_event_at`` set). Without this
+            # check a user resuming the chat days later — whose previous turn
+            # happened to be the rephrase prompt — would skip straight to
+            # escalation on what is effectively their first question of a new
+            # session.
             is_consecutive = bool(
-                chat is not None and chat.last_reply_was_rephrase_prompt
+                chat is not None
+                and chat.last_reply_was_rephrase_prompt
+                and chat.session_ended_event_at is None
             )
+
+            # Common telemetry fields populated by the pre-retrieval stage —
+            # mirrored from the normal-success branch so PostHog ``chat.turn``
+            # events on the fast path retain the same cross-script / FAQ
+            # signal as the slow path.
+            _fast_path_extras: dict[str, Any] = {
+                "query_script": state.query_script or None,
+                "kb_scripts": list(state.kb_scripts) if state.kb_scripts else None,
+                "cross_lingual_triggered": state.cross_lingual_triggered,
+                "cross_lingual_variants_count": state.cross_lingual_variants_added,
+                "query_kb_language_match": state.query_kb_language_match,
+                # ``retrieval_used_cross_lingual_variant`` requires the variant
+                # to have produced non-empty chunks; the fast-path fires
+                # precisely when chunk_texts is empty, so this is always False.
+                "retrieval_used_cross_lingual_variant": False,
+                "retrieval_ms": _retrieval_ms,
+            }
+
             if not is_consecutive:
                 soft_reply = await async_build_reject_response_result(
                     reason=RejectReason.REPHRASE_REQUEST,
@@ -3249,16 +3296,17 @@ async def async_run_chat_pipeline(
                     raw_answer=soft_reply.text,
                     final_answer=soft_reply.text,
                     tokens_used=soft_reply.tokens_used,
+                    tokens_output=soft_reply.tokens_used,
                     strategy="guard_reject",
                     reject_reason="rephrase",
                     is_reject=True,
                     is_faq_direct=False,
                     retrieval=retrieval,
-                    retrieval_ms=_retrieval_ms,
                     escalation_recommended=False,
                     escalation_trigger=None,
                     faq_match=state.faq_match,
                     language_context=language_context,
+                    **_fast_path_extras,
                 )
 
             relevant, relevance_reason, _ = await async_check_relevance_with_profile(
@@ -3269,14 +3317,29 @@ async def async_run_chat_pipeline(
                 trace=trace,
                 force_llm_check=True,
             )
-            if relevant:
+            # Only escalate when the relevance model actually rendered a
+            # positive verdict. Fail-open reasons (``no_profile`` for tenants
+            # without an onboarded profile; ``timeout`` / ``error`` during
+            # OpenAI degradation) all surface ``relevant=True`` without any
+            # real judgment — treating them as "in-domain" would arm a
+            # support handoff on what may well be an off-topic question, with
+            # no support pipeline configured. Route those to the off-topic
+            # reply path instead.
+            _is_trusted_relevant_verdict = relevant and relevance_reason not in (
+                "no_profile",
+                "timeout",
+                "error",
+            )
+            if _is_trusted_relevant_verdict:
                 # Localized fallback that keeps the reply non-empty if the
                 # handler's ``render_pre_confirm_text`` call fails (e.g.
                 # OpenAI timeout): the catch in _handle_sync flips
                 # ``escalation_pre_confirm_pending`` back to False and reuses
                 # ``result.final_answer`` as the user-facing reply. Using the
                 # rephrase soft-reply as fallback keeps the bot polite and
-                # in-language instead of returning an empty string.
+                # in-language instead of returning an empty string. The
+                # handler also re-arms the rephrase tracker in that catch so
+                # the next turn doesn't loop on the same prompt.
                 fallback = await async_build_reject_response_result(
                     reason=RejectReason.REPHRASE_REQUEST,
                     profile=state.profile,
@@ -3295,16 +3358,17 @@ async def async_run_chat_pipeline(
                     raw_answer=fallback.text,
                     final_answer=fallback.text,
                     tokens_used=fallback.tokens_used,
+                    tokens_output=fallback.tokens_used,
                     strategy="rag_only",
                     reject_reason=None,
                     is_reject=False,
                     is_faq_direct=False,
                     retrieval=retrieval,
-                    retrieval_ms=_retrieval_ms,
                     escalation_recommended=True,
                     escalation_trigger=EscalationTrigger.no_documents,
                     faq_match=state.faq_match,
                     language_context=language_context,
+                    **_fast_path_extras,
                 )
 
             offtopic_reply = await async_build_reject_response_result(
@@ -3325,16 +3389,17 @@ async def async_run_chat_pipeline(
                 raw_answer=offtopic_reply.text,
                 final_answer=offtopic_reply.text,
                 tokens_used=offtopic_reply.tokens_used,
+                tokens_output=offtopic_reply.tokens_used,
                 strategy="guard_reject",
                 reject_reason="not_relevant",
                 is_reject=True,
                 is_faq_direct=False,
                 retrieval=retrieval,
-                retrieval_ms=_retrieval_ms,
                 escalation_recommended=False,
                 escalation_trigger=None,
                 faq_match=state.faq_match,
                 language_context=language_context,
+                **_fast_path_extras,
             )
 
         state.reranker_rescued = (

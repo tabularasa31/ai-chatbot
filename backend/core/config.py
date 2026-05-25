@@ -204,10 +204,10 @@ class Settings(BaseSettings):
     widget_message_max_chars: int = Field(1000, alias="WIDGET_MESSAGE_MAX_CHARS", ge=1)
     chat_response_max_tokens: int = Field(800, alias="CHAT_RESPONSE_MAX_TOKENS", ge=1)
     chat_response_max_tokens_reasoning: int = Field(
-        1200,
+        4096,
         alias="CHAT_RESPONSE_MAX_TOKENS_REASONING",
         ge=1,
-        description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family). Budget covers BOTH internal reasoning tokens AND the visible reply; 1200 leaves ~600-800 tokens for the visible answer after ~200-500 internal reasoning tokens on gpt-5-mini.",
+        description="max_completion_tokens for reasoning models (o1/o3/gpt-5 family) that consume tokens for internal chain-of-thought. NOTE: PR #708 tried 1200 to bring avg output down but produced real finish_reason='length' truncations in prod (e.g. session d8a0823d-...). Pulling avg output down should be driven by the prompt brevity rule, not by a hard cap below typical reasoning+answer budget.",
     )
     chat_history_turns: int = Field(
         6,

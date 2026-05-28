@@ -55,31 +55,41 @@ _HUMAN_REQUEST_TIMEOUT = 3.0
 _HUMAN_REQUEST_CACHE_TTL = 5 * 60
 _HUMAN_REQUEST_CACHE_MAX = 2048
 _human_request_cache: dict[str, tuple[float, bool]] = {}
+# Like the support-contact cache below, this is read/written from
+# ``asyncio.to_thread`` worker threads, so the compound eviction operation
+# (iterating ``.items()`` while another thread inserts) can raise "dict changed
+# size during iteration". Guard every access with a lock.
+_hr_cache_lock = threading.Lock()
 
 
 def _hr_cache_get(key: str) -> bool | None:
-    item = _human_request_cache.get(key)
-    if not item:
-        record_miss(_HR_CACHE_NAME)
-        return None
-    expires_at, result = item
-    if time.time() > expires_at:
-        _human_request_cache.pop(key, None)
-        record_miss(_HR_CACHE_NAME)
-        return None
-    record_hit(_HR_CACHE_NAME)
-    return result
+    with _hr_cache_lock:
+        item = _human_request_cache.get(key)
+        if not item:
+            record_miss(_HR_CACHE_NAME)
+            return None
+        expires_at, result = item
+        if time.time() > expires_at:
+            _human_request_cache.pop(key, None)
+            record_miss(_HR_CACHE_NAME)
+            return None
+        record_hit(_HR_CACHE_NAME)
+        return result
 
 
 def _hr_cache_set(key: str, result: bool) -> None:
-    if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX and key not in _human_request_cache:
-        expired = [k for k, v in _human_request_cache.items() if time.time() > v[0]]
-        for k in expired[:max(1, len(expired))]:
-            _human_request_cache.pop(k, None)
-        if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX:
-            oldest = min(_human_request_cache.items(), key=lambda x: x[1][0])[0]
-            _human_request_cache.pop(oldest, None)
-    _human_request_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
+    with _hr_cache_lock:
+        if (
+            len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX
+            and key not in _human_request_cache
+        ):
+            expired = [k for k, v in _human_request_cache.items() if time.time() > v[0]]
+            for k in expired[: max(1, len(expired))]:
+                _human_request_cache.pop(k, None)
+            if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX:
+                oldest = min(_human_request_cache.items(), key=lambda x: x[1][0])[0]
+                _human_request_cache.pop(oldest, None)
+        _human_request_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
 
 
 def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:

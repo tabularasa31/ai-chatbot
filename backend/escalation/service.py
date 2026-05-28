@@ -215,6 +215,121 @@ def detect_human_request(
     return result
 
 
+_SC_CACHE_NAME = "support_contact"
+_support_contact_cache: dict[str, tuple[float, bool]] = {}
+
+
+def _sc_cache_get(key: str) -> bool | None:
+    item = _support_contact_cache.get(key)
+    if not item:
+        record_miss(_SC_CACHE_NAME)
+        return None
+    expires_at, result = item
+    if time.time() > expires_at:
+        _support_contact_cache.pop(key, None)
+        record_miss(_SC_CACHE_NAME)
+        return None
+    record_hit(_SC_CACHE_NAME)
+    return result
+
+
+def _sc_cache_set(key: str, result: bool) -> None:
+    if (
+        len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX
+        and key not in _support_contact_cache
+    ):
+        expired = [k for k, v in _support_contact_cache.items() if time.time() > v[0]]
+        for k in expired[: max(1, len(expired))]:
+            _support_contact_cache.pop(k, None)
+        if len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX:
+            oldest = min(_support_contact_cache.items(), key=lambda x: x[1][0])[0]
+            _support_contact_cache.pop(oldest, None)
+    _support_contact_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
+
+
+def detect_support_contact_question(
+    message: str,
+    api_key: str,
+    tenant_id: UUID | str | None = None,
+    *,
+    langfuse_observation: Any | None = None,
+) -> bool:
+    """Return True if the user is asking *how* to reach support / contact the team.
+
+    Distinct from :func:`detect_human_request` (which means "hand me off to a
+    human right now"). This catches informational questions like "how do I
+    contact support?", "what's your support email?", "where can I get help?".
+    When the knowledge base has no contact page, the bot is itself the support
+    channel — so on a retrieval miss we answer about that capability instead of
+    the generic "I couldn't find an answer" lead-in.
+
+    LLM-classified so it works across all languages. Fails safe to False on
+    timeout/error to keep the standard no-answer copy.
+    """
+    cache_key = hashlib.sha256(f"{tenant_id}:{message}".encode()).hexdigest()
+    cached = _sc_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    system_prompt = (
+        "Decide whether the user is asking HOW to contact / reach the support "
+        "team or where to get help — an informational question about support "
+        "and contact options.\n"
+        "\n"
+        "Return true for questions like: \"how do I contact support?\", "
+        "\"how can I write to support?\", \"what's your support email?\", "
+        "\"where can I get help?\", \"is there a way to reach a person?\", "
+        "\"do you have a support team?\".\n"
+        "\n"
+        "Return false for ordinary product/help questions that merely happen "
+        "to need support's answer, and for an explicit \"connect me to a human "
+        "right now\" hand-off request (that is handled separately).\n"
+        "\n"
+        "Look at intent, not exact wording. The same rule applies in any "
+        "language; treat the user's phrasing as a hint, not a template.\n"
+        "\n"
+        'Answer ONLY with JSON: {"support_contact": true/false}'
+    )
+
+    def _call_llm() -> bool:
+        client = get_openai_client(api_key)
+        response = call_openai_with_retry(
+            "detect_support_contact_question",
+            lambda: client.chat.completions.create(
+                model=settings.human_request_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message},
+                ],
+                temperature=0,
+                max_completion_tokens=20,
+                response_format={"type": "json_object"},
+            ),
+            langfuse_observation=langfuse_observation,
+        )
+        raw = response.choices[0].message.content or "{}"
+        return bool(json.loads(raw).get("support_contact", False))
+
+    ex = ThreadPoolExecutor(max_workers=1)
+    future = ex.submit(_call_llm)
+    try:
+        result = future.result(timeout=_HUMAN_REQUEST_TIMEOUT)
+    except (TimeoutError, Exception):
+        try:
+            ex.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            ex.shutdown(wait=False)
+        return False
+    else:
+        try:
+            ex.shutdown(wait=False)
+        except Exception:
+            pass
+
+    _sc_cache_set(cache_key, result)
+    return result
+
+
 def compute_priority(
     trigger: EscalationTrigger,
     plan_tier: str | None,

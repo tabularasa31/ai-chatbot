@@ -1674,6 +1674,7 @@ class RagHandler(PipelineHandler):
         _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
         _try_ingest_gap_signal = _svc._try_ingest_gap_signal
         render_pre_confirm_text = _svc.render_pre_confirm_text
+        detect_support_contact_question = _svc.detect_support_contact_question
 
         chat = ctx.chat
         # ``_async_dispatch`` always pre-computes the async pipeline result and
@@ -1911,11 +1912,29 @@ class RagHandler(PipelineHandler):
                 # event loop thread, so a direct sync OpenAI call here would
                 # freeze the loop for the duration of the localization call.
                 # Bridge back to the loop via ``await_only`` + ``asyncio.to_thread``.
+                # "How do I contact support?" is an informational question the
+                # human-request classifier deliberately routes to RAG (not an
+                # immediate handoff). When the KB has no contact page it lands
+                # here on a retrieval miss — but the bot itself IS the support
+                # channel, so leading with "I couldn't find an answer" misframes
+                # the handoff as a failure. Detect that intent and switch to the
+                # support-contact lead-in. Fails safe to "no_answer".
+                _is_support_contact_q = await_only(
+                    asyncio.to_thread(
+                        detect_support_contact_question,
+                        ctx.redacted_question,
+                        ctx.api_key,
+                        ctx.tenant_id,
+                    )
+                )
+                _pre_confirm_variant = (
+                    "support_contact" if _is_support_contact_q else "no_answer"
+                )
                 _esc_openai_start = perf_counter()
                 esc = await_only(
                     asyncio.to_thread(
                         render_pre_confirm_text,
-                        variant="no_answer",
+                        variant=_pre_confirm_variant,
                         response_language=ctx.language_context.response_language,
                         api_key=ctx.api_key,
                         tenant_id=str(ctx.tenant_id),

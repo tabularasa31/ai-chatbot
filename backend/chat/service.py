@@ -106,6 +106,7 @@ from backend.escalation.service import (
     build_chat_messages_for_openai,  # noqa: F401
     create_escalation_ticket,  # noqa: F401
     detect_human_request,
+    detect_support_contact_question,  # noqa: F401
     fact_from_ticket,  # noqa: F401
     should_escalate,  # noqa: F401
 )

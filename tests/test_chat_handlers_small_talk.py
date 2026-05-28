@@ -194,3 +194,63 @@ def test_handle_persists_both_user_and_assistant_messages(
     persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
     roles = [m.role for m in persisted]
     assert roles == [MessageRole.user, MessageRole.assistant]
+
+
+def test_handle_falls_through_when_prior_assistant_asked_a_question(
+    db_session: Session,
+) -> None:
+    """A one-word turn that answers the bot's own question must reach RAG.
+
+    Regression: the bot asked "What domain would you like me to check?" and the
+    user replied "rayconnection.ru" (a single token) — SmallTalkHandler greeted
+    instead of processing the answer, losing the conversation context.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="What domain would you like me to check?",
+        )
+    )
+    db_session.flush()
+    db_session.refresh(chat)
+
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="rayconnection.ru"
+    )
+
+    # can_handle is still True (single token, not injection, normal state)...
+    assert SmallTalkHandler().can_handle(ctx) is True
+    # ...but handle opts out at runtime so the router falls through to RAG.
+    assert SmallTalkHandler()._handle_sync(ctx, db_session) is None
+
+
+def test_handle_greets_when_prior_assistant_did_not_ask(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-word turn after a non-question assistant reply still greets."""
+    tenant = _make_persisted_tenant(db_session, name="Acme")
+    chat = _make_persisted_chat(db_session, tenant)
+    db_session.add(
+        Message(
+            chat_id=chat.id,
+            role=MessageRole.assistant,
+            content="Your account is now active.",
+        )
+    )
+    db_session.flush()
+    db_session.refresh(chat)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        lambda **_: LocalizationResult(text="Hi there.", tokens_used=3),
+    )
+
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
+    outcome = SmallTalkHandler()._handle_sync(ctx, db_session)
+    assert outcome is not None
+    assert outcome.text == "Hi there."

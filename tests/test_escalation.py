@@ -110,6 +110,67 @@ def test_detect_human_request_russian() -> None:
         assert detect_human_request("хочу поговорить с человеком", "sk-test") is True
 
 
+def _mock_llm_support_contact(result: bool):
+    """Patch the OpenAI call inside detect_support_contact_question."""
+    import json
+    from contextlib import ExitStack
+    from unittest.mock import MagicMock, patch
+
+    response = MagicMock()
+    response.choices = [MagicMock()]
+    response.choices[0].message.content = json.dumps({"support_contact": result})
+
+    class _Stack:
+        def __enter__(self):
+            self._stack = ExitStack()
+            self._stack.enter_context(
+                patch(
+                    "backend.escalation.service.get_openai_client",
+                    return_value=MagicMock(),
+                )
+            )
+            self._stack.enter_context(
+                patch(
+                    "backend.escalation.service.call_openai_with_retry",
+                    return_value=response,
+                )
+            )
+            return self
+
+        def __exit__(self, *args):
+            return self._stack.__exit__(*args)
+
+    return _Stack()
+
+
+def test_detect_support_contact_question_true_for_contact_question() -> None:
+    from backend.escalation.service import (
+        _support_contact_cache,
+        detect_support_contact_question,
+    )
+
+    _support_contact_cache.clear()
+    with _mock_llm_support_contact(True):
+        assert (
+            detect_support_contact_question("how can i write to the support?", "sk-test")
+            is True
+        )
+
+
+def test_detect_support_contact_question_false_for_ordinary_question() -> None:
+    from backend.escalation.service import (
+        _support_contact_cache,
+        detect_support_contact_question,
+    )
+
+    _support_contact_cache.clear()
+    with _mock_llm_support_contact(False):
+        assert (
+            detect_support_contact_question("how do I configure DNS records?", "sk-test")
+            is False
+        )
+
+
 def test_detect_human_request_cache_isolated_per_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1896,6 +1957,7 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
         PRE_CONFIRM_DECLINED_EN,
         PRE_CONFIRM_NO_ANSWER_EN,
         PRE_CONFIRM_QUESTION_EN,
+        PRE_CONFIRM_SUPPORT_CONTACT_EN,
         render_pre_confirm_text,
     )
 
@@ -1912,16 +1974,21 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
 
     render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
     render_pre_confirm_text(variant="no_answer", response_language="en", api_key="k")
+    render_pre_confirm_text(variant="support_contact", response_language="en", api_key="k")
     render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
     render_pre_confirm_text(variant="declined", response_language="en", api_key="k")
 
     assert seen == [
         PRE_CONFIRM_QUESTION_EN,
         PRE_CONFIRM_NO_ANSWER_EN,
+        PRE_CONFIRM_SUPPORT_CONTACT_EN,
         PRE_CONFIRM_CLARIFY_EN,
         PRE_CONFIRM_DECLINED_EN,
     ]
-    assert len(set(seen)) == 4, "four variants must use four distinct canonicals"
+    assert len(set(seen)) == 5, "five variants must use five distinct canonicals"
+    # The support-contact lead-in must NOT claim the bot couldn't find an answer:
+    # the bot itself is the support channel, so framing it as a failure is wrong.
+    assert "couldn't find" not in PRE_CONFIRM_SUPPORT_CONTACT_EN.lower()
 
 
 def test_classify_pre_confirm_reply_parses_decision_field(

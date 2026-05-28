@@ -58,6 +58,15 @@ PRE_CONFIRM_NO_ANSWER_EN = (
     "Would you like me to forward your request to our support team "
     "so they can reply by email?"
 )
+# Used when the user asks HOW to contact support (an informational question)
+# and the knowledge base has no contact page. The bot itself is the support
+# channel, so we answer about that capability instead of leading with "I
+# couldn't find an answer", which wrongly frames the handoff as a failure.
+PRE_CONFIRM_SUPPORT_CONTACT_EN = (
+    "You can reach our support team right here. "
+    "Would you like me to forward your request to our support team "
+    "so they can reply by email?"
+)
 PRE_CONFIRM_CLARIFY_EN = (
     "Just to confirm — should I forward your request to our support team "
     "for an email reply?"
@@ -76,7 +85,7 @@ class EscalationLlmResult(BaseModel):
 
 def render_pre_confirm_text(
     *,
-    variant: Literal["initial", "no_answer", "clarify", "declined"],
+    variant: Literal["initial", "no_answer", "support_contact", "clarify", "declined"],
     response_language: str,
     api_key: str,
     tenant_id: str | None = None,
@@ -95,6 +104,7 @@ def render_pre_confirm_text(
     canonical = {
         "initial": PRE_CONFIRM_QUESTION_EN,
         "no_answer": PRE_CONFIRM_NO_ANSWER_EN,
+        "support_contact": PRE_CONFIRM_SUPPORT_CONTACT_EN,
         "clarify": PRE_CONFIRM_CLARIFY_EN,
         "declined": PRE_CONFIRM_DECLINED_EN,
     }[variant]

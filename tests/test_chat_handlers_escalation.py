@@ -363,6 +363,50 @@ def test_pre_confirm_null_reply_with_explicit_human_request_escalates(
     assert chat.escalation_pre_confirm_pending is False
 
 
+def test_stale_followup_falls_through_after_session_reported_ended(
+    db_session: Session,
+) -> None:
+    """Regression: a follow-up prompt left pending across an inactivity gap must
+    not eat a genuine new question.
+
+    The bot asked "Is there anything else?" and set ``escalation_followup_pending``.
+    Hours later the inactivity sweeper set ``session_ended_event_at``; the user
+    then returns with a real new question. The follow-up is stale — the FSM must
+    clear the gate and yield to RagHandler (return None) instead of classifying
+    the new question as a yes/no answer and re-emitting the forwarded-handoff copy.
+    """
+    from datetime import UTC, datetime
+
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_followup_pending = True
+    chat.session_ended_event_at = datetime.now(UTC)
+    chat.user_context = {"escalation_followup_clarify": True}
+    db_session.flush()
+
+    def _fail_if_classified(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError(
+            "stale follow-up must fall through to RAG, not run the yes/no classifier"
+        )
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="why was the A www record not added to the list?",
+    )
+
+    with patch(
+        "backend.chat.service.complete_escalation_openai_turn", _fail_if_classified
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None, "Stale follow-up must yield to RagHandler"
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+    assert (chat.user_context or {}).get("escalation_followup_clarify") is None
+
+
 def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
     """Sanity: an explicit ``yes`` still routes to ticket creation/handoff."""
     tenant = _make_persisted_tenant(db_session)

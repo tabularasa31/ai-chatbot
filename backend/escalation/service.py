@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -217,34 +218,41 @@ def detect_human_request(
 
 _SC_CACHE_NAME = "support_contact"
 _support_contact_cache: dict[str, tuple[float, bool]] = {}
+# ``detect_support_contact_question`` runs inside ``asyncio.to_thread`` worker
+# threads, so concurrent compound operations (iterating ``.items()`` during
+# eviction while another thread inserts) can raise "dict changed size during
+# iteration". Guard every access with a lock.
+_sc_cache_lock = threading.Lock()
 
 
 def _sc_cache_get(key: str) -> bool | None:
-    item = _support_contact_cache.get(key)
-    if not item:
-        record_miss(_SC_CACHE_NAME)
-        return None
-    expires_at, result = item
-    if time.time() > expires_at:
-        _support_contact_cache.pop(key, None)
-        record_miss(_SC_CACHE_NAME)
-        return None
-    record_hit(_SC_CACHE_NAME)
-    return result
+    with _sc_cache_lock:
+        item = _support_contact_cache.get(key)
+        if not item:
+            record_miss(_SC_CACHE_NAME)
+            return None
+        expires_at, result = item
+        if time.time() > expires_at:
+            _support_contact_cache.pop(key, None)
+            record_miss(_SC_CACHE_NAME)
+            return None
+        record_hit(_SC_CACHE_NAME)
+        return result
 
 
 def _sc_cache_set(key: str, result: bool) -> None:
-    if (
-        len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX
-        and key not in _support_contact_cache
-    ):
-        expired = [k for k, v in _support_contact_cache.items() if time.time() > v[0]]
-        for k in expired[: max(1, len(expired))]:
-            _support_contact_cache.pop(k, None)
-        if len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX:
-            oldest = min(_support_contact_cache.items(), key=lambda x: x[1][0])[0]
-            _support_contact_cache.pop(oldest, None)
-    _support_contact_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
+    with _sc_cache_lock:
+        if (
+            len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX
+            and key not in _support_contact_cache
+        ):
+            expired = [k for k, v in _support_contact_cache.items() if time.time() > v[0]]
+            for k in expired[: max(1, len(expired))]:
+                _support_contact_cache.pop(k, None)
+            if len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX:
+                oldest = min(_support_contact_cache.items(), key=lambda x: x[1][0])[0]
+                _support_contact_cache.pop(oldest, None)
+        _support_contact_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
 
 
 def detect_support_contact_question(

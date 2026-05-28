@@ -7,6 +7,8 @@ any escalation or closed state.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
@@ -32,7 +34,9 @@ def _prev_assistant_turn_awaited_reply(chat: Chat) -> bool:
     right after the bot asked something is an answer, not small talk.
     """
     last_assistant_text: str | None = None
-    for m in sorted(chat.messages, key=lambda x: x.created_at or x.id):
+    # Tuple key avoids comparing mixed datetime/UUID types when an unflushed
+    # message has no created_at yet (datetime and UUID are not orderable).
+    for m in sorted(chat.messages, key=lambda x: (x.created_at or datetime.min, str(x.id))):
         if m.role == MessageRole.assistant and (m.content or "").strip():
             last_assistant_text = m.content
     if not last_assistant_text:

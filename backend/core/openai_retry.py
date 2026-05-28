@@ -565,6 +565,11 @@ def _emit_retry_exhausted(
                 "elapsed_ms": int(elapsed * 1000),
                 "reason": reason,
                 "call_type": call_type,
+                # True only when exhaustion failed the user-visible chat turn.
+                # Auxiliary calls that degrade gracefully (NER, etc.) set this
+                # False, so a "users got errors" chart can filter on it instead
+                # of misreading every exhausted event as a user-facing failure.
+                "user_facing": emit_chat_failed,
             },
             groups={"tenant": tenant_id} if tenant_id else None,
         )

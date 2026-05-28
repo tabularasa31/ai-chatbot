@@ -120,6 +120,19 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    # True iff the immediately preceding assistant reply ended awaiting a user
+    # answer (a clarify/slot question, e.g. "What domain would you like me to
+    # check?"). Read on the next turn by SmallTalkHandler to suppress the
+    # greeting fast path so a one-word reply that answers the bot's question
+    # reaches RAG instead of being greeted. Set authoritatively in
+    # _finalize_persisted_messages; greeting/small-talk replies always set it
+    # False (a greeting phrased as a question is rhetorical, not a prompt).
+    last_reply_awaited_reply = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     last_response_language = Column(String(16), nullable=True)
     # Once True, response_language is frozen at last_response_language and
     # detection is bypassed. Set by lock heuristic in backend/chat/language.py

@@ -203,19 +203,13 @@ def test_handle_falls_through_when_prior_assistant_asked_a_question(
 
     Regression: the bot asked "What domain would you like me to check?" and the
     user replied "rayconnection.ru" (a single token) — SmallTalkHandler greeted
-    instead of processing the answer, losing the conversation context.
+    instead of processing the answer, losing the conversation context. The
+    "did the bot just ask?" state is now read from chat.last_reply_awaited_reply.
     """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    db_session.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.assistant,
-            content="What domain would you like me to check?",
-        )
-    )
+    chat.last_reply_awaited_reply = True
     db_session.flush()
-    db_session.refresh(chat)
 
     ctx = _make_handler_context(
         db=db_session, tenant=tenant, chat=chat, question_text="rayconnection.ru"
@@ -233,15 +227,8 @@ def test_handle_greets_when_prior_assistant_did_not_ask(
     """A single-word turn after a non-question assistant reply still greets."""
     tenant = _make_persisted_tenant(db_session, name="Acme")
     chat = _make_persisted_chat(db_session, tenant)
-    db_session.add(
-        Message(
-            chat_id=chat.id,
-            role=MessageRole.assistant,
-            content="Your account is now active.",
-        )
-    )
+    chat.last_reply_awaited_reply = False
     db_session.flush()
-    db_session.refresh(chat)
 
     monkeypatch.setattr(
         "backend.chat.handlers.greeting.generate_greeting_in_language_result",
@@ -254,3 +241,27 @@ def test_handle_greets_when_prior_assistant_did_not_ask(
     outcome = SmallTalkHandler()._handle_sync(ctx, db_session)
     assert outcome is not None
     assert outcome.text == "Hi there."
+
+
+def test_greeting_question_does_not_set_awaited_reply_flag(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A greeting phrased as a question must not arm last_reply_awaited_reply.
+
+    Otherwise the very next one-word turn (e.g. a real 'hi') would be forced
+    through RAG. The greeting persist path passes awaited_reply=False explicitly.
+    """
+    tenant = _make_persisted_tenant(db_session, name="Acme")
+    chat = _make_persisted_chat(db_session, tenant)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        lambda **_: LocalizationResult(text="Hi! How can I help you?", tokens_used=4),
+    )
+
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+    )
+    SmallTalkHandler()._handle_sync(ctx, db_session)
+    db_session.refresh(chat)
+    assert chat.last_reply_awaited_reply is False

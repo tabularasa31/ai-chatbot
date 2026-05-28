@@ -597,3 +597,44 @@ def test_relevance_checker_comment_hygiene() -> None:
     path = Path("backend/guards/relevance_checker.py")
     src = path.read_text(encoding="utf-8")
     assert "Exception: queries that match an explicit off-topic pattern" not in src
+
+
+def test_persist_infers_awaited_reply_from_question_mark(
+    tenant: TestClient,
+    db_session: Session,
+) -> None:
+    """_persist_turn auto-arms last_reply_awaited_reply when the reply ends with
+    a question mark, and leaves it False otherwise — the signal SmallTalkHandler
+    reads to route a one-word answer to RAG instead of greeting."""
+    from backend.chat.persistence import _persist_turn_with_response_language
+
+    cl_row, _api_key = _create_client(
+        tenant, db_session, email="awaited-reply@example.com"
+    )
+
+    def _persist(content: str, **kw: object) -> Chat:
+        chat = Chat(tenant_id=cl_row.id, session_id=uuid.uuid4())
+        db_session.add(chat)
+        db_session.commit()
+        _persist_turn_with_response_language(
+            db=db_session,
+            chat=chat,
+            tenant_id=cl_row.id,
+            response_language="en",
+            resolution_reason="default",
+            user_content="q",
+            assistant_content=content,
+            document_ids=[],
+            extra_tokens=0,
+            **kw,
+        )
+        db_session.refresh(chat)
+        return chat
+
+    assert _persist("What domain should I check?").last_reply_awaited_reply is True
+    assert _persist("Your account is active.").last_reply_awaited_reply is False
+    # Explicit override wins over the text heuristic (greeting/small-talk path).
+    assert (
+        _persist("How can I help you?", awaited_reply=False).last_reply_awaited_reply
+        is False
+    )

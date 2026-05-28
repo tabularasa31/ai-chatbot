@@ -43,8 +43,6 @@ from backend.observability.cache_metrics import record_hit, record_miss
 from backend.privacy_config import public_redaction_config_dict
 from backend.support_config import public_support_config_dict
 
-_HR_CACHE_NAME = "human_request"
-
 logger = logging.getLogger(__name__)
 
 ESCALATION_THRESHOLD = 0.45
@@ -54,42 +52,57 @@ _CLARIFY_KEY = "escalation_followup_clarify"
 _HUMAN_REQUEST_TIMEOUT = 3.0
 _HUMAN_REQUEST_CACHE_TTL = 5 * 60
 _HUMAN_REQUEST_CACHE_MAX = 2048
-_human_request_cache: dict[str, tuple[float, bool]] = {}
-# Like the support-contact cache below, this is read/written from
-# ``asyncio.to_thread`` worker threads, so the compound eviction operation
-# (iterating ``.items()`` while another thread inserts) can raise "dict changed
-# size during iteration". Guard every access with a lock.
-_hr_cache_lock = threading.Lock()
 
 
-def _hr_cache_get(key: str) -> bool | None:
-    with _hr_cache_lock:
-        item = _human_request_cache.get(key)
-        if not item:
-            record_miss(_HR_CACHE_NAME)
-            return None
-        expires_at, result = item
-        if time.time() > expires_at:
-            _human_request_cache.pop(key, None)
-            record_miss(_HR_CACHE_NAME)
-            return None
-        record_hit(_HR_CACHE_NAME)
-        return result
+class _LockedTTLCache:
+    """Thread-safe TTL cache for boolean classifier results.
+
+    The intent classifiers run inside ``asyncio.to_thread`` worker threads, so
+    every operation — including the compound eviction scan — runs under a lock
+    to avoid "dict changed size during iteration" when one thread iterates
+    ``.items()`` while another inserts. Hits/misses are reported under ``name``.
+    """
+
+    def __init__(self, *, name: str, ttl: float, maxsize: int) -> None:
+        self._name = name
+        self._ttl = ttl
+        self._max = maxsize
+        self._lock = threading.Lock()
+        self._data: dict[str, tuple[float, bool]] = {}
+
+    def get(self, key: str) -> bool | None:
+        with self._lock:
+            item = self._data.get(key)
+            if not item:
+                record_miss(self._name)
+                return None
+            expires_at, result = item
+            if time.time() > expires_at:
+                self._data.pop(key, None)
+                record_miss(self._name)
+                return None
+            record_hit(self._name)
+            return result
+
+    def set(self, key: str, result: bool) -> None:
+        with self._lock:
+            if len(self._data) >= self._max and key not in self._data:
+                expired = [k for k, v in self._data.items() if time.time() > v[0]]
+                for k in expired[: max(1, len(expired))]:
+                    self._data.pop(k, None)
+                if len(self._data) >= self._max:
+                    oldest = min(self._data.items(), key=lambda x: x[1][0])[0]
+                    self._data.pop(oldest, None)
+            self._data[key] = (time.time() + self._ttl, result)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
 
 
-def _hr_cache_set(key: str, result: bool) -> None:
-    with _hr_cache_lock:
-        if (
-            len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX
-            and key not in _human_request_cache
-        ):
-            expired = [k for k, v in _human_request_cache.items() if time.time() > v[0]]
-            for k in expired[: max(1, len(expired))]:
-                _human_request_cache.pop(k, None)
-            if len(_human_request_cache) >= _HUMAN_REQUEST_CACHE_MAX:
-                oldest = min(_human_request_cache.items(), key=lambda x: x[1][0])[0]
-                _human_request_cache.pop(oldest, None)
-        _human_request_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
+_human_request_cache = _LockedTTLCache(
+    name="human_request", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
+)
 
 
 def _tenant_optional_entity_types(tenant: Tenant | None) -> set[str] | None:
@@ -158,7 +171,7 @@ def detect_human_request(
     cache_key = hashlib.sha256(
         f"{tenant_id}:{message}".encode()
     ).hexdigest()
-    cached = _hr_cache_get(cache_key)
+    cached = _human_request_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -222,47 +235,13 @@ def detect_human_request(
         except Exception:
             pass
 
-    _hr_cache_set(cache_key, result)
+    _human_request_cache.set(cache_key, result)
     return result
 
 
-_SC_CACHE_NAME = "support_contact"
-_support_contact_cache: dict[str, tuple[float, bool]] = {}
-# ``detect_support_contact_question`` runs inside ``asyncio.to_thread`` worker
-# threads, so concurrent compound operations (iterating ``.items()`` during
-# eviction while another thread inserts) can raise "dict changed size during
-# iteration". Guard every access with a lock.
-_sc_cache_lock = threading.Lock()
-
-
-def _sc_cache_get(key: str) -> bool | None:
-    with _sc_cache_lock:
-        item = _support_contact_cache.get(key)
-        if not item:
-            record_miss(_SC_CACHE_NAME)
-            return None
-        expires_at, result = item
-        if time.time() > expires_at:
-            _support_contact_cache.pop(key, None)
-            record_miss(_SC_CACHE_NAME)
-            return None
-        record_hit(_SC_CACHE_NAME)
-        return result
-
-
-def _sc_cache_set(key: str, result: bool) -> None:
-    with _sc_cache_lock:
-        if (
-            len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX
-            and key not in _support_contact_cache
-        ):
-            expired = [k for k, v in _support_contact_cache.items() if time.time() > v[0]]
-            for k in expired[: max(1, len(expired))]:
-                _support_contact_cache.pop(k, None)
-            if len(_support_contact_cache) >= _HUMAN_REQUEST_CACHE_MAX:
-                oldest = min(_support_contact_cache.items(), key=lambda x: x[1][0])[0]
-                _support_contact_cache.pop(oldest, None)
-        _support_contact_cache[key] = (time.time() + _HUMAN_REQUEST_CACHE_TTL, result)
+_support_contact_cache = _LockedTTLCache(
+    name="support_contact", ttl=_HUMAN_REQUEST_CACHE_TTL, maxsize=_HUMAN_REQUEST_CACHE_MAX
+)
 
 
 def detect_support_contact_question(
@@ -285,7 +264,7 @@ def detect_support_contact_question(
     timeout/error to keep the standard no-answer copy.
     """
     cache_key = hashlib.sha256(f"{tenant_id}:{message}".encode()).hexdigest()
-    cached = _sc_cache_get(cache_key)
+    cached = _support_contact_cache.get(cache_key)
     if cached is not None:
         return cached
 
@@ -344,7 +323,7 @@ def detect_support_contact_question(
         except Exception:
             pass
 
-    _sc_cache_set(cache_key, result)
+    _support_contact_cache.set(cache_key, result)
     return result
 
 

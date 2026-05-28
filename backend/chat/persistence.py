@@ -25,7 +25,13 @@ _QUESTION_MARKS = ("?", "？", "؟")  # noqa: RUF001 — fullwidth/Arabic marks 
 
 
 def _text_awaits_reply(text: str | None) -> bool:
-    return bool(text) and text.rstrip().endswith(_QUESTION_MARKS)
+    if not text:
+        return False
+    # Strip trailing whitespace plus common markdown emphasis / quote wrappers
+    # so a reply like ``...check?**`` or ``...help?"`` is still recognized as a
+    # question. rstrip is idempotent on the marker set, so order is safe.
+    trimmed = text.rstrip().rstrip("*_`\"' ").rstrip()
+    return trimmed.endswith(_QUESTION_MARKS)
 
 
 def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid.UUID] | None:

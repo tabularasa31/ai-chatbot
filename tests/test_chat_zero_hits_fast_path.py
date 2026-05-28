@@ -633,8 +633,22 @@ def test_persist_infers_awaited_reply_from_question_mark(
 
     assert _persist("What domain should I check?").last_reply_awaited_reply is True
     assert _persist("Your account is active.").last_reply_awaited_reply is False
+    # Trailing markdown emphasis / quotes around the question mark still count.
+    assert _persist("Which **domain**?*").last_reply_awaited_reply is True
+    assert _persist('Shall I forward it?"').last_reply_awaited_reply is True
     # Explicit override wins over the text heuristic (greeting/small-talk path).
     assert (
         _persist("How can I help you?", awaited_reply=False).last_reply_awaited_reply
         is False
     )
+
+
+def test_text_awaits_reply_handles_trailing_markdown_and_quotes() -> None:
+    from backend.chat.persistence import _text_awaits_reply
+
+    assert _text_awaits_reply("What domain?") is True
+    assert _text_awaits_reply("What domain?**") is True
+    assert _text_awaits_reply('What domain?"') is True
+    assert _text_awaits_reply("Готово.") is False
+    assert _text_awaits_reply(None) is False
+    assert _text_awaits_reply("") is False

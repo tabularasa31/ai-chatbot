@@ -85,15 +85,16 @@ class _LockedTTLCache:
             return result
 
     def set(self, key: str, result: bool) -> None:
+        now = time.time()
         with self._lock:
             if len(self._data) >= self._max and key not in self._data:
-                expired = [k for k, v in self._data.items() if time.time() > v[0]]
-                for k in expired[: max(1, len(expired))]:
+                expired = [k for k, v in self._data.items() if now > v[0]]
+                for k in expired:
                     self._data.pop(k, None)
                 if len(self._data) >= self._max:
                     oldest = min(self._data.items(), key=lambda x: x[1][0])[0]
                     self._data.pop(oldest, None)
-            self._data[key] = (time.time() + self._ttl, result)
+            self._data[key] = (now + self._ttl, result)
 
     def clear(self) -> None:
         with self._lock:

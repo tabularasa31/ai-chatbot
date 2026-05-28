@@ -97,6 +97,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 - Every chat turn passes through `backend/guards/` before LLM generation: injection detector (structural → semantic, 2 levels) then relevance guard. Both are synchronous and short-circuit on failure.
 - The bot is language-agnostic: replies must be in the user's language. New hardcoded strings in the chat pipeline go through `backend/chat/language.py` — never hardcode English-only copy.
 - Frontend components: `PascalCase`; utilities: `camelCase`; Tailwind for styles.
+- **Prompt caching contract.** When touching the chat generation prompt in `backend/chat/handlers/rag.py`, keep the system message byte-identical across turns (stable cache prefix) and ≥ ~1024 tokens — request-specific content goes in the user message after the `Context:` split. Full rules in **AGENTS.md → "Prompt caching contract"**.
 
 ---
 

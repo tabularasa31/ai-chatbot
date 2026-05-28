@@ -322,6 +322,11 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     assert props["prompt_cache_cached_tokens"] == 64
     assert props["prompt_cache_hit"] is True
     assert isinstance(props["prompt_cache_prefix_tokens_estimate"], int)
+    # With a bot id present, the cache key is forwarded via extra_body (not a
+    # named kwarg) so it works on every SDK version allowed by requirements.txt.
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert "prompt_cache_key" not in call_kwargs
+    assert call_kwargs["extra_body"] == {"prompt_cache_key": "bot_test"}
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:
@@ -411,7 +416,7 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         "response_language": "en",
         "context_chunk_count": 1,
         "quick_answer_count": 0,
-        "prompt_cache_prefix_meets_minimum": False,
+        "prompt_cache_prefix_meets_minimum": True,
         "captures_full_prompt": True,
         "finish_reason_expected": "stop_or_length",
         "system_prompt": system_prompt,
@@ -490,8 +495,10 @@ def test_build_rag_prompt_language_directive_uses_full_language_name() -> None:
     """The output-language rule must use the human-readable name (English/Russian),
     not the bare ISO code — full names steer the model far more reliably.
 
-    The directive lives in the user-message section (after Context:) so the system
-    message stays stable for prompt caching; check the full prompt, not just head.
+    The language-agnostic translation policy lives in the system message (stable
+    prompt-cache prefix); the concrete target language NAME is injected into the
+    user-message section (after Context:) so the system prefix stays byte-identical
+    across languages. Both appear in the full prompt — check the full prompt.
     """
     prompt = build_rag_prompt("Q?", ["chunk"], response_language="en")
     assert "CRITICAL — OUTPUT LANGUAGE" in prompt

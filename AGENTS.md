@@ -203,6 +203,15 @@ The service is **language-agnostic**: the bot must reply in whatever language th
 - Soft rejections, clarification prompts, and escalation fallbacks are localized via the shared helper in `backend/chat/language.py`.
 - New hardcoded strings (error messages, fallback copy, etc.) must go through this helper — never hardcode English-only text in the chat pipeline.
 
+## Prompt caching contract (`backend/chat/handlers/rag.py`)
+
+The main generation call relies on OpenAI **automatic prompt caching** to avoid re-billing the stable instruction prefix on every turn. Two hard rules — break either and the cache silently stops working (no error, just a low `$ai_cached_tokens / $ai_input_tokens` in PostHog):
+
+1. **The system message must stay byte-identical across turns of a bot.** It is the cacheable prefix. Anything request-specific — the target language *name*, user context, per-turn clarification budget, low-context warning, retrieved context, the question — goes in the **user message**, after the `Context:` delimiter that `build_rag_messages` splits on. Only bot-stable content (base rules, `agent_instructions`, client guard, disclosure level, and the `OUTPUT_LANGUAGE_POLICY` / `CONTEXT_FORMAT_NOTE` / `CLARIFICATION_POLICY` constants) belongs in the system message.
+2. **The system prefix must clear 1024 tokens.** OpenAI does **no** caching below that floor, no matter how stable the text is. The base rules are only ~820 tokens; the three stable constants above exist partly to push a persona-less bot past 1024 on its first turn (the bare-bot prefix is currently ~1037). If you add or trim system-prompt content, keep the bare-bot prefix comfortably above 1024 tokens (telemetry: `prompt_cache_prefix_meets_minimum` on the Langfuse generation must stay `True`).
+
+When adding a **new** prompt block: decide stable-vs-request-specific first. Stable → append to the system constants (it cache-warms once per deploy). Request-specific → put it in the user message after `Context:`. Never interleave the two. Each generation call also passes a per-bot `prompt_cache_key` (see `_prompt_cache_kwargs`) so OpenAI routes a bot's turns to the same cache node — keep threading `metrics_bot_id` / `retry_bot_id` through new generation entry points.
+
 ---
 
 Chat responses now support structured clarification outcomes in addition to plain answers. The canonical public chat/message types are:

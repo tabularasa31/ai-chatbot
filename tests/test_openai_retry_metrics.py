@@ -283,6 +283,23 @@ def test_no_emit_retry_scheduled_on_timeout(captured_events):
     assert len(exhausted) == 1
     assert exhausted[0]["properties"]["reason"] == "timeout_no_retry"
     assert exhausted[0]["properties"]["failure_kind"] == "timeout"
+    # Default (no emit_chat_failed) → auxiliary call, not a user-facing failure.
+    assert exhausted[0]["properties"]["user_facing"] is False
+
+
+def test_exhausted_user_facing_flag_set_with_emit_chat_failed(captured_events):
+    """openai_retry.exhausted carries user_facing=True when the turn failed."""
+    with pytest.raises(APITimeoutError):
+        call_openai_with_retry(
+            "chat_generate",
+            lambda: (_ for _ in ()).throw(APITimeoutError(request=_request())),
+            tenant_id="tnt_test",
+            emit_chat_failed=True,
+        )
+
+    exhausted = _named(captured_events, "openai_retry.exhausted")
+    assert len(exhausted) == 1
+    assert exhausted[0]["properties"]["user_facing"] is True
 
 
 def test_chat_failed_emitted_on_exhausted_chat_completion(captured_events):

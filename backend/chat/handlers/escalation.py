@@ -103,7 +103,14 @@ class EscalationStateMachine(PipelineHandler):
             # this turn; otherwise we fall through to RagHandler. Mirrors the
             # vanished-ticket recovery in _handle_awaiting_email above.
         if chat.escalation_followup_pending:
-            return self._handle_followup_yes_no(ctx)
+            outcome = self._handle_followup_yes_no(ctx)
+            if outcome is not None:
+                return outcome
+            # Stale follow-up (the inactivity sweeper reported the session
+            # ended) cleared the gate above. Drop into the checks below rather
+            # than returning immediately: if the same message is an explicit
+            # human request it must still escalate this turn; otherwise we fall
+            # through to RagHandler. Mirrors the pre_confirm null-reply recovery.
         # Explicit human request (T-3) — only fires when the user actually
         # asked for a human. Without this gate, a stale-pointer recovery
         # (vanished awaiting-ticket cleared above) would mint a fresh

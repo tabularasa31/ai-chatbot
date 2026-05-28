@@ -407,6 +407,52 @@ def test_stale_followup_falls_through_after_session_reported_ended(
     assert (chat.user_context or {}).get("escalation_followup_clarify") is None
 
 
+def test_stale_followup_with_explicit_human_request_still_escalates(
+    db_session: Session,
+) -> None:
+    """A stale follow-up must not swallow an explicit human request.
+
+    When the follow-up is stale (session reported ended) the gate is cleared,
+    but if the same turn is an explicit "connect me to a human" it must still
+    escalate immediately — drop through to the explicit-request branch rather
+    than falling all the way to RagHandler.
+    """
+    from datetime import UTC, datetime
+
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_followup_pending = True
+    chat.session_ended_event_at = datetime.now(UTC)
+    db_session.flush()
+
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def _fake_handoff(
+        _self: Any, _ctx: HandlerContext, *, escalation_reason: str, **_kwargs: Any
+    ) -> Any:
+        captured["reason"] = escalation_reason
+        return sentinel
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="just connect me to a human already",
+        explicit_human_request=True,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel, "Explicit human request must escalate, not hit RAG"
+    assert captured["reason"] == "explicit_human_request"
+    db_session.refresh(chat)
+    assert chat.escalation_followup_pending is False
+
+
 def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
     """Sanity: an explicit ``yes`` still routes to ticket creation/handoff."""
     tenant = _make_persisted_tenant(db_session)

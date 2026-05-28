@@ -1674,7 +1674,6 @@ class RagHandler(PipelineHandler):
         _trigger_log_analysis_threshold = _svc._trigger_log_analysis_threshold
         _try_ingest_gap_signal = _svc._try_ingest_gap_signal
         render_pre_confirm_text = _svc.render_pre_confirm_text
-        detect_support_contact_question = _svc.detect_support_contact_question
 
         chat = ctx.chat
         # ``_async_dispatch`` always pre-computes the async pipeline result and
@@ -1917,18 +1916,11 @@ class RagHandler(PipelineHandler):
                 # immediate handoff). When the KB has no contact page it lands
                 # here on a retrieval miss — but the bot itself IS the support
                 # channel, so leading with "I couldn't find an answer" misframes
-                # the handoff as a failure. Detect that intent and switch to the
-                # support-contact lead-in. Fails safe to "no_answer".
-                _is_support_contact_q = await_only(
-                    asyncio.to_thread(
-                        detect_support_contact_question,
-                        ctx.redacted_question,
-                        ctx.api_key,
-                        ctx.tenant_id,
-                    )
-                )
+                # the handoff as a failure. The intent is classified up front
+                # (in parallel with the human-request classifier) and threaded
+                # via ``ctx``, so this path adds no extra serialized LLM call.
                 _pre_confirm_variant = (
-                    "support_contact" if _is_support_contact_q else "no_answer"
+                    "support_contact" if ctx.support_contact_question else "no_answer"
                 )
                 _esc_openai_start = perf_counter()
                 esc = await_only(

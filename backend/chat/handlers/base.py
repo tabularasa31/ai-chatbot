@@ -92,6 +92,12 @@ class HandlerContext:
     stream_callback: Callable[[str], None] | None = None
     status_callback: Callable[[str], None] | None = None
     explicit_human_request: bool = False
+    # True when the user is asking *how* to reach support (informational), as
+    # opposed to ``explicit_human_request`` (hand me off now). Classified once
+    # up front (in parallel with the human-request classifier) and read by the
+    # RAG escalation path to pick the support-contact pre_confirm lead-in
+    # instead of the generic "I couldn't find an answer" one.
+    support_contact_question: bool = False
 
     # Per-turn metrics
     turn_started_at: float = 0.0

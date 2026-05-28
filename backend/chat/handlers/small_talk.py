@@ -7,16 +7,41 @@ any escalation or closed state.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.handlers.greeting import _build_greeting_result, _resolve_product_name
 from backend.guards.injection_detector import detect_injection_structural
+from backend.models import Chat, MessageRole
 
 # Messages with at most this many words are treated as small talk and short-circuit
 # the LLM guards / RAG pipeline. One-word greetings ("hi", "hello") account for
 # the vast majority of these inputs.
 _SHORT_TURN_MAX_WORDS = 1
+
+# Question marks across the scripts the bot serves. A single-word turn that
+# answers a question the assistant just asked ("What domain would you like me to
+# check?" → "example.com") must reach RAG, not be eaten as a greeting.
+_QUESTION_MARKS = ("?", "？", "؟")  # noqa: RUF001 — fullwidth/Arabic marks intentional
+
+
+def _prev_assistant_turn_awaited_reply(chat: Chat) -> bool:
+    """True when the most recent assistant reply ended with a question.
+
+    Used to suppress the greeting fast path mid-conversation: a one-word reply
+    right after the bot asked something is an answer, not small talk.
+    """
+    last_assistant_text: str | None = None
+    # Tuple key avoids comparing mixed datetime/UUID types when an unflushed
+    # message has no created_at yet (datetime and UUID are not orderable).
+    for m in sorted(chat.messages, key=lambda x: (x.created_at or datetime.min, str(x.id))):
+        if m.role == MessageRole.assistant and (m.content or "").strip():
+            last_assistant_text = m.content
+    if not last_assistant_text:
+        return False
+    return last_assistant_text.rstrip().endswith(_QUESTION_MARKS)
 
 
 class SmallTalkHandler(PipelineHandler):
@@ -47,17 +72,22 @@ class SmallTalkHandler(PipelineHandler):
             return False
         return True
 
-    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
+    async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         from backend.core.db import run_sync
 
         return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
 
-    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome:
+    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome | None:
         # Lazy import: service.py loads the router at module init, so a top-level
         # import of the persistence helper would create a cycle.
         from backend.chat.service import _persist_turn_with_response_language
 
         ctx.db = sync_db
+        # A one-word turn that answers a question the bot just asked must not be
+        # greeted — it would drop the user's answer and reset the conversation.
+        # Opt out at runtime (return None) so the router falls through to RAG.
+        if _prev_assistant_turn_awaited_reply(ctx.chat):
+            return None
         result = _build_greeting_result(
             product_name=_resolve_product_name(
                 tenant=ctx.tenant_row,

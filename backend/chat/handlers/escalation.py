@@ -103,7 +103,14 @@ class EscalationStateMachine(PipelineHandler):
             # this turn; otherwise we fall through to RagHandler. Mirrors the
             # vanished-ticket recovery in _handle_awaiting_email above.
         if chat.escalation_followup_pending:
-            return self._handle_followup_yes_no(ctx)
+            outcome = self._handle_followup_yes_no(ctx)
+            if outcome is not None:
+                return outcome
+            # Stale follow-up (the inactivity sweeper reported the session
+            # ended) cleared the gate above. Drop into the checks below rather
+            # than returning immediately: if the same message is an explicit
+            # human request it must still escalate this turn; otherwise we fall
+            # through to RagHandler. Mirrors the pre_confirm null-reply recovery.
         # Explicit human request (T-3) — only fires when the user actually
         # asked for a human. Without this gate, a stale-pointer recovery
         # (vanished awaiting-ticket cleared above) would mint a fresh
@@ -263,9 +270,23 @@ class EscalationStateMachine(PipelineHandler):
                 )
             raise
 
-    def _handle_followup_yes_no(self, ctx: HandlerContext) -> ChatTurnOutcome:
+    def _handle_followup_yes_no(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
         _svc = _svc_lookup()
         chat = ctx.chat
+        # Session-window guard: ``escalation_followup_pending`` is a persistent
+        # DB flag, so a user resuming hours later — after the inactivity sweeper
+        # reported the session ended (``session_ended_event_at`` set) — would
+        # otherwise have a genuine new question classified as a yes/no answer to
+        # the long-gone "anything else?" prompt and eaten by the escalation FSM.
+        # Treat the follow-up as stale: clear the gate and fall through to RAG so
+        # the new question gets a fresh answer. Mirrors the same staleness check
+        # the zero-hits rephrase fast path applies in rag.py.
+        if chat.session_ended_event_at is not None:
+            chat.escalation_followup_pending = False
+            _clear_escalation_clarify_flag(chat)
+            ctx.db.add(chat)
+            ctx.db.commit()
+            return None
         followup_span = (
             ctx.trace.span(name="escalation-followup", input={"pending": True})
             if ctx.trace is not None

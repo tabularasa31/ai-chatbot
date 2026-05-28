@@ -1911,11 +1911,22 @@ class RagHandler(PipelineHandler):
                 # event loop thread, so a direct sync OpenAI call here would
                 # freeze the loop for the duration of the localization call.
                 # Bridge back to the loop via ``await_only`` + ``asyncio.to_thread``.
+                # "How do I contact support?" is an informational question the
+                # human-request classifier deliberately routes to RAG (not an
+                # immediate handoff). When the KB has no contact page it lands
+                # here on a retrieval miss — but the bot itself IS the support
+                # channel, so leading with "I couldn't find an answer" misframes
+                # the handoff as a failure. The intent is classified up front
+                # (in parallel with the human-request classifier) and threaded
+                # via ``ctx``, so this path adds no extra serialized LLM call.
+                _pre_confirm_variant = (
+                    "support_contact" if ctx.support_contact_question else "no_answer"
+                )
                 _esc_openai_start = perf_counter()
                 esc = await_only(
                     asyncio.to_thread(
                         render_pre_confirm_text,
-                        variant="no_answer",
+                        variant=_pre_confirm_variant,
                         response_language=ctx.language_context.response_language,
                         api_key=ctx.api_key,
                         tenant_id=str(ctx.tenant_id),

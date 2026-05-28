@@ -322,6 +322,11 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     assert props["prompt_cache_cached_tokens"] == 64
     assert props["prompt_cache_hit"] is True
     assert isinstance(props["prompt_cache_prefix_tokens_estimate"], int)
+    # With a bot id present, the cache key is forwarded via extra_body (not a
+    # named kwarg) so it works on every SDK version allowed by requirements.txt.
+    call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+    assert "prompt_cache_key" not in call_kwargs
+    assert call_kwargs["extra_body"] == {"prompt_cache_key": "bot_test"}
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:

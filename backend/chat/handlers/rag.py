@@ -859,8 +859,8 @@ def _assemble_chat_messages(
     return messages
 
 
-def _prompt_cache_kwargs(*candidate_ids: str | None) -> dict[str, str]:
-    """Return ``{"prompt_cache_key": <bot id>}`` for the OpenAI request, or ``{}``.
+def _prompt_cache_kwargs(*candidate_ids: str | None) -> dict[str, Any]:
+    """Return ``{"extra_body": {"prompt_cache_key": <bot id>}}`` for the request, or ``{}``.
 
     OpenAI routes requests sharing a ``prompt_cache_key`` to the same cache node,
     materially raising the prefix cache-hit rate once the prefix clears the
@@ -868,10 +868,16 @@ def _prompt_cache_kwargs(*candidate_ids: str | None) -> dict[str, str]:
     on the same node; turns from different bots never contend. The key is opaque
     to OpenAI (no PII) — a public bot/tenant id is fine. Omitted when no id is
     available (e.g. in unit tests) so the request shape is unchanged there.
+
+    The field is passed via ``extra_body`` rather than as a named kwarg so it is
+    forwarded in the request body on every SDK version allowed by
+    ``requirements.txt`` (``openai>=1.70.0``); older 1.x releases predate the
+    typed ``prompt_cache_key`` parameter and would raise ``TypeError`` if it were
+    spread as a direct keyword argument.
     """
     for candidate in candidate_ids:
         if candidate:
-            return {"prompt_cache_key": candidate}
+            return {"extra_body": {"prompt_cache_key": candidate}}
     return {}
 
 

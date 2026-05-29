@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import "highlight.js/styles/github-dark.css";
 import { MessageCircle, Send, Ticket } from "lucide-react";
-import { cn } from "./utils";
+import { cn, withUtm } from "./utils";
 import { LinkSafetyModal } from "./LinkSafetyModal";
 import { LoadingIndicator } from "./LoadingIndicator";
 import {
@@ -1152,7 +1152,7 @@ export function ChatWidget({
 
         <div className="mt-2 text-center">
           <a
-            href={siteUrl}
+            href={withUtm(siteUrl, botId)}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs font-medium text-gray-400 transition hover:text-gray-600"

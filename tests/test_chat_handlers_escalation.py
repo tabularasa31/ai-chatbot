@@ -565,14 +565,12 @@ def test_human_request_with_content_escalates_immediately(db_session: Session) -
     assert chat.escalation_awaiting_request is False
 
 
-def test_human_request_with_prior_user_content_escalates(db_session: Session) -> None:
-    """No problem in *this* message, but the user described one earlier — the
-    prior turn is forwardable context, so escalate rather than re-ask."""
+def test_human_request_with_prior_substantive_content_escalates(db_session: Session) -> None:
+    """No problem in *this* message, but the chat already carries substantive
+    content from an earlier turn (sticky flag set) — escalate, don't re-ask."""
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
-    db_session.add(
-        Message(chat_id=chat.id, role=MessageRole.user, content="the export returns a 500")
-    )
+    chat.has_substantive_content = True
     db_session.flush()
     ctx = _make_handler_context(
         db=db_session,
@@ -592,6 +590,39 @@ def test_human_request_with_prior_user_content_escalates(db_session: Session) ->
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
     assert outcome is sentinel
+
+
+def test_human_request_after_greeting_only_elicits_not_escalates(db_session: Session) -> None:
+    """Regression for PR #722 review (gemini high).
+
+    A prior *greeting* (no substantive content → sticky flag stays False)
+    followed by a bare "connect me to a human" must elicit the question, NOT
+    mint an empty ticket. Earlier any prior user message would have leaked
+    through as forwardable context.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    # An earlier greeting turn was persisted, but it never set the sticky flag.
+    db_session.add(Message(chat_id=chat.id, role=MessageRole.user, content="hi"))
+    chat.has_substantive_content = False
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="connect me to a human",
+        explicit_human_request=True,
+        message_has_request_content=False,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is not None
+    assert outcome.text == _AWAITING_REQUEST_CANONICAL_TEXT
+    assert chat.escalation_awaiting_request is True
 
 
 def test_awaiting_request_then_substantive_message_escalates(db_session: Session) -> None:

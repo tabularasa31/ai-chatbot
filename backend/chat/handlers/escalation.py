@@ -40,7 +40,6 @@ from backend.models import (
     EscalationPhase,
     EscalationTicket,
     EscalationTrigger,
-    MessageRole,
 )
 from backend.models.base import _utcnow
 
@@ -598,15 +597,16 @@ class EscalationStateMachine(PipelineHandler):
     def _has_forwardable_request(self, ctx: HandlerContext) -> bool:
         """Whether there is concrete content worth forwarding to support.
 
-        True when this message states a problem, or when the chat already holds
-        prior user turns (the user described something earlier, then asked for a
-        human). A bare handoff plea on a fresh session has neither.
+        True when this message states a problem, or when the chat already
+        carries substantive content from an earlier turn (the user described
+        something, then asked for a human). ``has_substantive_content`` is the
+        sticky flag set by the pipeline whenever a turn's
+        ``message_has_request_content`` is True — a prior bare greeting never
+        sets it, so it does not let an empty ticket through.
         """
         if ctx.message_has_request_content:
             return True
-        return any(
-            m.role == MessageRole.user for m in (ctx.chat.messages or [])
-        )
+        return bool(ctx.chat.has_substantive_content)
 
     def _enter_awaiting_request(self, ctx: HandlerContext) -> ChatTurnOutcome:
         """First bare human request with no content — ask for the question."""
@@ -651,7 +651,7 @@ class EscalationStateMachine(PipelineHandler):
     def _emit_awaiting_request_message(
         self, ctx: HandlerContext, *, trace_source: str
     ) -> ChatTurnOutcome:
-        from backend.chat.service import _persist_turn_with_response_language
+        _svc = _svc_lookup()
 
         localized = localize_text_to_language_result(
             canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
@@ -661,7 +661,7 @@ class EscalationStateMachine(PipelineHandler):
             bot_id=str(ctx.bot_id) if ctx.bot_id else None,
             chat_id=str(ctx.chat.id),
         )
-        _persist_turn_with_response_language(
+        _svc._persist_turn_with_response_language(
             db=ctx.db,
             chat=ctx.chat,
             tenant_id=ctx.tenant_id,

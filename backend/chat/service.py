@@ -745,6 +745,13 @@ async def async_process_chat_message(
     question_text = question.strip()
     is_new_session = not chat.messages
 
+    # Sticky marker: once any turn carries a concrete problem/question, later
+    # bare handoff requests can escalate with that context instead of being
+    # re-asked. A bare greeting (message_has_request_content=False) never sets
+    # it. Persisted with the turn via the chat row already in this session.
+    if human_request_result.message_has_request_content and not chat.has_substantive_content:
+        chat.has_substantive_content = True
+
     _lang_start = perf_counter()
     _lang_span = trace.span(
         name="language_detect",

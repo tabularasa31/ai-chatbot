@@ -38,6 +38,7 @@ class SmallTalkHandler(PipelineHandler):
             chat.escalation_followup_pending
             or chat.escalation_awaiting_ticket_id
             or chat.escalation_pre_confirm_pending
+            or chat.escalation_awaiting_request
             or chat.ended_at
         ):
             return False

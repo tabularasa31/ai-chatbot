@@ -96,18 +96,28 @@ def _mock_llm_human_request(result: bool):
 def test_detect_human_request_english() -> None:
     with _mock_llm_human_request(True):
         assert (
-            detect_human_request("I need to talk to a human please", "sk-test") is True
+            detect_human_request(
+                "I need to talk to a human please", "sk-test"
+            ).human_request
+            is True
         )
     with _mock_llm_human_request(True):
         assert (
-            detect_human_request("connect me to support, this is useless", "sk-test")
+            detect_human_request(
+                "connect me to support, this is useless", "sk-test"
+            ).human_request
             is True
         )
 
 
 def test_detect_human_request_russian() -> None:
     with _mock_llm_human_request(True):
-        assert detect_human_request("хочу поговорить с человеком", "sk-test") is True
+        assert (
+            detect_human_request(
+                "хочу поговорить с человеком", "sk-test"
+            ).human_request
+            is True
+        )
 
 
 def _mock_llm_support_contact(result: bool):
@@ -208,14 +218,14 @@ def test_detect_human_request_cache_isolated_per_tenant(
     )
 
     # Tenant A — first call hits LLM, returns True, gets cached.
-    assert detect_human_request(message, "sk-test", tenant_a) is True
+    assert detect_human_request(message, "sk-test", tenant_a).human_request is True
     # Same message, different tenant — must NOT reuse A's cached True; must
     # call the LLM again (returns False per the mock).
-    assert detect_human_request(message, "sk-test", tenant_b) is False
+    assert detect_human_request(message, "sk-test", tenant_b).human_request is False
     assert call_count["n"] == 2
 
     # Tenant A again — served from cache, no extra LLM call.
-    assert detect_human_request(message, "sk-test", tenant_a) is True
+    assert detect_human_request(message, "sk-test", tenant_a).human_request is True
     assert call_count["n"] == 2
 
 
@@ -239,7 +249,12 @@ def test_detect_human_request_uses_human_request_model(
         "gpt-test-human-guard",
     )
 
-    assert detect_human_request("please connect me to an operator now", "sk-test") is True
+    assert (
+        detect_human_request(
+            "please connect me to an operator now", "sk-test"
+        ).human_request
+        is True
+    )
     assert mock_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-human-guard"
 
 

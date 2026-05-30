@@ -140,6 +140,24 @@ def test_can_handle_returns_false_when_awaiting_ticket_id(db_session: Session) -
     assert SmallTalkHandler().can_handle(ctx) is False
 
 
+def test_can_handle_returns_false_when_awaiting_request(db_session: Session) -> None:
+    """Regression for PR #722 review (codex).
+
+    While parked in escalation_awaiting_request the bot is asking for the user's
+    question; a one-word detail reply ("billing") must reach the awaiting-request
+    handler, not be swallowed as small talk.
+    """
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_awaiting_request = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session, tenant=tenant, chat=chat, question_text="billing"
+    )
+
+    assert SmallTalkHandler().can_handle(ctx) is False
+
+
 def test_can_handle_returns_false_for_structural_injection(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

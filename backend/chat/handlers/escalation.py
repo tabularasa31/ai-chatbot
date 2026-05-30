@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
+from backend.chat.language import localize_text_to_language_result
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
@@ -35,8 +36,25 @@ from backend.escalation.service import (
     get_latest_escalation_ticket_for_chat,
     parse_contact_email,
 )
-from backend.models import EscalationPhase, EscalationTicket, EscalationTrigger
+from backend.models import (
+    EscalationPhase,
+    EscalationTicket,
+    EscalationTrigger,
+)
 from backend.models.base import _utcnow
+
+# Canonical (English) copy shown when the user asks for a human but has not yet
+# stated a forwardable problem. Localized to the user's language at runtime via
+# ``localize_text_to_language_result`` — never hardcode translations here. Sets
+# the expectation that this chat is not real-time and answers arrive by email,
+# then asks for the actual question so support receives a real request rather
+# than an empty ticket.
+_AWAITING_REQUEST_CANONICAL_TEXT = (
+    "Support in this chat doesn't reply in real time — your question is "
+    "forwarded to the support team and the answer is sent to your email. "
+    "Please describe your question in as much detail as you can, and we'll "
+    "pass it on."
+)
 
 
 def _svc_lookup() -> Any:
@@ -67,6 +85,8 @@ class EscalationStateMachine(PipelineHandler):
         if chat.escalation_awaiting_ticket_id:
             return True
         if chat.escalation_pre_confirm_pending:
+            return True
+        if chat.escalation_awaiting_request:
             return True
         if chat.escalation_followup_pending:
             return True
@@ -102,6 +122,13 @@ class EscalationStateMachine(PipelineHandler):
             # message is also an explicit human request it must still escalate
             # this turn; otherwise we fall through to RagHandler. Mirrors the
             # vanished-ticket recovery in _handle_awaiting_email above.
+        if chat.escalation_awaiting_request:
+            outcome = self._handle_awaiting_request(ctx)
+            if outcome is not None:
+                return outcome
+            # No forwardable content yet and not an explicit human request —
+            # fall through to RagHandler so an ordinary follow-up still gets a
+            # real answer. The awaiting flag stays set until content arrives.
         if chat.escalation_followup_pending:
             outcome = self._handle_followup_yes_no(ctx)
             if outcome is not None:
@@ -115,11 +142,15 @@ class EscalationStateMachine(PipelineHandler):
         # asked for a human. Without this gate, a stale-pointer recovery
         # (vanished awaiting-ticket cleared above) would mint a fresh
         # escalation ticket on any ordinary reply, which the legacy inline
-        # flow did not do. Escalates immediately (no pre_confirm); failures
-        # propagate rather than degrading to RagHandler once the ticket and
-        # support email have been committed.
+        # flow did not do. Escalates immediately (no pre_confirm) only when
+        # there is a concrete request to forward; a bare handoff plea with no
+        # stated problem first elicits the actual question. Failures propagate
+        # rather than degrading to RagHandler once the ticket and support
+        # email have been committed.
         if ctx.explicit_human_request:
-            return self._handle_explicit_request(ctx)
+            if self._has_forwardable_request(ctx):
+                return self._handle_explicit_request(ctx)
+            return self._enter_awaiting_request(ctx)
         return None
 
     # ------------------------------------------------------------------
@@ -555,6 +586,114 @@ class EscalationStateMachine(PipelineHandler):
             },
             escalation_reason="explicit_human_request",
             trace_source="escalation_explicit_request",
+        )
+
+    # ------------------------------------------------------------------
+    # Awaiting-request state — the user asked for a human but hasn't stated a
+    # forwardable problem yet. We elicit the actual question instead of minting
+    # an empty ticket, then escalate once real content arrives.
+    # ------------------------------------------------------------------
+
+    def _has_forwardable_request(self, ctx: HandlerContext) -> bool:
+        """Whether there is concrete content worth forwarding to support.
+
+        True when this message states a problem, or when the chat already
+        carries substantive content from an earlier turn (the user described
+        something, then asked for a human). ``has_substantive_content`` is the
+        sticky flag set by the pipeline whenever a turn's
+        ``message_has_request_content`` is True — a prior bare greeting never
+        sets it, so it does not let an empty ticket through.
+        """
+        if ctx.message_has_request_content:
+            return True
+        return bool(ctx.chat.has_substantive_content)
+
+    def _enter_awaiting_request(self, ctx: HandlerContext) -> ChatTurnOutcome:
+        """First bare human request with no content — ask for the question."""
+        chat = ctx.chat
+        chat.escalation_awaiting_request = True
+        ctx.db.add(chat)
+        return self._emit_awaiting_request_message(
+            ctx, trace_source="escalation_awaiting_request"
+        )
+
+    def _handle_awaiting_request(self, ctx: HandlerContext) -> ChatTurnOutcome | None:
+        """Resolve a turn while waiting for the user's actual question.
+
+        - Substantive message → clear the flag and escalate with that content.
+        - Still a bare plea for a human → repeat the elicitation message.
+        - Anything else (no content, no handoff ask) → clear the flag and
+          return None so RagHandler answers the new message afresh.
+        """
+        chat = ctx.chat
+        if ctx.message_has_request_content:
+            chat.escalation_awaiting_request = False
+            ctx.db.add(chat)
+            return self._create_ticket_and_handoff(
+                ctx,
+                pre_confirm_ctx={
+                    "trigger": EscalationTrigger.user_request.value,
+                    "primary_question": ctx.question,
+                    "best_similarity_score": None,
+                    "retrieved_chunks": None,
+                },
+                escalation_reason="explicit_human_request",
+                trace_source="escalation_request_detail_provided",
+            )
+        if ctx.explicit_human_request:
+            return self._emit_awaiting_request_message(
+                ctx, trace_source="escalation_awaiting_request_repeat"
+            )
+        chat.escalation_awaiting_request = False
+        ctx.db.add(chat)
+        return None
+
+    def _emit_awaiting_request_message(
+        self, ctx: HandlerContext, *, trace_source: str
+    ) -> ChatTurnOutcome:
+        _svc = _svc_lookup()
+
+        localized = localize_text_to_language_result(
+            canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
+            target_language=ctx.language_context.response_language,
+            api_key=ctx.api_key,
+            tenant_id=str(ctx.tenant_id),
+            bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+            chat_id=str(ctx.chat.id),
+        )
+        _svc._persist_turn_with_response_language(
+            db=ctx.db,
+            chat=ctx.chat,
+            tenant_id=ctx.tenant_id,
+            response_language=ctx.language_context.response_language,
+            resolution_reason=ctx.language_context.response_language_resolution_reason,
+            user_content=ctx.question,
+            assistant_content=localized.text,
+            document_ids=[],
+            extra_tokens=localized.tokens_used,
+            optional_entity_types=ctx.optional_entity_types,
+            language_context=ctx.language_context,
+            # This reply asks the user for their question, so the next turn —
+            # even a one-word detail — must reach the awaiting-request handler
+            # rather than being greeted as small talk. Don't rely on inferring
+            # it from the localized text (the canonical copy ends in a period).
+            awaited_reply=True,
+        )
+        if ctx.trace is not None:
+            ctx.trace.update(
+                output={"answer": localized.text, "source": trace_source},
+                metadata={
+                    "chat_ended": False,
+                    "escalated": False,
+                    "awaiting_request": True,
+                    "response_language": ctx.language_context.response_language,
+                },
+            )
+        return ChatTurnOutcome(
+            text=localized.text,
+            document_ids=[],
+            tokens_used=localized.tokens_used,
+            chat_ended=False,
         )
 
     def _handle_pre_confirm(self, ctx: HandlerContext) -> ChatTurnOutcome | None:

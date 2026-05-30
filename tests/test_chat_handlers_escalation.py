@@ -16,9 +16,12 @@ from unittest.mock import Mock, patch
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import HandlerContext
-from backend.chat.handlers.escalation import EscalationStateMachine
+from backend.chat.handlers.escalation import (
+    _AWAITING_REQUEST_CANONICAL_TEXT,
+    EscalationStateMachine,
+)
 from backend.chat.language import ResolvedLanguageContext
-from backend.models import Chat, Tenant
+from backend.models import Chat, Message, MessageRole, Tenant
 
 
 def _make_language_context() -> ResolvedLanguageContext:
@@ -54,6 +57,7 @@ def _make_handler_context(
     chat: Chat,
     question_text: str = "anything",
     explicit_human_request: bool = False,
+    message_has_request_content: bool = False,
 ) -> HandlerContext:
     return HandlerContext(
         tenant_id=tenant.id,
@@ -71,6 +75,7 @@ def _make_handler_context(
         db=db,
         session_id=chat.session_id,
         explicit_human_request=explicit_human_request,
+        message_has_request_content=message_has_request_content,
     )
 
 
@@ -192,8 +197,11 @@ def test_explicit_request_escalates_immediately_without_pre_confirm(
         db=db_session,
         tenant=tenant,
         chat=chat,
-        question_text="connect me to a human please",
+        question_text="my billing is broken, connect me to a human please",
         explicit_human_request=True,
+        # A concrete problem is stated, so there is something to forward and the
+        # FSM escalates immediately rather than eliciting the question first.
+        message_has_request_content=True,
     )
 
     captured: dict[str, Any] = {}
@@ -219,7 +227,7 @@ def test_explicit_request_escalates_immediately_without_pre_confirm(
     assert outcome is sentinel, "Explicit request must route to immediate handoff"
     assert captured["escalation_reason"] == "explicit_human_request"
     assert captured["trigger"] == "user_request"
-    assert captured["primary_question"] == "connect me to a human please"
+    assert captured["primary_question"] == "my billing is broken, connect me to a human please"
     # The pre_confirm gate must NOT be engaged for an explicit human request.
     assert not chat.escalation_pre_confirm_pending
 
@@ -340,6 +348,7 @@ def test_pre_confirm_null_reply_with_explicit_human_request_escalates(
         chat=chat,
         question_text="still broken, just connect me to a human already",
         explicit_human_request=True,
+        message_has_request_content=True,
     )
 
     captured: dict[str, Any] = {}
@@ -438,8 +447,9 @@ def test_stale_followup_with_explicit_human_request_still_escalates(
         db=db_session,
         tenant=tenant,
         chat=chat,
-        question_text="just connect me to a human already",
+        question_text="the import still fails — just connect me to a human already",
         explicit_human_request=True,
+        message_has_request_content=True,
     )
 
     with patch.object(
@@ -477,3 +487,197 @@ def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
 
     assert outcome is sentinel
     assert captured["trigger"] == "low_similarity"
+
+
+# ---------------------------------------------------------------------------
+# Awaiting-request state — the user asked for a human but stated no concrete
+# problem yet. The FSM elicits the actual question instead of minting an empty
+# ticket, then escalates once forwardable content arrives.
+# ---------------------------------------------------------------------------
+
+
+def _fail_if_ticket_handoff(*_args: Any, **_kwargs: Any) -> Any:
+    raise AssertionError("No ticket/handoff must be created while eliciting the question")
+
+
+def test_can_handle_true_when_awaiting_request(db_session: Session) -> None:
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_awaiting_request = True
+    db_session.flush()
+    ctx = _make_handler_context(db=db_session, tenant=tenant, chat=chat)
+    assert EscalationStateMachine().can_handle(ctx) is True
+
+
+def test_bare_human_request_enters_awaiting_without_ticket(db_session: Session) -> None:
+    """A bare "are you there, support?" on a fresh chat must elicit the question
+    and set the awaiting flag — no ticket, no email."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="hello, support, are you there?",
+        explicit_human_request=True,
+        message_has_request_content=False,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is not None
+    # English target → canonical text is returned verbatim (no localization call).
+    assert outcome.text == _AWAITING_REQUEST_CANONICAL_TEXT
+    assert outcome.chat_ended is False
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is True
+
+
+def test_human_request_with_content_escalates_immediately(db_session: Session) -> None:
+    """A human request that already states the problem skips elicitation."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="my payment failed, get me a human",
+        explicit_human_request=True,
+        message_has_request_content=True,
+    )
+
+    sentinel = object()
+    captured: dict[str, Any] = {}
+
+    def _fake_handoff(_self: Any, _ctx: HandlerContext, *, escalation_reason: str, **_kw: Any) -> Any:
+        captured["reason"] = escalation_reason
+        return sentinel
+
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel
+    assert captured["reason"] == "explicit_human_request"
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is False
+
+
+def test_human_request_with_prior_user_content_escalates(db_session: Session) -> None:
+    """No problem in *this* message, but the user described one earlier — the
+    prior turn is forwardable context, so escalate rather than re-ask."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    db_session.add(
+        Message(chat_id=chat.id, role=MessageRole.user, content="the export returns a 500")
+    )
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="just connect me to a person",
+        explicit_human_request=True,
+        message_has_request_content=False,
+    )
+
+    sentinel = object()
+    with patch.object(
+        EscalationStateMachine,
+        "_create_ticket_and_handoff",
+        lambda _self, _ctx, **_kw: sentinel,
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel
+
+
+def test_awaiting_request_then_substantive_message_escalates(db_session: Session) -> None:
+    """Once the user supplies the concrete question, the parked awaiting state
+    escalates with that content and clears the flag."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_awaiting_request = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="my invoice shows the wrong amount",
+        explicit_human_request=False,
+        message_has_request_content=True,
+    )
+
+    sentinel = object()
+    captured: dict[str, Any] = {}
+
+    def _fake_handoff(_self: Any, _ctx: HandlerContext, *, pre_confirm_ctx: dict, trace_source: str, **_kw: Any) -> Any:
+        captured["primary_question"] = pre_confirm_ctx["primary_question"]
+        captured["trace_source"] = trace_source
+        return sentinel
+
+    with patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is sentinel
+    assert captured["primary_question"] == "my invoice shows the wrong amount"
+    assert captured["trace_source"] == "escalation_request_detail_provided"
+    # Flag cleared on the in-memory chat; the real _create_ticket_and_handoff
+    # commits it (the mock here short-circuits before any commit).
+    assert chat.escalation_awaiting_request is False
+
+
+def test_awaiting_request_repeated_bare_ping_re_elicits(db_session: Session) -> None:
+    """Still no concrete question, still asking for a human → re-ask, stay parked,
+    never mint a ticket."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_awaiting_request = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="is anyone there??",
+        explicit_human_request=True,
+        message_has_request_content=False,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is not None
+    assert outcome.text == _AWAITING_REQUEST_CANONICAL_TEXT
+    db_session.refresh(chat)
+    assert chat.escalation_awaiting_request is True
+
+
+def test_awaiting_request_unrelated_message_falls_through_to_rag(db_session: Session) -> None:
+    """While parked, a message that is neither a human request nor a stated
+    problem clears the flag and yields to RagHandler."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_awaiting_request = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="ok thanks",
+        explicit_human_request=False,
+        message_has_request_content=False,
+    )
+
+    with patch.object(
+        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    ):
+        outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
+
+    assert outcome is None, "Must yield to RagHandler"
+    # Flag cleared on the in-memory chat; RagHandler persists/commits this turn
+    # downstream (the handler itself does not commit on the fall-through path).
+    assert chat.escalation_awaiting_request is False

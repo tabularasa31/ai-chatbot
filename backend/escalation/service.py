@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
@@ -54,8 +55,32 @@ _HUMAN_REQUEST_CACHE_TTL = 5 * 60
 _HUMAN_REQUEST_CACHE_MAX = 2048
 
 
+@dataclass(frozen=True)
+class HumanRequestResult:
+    """Outcome of the human-request classifier for a single user message.
+
+    ``human_request`` — the user wants to be handed off to a person this turn.
+    ``message_has_request_content`` — this message states a concrete problem or
+    question that support could act on (as opposed to a bare greeting /
+    availability ping / "connect me to a human" with no substance).
+
+    The two are independent: an availability ping ("are you there?") is
+    ``human_request=True, message_has_request_content=False``; a plain product
+    question with no handoff ask is ``human_request=False,
+    message_has_request_content=True``.
+    """
+
+    human_request: bool
+    message_has_request_content: bool
+
+    # Preserve the historical ``bool``-like contract at call sites and in tests
+    # that still treat the result as truthy iff a human was requested.
+    def __bool__(self) -> bool:  # pragma: no cover - trivial
+        return self.human_request
+
+
 class _LockedTTLCache:
-    """Thread-safe TTL cache for boolean classifier results.
+    """Thread-safe TTL cache for classifier results.
 
     The intent classifiers run inside ``asyncio.to_thread`` worker threads, so
     every operation — including the compound eviction scan — runs under a lock
@@ -68,9 +93,9 @@ class _LockedTTLCache:
         self._ttl = ttl
         self._max = maxsize
         self._lock = threading.Lock()
-        self._data: dict[str, tuple[float, bool]] = {}
+        self._data: dict[str, tuple[float, Any]] = {}
 
-    def get(self, key: str) -> bool | None:
+    def get(self, key: str) -> Any | None:
         with self._lock:
             item = self._data.get(key)
             if not item:
@@ -84,7 +109,7 @@ class _LockedTTLCache:
             record_hit(self._name)
             return result
 
-    def set(self, key: str, result: bool) -> None:
+    def set(self, key: str, result: Any) -> None:
         now = time.time()
         with self._lock:
             if len(self._data) >= self._max and key not in self._data:
@@ -160,11 +185,18 @@ def detect_human_request(
     tenant_id: UUID | str | None = None,
     *,
     langfuse_observation: Any | None = None,
-) -> bool:
-    """Return True if the user is requesting to speak with a human agent.
+) -> HumanRequestResult:
+    """Classify whether the user wants a human and whether this message has
+    forwardable content.
+
+    Returns a :class:`HumanRequestResult`. ``human_request`` means the user
+    wants to be handed off to a person this turn; ``message_has_request_content``
+    means this message states a concrete problem/question support could act on.
+    The result is truthy iff ``human_request`` is True, preserving the legacy
+    bool contract at call sites.
 
     Uses LLM classification so it works across all languages. Falls back to
-    False on timeout or error to avoid false-positive escalations.
+    ``(False, False)`` on timeout or error to avoid false-positive escalations.
 
     `tenant_id` partitions the in-memory result cache so tenants never read
     each other's classifications.
@@ -177,31 +209,48 @@ def detect_human_request(
         return cached
 
     system_prompt = (
-        "Decide whether the user is *currently* asking to be connected to a "
-        "human agent / operator / live support person, RIGHT NOW.\n"
+        "Classify the user's latest message on two independent axes and "
+        "return both.\n"
         "\n"
-        "Return true when the user's intent is to hand the conversation off "
-        "to a person this turn — they want a human, not a self-serve answer. "
-        "Examples (illustrative, not exhaustive): "
-        "\"I want to talk to a human\", \"connect me to support\", "
-        "\"I need to speak with a person\", \"can someone help me?\", "
+        "1. human_request — is the user *currently* asking to be connected to "
+        "a human agent / operator / live support person, RIGHT NOW?\n"
+        "   true: the intent is to hand the conversation off to a person this "
+        "turn. Examples (illustrative): \"I want to talk to a human\", "
+        "\"connect me to support\", \"I need to speak with a person\", "
+        "\"can someone help me?\", \"are you there, support?\", "
         "\"please escalate this\".\n"
+        "   false: the user is asking an *informational* question ABOUT "
+        "support / contact options that the bot should answer from the "
+        "documentation. Examples: \"how do I contact support?\", "
+        "\"what's your support email?\", \"do you have a support team?\". "
+        "These are knowledge questions — the user wants to know HOW to reach "
+        "support, not be handed off this turn.\n"
         "\n"
-        "Return false when the user is asking an *informational* question "
-        "ABOUT support / contact options that the bot should answer from "
-        "the documentation. Examples: "
-        "\"how do I contact support?\", \"what's your support email?\", "
-        "\"where can I find help?\", \"do you have a support team?\". "
-        "These are knowledge questions — the user wants to know HOW to "
-        "reach support, not be handed off this turn.\n"
+        "2. message_has_request_content — does THIS message state a concrete "
+        "problem, question, or request that a support agent could actually act "
+        "on?\n"
+        "   true: there is substance to forward. Examples: \"my payment "
+        "failed\", \"the export button returns a 500\", \"I can't reset my "
+        "password\", \"connect me to a human, my invoice is wrong\".\n"
+        "   false: the message is only a greeting, an availability ping, or a "
+        "bare request for a human with NO problem stated yet. Examples: "
+        "\"hello\", \"are you there?\", \"is support online?\", "
+        "\"can someone help me?\", \"I want to talk to a human\". There is "
+        "nothing concrete to forward.\n"
         "\n"
-        "Look at intent, not exact wording. The same rule applies in any "
+        "The two axes are independent: a bare \"can someone help me?\" is "
+        "human_request=true, message_has_request_content=false; a plain "
+        "product question with no handoff ask is human_request=false, "
+        "message_has_request_content=true.\n"
+        "\n"
+        "Look at intent, not exact wording. The same rules apply in any "
         "language; treat the user's phrasing as a hint, not a template.\n"
         "\n"
-        'Answer ONLY with JSON: {"human_request": true/false}'
+        'Answer ONLY with JSON: {"human_request": true/false, '
+        '"message_has_request_content": true/false}'
     )
 
-    def _call_llm() -> bool:
+    def _call_llm() -> HumanRequestResult:
         client = get_openai_client(api_key)
         response = call_openai_with_retry(
             "detect_human_request",
@@ -212,13 +261,19 @@ def detect_human_request(
                     {"role": "user", "content": message},
                 ],
                 temperature=0,
-                max_completion_tokens=20,
+                max_completion_tokens=30,
                 response_format={"type": "json_object"},
             ),
             langfuse_observation=langfuse_observation,
         )
         raw = response.choices[0].message.content or "{}"
-        return bool(json.loads(raw).get("human_request", False))
+        parsed = json.loads(raw)
+        return HumanRequestResult(
+            human_request=bool(parsed.get("human_request", False)),
+            message_has_request_content=bool(
+                parsed.get("message_has_request_content", False)
+            ),
+        )
 
     ex = ThreadPoolExecutor(max_workers=1)
     future = ex.submit(_call_llm)
@@ -229,7 +284,7 @@ def detect_human_request(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-        return False
+        return HumanRequestResult(human_request=False, message_has_request_content=False)
     else:
         try:
             ex.shutdown(wait=False)

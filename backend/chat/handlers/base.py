@@ -98,6 +98,11 @@ class HandlerContext:
     # RAG escalation path to pick the support-contact pre_confirm lead-in
     # instead of the generic "I couldn't find an answer" one.
     support_contact_question: bool = False
+    # Whether the current user message states a concrete problem/question that
+    # support could act on. Used together with ``explicit_human_request`` to
+    # decide whether to escalate immediately or first elicit the actual
+    # question (avoids minting empty tickets on bare greetings / pings).
+    message_has_request_content: bool = False
 
     # Per-turn metrics
     turn_started_at: float = 0.0

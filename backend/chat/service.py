@@ -544,6 +544,7 @@ async def _build_handler_context_async(
     status_callback: Callable[[str], None] | None = None,
     explicit_human_request: bool,
     support_contact_question: bool = False,
+    message_has_request_content: bool = False,
     turn_started_at: float,
 ) -> HandlerContext:
     """Async counterpart of :func:`_build_handler_context`.
@@ -606,6 +607,7 @@ async def _build_handler_context_async(
         status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         support_contact_question=support_contact_question,
+        message_has_request_content=message_has_request_content,
         turn_started_at=turn_started_at,
     )
 
@@ -697,12 +699,13 @@ async def async_process_chat_message(
     # result is consumed only on the rarer escalation path but classifying it
     # here (in parallel) keeps that path from paying a second serialized ~3s call.
     _hrc_start = perf_counter()
-    explicit_human_request, support_contact_question = await asyncio.gather(
+    human_request_result, support_contact_question = await asyncio.gather(
         asyncio.to_thread(detect_human_request, redacted_question, api_key, tenant_id),
         asyncio.to_thread(
             detect_support_contact_question, redacted_question, api_key, tenant_id
         ),
     )
+    explicit_human_request = human_request_result.human_request
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 
     trace = begin_trace(
@@ -819,6 +822,7 @@ async def async_process_chat_message(
         status_callback=status_callback,
         explicit_human_request=explicit_human_request,
         support_contact_question=support_contact_question,
+        message_has_request_content=human_request_result.message_has_request_content,
         turn_started_at=_turn_started_at,
     )
 

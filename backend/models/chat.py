@@ -98,6 +98,16 @@ class Chat(Base):
         default=False,
         server_default="false",
     )
+    # Set when the user asked for a human but hasn't stated a forwardable
+    # problem yet (bare greeting / availability ping). The bot asks for the
+    # actual question instead of minting an empty ticket; once a substantive
+    # message arrives the escalation proceeds with real content.
+    escalation_awaiting_request = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
     # Stores trigger/context for deferred ticket creation after user confirms.
     # Schema: {"trigger": str, "primary_question": str,
     #          "best_similarity_score": float|null, "retrieved_chunks": list|null}

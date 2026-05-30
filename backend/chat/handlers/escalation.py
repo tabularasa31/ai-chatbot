@@ -673,6 +673,11 @@ class EscalationStateMachine(PipelineHandler):
             extra_tokens=localized.tokens_used,
             optional_entity_types=ctx.optional_entity_types,
             language_context=ctx.language_context,
+            # This reply asks the user for their question, so the next turn —
+            # even a one-word detail — must reach the awaiting-request handler
+            # rather than being greeted as small talk. Don't rely on inferring
+            # it from the localized text (the canonical copy ends in a period).
+            awaited_reply=True,
         )
         if ctx.trace is not None:
             ctx.trace.update(

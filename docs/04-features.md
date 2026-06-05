@@ -502,7 +502,9 @@ User message
   ↓
 PII redaction (regex)
   ↓
-Small-talk early exit  (greeting / off-topic one-liner → return immediately)
+Bootstrap greeting early exit  (empty turn on a brand-new session → default greeting, return)
+  (No small-talk shortcut: every non-empty turn — including one-word greetings — continues
+   below. Short/unclear inputs are answered or get the zero-hits "please rephrase" soft reply.)
   ↓
 Parallel guard pool (3 threads, ~2 s budget):
   ├─ injection_check   — semantic + pattern detector

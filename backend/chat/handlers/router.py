@@ -8,7 +8,6 @@ from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, Pipeline
 from backend.chat.handlers.escalation import EscalationStateMachine
 from backend.chat.handlers.greeting import GreetingHandler
 from backend.chat.handlers.rag import RagHandler
-from backend.chat.handlers.small_talk import SmallTalkHandler
 
 
 class HandlerRouter:
@@ -40,16 +39,21 @@ class HandlerRouter:
 def default_router() -> HandlerRouter:
     """Builds the standard handler chain.
 
-    Order matters: GreetingHandler claims empty + new-session turns first,
-    SmallTalkHandler claims single-word turns outside escalation flows,
-    EscalationStateMachine claims any active escalation state or explicit
-    human request, and RagHandler is the catch-all that runs the full RAG
-    pipeline for everything else.
+    Order matters: GreetingHandler claims the empty bootstrap turn on a brand-new
+    session (the widget-open welcome), EscalationStateMachine claims any active
+    escalation state or explicit human request, and RagHandler is the catch-all
+    that runs the full RAG pipeline for everything else.
+
+    There is deliberately no small-talk fast path: every non-empty user turn —
+    including one-word greetings ("hi") and short continuations — flows through
+    RAG, which answers when it can and otherwise emits a localized
+    "couldn't find that, please rephrase" soft reply (see the strict zero-hits
+    fast path in RagHandler). This avoids the class of bug where a canned
+    greeting was injected mid-conversation in response to a short reply.
     """
     return HandlerRouter(
         [
             GreetingHandler(),
-            SmallTalkHandler(),
             EscalationStateMachine(),
             RagHandler(),
         ]

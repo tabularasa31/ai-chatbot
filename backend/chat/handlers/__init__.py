@@ -1,8 +1,8 @@
 """Chat pipeline handlers — pluggable stages dispatched by HandlerRouter.
 
-Part of the chat/service.py refactor (epic: split god-module into pipeline
-objects). PR 1/4 wires only GreetingHandler; SmallTalk / Rag / Escalation
-handlers land in subsequent PRs.
+The standard chain is GreetingHandler → EscalationStateMachine → RagHandler
+(see ``default_router``); every non-empty turn that no earlier handler claims
+falls through to the full RAG pipeline.
 """
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler

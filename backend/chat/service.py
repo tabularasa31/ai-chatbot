@@ -677,7 +677,7 @@ async def async_process_chat_message(
     ``asyncio.create_task`` so guard checks, embedding, and retrieval run
     concurrently on the event loop without blocking OS threads.
 
-    Non-RAG handlers (Greeting, SmallTalk, Escalation) are dispatched via
+    Non-RAG handlers (Greeting, Escalation) are dispatched via
     ``asyncio.to_thread`` using the sync session (``db.sync_session``) so
     their DB operations do not need to be migrated in this PR.
     """

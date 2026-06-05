@@ -932,7 +932,7 @@ def _compute_loop_signal(
         return (False, None, 0)
     # Walk backwards from the most recent message and stop once we have
     # ``window`` assistant turns or hit a doc-less assistant turn (greeting /
-    # handoff / small_talk) that resets the chain. Avoids the O(N) full-history
+    # handoff) that resets the chain. Avoids the O(N) full-history
     # sort and the (datetime, UUID) type-comparison risk of ``created_at or id``.
     persisted = sorted(
         chat.messages or [],
@@ -1696,7 +1696,7 @@ def _enforce_response_language(
 class RagHandler(PipelineHandler):
     """Catch-all handler that runs the full RAG pipeline.
 
-    Invoked after Greeting / SmallTalk / EscalationStateMachine handlers; this
+    Invoked after Greeting / EscalationStateMachine handlers; this
     one always claims a turn (``can_handle`` returns True for non-empty input
     that didn't trigger an earlier handler). Owns:
 
@@ -1773,7 +1773,7 @@ class RagHandler(PipelineHandler):
             # Every other reply path (including other reject reasons and
             # faq_direct) is implicitly reset to False by the persistence
             # layer's default argument — handlers that bypass RagHandler
-            # (Greeting, SmallTalk, Escalation) get the same reset for free.
+            # (Greeting, Escalation) get the same reset for free.
             user_message, assistant_message = _persist_turn_with_response_language(
                 db=ctx.db,
                 chat=chat,
@@ -2045,9 +2045,10 @@ class RagHandler(PipelineHandler):
         # allows this when it judges the docs incomplete). The LLM signals
         # the offer by appending OFFER_MARKER, which generate_answer strips
         # and surfaces as ``result.llm_offered_ticket``. Without arming
-        # pre_confirm here, the user's "yes" / "да" / "ja" / "oui" falls into
-        # SmallTalkHandler and gets greeted instead of escalated. The marker
-        # is machine-emitted, so this works in any response language.
+        # pre_confirm here, the user's "yes" / "да" / "ja" / "oui" reaches the
+        # next turn as an ordinary RAG query and is answered afresh instead of
+        # being read as acceptance of the ticket offer. The marker is
+        # machine-emitted, so this works in any response language.
         if (
             not escalate
             and not chat.escalation_pre_confirm_pending
@@ -3351,7 +3352,7 @@ async def async_run_chat_pipeline(
         # The flag ``chat.last_reply_was_rephrase_prompt`` is authoritatively
         # set/cleared by the persistence layer (``set_rephrase_flag`` param on
         # ``_persist_turn_with_response_language``), so handlers that bypass
-        # the RAG path (Greeting, SmallTalk, Escalation) also reset it.
+        # the RAG path (Greeting, Escalation) also reset it.
         #
         # Fast path only applies when there is truly nothing for the LLM to
         # answer from: empty retrieval AND no FAQ context items AND no Quick

@@ -363,9 +363,9 @@ def test_intervening_non_rag_turn_resets_rephrase_flag(
     db_session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for the codex P1: handlers other than RagHandler (SmallTalk,
-    Greeting, Escalation) must also clear ``last_reply_was_rephrase_prompt``
-    when they persist a turn. Otherwise a one-word "hi" between two unrelated
+    """Regression for the codex P1: handlers other than RagHandler (Greeting,
+    Escalation) must also clear ``last_reply_was_rephrase_prompt`` when they
+    persist a turn. Otherwise a one-word "hi" between two unrelated
     zero-hits turns would mis-classify the second as a *consecutive* miss and
     trigger forced relevance/escalation.
 
@@ -388,7 +388,7 @@ def test_intervening_non_rag_turn_resets_rephrase_flag(
     db_session.add(chat)
     db_session.commit()
 
-    # Simulate a non-Rag handler (e.g. SmallTalk) persisting a turn with the
+    # Simulate a non-Rag handler (e.g. Greeting) persisting a turn with the
     # default ``set_rephrase_flag=False`` — the same call signature these
     # handlers already use, no opt-in needed.
     _persist_turn_with_response_language(

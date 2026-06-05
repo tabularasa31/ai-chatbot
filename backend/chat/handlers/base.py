@@ -40,9 +40,9 @@ class ChatTurnOutcome:
 class HandlerContext:
     """Inputs assembled at the top of process_chat_message before handler dispatch.
 
-    Greeting / SmallTalk handlers only read the core fields; Escalation /
-    RagHandler also use the bot, disclosure, callback, and per-turn metadata
-    fields populated below.
+    The Greeting handler only reads the core fields; Escalation / RagHandler
+    also use the bot, disclosure, callback, and per-turn metadata fields
+    populated below.
     """
 
     # Core — used by every handler

@@ -534,9 +534,6 @@ def test_bare_human_request_enters_awaiting_without_ticket(db_session: Session) 
     assert outcome.chat_ended is False
     db_session.refresh(chat)
     assert chat.escalation_awaiting_request is True
-    # The reply asks for the question, so the next turn must be treated as an
-    # awaited reply (not swallowed by SmallTalkHandler).
-    assert chat.last_reply_awaited_reply is True
 
 
 def test_human_request_with_content_escalates_immediately(db_session: Session) -> None:

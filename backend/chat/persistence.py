@@ -18,21 +18,6 @@ from backend.observability import TraceHandle
 
 logger = logging.getLogger(__name__)
 
-# Question marks across the scripts the bot serves. Used to infer whether an
-# assistant reply ended awaiting a user answer (a clarify/slot question), so the
-# next one-word turn is routed to RAG instead of the greeting fast path.
-_QUESTION_MARKS = ("?", "？", "؟")  # noqa: RUF001 — fullwidth/Arabic marks intentional
-
-
-def _text_awaits_reply(text: str | None) -> bool:
-    if not text:
-        return False
-    # Strip trailing whitespace plus common markdown emphasis / quote wrappers
-    # so a reply like ``...check?**`` or ``...help?"`` is still recognized as a
-    # question. rstrip is idempotent on the marker set, so order is safe.
-    trimmed = text.rstrip().rstrip("*_`\"' ").rstrip()
-    return trimmed.endswith(_QUESTION_MARKS)
-
 
 def _source_docs_for_db(db: Session, document_ids: list[uuid.UUID]) -> list[uuid.UUID] | None:
     return document_ids if "postgresql" in str(db.bind.url) else None
@@ -86,18 +71,14 @@ def _finalize_persisted_messages(
     tenant_id: uuid.UUID,
     extra_tokens: int,
     set_rephrase_flag: bool = False,
-    awaited_reply: bool = False,
 ) -> None:
     chat.tokens_used = int(chat.tokens_used or 0) + int(extra_tokens)
     # Authoritative single write point for the zero-RAG-hits tracker so the
-    # flag stays consistent regardless of which handler (Greeting, SmallTalk,
-    # Escalation, Rag) persisted this turn. Defaults to False: any successful
-    # reply resets the tracker, so two unrelated zero-hits turns separated by
-    # an unrelated turn don't collapse into the consecutive-failure path.
+    # flag stays consistent regardless of which handler (Greeting, Escalation,
+    # Rag) persisted this turn. Defaults to False: any successful reply resets
+    # the tracker, so two unrelated zero-hits turns separated by an unrelated
+    # turn don't collapse into the consecutive-failure path.
     chat.last_reply_was_rephrase_prompt = set_rephrase_flag
-    # Same single-write-point discipline for the "did the bot just ask the user
-    # a question" tracker. Defaults False so any non-question reply resets it.
-    chat.last_reply_awaited_reply = awaited_reply
     db.add(chat)
     try:
         with db.begin_nested():
@@ -128,13 +109,7 @@ def _persist_turn(
     optional_entity_types: set[str] | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
-    awaited_reply: bool | None = None,
 ) -> tuple[Message, Message]:
-    # None → infer from the reply text (a question awaits an answer). Handlers
-    # whose reply is never a real prompt (Greeting, SmallTalk) pass False
-    # explicitly so a greeting phrased as a question isn't treated as a prompt.
-    if awaited_reply is None:
-        awaited_reply = _text_awaits_reply(assistant_content)
     _persist_start = perf_counter()
     _persist_span = None
     if trace is not None:
@@ -165,7 +140,6 @@ def _persist_turn(
         tenant_id=tenant_id,
         extra_tokens=extra_tokens,
         set_rephrase_flag=set_rephrase_flag,
-        awaited_reply=awaited_reply,
     )
     if _persist_span is not None:
         _persist_span.end(
@@ -190,7 +164,6 @@ def _persist_turn_with_response_language(
     language_context: ResolvedLanguageContext | None = None,
     trace: TraceHandle | None = None,
     set_rephrase_flag: bool = False,
-    awaited_reply: bool | None = None,
 ) -> tuple[Message, Message]:
     _set_last_response_language(
         db=db,
@@ -211,7 +184,6 @@ def _persist_turn_with_response_language(
         optional_entity_types=optional_entity_types,
         trace=trace,
         set_rephrase_flag=set_rephrase_flag,
-        awaited_reply=awaited_reply,
     )
 
 

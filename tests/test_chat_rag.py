@@ -143,9 +143,22 @@ def test_quick_answer_keys_for_question_filters_by_topic() -> None:
         "pricing_url",
         "trial_info",
     ]
-    assert _quick_answer_keys_for_question("How can I contact support?") == [
+    # Support-contact intent is language-agnostic: it is driven by the LLM
+    # classifier flag, not by keywords in the question text. The phrasing /
+    # language of the question is irrelevant — only the flag matters.
+    assert _quick_answer_keys_for_question("How can I contact support?") == []
+    assert _quick_answer_keys_for_question(
+        "How can I contact support?", support_contact_question=True
+    ) == [
         "support_email",
-        "support_chat",
+        "status_page_url",
+    ]
+    # A non-English support question still resolves, because the flag — not the
+    # words — selects the keys. ``support_chat`` is intentionally never surfaced.
+    assert _quick_answer_keys_for_question(
+        "как написать в поддержку?", support_contact_question=True
+    ) == [
+        "support_email",
         "status_page_url",
     ]
     assert _quick_answer_keys_for_question("Show me the documentation") == [

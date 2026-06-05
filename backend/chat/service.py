@@ -647,6 +647,7 @@ async def _async_dispatch(ctx: HandlerContext, db: AsyncSession) -> ChatTurnOutc
                 agent_instructions=ctx.bot_agent_instructions,
                 allow_clarification=ctx.allow_clarification,
                 guard_profile=ctx.tenant_profile,
+                support_contact_question=ctx.support_contact_question,
             )
             ctx.extras["_pipeline_result"] = pipeline_result
 

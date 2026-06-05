@@ -29,19 +29,23 @@ def _has_column(table: str, column: str) -> bool:
 
 def upgrade() -> None:
     # Idempotent: skip if a prior partial run already dropped the column.
+    # batch_alter_table keeps the drop portable to SQLite (copy-and-move), which
+    # older versions need since they can't ALTER TABLE DROP COLUMN in place; on
+    # Postgres (prod) it emits a plain ALTER.
     if _has_column("chats", "last_reply_awaited_reply"):
-        op.drop_column("chats", "last_reply_awaited_reply")
+        with op.batch_alter_table("chats") as batch_op:
+            batch_op.drop_column("last_reply_awaited_reply")
 
 
 def downgrade() -> None:
     # Documentation only — never run against shared/production DBs.
     if not _has_column("chats", "last_reply_awaited_reply"):
-        op.add_column(
-            "chats",
-            sa.Column(
-                "last_reply_awaited_reply",
-                sa.Boolean(),
-                nullable=False,
-                server_default=sa.text("false"),
-            ),
-        )
+        with op.batch_alter_table("chats") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "last_reply_awaited_reply",
+                    sa.Boolean(),
+                    nullable=False,
+                    server_default=sa.text("false"),
+                )
+            )

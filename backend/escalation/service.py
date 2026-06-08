@@ -284,7 +284,13 @@ def detect_human_request(
             ex.shutdown(wait=False, cancel_futures=True)
         except TypeError:
             ex.shutdown(wait=False)
-        return HumanRequestResult(human_request=False, message_has_request_content=False)
+        # Fail safe toward answering, not greeting. ``message_has_request_content``
+        # gates whether the turn is treated as a bare social greeting (routed to
+        # GreetingHandler) versus a real question (routed to RAG). On classifier
+        # failure we must NOT discard a real user question with a canned
+        # greeting, so default to True (the message has content worth answering).
+        # ``human_request`` stays False so a failure never auto-escalates.
+        return HumanRequestResult(human_request=False, message_has_request_content=True)
     else:
         try:
             ex.shutdown(wait=False)

@@ -40,16 +40,19 @@ def default_router() -> HandlerRouter:
     """Builds the standard handler chain.
 
     Order matters: GreetingHandler claims the empty bootstrap turn on a brand-new
-    session (the widget-open welcome), EscalationStateMachine claims any active
-    escalation state or explicit human request, and RagHandler is the catch-all
-    that runs the full RAG pipeline for everything else.
+    session (the widget-open welcome) and bare social turns with no actionable
+    request, EscalationStateMachine claims any active escalation state or
+    explicit human request, and RagHandler is the catch-all that runs the full
+    RAG pipeline for everything else.
 
-    There is deliberately no small-talk fast path: every non-empty user turn —
-    including one-word greetings ("hi") and short continuations — flows through
-    RAG, which answers when it can and otherwise emits a localized
-    "couldn't find that, please rephrase" soft reply (see the strict zero-hits
-    fast path in RagHandler). This avoids the class of bug where a canned
-    greeting was injected mid-conversation in response to a short reply.
+    Bare greetings are intercepted by intent, not by length: GreetingHandler
+    only claims a typed turn when the human-request classifier reports no
+    request content (``message_has_request_content`` is False) and the chat is
+    not in an escalation / closed state. Short *questions* ("price?", "wildcard?")
+    still carry request content and flow through RAG. This is deliberately
+    narrower than the old word-count small-talk path, which greeted one-word
+    questions and risked injecting a canned greeting in response to a short
+    reply.
     """
     return HandlerRouter(
         [

@@ -347,7 +347,7 @@ def _format_transcript_turn(
     indent = " " * len(label)
     out = [f"{label}{body_lines[0]}"]
     for body_line in body_lines[1:]:
-        out.append(f"{indent}{body_line}")
+        out.append(f"{indent}{body_line}" if body_line else "")
     return out
 
 

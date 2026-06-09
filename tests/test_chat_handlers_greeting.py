@@ -41,6 +41,8 @@ def _make_handler_context(
     is_new_session: bool = True,
     response_language: str = "en",
     tenant_profile: TenantProfile | None = None,
+    message_has_request_content: bool = True,
+    explicit_human_request: bool = False,
 ) -> HandlerContext:
     return HandlerContext(
         tenant_id=tenant.id if tenant else uuid.uuid4(),
@@ -56,6 +58,8 @@ def _make_handler_context(
         is_new_session=is_new_session,
         trace=None,
         db=db,
+        message_has_request_content=message_has_request_content,
+        explicit_human_request=explicit_human_request,
     )
 
 
@@ -91,14 +95,107 @@ def test_can_handle_returns_false_when_session_not_new(db_session: Session) -> N
     assert GreetingHandler().can_handle(ctx) is False
 
 
-def test_can_handle_returns_false_when_question_present(db_session: Session) -> None:
+def test_can_handle_returns_false_for_short_question_with_request_content(
+    db_session: Session,
+) -> None:
+    """A short *question* still carries request content → flows to RAG, not greeted.
+
+    This is the bug the old word-count small-talk path had: it greeted one-word
+    questions. GreetingHandler now keys off intent, not length.
+    """
     tenant = _make_persisted_tenant(db_session)
     chat = _make_persisted_chat(db_session, tenant)
     ctx = _make_handler_context(
-        db=db_session, tenant=tenant, chat=chat, question_text="hi"
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="price?",
+        is_new_session=False,
+        message_has_request_content=True,
     )
 
     assert GreetingHandler().can_handle(ctx) is False
+
+
+def test_can_handle_returns_true_for_bare_typed_greeting(db_session: Session) -> None:
+    """A typed greeting with no request content is greeted, not sent to RAG."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="Здравствуйте!",
+        is_new_session=False,
+        message_has_request_content=False,
+    )
+
+    assert GreetingHandler().can_handle(ctx) is True
+
+
+def test_can_handle_returns_false_when_explicit_human_request(db_session: Session) -> None:
+    """A hand-me-off request is never small talk, even with no request content."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="оператор",
+        is_new_session=False,
+        message_has_request_content=False,
+        explicit_human_request=True,
+    )
+
+    assert GreetingHandler().can_handle(ctx) is False
+
+
+def test_can_handle_returns_false_during_escalation_pre_confirm(db_session: Session) -> None:
+    """A no-request-content reply during pre-confirm must reach the escalation FSM."""
+    tenant = _make_persisted_tenant(db_session)
+    chat = _make_persisted_chat(db_session, tenant)
+    chat.escalation_pre_confirm_pending = True
+    db_session.flush()
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="да",
+        is_new_session=False,
+        message_has_request_content=False,
+    )
+
+    assert GreetingHandler().can_handle(ctx) is False
+
+
+def test_handle_typed_greeting_persists_user_and_assistant(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tenant = _make_persisted_tenant(db_session, name="Acme")
+    chat = _make_persisted_chat(db_session, tenant)
+
+    monkeypatch.setattr(
+        "backend.chat.handlers.greeting.generate_greeting_in_language_result",
+        lambda **kwargs: LocalizationResult(text="Здравствуйте! Чем помочь?", tokens_used=5),
+    )
+
+    ctx = _make_handler_context(
+        db=db_session,
+        tenant=tenant,
+        chat=chat,
+        question_text="Здравствуйте!",
+        is_new_session=False,
+        message_has_request_content=False,
+    )
+    outcome = GreetingHandler()._handle_sync(ctx, db_session)
+
+    assert outcome.text == "Здравствуйте! Чем помочь?"
+    # Both the user message and the assistant greeting are persisted. Use a set
+    # comparison: the two rows share a transaction and can collide on created_at,
+    # so order is not guaranteed (notably on SQLite).
+    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
+    assert len(persisted) == 2
+    assert {m.role for m in persisted} == {MessageRole.user, MessageRole.assistant}
 
 
 def test_handle_produces_outcome_and_persists_only_assistant_message(

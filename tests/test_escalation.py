@@ -789,10 +789,12 @@ def test_notify_email_body_contains_full_context_and_reply_to(
     assert "How can I download last month's invoice?" in body
     assert "Could you confirm the billing email so I can check?" in body
 
-    # Conversation has UTC timestamps in HH:MM format.
+    # Conversation renders each turn as a marked header ("▸ USER · HH:MM")
+    # followed by the indented message body.
     assert "CONVERSATION (UTC)" in body
     import re as _re
-    assert _re.search(r"\b\d{2}:\d{2}\s+user:", body) is not None
+    assert _re.search(r"▸ USER · \d{2}:\d{2}", body) is not None
+    assert _re.search(r"· ASSISTANT · \d{2}:\d{2}", body) is not None
 
     # Internal metadata lives in X-Chat9-* headers.
     assert headers.get("X-Chat9-Ticket-Number") == "ESC-0102"

@@ -495,11 +495,38 @@ def _full_transcript_from_chat(
 
 _KYC_IDENTITY_KEYS = {"email", "name", "plan_tier", "user_id", "audience_tag", "locale", "browser_locale"}
 
-# Width of the indent used to wrap multi-line transcript turns under the
-# "  user: " / "  assistant: " label so subsequent lines stay aligned with the
-# message text. Matches the longest label ("assistant"); shorter labels get a
-# slight visual offset which is acceptable here.
-_TRANSCRIPT_WRAP_INDENT = " " * 13
+# Gap between a turn's "▸ USER · HH:MM" label and the message text that follows
+# it on the same line. Continuation lines of a multi-line message are indented
+# to line up under that turn's text.
+_TRANSCRIPT_LABEL_GAP = " " * 3
+
+
+def _format_transcript_turn(
+    role: str,
+    content: str,
+    when: datetime | None,
+) -> list[str]:
+    """Render one transcript turn as a label + message text on the same line.
+
+    User turns are marked with ``▸`` so a support agent can scan straight to
+    the customer's messages — the thing they actually need to reply to;
+    assistant turns use a quieter ``·``. Multi-line messages keep their first
+    line next to the label and indent the rest to line up under it. The caller
+    is responsible for the blank line that separates consecutive turns and for
+    date dividers.
+    """
+    marker = "▸" if role == "user" else "·"
+    label = f"  {marker} {role.upper()}"
+    when_utc = _to_utc(when)
+    if when_utc is not None:
+        label += f" · {when_utc.strftime('%H:%M')}"
+    label += _TRANSCRIPT_LABEL_GAP
+    body_lines = content.splitlines() or [content]
+    indent = " " * len(label)
+    out = [f"{label}{body_lines[0]}"]
+    for body_line in body_lines[1:]:
+        out.append(f"{indent}{body_line}" if body_line else "")
+    return out
 
 
 def _build_escalation_email_body(
@@ -588,6 +615,7 @@ def _build_escalation_email_body(
     if transcript:
         lines.append(sep)
         lines.append("CONVERSATION (UTC)")
+        lines.append("")
         last_date: date | None = None
         for role, content, when in transcript:
             when_utc = _to_utc(when)
@@ -596,12 +624,8 @@ def _build_escalation_email_body(
                 if last_date is not None and cur_date != last_date:
                     lines.append(f"  ── {cur_date.isoformat()} ──")
                 last_date = cur_date
-                prefix = when_utc.strftime("%H:%M")
-            else:
-                prefix = "  · "
-            indented = content.replace("\n", "\n" + _TRANSCRIPT_WRAP_INDENT)
-            lines.append(f"  {prefix}  {role}: {indented}")
-        lines.append("")
+            lines.extend(_format_transcript_turn(role, content, when))
+            lines.append("")
     elif ticket.conversation_summary:
         lines.append(sep)
         lines.append("CONVERSATION")
@@ -856,6 +880,7 @@ def _format_update_email_body(
         "",
         sep,
         "NEW MESSAGES (UTC)",
+        "",
     ]
     last_date: date | None = None
     for content, when in turns:
@@ -865,12 +890,8 @@ def _format_update_email_body(
             if last_date is not None and cur_date != last_date:
                 lines.append(f"  ── {cur_date.isoformat()} ──")
             last_date = cur_date
-            prefix = when_utc.strftime("%H:%M")
-        else:
-            prefix = "  · "
-        indented = content.replace("\n", "\n" + _TRANSCRIPT_WRAP_INDENT)
-        lines.append(f"  {prefix}  user: {indented}")
-    lines.append("")
+        lines.extend(_format_transcript_turn("user", content, when))
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

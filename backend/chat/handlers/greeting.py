@@ -159,6 +159,7 @@ class GreetingHandler(PipelineHandler):
                 extra_tokens=greeting.tokens_used,
                 optional_entity_types=ctx.optional_entity_types,
                 language_context=ctx.language_context,
+                trace=ctx.trace,
             )
 
         if ctx.trace is not None:

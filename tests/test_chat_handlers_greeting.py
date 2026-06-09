@@ -190,12 +190,12 @@ def test_handle_typed_greeting_persists_user_and_assistant(
     outcome = GreetingHandler()._handle_sync(ctx, db_session)
 
     assert outcome.text == "Здравствуйте! Чем помочь?"
-    # Both the user message and the assistant greeting are persisted.
-    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).order_by(
-        Message.created_at
-    ).all()
-    roles = [m.role for m in persisted]
-    assert roles == [MessageRole.user, MessageRole.assistant]
+    # Both the user message and the assistant greeting are persisted. Use a set
+    # comparison: the two rows share a transaction and can collide on created_at,
+    # so order is not guaranteed (notably on SQLite).
+    persisted = db_session.query(Message).filter(Message.chat_id == chat.id).all()
+    assert len(persisted) == 2
+    assert {m.role for m in persisted} == {MessageRole.user, MessageRole.assistant}
 
 
 def test_handle_produces_outcome_and_persists_only_assistant_message(

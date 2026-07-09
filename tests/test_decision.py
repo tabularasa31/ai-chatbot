@@ -61,6 +61,9 @@ def _ctx(
     loop_detected: bool = False,
     loop_overlap_ratio: float | None = None,
     loop_window_size: int = 0,
+    loop_docs_repeat: bool = False,
+    loop_questions_repeat: bool = False,
+    loop_question_similarity: float | None = None,
 ) -> TurnContext:
     return TurnContext(
         session_closed=session_closed,
@@ -79,6 +82,9 @@ def _ctx(
         loop_detected=loop_detected,
         loop_overlap_ratio=loop_overlap_ratio,
         loop_window_size=loop_window_size,
+        loop_docs_repeat=loop_docs_repeat,
+        loop_questions_repeat=loop_questions_repeat,
+        loop_question_similarity=loop_question_similarity,
     )
 
 
@@ -413,12 +419,18 @@ def test_trace_dict_carries_loop_fields() -> None:
         loop_detected=True,
         loop_overlap_ratio=0.6,
         loop_window_size=3,
+        loop_docs_repeat=True,
+        loop_questions_repeat=True,
+        loop_question_similarity=0.9,
     )
     d = decide(turn)
     loop_trace = d.loop_trace_dict(turn)
     assert loop_trace["loop_detected"] is True
     assert loop_trace["loop_overlap_ratio"] == 0.6
     assert loop_trace["loop_window_size"] == 3
+    assert loop_trace["loop_docs_repeat"] is True
+    assert loop_trace["loop_questions_repeat"] is True
+    assert loop_trace["loop_question_similarity"] == 0.9
 
 
 def test_loop_not_detected_falls_through_to_normal_routing() -> None:
@@ -426,3 +438,25 @@ def test_loop_not_detected_falls_through_to_normal_routing() -> None:
     routes via normal kb_confidence rules."""
     d = decide(_ctx(kb_confidence="high", loop_detected=False))
     assert d.kind == DecisionKind.answer_with_citations
+
+
+def test_docs_only_repeat_answers_normally_and_is_traceable() -> None:
+    """Single-document tenant: docs repeat on every coherent conversation,
+    but distinct questions mean no loop — the generated answer is delivered
+    and the trace still records the docs-only repeat for monitoring."""
+    turn = _ctx(
+        kb_confidence="medium",
+        kb_has_partial_answer=True,
+        loop_detected=False,
+        loop_overlap_ratio=1.0,
+        loop_window_size=3,
+        loop_docs_repeat=True,
+        loop_questions_repeat=False,
+        loop_question_similarity=0.1,
+    )
+    d = decide(turn)
+    assert d.kind == DecisionKind.answer_with_caveat_and_inline_clarify
+    loop_trace = d.loop_trace_dict(turn)
+    assert loop_trace["loop_detected"] is False
+    assert loop_trace["loop_docs_repeat"] is True
+    assert loop_trace["loop_questions_repeat"] is False

@@ -187,6 +187,13 @@ class Settings(BaseSettings):
         le=1.0,
         description="Minimum Jaccard overlap of source_documents across the loop window for the bot to force-escalate instead of re-answering.",
     )
+    loop_detection_min_question_similarity: float = Field(
+        0.6,
+        alias="LOOP_DETECTION_MIN_QUESTION_SIMILARITY",
+        ge=0.0,
+        le=1.0,
+        description="Minimum token-Jaccard similarity between the current user question and a recent prior question for the loop heuristic to treat the turn as a repeat. Document overlap alone (single-document tenants) must not trigger loop escalation.",
+    )
     language_detection_reliability_threshold: float = Field(
         0.7,
         alias="LANGUAGE_DETECTION_RELIABILITY_THRESHOLD",

@@ -934,31 +934,72 @@ def _usage_cached_tokens(usage: Any) -> int:
     return _safe_int(getattr(details, "cached_tokens", 0))
 
 
+@dataclass(frozen=True)
+class LoopSignal:
+    """Result of the loop-detection heuristic for one turn.
+
+    ``detected`` (the escalation trigger) requires BOTH component signals:
+    ``docs_repeat`` — trailing assistant turns drew on the same documents —
+    and ``questions_repeat`` — the current user question repeats a recent
+    prior one. Docs overlap alone must never escalate: a tenant whose whole
+    KB is a single document yields overlap=1.0 on every coherent
+    conversation, and escalating there throws away a correct generated
+    answer (see decision.py Block rule 6b).
+    """
+
+    detected: bool = False
+    docs_repeat: bool = False
+    doc_overlap_ratio: float | None = None
+    questions_repeat: bool = False
+    question_similarity: float | None = None
+    window_size: int = 0
+
+
+def _question_tokens(text: str | None) -> frozenset[str]:
+    """Lowercased word tokens for question-similarity comparison.
+
+    ``\\w`` is Unicode-aware, so this works for Cyrillic and other
+    non-Latin scripts without language-specific handling.
+    """
+    if not text:
+        return frozenset()
+    return frozenset(re.findall(r"\w+", text.lower()))
+
+
 def _compute_loop_signal(
     chat: Chat | None,
     *,
+    current_question: str | None,
     window: int,
     min_overlap: float,
-) -> tuple[bool, float | None, int]:
-    """Detect whether the last ``window`` assistant turns drew on the same
-    knowledge-base documents — a signal the user is stuck on one issue and
-    repeating the answer won't help.
+    min_question_similarity: float,
+) -> LoopSignal:
+    """Detect whether the user is stuck in a loop: the last ``window``
+    assistant turns drew on the same knowledge-base documents AND the
+    current question repeats one of the questions that produced them —
+    a signal that re-answering won't help.
 
-    Returns (loop_detected, max_pairwise_overlap, effective_window_size).
+    Component signals:
+      - docs_repeat: max pairwise Jaccard overlap of ``source_documents``
+        among the trailing assistant turns >= ``min_overlap``. We use *max*
+        rather than mean so that two near-identical turns sandwiching a
+        slightly different one still count — the user is clearly orbiting
+        the same documents.
+      - questions_repeat: max token-Jaccard similarity between
+        ``current_question`` and the user questions that preceded those
+        assistant turns >= ``min_question_similarity``. This is what
+        separates "user asks the same thing again and again" (a real loop)
+        from "coherent conversation around one document" (single-document
+        tenants, where docs overlap is 1.0 by construction).
 
-    The signal is the max pairwise Jaccard overlap of ``source_documents``
-    among the trailing assistant turns. We use *max* rather than mean so
-    that two near-identical turns sandwiching a slightly different one
-    still count — the user is clearly orbiting the same documents.
-
-    Returns ``(False, None, 0)`` when:
+    Returns a no-loop ``LoopSignal`` when:
       - chat is None or has < window assistant turns with source documents,
       - any of the inspected turns has an empty ``source_documents`` set
         (we can't reason about overlap with an empty set; treating it as
         no-loop is the safe default to avoid false-positive escalations).
     """
     if chat is None or window < 2:
-        return (False, None, 0)
+        return LoopSignal()
     # Walk backwards from the most recent message and stop once we have
     # ``window`` assistant turns or hit a doc-less assistant turn (greeting /
     # handoff) that resets the chain. Avoids the O(N) full-history
@@ -969,17 +1010,30 @@ def _compute_loop_signal(
         reverse=True,
     )
     inspected_reverse: list[frozenset[str]] = []
-    for m in persisted:
+    prior_questions: list[str | None] = []
+    for idx, m in enumerate(persisted):
         if m.role != MessageRole.assistant:
             continue
         docs = m.source_documents or []
         if not docs:
             break
         inspected_reverse.append(frozenset(str(d) for d in docs))
+        # The user question that produced this assistant turn: the closest
+        # preceding user message. None when absent (e.g. proactive turns).
+        prior_questions.append(
+            next(
+                (
+                    p.content
+                    for p in persisted[idx + 1 :]
+                    if p.role == MessageRole.user
+                ),
+                None,
+            )
+        )
         if len(inspected_reverse) >= window:
             break
     if len(inspected_reverse) < window:
-        return (False, None, len(inspected_reverse))
+        return LoopSignal(window_size=len(inspected_reverse))
     inspected = list(reversed(inspected_reverse))
     max_overlap = 0.0
     for i in range(len(inspected)):
@@ -991,7 +1045,31 @@ def _compute_loop_signal(
             overlap = len(a & b) / len(union)
             if overlap > max_overlap:
                 max_overlap = overlap
-    return (max_overlap >= min_overlap, max_overlap, window)
+    docs_repeat = max_overlap >= min_overlap
+
+    # Question similarity: current question vs each question in the window.
+    # Missing texts yield similarity 0.0 — the safe default is to deliver
+    # the generated answer rather than escalate.
+    current_tokens = _question_tokens(current_question)
+    max_similarity = 0.0
+    for prior in prior_questions:
+        prior_tokens = _question_tokens(prior)
+        union_tokens = current_tokens | prior_tokens
+        if not union_tokens:
+            continue
+        similarity = len(current_tokens & prior_tokens) / len(union_tokens)
+        if similarity > max_similarity:
+            max_similarity = similarity
+    questions_repeat = max_similarity >= min_question_similarity
+
+    return LoopSignal(
+        detected=docs_repeat and questions_repeat,
+        docs_repeat=docs_repeat,
+        doc_overlap_ratio=max_overlap,
+        questions_repeat=questions_repeat,
+        question_similarity=max_similarity,
+        window_size=window,
+    )
 
 
 def _clarify_anchor_turn_id(chat: Chat | None) -> str | None:
@@ -1910,10 +1988,12 @@ class RagHandler(PipelineHandler):
         # This is the single authoritative classification of what this turn produced.
         faq_match_obj = result.faq_match
         _kb_confidence = _classify_kb_confidence(retrieval)
-        _loop_detected, _loop_overlap, _loop_window = _compute_loop_signal(
+        _loop_signal = _compute_loop_signal(
             chat,
+            current_question=ctx.question,
             window=settings.loop_detection_window,
             min_overlap=settings.loop_detection_min_overlap,
+            min_question_similarity=settings.loop_detection_min_question_similarity,
         )
         _turn_ctx = DecisionTurnContext(
             session_closed=(chat.ended_at is not None),
@@ -1938,9 +2018,12 @@ class RagHandler(PipelineHandler):
                 retrieval.reliability.cap_reason == "contradiction"
             ),
             low_retrieval_no_chunks=not chunk_texts,
-            loop_detected=_loop_detected,
-            loop_overlap_ratio=_loop_overlap,
-            loop_window_size=_loop_window,
+            loop_detected=_loop_signal.detected,
+            loop_overlap_ratio=_loop_signal.doc_overlap_ratio,
+            loop_window_size=_loop_signal.window_size,
+            loop_docs_repeat=_loop_signal.docs_repeat,
+            loop_questions_repeat=_loop_signal.questions_repeat,
+            loop_question_similarity=_loop_signal.question_similarity,
         )
         _decision: Decision = decide(_turn_ctx)
 

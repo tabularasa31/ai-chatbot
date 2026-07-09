@@ -22,6 +22,7 @@ the call sites that now live here.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import uuid
@@ -905,6 +906,18 @@ def _estimate_prompt_tokens(text: str) -> int:
     return max(1, (len(stripped) + 3) // 4)
 
 
+def _prompt_prefix_fingerprint(system_prompt: str) -> str:
+    """Short stable fingerprint of the system prompt for cache telemetry.
+
+    OpenAI prompt caching requires the prefix to be byte-identical across
+    requests; this fingerprint makes any prefix drift directly observable by
+    comparing the value across adjacent turns in Langfuse / PostHog instead of
+    inferring stability from the token-count estimate. 16 hex chars of SHA-256
+    is plenty for equality checks and leaks nothing about the prompt content.
+    """
+    return hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+
+
 def _usage_cached_tokens(usage: Any) -> int:
     """Extract OpenAI prompt cache hit tokens from SDK objects or dicts."""
     if usage is None:
@@ -1442,6 +1455,7 @@ def generate_answer(
         prior_messages=prior_messages,
     )
     prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
+    prompt_cache_prefix_fingerprint = _prompt_prefix_fingerprint(system_prompt)
     _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
@@ -1475,6 +1489,7 @@ def generate_answer(
                 "quick_answer_count": len(quick_answer_items or []),
                 "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
                 "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
+                "prompt_cache_prefix_fingerprint": prompt_cache_prefix_fingerprint,
                 "captures_full_prompt": settings.observability_capture_full_prompts,
                 "finish_reason_expected": "stop_or_length",
                 "system_prompt": (
@@ -1619,6 +1634,7 @@ def generate_answer(
                 output_tokens=_output_tokens,
                 cached_tokens=_cached_tokens,
                 prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
+                prompt_cache_prefix_fingerprint=prompt_cache_prefix_fingerprint,
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",
@@ -2395,6 +2411,7 @@ async def _async_generate_answer_native(
         prior_messages=prior_messages,
     )
     prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
+    prompt_cache_prefix_fingerprint = _prompt_prefix_fingerprint(system_prompt)
     _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
     openai_client = _svc.get_async_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
@@ -2427,6 +2444,7 @@ async def _async_generate_answer_native(
                 "quick_answer_count": len(quick_answer_items or []),
                 "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
                 "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
+                "prompt_cache_prefix_fingerprint": prompt_cache_prefix_fingerprint,
                 "captures_full_prompt": settings.observability_capture_full_prompts,
                 "finish_reason_expected": "stop_or_length",
                 "system_prompt": (
@@ -2571,6 +2589,7 @@ async def _async_generate_answer_native(
                 output_tokens=_output_tokens,
                 cached_tokens=_cached_tokens,
                 prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
+                prompt_cache_prefix_fingerprint=prompt_cache_prefix_fingerprint,
                 cost_usd=_cost_usd,
                 latency_s=_duration_s,
                 operation="chat/generate",

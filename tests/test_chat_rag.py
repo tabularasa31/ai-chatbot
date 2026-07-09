@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from unittest.mock import Mock
 
@@ -335,6 +336,12 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     assert props["prompt_cache_cached_tokens"] == 64
     assert props["prompt_cache_hit"] is True
     assert isinstance(props["prompt_cache_prefix_tokens_estimate"], int)
+    # Fingerprint of the system prompt: byte-stable across identical bot
+    # config, so adjacent turns must report the same value.
+    fingerprint = props["prompt_cache_prefix_fingerprint"]
+    assert isinstance(fingerprint, str) and len(fingerprint) == 16
+    system_prompt, _ = build_rag_messages("What?", ["chunk1"])
+    assert fingerprint == hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     # With a bot id present, the cache key is forwarded via extra_body (not a
     # named kwarg) so it works on every SDK version allowed by requirements.txt.
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
@@ -423,6 +430,8 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     assert isinstance(trace.generation_metadata, dict)
     prefix_estimate = trace.generation_metadata.pop("prompt_cache_prefix_tokens_estimate")
     assert isinstance(prefix_estimate, int)
+    prefix_fingerprint = trace.generation_metadata.pop("prompt_cache_prefix_fingerprint")
+    assert prefix_fingerprint == hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     assert trace.generation_metadata == {
         # gpt-5-mini is a reasoning model — temperature omitted, larger token budget
         "max_completion_tokens": settings.chat_response_max_tokens_reasoning,

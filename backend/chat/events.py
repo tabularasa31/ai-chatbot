@@ -306,6 +306,7 @@ def _emit_ai_generation_event(
     http_status: int = 200,
     cached_tokens: int = 0,
     prompt_cache_prefix_tokens_estimate: int | None = None,
+    prompt_cache_prefix_fingerprint: str | None = None,
     trace_id: str | None = None,
     span_id: str | None = None,
     parent_id: str | None = None,
@@ -338,6 +339,7 @@ def _emit_ai_generation_event(
                 prompt_cache_prefix_tokens_estimate is not None
                 and prompt_cache_prefix_tokens_estimate >= 1024
             ),
+            "prompt_cache_prefix_fingerprint": prompt_cache_prefix_fingerprint,
         }
         if trace_id is not None:
             properties["$ai_trace_id"] = trace_id

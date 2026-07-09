@@ -104,7 +104,7 @@ class TurnContext:
     #   - the last N assistant turns drew on the same set of source documents
     #     (docs Jaccard overlap >= threshold), AND
     #   - the current user question repeats a recent prior question
-    #     (token Jaccard similarity >= threshold).
+    #     (length-weighted token Jaccard similarity >= threshold).
     # Document overlap alone is not a loop: a tenant whose whole KB is one
     # document produces overlap=1.0 on every coherent conversation. The
     # component signals are carried separately for trace observability.

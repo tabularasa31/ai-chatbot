@@ -210,6 +210,41 @@ def test_loop_signal_question_similarity_is_token_based_not_exact() -> None:
     assert signal.detected is True
 
 
+def test_loop_signal_shared_scaffolding_is_not_a_repeat() -> None:
+    """Short questions sharing only function-word scaffolding ("how do I …")
+    must not count as repeats: plain Jaccard rates 'how do I cancel' vs
+    'how do I install' at 3/5 = 0.6, which would falsely escalate on a
+    single-document tenant. Length-weighted Jaccard discounts the short
+    scaffolding tokens and keeps the substantive verbs decisive."""
+    chat = _ChatStub(
+        messages=[
+            _user(1, "how do i cancel"), _assistant(2, [DOC_A]),
+            _user(3, "how do i upgrade"), _assistant(4, [DOC_A]),
+            _user(5, "how do i pay"), _assistant(6, [DOC_A]),
+        ]
+    )
+    signal = _signal(chat, current_question="how do i install")
+    assert signal.questions_repeat is False
+    assert signal.detected is False
+    assert signal.docs_repeat is True  # docs alone must not escalate
+
+
+def test_loop_signal_rephrased_repeat_with_swapped_function_word() -> None:
+    """Length weighting must not break rephrase tolerance: swapping one
+    short function word ('my' → 'the') keeps the substantive tokens shared
+    and similarity above threshold."""
+    chat = _ChatStub(
+        messages=[
+            _user(1, "how do i cancel my subscription"), _assistant(2, [DOC_A]),
+            _user(3, "how do i cancel my subscription"), _assistant(4, [DOC_A]),
+            _user(5, "how do i cancel my subscription"), _assistant(6, [DOC_A]),
+        ]
+    )
+    signal = _signal(chat, current_question="how do i cancel the subscription")
+    assert signal.questions_repeat is True
+    assert signal.detected is True
+
+
 def test_loop_signal_missing_question_texts_default_to_no_loop() -> None:
     """Prior user turns without content (or an empty current question) can't
     establish a repeat — safe default is to deliver the generated answer."""

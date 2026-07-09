@@ -192,7 +192,7 @@ class Settings(BaseSettings):
         alias="LOOP_DETECTION_MIN_QUESTION_SIMILARITY",
         ge=0.0,
         le=1.0,
-        description="Minimum token-Jaccard similarity between the current user question and a recent prior question for the loop heuristic to treat the turn as a repeat. Document overlap alone (single-document tenants) must not trigger loop escalation.",
+        description="Minimum length-weighted token-Jaccard similarity between the current user question and a recent prior question for the loop heuristic to treat the turn as a repeat. Document overlap alone (single-document tenants) must not trigger loop escalation.",
     )
     language_detection_reliability_threshold: float = Field(
         0.7,

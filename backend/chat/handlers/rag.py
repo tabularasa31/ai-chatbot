@@ -985,9 +985,9 @@ def _compute_loop_signal(
         rather than mean so that two near-identical turns sandwiching a
         slightly different one still count — the user is clearly orbiting
         the same documents.
-      - questions_repeat: max token-Jaccard similarity between
-        ``current_question`` and the user questions that preceded those
-        assistant turns >= ``min_question_similarity``. This is what
+      - questions_repeat: max length-weighted token-Jaccard similarity
+        between ``current_question`` and the user questions that preceded
+        those assistant turns >= ``min_question_similarity``. This is what
         separates "user asks the same thing again and again" (a real loop)
         from "coherent conversation around one document" (single-document
         tenants, where docs overlap is 1.0 by construction).
@@ -1048,16 +1048,22 @@ def _compute_loop_signal(
     docs_repeat = max_overlap >= min_overlap
 
     # Question similarity: current question vs each question in the window.
-    # Missing texts yield similarity 0.0 — the safe default is to deliver
-    # the generated answer rather than escalate.
+    # Length-weighted Jaccard — function words are short across languages
+    # (Zipf), so weighting tokens by length discounts shared scaffolding
+    # ("how do I …", "как мне …") without language-specific stopword lists.
+    # Plain Jaccard rates "how do I cancel" vs "how do I install" at 0.6 —
+    # a false repeat that would re-trigger the discarded-answer bug this
+    # heuristic exists to avoid. Missing texts yield similarity 0.0 — the
+    # safe default is to deliver the generated answer rather than escalate.
     current_tokens = _question_tokens(current_question)
     max_similarity = 0.0
     for prior in prior_questions:
         prior_tokens = _question_tokens(prior)
-        union_tokens = current_tokens | prior_tokens
-        if not union_tokens:
+        union_weight = sum(len(t) for t in current_tokens | prior_tokens)
+        if not union_weight:
             continue
-        similarity = len(current_tokens & prior_tokens) / len(union_tokens)
+        shared_weight = sum(len(t) for t in current_tokens & prior_tokens)
+        similarity = shared_weight / union_weight
         if similarity > max_similarity:
             max_similarity = similarity
     questions_repeat = max_similarity >= min_question_similarity

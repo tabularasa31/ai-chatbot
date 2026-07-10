@@ -168,6 +168,7 @@ async def chat(
         existing = (
             s.query(Chat)
             .filter(Chat.session_id == session_id, Chat.tenant_id == tenant.id)
+            .order_by(Chat.created_at.desc())
             .first()
         )
         if existing is not None and existing.bot_id is not None:
@@ -357,7 +358,7 @@ def get_session_logs_route(
     if logs is None:
         raise HTTPException(status_code=404, detail="Session not found")
     if include_original:
-        for msg_id, _sid, _role, _content, content_original, content_original_available, _feedback, _ideal_answer, _created_at in logs:
+        for msg_id, _sid, _role, _content, content_original, content_original_available, _feedback, _ideal_answer, _created_at, _chat_id in logs:
             if not content_original_available or content_original is None:
                 continue
             db.add(
@@ -386,8 +387,9 @@ def get_session_logs_route(
                 feedback=feedback,
                 ideal_answer=ideal_answer,
                 created_at=created_at,
+                chat_id=chat_id,
             )
-            for msg_id, sid, role, content, content_original, content_original_available, feedback, ideal_answer, created_at in logs
+            for msg_id, sid, role, content, content_original, content_original_available, feedback, ideal_answer, created_at, chat_id in logs
         ],
     )
 

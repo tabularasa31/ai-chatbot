@@ -57,21 +57,40 @@ class SessionSummary:
     last_activity: datetime
 
 
+def _session_chat_ids(
+    session_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    db: Session,
+) -> list[uuid.UUID]:
+    """All conversation (Chat) ids of a session, oldest first.
+
+    A session spans several Chat rows once conversation rotation kicks in;
+    session-level reads must cover every conversation, not just the first row.
+    """
+    rows = (
+        db.query(Chat.id)
+        .filter(
+            Chat.session_id == session_id,
+            Chat.tenant_id == tenant_id,
+        )
+        .order_by(Chat.created_at.asc())
+        .all()
+    )
+    return [row[0] for row in rows]
+
+
 def get_chat_history(
     session_id: uuid.UUID,
     tenant_id: uuid.UUID,
     db: Session,
 ) -> list[Message]:
-    chat = db.query(Chat).filter(
-        Chat.session_id == session_id,
-        Chat.tenant_id == tenant_id,
-    ).first()
-    if not chat:
+    chat_ids = _session_chat_ids(session_id, tenant_id, db)
+    if not chat_ids:
         return []
     messages = (
         db.query(Message)
-        .filter(Message.chat_id == chat.id)
-        .order_by(Message.created_at.asc())
+        .filter(Message.chat_id.in_(chat_ids))
+        .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
     )
     return list(messages)
@@ -82,9 +101,12 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
         db.query(Chat)
         .filter(Chat.tenant_id == tenant_id)
         .options(joinedload(Chat.messages))
+        .order_by(Chat.created_at.asc())
         .all()
     )
-    result: list[SessionSummary] = []
+    # One inbox row per session: a session's conversations (Chat rows created
+    # by rotation) are folded together, newest activity wins the preview.
+    by_session: dict[uuid.UUID, SessionSummary] = {}
     for chat in chats:
         messages = sorted(chat.messages, key=lambda m: m.created_at or datetime.min)
         msg_count = len(messages)
@@ -103,16 +125,25 @@ def list_chat_sessions(tenant_id: uuid.UUID, db: Session) -> list[SessionSummary
                     preview = preview[:PREVIEW_MAX_LEN].rstrip() + "..."
                 last_answer_preview = preview
 
-        result.append(
-            SessionSummary(
+        existing = by_session.get(chat.session_id)
+        if existing is None:
+            by_session[chat.session_id] = SessionSummary(
                 session_id=chat.session_id,
                 message_count=msg_count,
                 last_question=last_question,
                 last_answer_preview=last_answer_preview,
                 last_activity=last_activity,
             )
-        )
+            continue
+        existing.message_count += msg_count
+        if last_activity >= existing.last_activity:
+            existing.last_activity = last_activity
+            if last_question is not None:
+                existing.last_question = last_question
+            if last_answer_preview is not None:
+                existing.last_answer_preview = last_answer_preview
 
+    result = list(by_session.values())
     result.sort(key=lambda s: s.last_activity, reverse=True)
     return result
 
@@ -123,24 +154,21 @@ def get_session_logs(
     db: Session,
     *,
     include_original: bool = False,
-) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime]] | None:
-    chat = db.query(Chat).filter(
-        Chat.session_id == session_id,
-        Chat.tenant_id == tenant_id,
-    ).first()
-    if not chat:
+) -> list[tuple[uuid.UUID, uuid.UUID, str, str, str | None, bool, str, str | None, datetime, uuid.UUID]] | None:
+    chat_ids = _session_chat_ids(session_id, tenant_id, db)
+    if not chat_ids:
         return None
 
     messages = (
         db.query(Message)
-        .filter(Message.chat_id == chat.id)
-        .order_by(Message.created_at.asc())
+        .filter(Message.chat_id.in_(chat_ids))
+        .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
     )
     return [
         (
             m.id,
-            chat.session_id,
+            session_id,
             m.role.value,
             _display_message_content(m, include_original=False),
             _display_message_content(m, include_original=True) if include_original else None,
@@ -148,6 +176,9 @@ def get_session_logs(
             (m.feedback or MessageFeedback.none).value,
             m.ideal_answer,
             m.created_at,
+            # Conversation boundary marker: the dashboard renders a divider
+            # whenever chat_id changes between consecutive messages.
+            m.chat_id,
         )
         for m in messages
     ]
@@ -158,16 +189,24 @@ def delete_session_original_content(
     tenant_id: uuid.UUID,
     db: Session,
 ) -> tuple[Chat | None, int]:
-    chat = db.query(Chat).filter(
-        Chat.session_id == session_id,
-        Chat.tenant_id == tenant_id,
-    ).first()
-    if not chat:
+    # Privacy deletion must cover every conversation of the session, not just
+    # the latest one — rotated-away chats still hold original content.
+    chats = (
+        db.query(Chat)
+        .filter(
+            Chat.session_id == session_id,
+            Chat.tenant_id == tenant_id,
+        )
+        .order_by(Chat.created_at.desc())
+        .all()
+    )
+    if not chats:
         return None, 0
+    chat = chats[0]
 
     messages = (
         db.query(Message)
-        .filter(Message.chat_id == chat.id)
+        .filter(Message.chat_id.in_([c.id for c in chats]))
         .all()
     )
     deleted_count = 0

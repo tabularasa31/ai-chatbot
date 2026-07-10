@@ -204,6 +204,12 @@ class Settings(BaseSettings):
         alias="CONTRADICTION_ADJUDICATION_FILTER_CAP_ENABLED",
     )
     clarification_turn_limit: int = Field(1, alias="CLARIFICATION_TURN_LIMIT", ge=1)
+    conversation_idle_timeout_seconds: int = Field(
+        1800,
+        alias="CONVERSATION_IDLE_TIMEOUT_SECONDS",
+        ge=60,
+        description="Idle gap (no chat activity) after which the next message starts a new conversation (new Chat row, same session_id). Shared by lazy rotation and the chat_session_ended analytics sweeper so the system has a single definition of an ended conversation.",
+    )
     loop_detection_window: int = Field(
         3,
         alias="LOOP_DETECTION_WINDOW",

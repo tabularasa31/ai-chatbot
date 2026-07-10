@@ -870,3 +870,229 @@ def test_widget_chat_returns_plain_answer_payload(
     assert data["text"] == "Which provider are you trying to configure?"
     assert "message_type" not in data
     assert "clarification" not in data
+
+
+# ---------------------------------------------------------------------------
+# Conversation rotation (widget protocol)
+# ---------------------------------------------------------------------------
+
+
+def _setup_rotation_tenant(
+    tenant: TestClient, db_session: Session, *, email: str, name: str
+) -> tuple[uuid.UUID, str]:
+    token = register_and_verify_user(tenant, db_session, email=email)
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": name},
+    )
+    assert cl_resp.status_code == 201
+    set_client_openai_key(tenant, token)
+    bot_public_id = _create_bot(tenant, token)
+    return uuid.UUID(cl_resp.json()["id"]), bot_public_id
+
+
+def _make_session_chat(
+    db_session: Session,
+    tenant_uuid: uuid.UUID,
+    *,
+    session_id: uuid.UUID,
+    idle_minutes: int,
+    messages: list[tuple[str, str]],
+    **chat_fields,
+) -> "Chat":
+    from datetime import timedelta
+
+    from backend.models.base import _utcnow
+    from backend.models.enums import MessageRole
+
+    created = _utcnow() - timedelta(minutes=idle_minutes + 5)
+    last_activity = _utcnow() - timedelta(minutes=idle_minutes)
+    chat = Chat(
+        tenant_id=tenant_uuid,
+        session_id=session_id,
+        created_at=created,
+        updated_at=last_activity,
+        user_context={},
+        **chat_fields,
+    )
+    db_session.add(chat)
+    db_session.commit()
+    db_session.refresh(chat)
+    from backend.models import Message
+
+    for offset, (role, content) in enumerate(messages):
+        db_session.add(
+            Message(
+                chat_id=chat.id,
+                role=MessageRole(role),
+                content=content,
+                created_at=created + timedelta(seconds=offset),
+            )
+        )
+    db_session.commit()
+    return chat
+
+
+def test_widget_history_marks_conversation_boundaries(
+    tenant: TestClient, db_session: Session
+) -> None:
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant, db_session, email="widget-rot-hist@example.com", name="Widget Rot Hist Co"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=120,
+        messages=[("user", "old question"), ("assistant", "old answer")],
+    )
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=1,
+        messages=[("user", "new question")],
+    )
+
+    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
+
+    assert r.status_code == 200
+    data = r.json()
+    assert [m["content"] for m in data["messages"]] == [
+        "old question",
+        "old answer",
+        "new question",
+    ]
+    assert data["boundary_indices"] == [2]
+    assert data["conversation_rotated"] is False
+
+
+def test_widget_history_flags_pending_rotation(
+    tenant: TestClient, db_session: Session
+) -> None:
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant, db_session, email="widget-rot-flag@example.com", name="Widget Rot Flag Co"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=45,
+        messages=[("user", "old question"), ("assistant", "old answer")],
+    )
+
+    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["conversation_rotated"] is True
+    assert data["boundary_indices"] == []
+
+
+def test_widget_history_rotated_closed_chat_is_not_ended(
+    tenant: TestClient, db_session: Session
+) -> None:
+    # A closed conversation past the idle window must not lock the widget
+    # input: the visitor is about to start a fresh conversation.
+    from backend.models.base import _utcnow
+
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant, db_session, email="widget-rot-closed@example.com", name="Widget Rot Closed Co"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=45,
+        messages=[("user", "old question")],
+        ended_at=_utcnow(),
+    )
+
+    r = tenant.get(f"/widget/history?bot_id={bot_public_id}&session_id={session_id}")
+
+    assert r.status_code == 200
+    data = r.json()
+    assert data["conversation_rotated"] is True
+    assert data["chat_ended"] is False
+
+
+def test_widget_chat_empty_message_allowed_when_rotation_pending(
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The widget re-greets a returning visitor by POSTing an empty message
+    # with the existing session; mid-conversation empty messages still 422.
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant, db_session, email="widget-rot-greet@example.com", name="Widget Rot Greet Co"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=45,
+        messages=[("user", "old question")],
+    )
+
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="Fresh greeting",
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
+    )
+
+    r = _post_widget_chat(
+        tenant, bot_public_id, message="", session_id=str(session_id)
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "Fresh greeting"
+
+
+def test_widget_chat_closed_session_answers_when_rotation_pending(
+    tenant: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Within the window a closed chat returns 409 session_closed (see
+    # test_widget_chat_closed_session_returns_controlled_error); past the
+    # idle threshold the same POST opens a fresh conversation instead.
+    from backend.models.base import _utcnow
+
+    tenant_uuid, bot_public_id = _setup_rotation_tenant(
+        tenant, db_session, email="widget-rot-409@example.com", name="Widget Rot 409 Co"
+    )
+    session_id = uuid.uuid4()
+    _make_session_chat(
+        db_session,
+        tenant_uuid,
+        session_id=session_id,
+        idle_minutes=45,
+        messages=[("user", "old question")],
+        ended_at=_utcnow(),
+    )
+
+    async def _fake_async_process(*args, **kwargs):
+        return ChatTurnOutcome(
+            text="Answer in a fresh conversation",
+            document_ids=[],
+            tokens_used=0,
+            chat_ended=False,
+        )
+
+    monkeypatch.setattr(
+        "backend.widget.routes.async_process_chat_message",
+        _fake_async_process,
+    )
+
+    r = _post_widget_chat(
+        tenant, bot_public_id, message="hello again", session_id=str(session_id)
+    )
+    assert r.status_code == 200
+    assert r.json()["text"] == "Answer in a fresh conversation"

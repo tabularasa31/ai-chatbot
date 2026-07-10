@@ -19,6 +19,7 @@ from backend.chat.handlers.rag import _CitationStreamFilter
 from backend.chat.language import localize_text_to_language_result
 from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
+from backend.chat.rotation import should_rotate
 from backend.chat.schemas import WidgetChatTurnResponse
 from backend.chat.service import async_process_chat_message
 from backend.contact_sessions.service import (
@@ -386,6 +387,7 @@ def widget_chat(
                 Chat.session_id == sid,
                 or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
             )
+            .order_by(Chat.created_at.desc())
             .first()
         )
         if existing_chat is None:
@@ -396,11 +398,15 @@ def widget_chat(
                     "Session not found",
                 ),
             )
+        rotation_pending = should_rotate(existing_chat)
         if existing_chat.bot_id is None:
             existing_chat.bot_id = _bot.id
             db.add(existing_chat)
             db.commit()
-        if existing_chat.ended_at is not None:
+        if existing_chat.ended_at is not None and not rotation_pending:
+            # Within the idle window a closed chat still answers with the
+            # "already closed" acknowledgement; past it, the turn falls
+            # through and rotation opens a fresh conversation instead.
             raise HTTPException(
                 status_code=409,
                 detail=widget_session_error_detail(
@@ -410,9 +416,10 @@ def widget_chat(
             )
     else:
         sid = uuid.uuid4()
+        rotation_pending = False
 
     if not resolved_message:
-        if session_id:
+        if session_id and not rotation_pending:
             logger.info(
                 "widget_message_rejected",
                 extra={"reason": "empty", "length": 0},
@@ -421,6 +428,8 @@ def widget_chat(
                 status_code=422,
                 detail={"code": "message_required", "message": "message is required"},
             )
+        # Bootstrap turn: a brand-new session, or a rotated conversation
+        # re-greeting a returning visitor (the pipeline opens the new Chat).
         resolved_message = ""
     elif len(resolved_message) > _WIDGET_MESSAGE_MAX_CHARS:
         logger.info(
@@ -738,6 +747,13 @@ class WidgetHistoryResponse(BaseModel):
     messages: list[WidgetHistoryMessage]
     chat_ended: bool
     ticket_number: str | None = None
+    # Message indices where a newer conversation begins — the widget renders
+    # a "new conversation" separator before each of them.
+    boundary_indices: list[int] = []
+    # True when the session's latest conversation is idle past the rotation
+    # threshold: the widget shows a separator and fetches a fresh greeting
+    # (the next POST /widget/chat rotates server-side).
+    conversation_rotated: bool = False
 
 
 @widget_router.get("/history", response_model=WidgetHistoryResponse)
@@ -761,31 +777,45 @@ def widget_history(
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid session_id") from None
 
-    chat = (
+    # Latest two conversations: the current one plus the previous one as
+    # read-only context after rotation (oldest first after the slice).
+    chats = (
         db.query(Chat)
         .filter(
             Chat.tenant_id == tenant.id,
             Chat.session_id == sid,
             or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
         )
-        .first()
+        .order_by(Chat.created_at.desc())
+        .limit(2)
+        .all()
     )
-    if chat is None:
+    if not chats:
         raise HTTPException(status_code=404, detail="Session not found")
+    chats.reverse()
+    latest = chats[-1]
 
     messages = (
         db.query(Message)
         .filter(
-            Message.chat_id == chat.id,
+            Message.chat_id.in_([c.id for c in chats]),
             Message.role.in_([MessageRole.user, MessageRole.assistant]),
         )
-        .order_by(Message.created_at.asc())
+        .order_by(Message.created_at.asc(), Message.id.asc())
         .all()
     )
 
+    boundary_indices = [
+        idx
+        for idx, m in enumerate(messages)
+        if idx > 0 and m.chat_id != messages[idx - 1].chat_id
+    ]
+    # Read-only signal: the actual rotation happens on the next POST.
+    conversation_rotated = should_rotate(latest)
+
     ticket_number: str | None = None
-    if chat.escalation_awaiting_ticket_id is not None:
-        ticket = db.get(EscalationTicket, chat.escalation_awaiting_ticket_id)
+    if latest.escalation_awaiting_ticket_id is not None:
+        ticket = db.get(EscalationTicket, latest.escalation_awaiting_ticket_id)
         if ticket is not None:
             ticket_number = ticket.ticket_number
 
@@ -795,8 +825,12 @@ def widget_history(
             WidgetHistoryMessage(role=m.role.value, content=m.content)
             for m in messages
         ],
-        chat_ended=chat.ended_at is not None,
+        # A rotated-away closed chat must not lock the widget input — the
+        # visitor is about to start a fresh conversation.
+        chat_ended=latest.ended_at is not None and not conversation_rotated,
         ticket_number=ticket_number,
+        boundary_indices=boundary_indices,
+        conversation_rotated=conversation_rotated,
     )
 
 

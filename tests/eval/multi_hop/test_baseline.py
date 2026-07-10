@@ -30,7 +30,7 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.search.service import search_similar_chunks
+from backend.search.service import search_similar_chunks_async
 from tests.eval.multi_hop import dataset as ds
 from tests.eval.multi_hop.metrics import (
     aggregate,
@@ -39,18 +39,18 @@ from tests.eval.multi_hop.metrics import (
 )
 
 
-def _run_eval(
+async def _run_eval(
     *,
     tenant_id: uuid.UUID,
     uuid_to_chunk_id: dict[uuid.UUID, str],
-    db: Session,
+    db,
     k: int,
     ranking_depth: int,
 ):
-    """Run all 30 queries through search_similar_chunks; return list of CaseResult."""
+    """Run all 30 queries through search_similar_chunks_async; return list of CaseResult."""
     cases = []
     for query in ds.QUERIES:
-        results = search_similar_chunks(
+        results = await search_similar_chunks_async(
             tenant_id=tenant_id,
             query=query.text,
             top_k=ranking_depth,
@@ -78,8 +78,10 @@ RANKING_DEPTH = 10  # How many results to ask the retriever for; MRR uses full d
 
 
 @pytest.mark.pgvector
-def test_multi_hop_baseline(
+@pytest.mark.asyncio
+async def test_multi_hop_baseline(
     pg_db_session: Session,
+    pg_async_db_session,
     indexed_corpus: dict,
     capsys: pytest.CaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -94,10 +96,10 @@ def test_multi_hop_baseline(
     tenant_id = cast(uuid.UUID, indexed_corpus["tenant_id"])
     uuid_to_chunk_id: dict[uuid.UUID, str] = indexed_corpus["uuid_to_chunk_id"]
 
-    cases = _run_eval(
+    cases = await _run_eval(
         tenant_id=tenant_id,
         uuid_to_chunk_id=uuid_to_chunk_id,
-        db=pg_db_session,
+        db=pg_async_db_session,
         k=K,
         ranking_depth=RANKING_DEPTH,
     )
@@ -132,8 +134,10 @@ def test_multi_hop_baseline(
 
 
 @pytest.mark.pgvector
-def test_multi_hop_with_entity_overlap_channel(
+@pytest.mark.asyncio
+async def test_multi_hop_with_entity_overlap_channel(
     pg_db_session: Session,
+    pg_async_db_session,
     indexed_corpus: dict,
     query_entities_lookup: dict[str, list[str]],
     monkeypatch: pytest.MonkeyPatch,
@@ -170,10 +174,10 @@ def test_multi_hop_with_entity_overlap_channel(
         "backend.search.service.extract_entities_from_query",
         side_effect=stub_query_ner,
     ):
-        cases = _run_eval(
+        cases = await _run_eval(
             tenant_id=tenant_id,
             uuid_to_chunk_id=uuid_to_chunk_id,
-            db=pg_db_session,
+            db=pg_async_db_session,
             k=K,
             ranking_depth=RANKING_DEPTH,
         )

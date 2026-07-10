@@ -141,7 +141,6 @@ from backend.search.service import (
     async_semantic_query_rewrite_for_kb,  # noqa: F401
     embed_queries,  # noqa: F401
     expand_query,  # noqa: F401
-    search_similar_chunks_detailed,  # noqa: F401
     semantic_query_rewrite,  # noqa: F401
 )
 

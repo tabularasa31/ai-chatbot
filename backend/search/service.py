@@ -7,7 +7,6 @@ import logging
 import re
 import time
 import uuid
-from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any, Literal
@@ -46,13 +45,13 @@ from backend.utils.math import cosine_similarity
 # Number of vector candidates to pre-fetch before BM25 scoring.
 # BM25 runs only on this pool (already in memory) — never queries all tenant chunks.
 BM25_CANDIDATE_POOL = 200
-# Cap for the standalone bm25_search_chunks() prefilter: bounds memory and CPU
+# Cap for the standalone async_bm25_search_chunks() prefilter: bounds memory and CPU
 # even when a query token matches a large fraction of a tenant's corpus.
 BM25_PREFILTER_CANDIDATE_LIMIT = 1000
 # Cap on unique query tokens used to build the prefilter OR-clause. Prevents
 # pathological queries from generating SQL with hundreds of LIKE branches.
 BM25_PREFILTER_MAX_QUERY_TOKENS = 32
-# Cap for entity_overlap_search() PG candidate pull. Mirrors BM25's prefilter
+# Cap for async_entity_overlap_search() PG candidate pull. Mirrors BM25's prefilter
 # cap — a popular entity (e.g. "Pro plan" on a tenant with 10k chunks) could
 # otherwise pull every row into memory before the Python intersection scoring
 # step. The downstream RRF only consumes top RRF_CANDIDATE_POOL_MULTIPLIER *
@@ -1118,51 +1117,6 @@ def _embedding_script_bucket(embedding: Embedding) -> str:
     return detect_query_script_bucket(embedding.chunk_text or "")
 
 
-def _rewrite_query_for_retrieval(
-    query: str,
-    *,
-    api_key: str,
-    langfuse_observation: Any | None = None,
-) -> str | None:
-    """
-    Rephrase a user question as English documentation-style keywords.
-
-    Bridges the semantic gap between problem-description phrasing ("bot doesn't
-    respond in Russian") and feature-name phrasing in docs ("language detection").
-    Output is in English so the result can serve as the BM25 query against the
-    English corpus for non-EN user queries, and also enriches vector retrieval.
-    Fails silently — returns None on any error so retrieval degrades gracefully.
-    """
-    try:
-        client = get_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
-        response = call_openai_with_retry(
-            "query_rewrite_for_retrieval",
-            lambda: client.chat.completions.create(
-                model=settings.query_rewrite_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a search query optimizer for a product knowledge base.\n"
-                            "Rewrite the user's question as 3-5 English keywords or a short English noun phrase "
-                            "that would appear as a topic or heading in product documentation.\n"
-                            "Always output in English regardless of the input language.\n"
-                            "Output only the rewritten query, nothing else."
-                        ),
-                    },
-                    {"role": "user", "content": query},
-                ],
-                temperature=0,
-                max_completion_tokens=60,
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        rewritten = (response.choices[0].message.content or "").strip()
-        return rewritten if rewritten else None
-    except Exception:
-        return None
-
-
 def expand_query(query: str) -> list[str]:
     """Generate lightweight query variants without changing user intent."""
     variants: list[str] = []
@@ -1495,24 +1449,6 @@ def _normalize_query_variants(values: list[str]) -> list[str]:
     return variants
 
 
-def lexical_safe_query_variants(
-    query: str,
-    *,
-    base_variants: list[str] | None = None,
-) -> list[str]:
-    """
-    Return only normalization-safe variants suitable for lexical BM25 scoring.
-
-    Today this mirrors the deterministic normalized variants used for vector
-    retrieval. If expand_query() ever grows to include freer rewrites or
-    paraphrases, BM25 must continue consuming only the lexical-safe subset
-    unless the lexical branch contract is explicitly revisited.
-    """
-    source_variants = base_variants if base_variants is not None else expand_query(query)
-    variants = _normalize_query_variants(source_variants)
-    return variants or [query]
-
-
 def embed_query(
     query: str,
     *,
@@ -1587,17 +1523,6 @@ def embed_queries(
     return [cached_map[q] for q in queries]  # type: ignore[return-value]
 
 
-def embed_queries_with_stats(
-    queries: list[str], *, api_key: str, timeout: float | None = None
-) -> tuple[list[list[float]], int]:
-    """Embed multiple queries and return the actual API request count used."""
-    if not queries:
-        return [], 0
-    any_miss = any(_emb_cache.get(q) is None for q in queries)
-    vectors = embed_queries(queries, api_key=api_key, timeout=timeout)
-    return vectors, (1 if any_miss else 0)
-
-
 def _bm25_score_candidates_with_signal(
     candidates: list[Embedding],
     query: str,
@@ -1622,182 +1547,8 @@ def _bm25_score_candidates(
     return scored
 
 
-def _build_vector_candidate_set(
-    tenant_id: uuid.UUID,
-    variant_vectors: list[list[float]],
-    db: Session,
-    *,
-    vector_search_fn,
-) -> VectorCandidateSet:
-    """Acquire, merge, dedupe, and truncate vector candidates across variants."""
-    vector_started_at = perf_counter()
-    vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
-    vector_search_call_count = 0
-    for variant_vector in variant_vectors:
-        vector_search_call_count += 1
-        for embedding, similarity in vector_search_fn(
-            tenant_id,
-            variant_vector,
-            BM25_CANDIDATE_POOL,
-            db,
-        ):
-            existing = vector_candidate_map.get(embedding.id)
-            if existing is None or similarity > existing[1]:
-                vector_candidate_map[embedding.id] = (embedding, similarity)
-    return VectorCandidateSet(
-        candidates=_sort_scored_embeddings(list(vector_candidate_map.values()))[
-            :BM25_CANDIDATE_POOL
-        ],
-        call_count=vector_search_call_count,
-        duration_ms=round((perf_counter() - vector_started_at) * 1000, 2),
-    )
-
-
-def bm25_search_chunks(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: Session,
-) -> list[tuple[Embedding, float]]:
-    """
-    BM25 full-text search over chunk_text for a tenant.
-
-    Performs DB-side prefiltering: only chunks containing at least one query
-    token (case-insensitive substring match) are fetched and scored. Chunks
-    with no token overlap would receive a BM25 score of zero and contribute
-    nothing to the ranking, so excluding them at the SQL layer keeps memory
-    and CPU bounded even on large tenant corpora.
-    """
-    tokens = _bm25_prefilter_tokens(query)
-    if not tokens:
-        return []
-
-    token_conditions = [
-        func.lower(Embedding.chunk_text).like(
-            f"%{_escape_like(token)}%", escape="\\"
-        )
-        for token in tokens
-    ]
-    embeddings = (
-        db.query(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.tenant_id == tenant_id)
-        .filter(Embedding.chunk_text.isnot(None))
-        .filter(or_(*token_conditions))
-        # Deterministic ordering so the limit truncates predictably and biases
-        # toward recent content when a token matches more than the cap allows.
-        .order_by(Embedding.created_at.desc(), Embedding.id.desc())
-        .limit(BM25_PREFILTER_CANDIDATE_LIMIT)
-        .all()
-    )
-    return _bm25_score_candidates(embeddings, query, top_k)
-
-
-def entity_overlap_search(
-    tenant_id: uuid.UUID,
-    query_entities: list[str],
-    top_k: int,
-    db: Session,
-) -> list[tuple[Embedding, float]]:
-    """Retrieve chunks whose ``entities`` overlap with the query's NER list.
-
-    Step 5 of the entity-aware retrieval epic (ClickUp 86exe5pjx). The
-    third RRF channel: dense and BM25 already cover semantic and lexical
-    similarity; this channel surfaces chunks that name-match specific
-    products / plans / error codes / endpoints — precisely the shapes
-    the other two channels under-rank (dense smooths over rare tokens,
-    BM25 is noisy on short codes).
-
-    The per-chunk entity index (PR #540) is populated at ingest from
-    ``extract_entities_from_passage``. The query-side NER comes from
-    ``extract_entities_from_query`` (PR #537). Both use the SAME prompt
-    family so surface forms are likely to align.
-
-    Score = number of overlapping entities (cardinality of intersection).
-    Comparison is case-sensitive on the surface form preserved by the
-    NER prompts. Results are ordered by score desc; ties broken by
-    ``created_at`` desc and ``id`` desc to match the BM25 ordering, so
-    RRF's tie-break across channels is stable.
-
-    PostgreSQL path: ``WHERE entities ?| array[...]`` against the GIN
-    index (``ix_embeddings_entities_gin``, ``jsonb_ops``) prefilters
-    candidates server-side. SQLite (tests) doesn't support ``?|``; we
-    fall through to a Python filter over all tenant chunks. Both paths
-    score the SAME way in Python after the candidate set is in memory.
-
-    An empty ``query_entities`` short-circuits to ``[]`` — no DB hit.
-    """
-    if not query_entities:
-        return []
-    if not tenant_id:
-        return []
-
-    db_url = str(db.bind.url if db.bind else "")
-    is_sqlite = "sqlite" in db_url
-
-    if is_sqlite:
-        # JSON column on SQLite: no GIN, no ?| operator. Walk all chunks
-        # for the tenant and intersect in Python. Acceptable in tests
-        # because the corpus is tiny; never hit in production.
-        candidates = (
-            db.query(Embedding)
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
-            .all()
-        )
-    else:
-        # PG path: ?| (any-of-array) uses ix_embeddings_entities_gin
-        # (jsonb_ops). Returns only rows with at least one overlapping
-        # entity, so the in-memory scoring loop below scales with hits,
-        # not the full table.
-        #
-        # ``Embedding.entities.op("?|")(...)`` goes through SQLAlchemy's
-        # column expression API instead of a raw text() fragment with
-        # the table name baked in — survives table aliases and refactors
-        # without breakage. The right-hand side must be cast to
-        # ``ARRAY(text)`` explicitly: otherwise SQLAlchemy infers the
-        # JSONB column on the left and JSON-encodes the Python list
-        # (``'["a","b"]'``), which Postgres rejects with "malformed
-        # array literal" — the ``?|`` operator wants a real text[] array.
-        candidates = (
-            db.query(Embedding)
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .filter(
-                Embedding.entities.op("?|")(
-                    cast(list(query_entities), ARRAY(SAText()))
-                )
-            )
-            .order_by(Embedding.created_at.desc(), Embedding.id.desc())
-            .limit(ENTITY_SEARCH_CANDIDATE_LIMIT)
-            .all()
-        )
-
-    query_set = set(query_entities)
-    scored: list[tuple[Embedding, float]] = []
-    for emb in candidates:
-        chunk_entities = emb.entities or []
-        if not isinstance(chunk_entities, list):
-            # Defensive: if a row got non-list JSON somehow, skip it
-            # rather than crashing the retriever.
-            continue
-        overlap = len(query_set.intersection(chunk_entities))
-        if overlap == 0:
-            # On SQLite the prefilter doesn't run, so we may have rows
-            # with zero overlap; drop them here.
-            continue
-        scored.append((emb, float(overlap)))
-
-    # Score desc; tiebreak preserved from SQL order_by (created_at desc,
-    # id desc) because Python sort is stable and we already iterate in
-    # that order.
-    scored.sort(key=lambda pair: pair[1], reverse=True)
-    return scored[:top_k]
-
-
 def _bm25_prefilter_tokens(query: str) -> list[str]:
-    """Unique, lowercase word tokens used for the bm25_search_chunks prefilter.
+    """Unique, lowercase word tokens used for the BM25 search prefilter.
 
     .lower() (not .casefold()) matches the SQL func.lower() applied to the
     column and the BM25 scorer's tokenization, keeping prefilter and scoring
@@ -2337,53 +2088,8 @@ def detect_source_overlaps(
     return bool(overlap_pairs), tuple(overlap_pairs)
 
 
-def _pgvector_search(
-    tenant_id: uuid.UUID,
-    query_vector: list[float],
-    top_k: int,
-    db: Session,
-) -> list[tuple[Embedding, float]]:
-    """Native pgvector cosine distance search. PostgreSQL only."""
-    try:
-        distance_expr = Embedding.vector.cosine_distance(query_vector)
-        results_with_distance = (
-            db.query(Embedding, distance_expr.label("distance"))
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .filter(Embedding.vector.isnot(None))
-            .order_by(distance_expr)
-            .limit(top_k)
-            .all()
-        )
-        return [
-            (emb, max(0.0, 1.0 - distance))
-            for emb, distance in results_with_distance
-        ]
-    except Exception:
-        logger.exception("pgvector search failed; falling back to Python cosine search")
-        return _python_cosine_search(tenant_id, query_vector, top_k, db)
-
-
-def search_similar_chunks(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: Session,
-    *,
-    api_key: str,
-) -> list[tuple[Embedding, float]]:
-    """Compatibility wrapper returning ranked results only."""
-    return search_similar_chunks_detailed(
-        tenant_id=tenant_id,
-        query=query,
-        top_k=top_k,
-        db=db,
-        api_key=api_key,
-    ).results
-
-
 # ---------------------------------------------------------------------------
-# Pipeline stage dataclasses — private to search_similar_chunks_detailed
+# Pipeline stage dataclasses — private to search_similar_chunks_detailed_async
 # ---------------------------------------------------------------------------
 
 
@@ -2436,486 +2142,6 @@ class _QualityStageResult:
 # ---------------------------------------------------------------------------
 # Stage functions
 # ---------------------------------------------------------------------------
-
-
-def _run_query_stage(
-    *,
-    query: str,
-    api_key: str,
-    trace: TraceHandle | None,
-    precomputed_query_variants: list[str] | None,
-    precomputed_variant_vectors: list[list[float]] | None,
-    precomputed_embedding_api_request_count: int | None,
-    precomputed_rewritten_variant: str | None,
-    embedding_timeout: float | None,
-) -> _QueryStageResult:
-    use_precomputed = (
-        precomputed_query_variants is not None
-        and precomputed_variant_vectors is not None
-        and precomputed_query_variants
-        and len(precomputed_query_variants) == len(precomputed_variant_vectors)
-    )
-
-    query_variants = precomputed_query_variants if use_precomputed else expand_query(query)
-
-    # Semantic query rewriting: add a documentation-style keyword variant of the
-    # user's question (in the same language). Bridges the framing gap between
-    # user problem-descriptions and feature-name headings in docs. Language-agnostic —
-    # the multilingual embedding model handles cross-lingual matching from there.
-    rewritten_variant: str | None = None
-    if not use_precomputed:
-        rewritten_variant = _rewrite_query_for_retrieval(query, api_key=api_key)
-        if rewritten_variant:
-            query_variants = _normalize_query_variants([*query_variants, rewritten_variant])
-
-    query_variant_count = len(query_variants)
-    variant_mode = _variant_mode_for_count(query_variant_count)
-    extra_variant_count = max(query_variant_count - 1, 0)
-    if trace is not None:
-        trace.span(
-            name="query-expansion",
-            input={"query": query},
-        ).end(
-            output={
-                "variants": query_variants,
-                # On the precomputed path (chat pipeline), rewritten_variant stays
-                # None (the in-search rewrite is skipped); surface the value that
-                # was computed upstream so traces reflect the actual rewrite used.
-                "rewritten_variant": rewritten_variant or precomputed_rewritten_variant,
-                "query_variant_count": query_variant_count,
-                "variant_mode": variant_mode,
-                "extra_variant_count": extra_variant_count,
-            }
-        )
-
-    if use_precomputed:
-        variant_vectors = precomputed_variant_vectors or []
-        embedding_api_request_count = int(precomputed_embedding_api_request_count or 1)
-        query_embedding_duration_ms = 0.0
-        embedded_query_count = len(variant_vectors)
-        extra_embedded_queries = max(embedded_query_count - 1, 0)
-        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
-        trace_query_vector = variant_vectors[0] if variant_vectors else []
-        # Intentionally skip `query-embedding` span: embeddings were computed upstream.
-    else:
-        embedding_started_at = perf_counter()
-        variant_vectors, embedding_api_request_count = embed_queries_with_stats(
-            query_variants,
-            api_key=api_key,
-            timeout=embedding_timeout,
-        )
-        query_embedding_duration_ms = round((perf_counter() - embedding_started_at) * 1000, 2)
-        embedded_query_count = len(query_variants)
-        extra_embedded_queries = max(embedded_query_count - 1, 0)
-        extra_embedding_api_requests = max(embedding_api_request_count - 1, 0)
-        trace_query_vector = variant_vectors[0] if variant_vectors else []
-        if trace is not None:
-            trace.span(
-                name="query-embedding",
-                input={
-                    "query_variants": query_variants,
-                    "query_variant_count": query_variant_count,
-                    "variant_mode": variant_mode,
-                    "model": settings.embedding_model,
-                },
-            ).end(
-                output={
-                    "embedded_query_count": embedded_query_count,
-                    "extra_embedded_queries": extra_embedded_queries,
-                    "embedding_api_request_count": embedding_api_request_count,
-                    "extra_embedding_api_requests": extra_embedding_api_requests,
-                    "duration_ms": query_embedding_duration_ms,
-                }
-            )
-
-    return _QueryStageResult(
-        query_variants=query_variants,
-        variant_vectors=variant_vectors,
-        query_variant_count=query_variant_count,
-        variant_mode=variant_mode,
-        extra_variant_count=extra_variant_count,
-        embedded_query_count=embedded_query_count,
-        extra_embedded_queries=extra_embedded_queries,
-        embedding_api_request_count=embedding_api_request_count,
-        extra_embedding_api_requests=extra_embedding_api_requests,
-        query_embedding_duration_ms=query_embedding_duration_ms,
-        query_script_bucket=detect_query_script_bucket(query),
-        rewritten_variant=rewritten_variant,
-        trace_query_vector=trace_query_vector,
-    )
-
-
-def _tenant_has_embeddings(tenant_id: uuid.UUID, db: Session) -> bool:
-    """Cheap existence check: does the tenant have any indexed chunk?
-
-    Used to gate the NER submission for the entity-overlap channel —
-    tenants with zero embeddings will hit the empty-vector early-return
-    downstream, so spending an OpenAI NER call for them is pure waste.
-
-    Implemented as a ``LIMIT 1`` against the same ``embeddings`` table
-    the vector search uses; with the existing ``ix_embeddings_document_id``
-    index this is ~1-2ms even on multi-million-row deploys. Returns
-    False on any DB error (defensive — a transient failure here must
-    not block retrieval).
-    """
-    try:
-        return (
-            db.query(Embedding.id)
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .limit(1)
-            .first()
-        ) is not None
-    except Exception:
-        logger.warning("tenant_has_embeddings_check_failed", exc_info=True)
-        return False
-
-
-def _cleanup_ner_executor(
-    executor: ThreadPoolExecutor | None,
-    future: Future[list[str]] | None,
-) -> None:
-    """Cancel a pending NER future and shut down its executor.
-
-    Used both on the main path (after we've consumed the result) and
-    on the early-return path (when vector search produced no candidates
-    so the entity channel will not be invoked anyway). Best-effort —
-    a failure here cannot leak into chat.
-    """
-    if future is not None:
-        try:
-            future.cancel()
-        except Exception:
-            pass
-    if executor is not None:
-        try:
-            executor.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            # Older Python without cancel_futures — fall back.
-            executor.shutdown(wait=False)
-        except Exception:
-            pass
-
-
-def _run_candidate_stage(
-    *,
-    tenant_id: uuid.UUID,
-    query: str,
-    query_stage: _QueryStageResult,
-    top_k: int,
-    db: Session,
-    trace: TraceHandle | None,
-    api_key: str | None = None,
-) -> _CandidateStageResult:
-    q = query_stage
-    db_url = str(db.bind.url if db.bind else "")
-    vector_engine = "python-cosine" if "sqlite" in db_url else "pgvector"
-    vector_search_fn = _python_cosine_search if "sqlite" in db_url else _pgvector_search
-    bm25_expansion_mode = _resolve_bm25_expansion_mode()
-
-    kb_script = detect_tenant_kb_script(tenant_id, db)
-    bm25_variant_queries = _bm25_queries_for_script(
-        query, q.query_variants, q.query_script_bucket, kb_script=kb_script
-    )
-    # EN rewrite to use for lexical scoring in reranker when query is non-EN.
-    rerank_lexical_query: str | None = (
-        None
-        if _is_en_query(query, q.query_script_bucket)
-        else (bm25_variant_queries[0] if bm25_variant_queries else None)
-    )
-
-    # ── Step 5+: kick off NER for the entity-overlap channel concurrently
-    # with vector + BM25 retrieval. Sequential execution would add the full
-    # NER latency (~1-2s) to every chat turn — multi-turn cases multiplied
-    # this into ~+8s p50 in the eval (see ClickUp 86exe5pjx). Parallel
-    # execution overlaps NER with the existing vector + BM25 budget so the
-    # channel's added latency drops to ~max(0, ner_ms - retrieval_ms),
-    # which on prod traffic is typically zero (retrieval is the slower
-    # branch). NER's internal wall-clock timeout still bounds the work,
-    # so a slow OpenAI call cannot stall this hot path.
-    #
-    # Gating: only submit NER when the tenant has any indexed embeddings.
-    # Otherwise vector_candidates will be empty downstream, the entity
-    # channel won't run, and a submitted NER would just waste an OpenAI
-    # call (the future cancel cannot kill an already-running thread —
-    # ``cancel_futures=True`` in shutdown only stops queued ones).
-    # The pre-check is one ``LIMIT 1`` against the same table the vector
-    # search hits, ~1-2ms with the document_id index. Cheap insurance
-    # against paying for NER on freshly-onboarded / empty-FAQ tenants.
-    ner_executor: ThreadPoolExecutor | None = None
-    ner_future: Future[list[str]] | None = None
-    if settings.entity_overlap_enabled and api_key and _tenant_has_embeddings(
-        tenant_id, db
-    ):
-        ner_executor = ThreadPoolExecutor(
-            max_workers=1,
-            thread_name_prefix="entity_overlap_ner",
-        )
-        ner_future = ner_executor.submit(
-            extract_entities_from_query,
-            query,
-            api_key,
-            tenant_id=str(tenant_id),
-        )
-
-    # Build one shared candidate set before lexical stages: engine-specific
-    # acquisition, then cross-variant merge/dedup/truncation.
-    vector_candidate_set = _build_vector_candidate_set(
-        tenant_id,
-        q.variant_vectors,
-        db,
-        vector_search_fn=vector_search_fn,
-    )
-    vector_candidates = vector_candidate_set.candidates
-    vector_search_call_count = vector_candidate_set.call_count
-    vector_duration_ms = vector_candidate_set.duration_ms
-    extra_vector_search_calls = max(vector_search_call_count - 1, 0)
-
-    if not vector_candidates:
-        # Empty corpus or no vector matches — entity channel won't run
-        # downstream, so cancel the pending NER call to free its thread
-        # and avoid wasting an OpenAI request on an unused result.
-        _cleanup_ner_executor(ner_executor, ner_future)
-        if trace is not None:
-            trace.span(
-                name="vector-search",
-                input={
-                    "query_embedding": format_query_embedding_preview(q.trace_query_vector),
-                    "query_variants": q.query_variants,
-                    "tenant_id": str(tenant_id),
-                    "top_k": BM25_CANDIDATE_POOL,
-                    "engine": vector_engine,
-                },
-            ).end(
-                output={
-                    "chunks": [],
-                    "duration_ms": vector_duration_ms,
-                    "total_candidates_scanned": 0,
-                    "vector_search_call_count": vector_search_call_count,
-                    "extra_vector_search_calls": extra_vector_search_calls,
-                }
-            )
-        return _CandidateStageResult(
-            vector_candidates=[],
-            vector_search_call_count=vector_search_call_count,
-            vector_duration_ms=vector_duration_ms,
-            vector_engine=vector_engine,
-            bm25_variant_queries=bm25_variant_queries,
-            bm25_bundle=BM25SearchBundle(
-                results=[],
-                has_lexical_signal=False,
-                variant_queries=bm25_variant_queries or [query],
-                variant_eval_count=0,
-                merged_hit_count_before_cap=0,
-                merged_hit_count_after_cap=0,
-                winner_by_id={},
-            ),
-            bm25_duration_ms=0.0,
-            bm25_expansion_mode=bm25_expansion_mode,
-            fused_results=[],
-            rrf_duration_ms=0.0,
-            best_vector_similarity=None,
-            best_keyword_score=None,
-            rerank_lexical_query=rerank_lexical_query,
-        )
-
-    vector_embs = [emb for emb, _ in vector_candidates]
-    if trace is not None:
-        trace.span(
-            name="vector-search",
-            input={
-                "query_embedding": format_query_embedding_preview(q.trace_query_vector),
-                "query_variants": q.query_variants,
-                "tenant_id": str(tenant_id),
-                "top_k": BM25_CANDIDATE_POOL,
-                "engine": vector_engine,
-            },
-        ).end(
-            output={
-                "chunks": format_embedding_results(
-                    vector_candidates[:top_k * 2],
-                    score_name="similarity_score",
-                ),
-                "duration_ms": vector_duration_ms,
-                "total_candidates_scanned": len(vector_candidates),
-                "vector_search_call_count": vector_search_call_count,
-                "extra_vector_search_calls": extra_vector_search_calls,
-            }
-        )
-
-    rrf_candidate_pool = top_k * RRF_CANDIDATE_POOL_MULTIPLIER
-    bm25_started_at = perf_counter()
-    bm25_bundle = _run_bm25_search(
-        vector_embs,
-        query=query,
-        variant_queries=bm25_variant_queries,
-        top_k=rrf_candidate_pool,
-        expansion_mode=bm25_expansion_mode,
-    )
-    bm25_duration_ms = round((perf_counter() - bm25_started_at) * 1000, 2)
-    if trace is not None:
-        trace.span(
-            name="bm25-search",
-            input={
-                "query": query,
-                "query_variants": bm25_bundle.variant_queries,
-                "tenant_id": str(tenant_id),
-                "top_k": rrf_candidate_pool,
-                "bm25_expansion_mode": bm25_expansion_mode,
-                "variant_source": (
-                    "original-query"
-                    if bm25_expansion_mode == "asymmetric"
-                    else "lexical-safe-normalized-variants"
-                ),
-            },
-        ).end(
-            output={
-                "chunks": _format_bm25_trace_results(
-                    bm25_bundle.results,
-                    winner_by_id=bm25_bundle.winner_by_id,
-                ),
-                "duration_ms": bm25_duration_ms,
-                "bm25_query_variant_count": len(bm25_bundle.variant_queries),
-                "bm25_variant_eval_count": bm25_bundle.variant_eval_count,
-                "extra_bm25_variant_evals": max(bm25_bundle.variant_eval_count - 1, 0),
-                "bm25_merged_hit_count_before_cap": bm25_bundle.merged_hit_count_before_cap,
-                "bm25_merged_hit_count_after_cap": bm25_bundle.merged_hit_count_after_cap,
-            }
-        )
-
-    vector_for_rrf = vector_candidates[:rrf_candidate_pool]
-
-    # ── Step 5+: harvest the parallel NER future and run entity overlap.
-    # The NER call was kicked off at the start of this stage (concurrent
-    # with vector + BM25). Here we just wait for whatever's left of the
-    # NER work and run the cheap DB lookup for entity overlap.
-    #
-    # ``entity_duration_ms`` measures the wait-and-lookup time the
-    # caller actually paid on top of vector + BM25. With healthy NER
-    # latency it's near-zero (NER usually finished while retrieval was
-    # running). The total NER work-time itself is observable via
-    # Langfuse trace + the timing of the future result — callers don't
-    # need it to make rollout decisions.
-    entity_results: list[tuple[Embedding, float]] = []
-    query_entities: list[str] = []
-    entity_duration_ms = 0.0
-    if ner_future is not None and ner_executor is not None:
-        wait_started_at = perf_counter()
-        try:
-            # extract_entities_from_query has its own ~2s wall-clock
-            # timeout + empty-list fallback inside _run_with_timeout.
-            # The small margin here is just to let the inner thread
-            # actually return in case the timeout fired right at the
-            # wire — ``cancel_futures=True`` in cleanup handles the
-            # rare case where the inner thread is still draining.
-            query_entities = ner_future.result(
-                timeout=settings.ner_query_timeout_seconds + 0.5
-            )
-        except Exception:
-            logger.warning("ner_future_result_failed", exc_info=True)
-            query_entities = []
-        finally:
-            _cleanup_ner_executor(ner_executor, ner_future)
-        if query_entities:
-            entity_results = entity_overlap_search(
-                tenant_id=tenant_id,
-                query_entities=query_entities,
-                top_k=rrf_candidate_pool,
-                db=db,
-            )
-        entity_duration_ms = round((perf_counter() - wait_started_at) * 1000, 2)
-        if trace is not None:
-            trace.span(
-                name="entity-overlap-search",
-                input={
-                    "query": query,
-                    "tenant_id": str(tenant_id),
-                    "top_k": rrf_candidate_pool,
-                    "query_entities": query_entities,
-                },
-            ).end(
-                output={
-                    "chunks": format_embedding_results(
-                        entity_results,
-                        score_name="entity_overlap_score",
-                    ),
-                    "duration_ms": entity_duration_ms,
-                    "query_entity_count": len(query_entities),
-                    "candidate_count": len(entity_results),
-                }
-            )
-
-        # PostHog: per-chat-turn record of how the entity channel
-        # actually behaved. Lets us answer at-scale questions like
-        # "what fraction of queries surface ≥1 entity?", "what's the
-        # p95 NER+lookup latency?", "how often does the channel return
-        # zero candidates?". One event per retrieval; aggregated by
-        # tenant in the dashboard. Best-effort: failure to emit must
-        # never break the chat hot path.
-        try:
-            capture_event(
-                "entity_overlap.channel_used",
-                distinct_id=str(tenant_id) if tenant_id else "system",
-                tenant_id=str(tenant_id) if tenant_id else None,
-                properties={
-                    "channel": "entity_overlap",
-                    "query_entity_count": len(query_entities),
-                    "had_query_entities": bool(query_entities),
-                    "candidate_count": len(entity_results),
-                    "duration_ms": entity_duration_ms,
-                },
-                groups={"tenant": str(tenant_id)} if tenant_id else None,
-            )
-        except Exception:
-            logger.warning("Failed to emit entity_overlap.channel_used", exc_info=True)
-
-    rrf_started_at = perf_counter()
-    fused_results = reciprocal_rank_fusion(
-        vector_for_rrf,
-        bm25_bundle.results,
-        top_k=rrf_candidate_pool,
-        entity_results=entity_results or None,
-    )
-    rrf_duration_ms = round((perf_counter() - rrf_started_at) * 1000, 2)
-    if trace is not None:
-        trace.span(
-            name="rrf-fusion",
-            input={
-                "vector_results": format_embedding_results(
-                    vector_for_rrf,
-                    score_name="similarity_score",
-                ),
-                "bm25_results": format_embedding_results(
-                    bm25_bundle.results,
-                    score_name="bm25_score",
-                ),
-                "bm25_expansion_mode": bm25_expansion_mode,
-            },
-        ).end(
-            output={
-                "merged_chunks": format_embedding_results(
-                    fused_results,
-                    score_name="rrf_score",
-                ),
-                "duration_ms": rrf_duration_ms,
-            }
-        )
-
-    return _CandidateStageResult(
-        vector_candidates=vector_candidates,
-        vector_search_call_count=vector_search_call_count,
-        vector_duration_ms=vector_duration_ms,
-        vector_engine=vector_engine,
-        bm25_variant_queries=bm25_variant_queries,
-        bm25_bundle=bm25_bundle,
-        bm25_duration_ms=bm25_duration_ms,
-        bm25_expansion_mode=bm25_expansion_mode,
-        fused_results=fused_results,
-        rrf_duration_ms=rrf_duration_ms,
-        best_vector_similarity=vector_candidates[0][1] if vector_candidates else None,
-        best_keyword_score=bm25_bundle.results[0][1] if bm25_bundle.results else None,
-        rerank_lexical_query=rerank_lexical_query,
-    )
 
 
 def _run_ranking_stage(
@@ -3018,55 +2244,6 @@ def _run_ranking_stage(
     )
 
 
-def _run_quality_stage(
-    *,
-    final_results: list[tuple[Embedding, float]],
-    tenant_id: uuid.UUID,
-    db: Session,
-    api_key: str,
-    trace: TraceHandle | None,
-) -> _QualityStageResult:
-    overlap_started_at = perf_counter()
-    source_overlap_detected, source_overlap_pairs = detect_source_overlaps(final_results)
-    contradiction_pairs = detect_metadata_contradictions(final_results, source_overlap_pairs)
-    client_row: Tenant | None = None
-    if settings.contradiction_adjudication_enabled and hasattr(db, "query"):
-        client_row = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    contradiction_adjudication, contradiction_adjudication_observability = (
-        _build_contradiction_adjudication_evidence(
-            contradiction_pairs=contradiction_pairs,
-            final_results=final_results,
-            tenant=client_row,
-            api_key=api_key,
-        )
-    )
-    reliability = build_reliability_assessment(
-        top_score=final_results[0][1] if final_results else None,
-        result_count=len(final_results),
-        source_overlap_detected=source_overlap_detected,
-        source_overlap_pairs=source_overlap_pairs,
-        source_overlap_similarity_threshold=0.75,
-        contradiction_pairs=contradiction_pairs,
-        contradiction_adjudication=contradiction_adjudication,
-        contradiction_adjudication_observability=contradiction_adjudication_observability,
-    )
-    if trace is not None:
-        # The historical span name is preserved for continuity; payload semantics are overlap-only.
-        trace.span(
-            name="source-overlap-check",
-            input={
-                "candidate_count": len(final_results),
-                "strategy": "cross-document-jaccard-overlap-heuristic",
-            },
-        ).end(
-            output={
-                **build_reliability_projection(reliability),
-                "duration_ms": round((perf_counter() - overlap_started_at) * 1000, 2),
-            }
-        )
-    return _QualityStageResult(reliability=reliability)
-
-
 def _build_empty_result_bundle(
     q: _QueryStageResult,
     c: _CandidateStageResult,
@@ -3097,157 +2274,12 @@ def _build_empty_result_bundle(
 
 
 # ---------------------------------------------------------------------------
-# Public orchestrator
-# ---------------------------------------------------------------------------
-
-
-def search_similar_chunks_detailed(
-    tenant_id: uuid.UUID,
-    query: str,
-    top_k: int,
-    db: Session,
-    *,
-    api_key: str,
-    trace: TraceHandle | None = None,
-    precomputed_query_variants: list[str] | None = None,
-    precomputed_variant_vectors: list[list[float]] | None = None,
-    precomputed_embedding_api_request_count: int | None = None,
-    precomputed_rewritten_variant: str | None = None,
-    embedding_timeout: float | None = None,
-) -> SearchResultBundle:
-    """
-    Hybrid search: pgvector cosine similarity + BM25, merged with RRF.
-
-    PostgreSQL uses pgvector for candidate acquisition, while SQLite uses
-    Python cosine search. Downstream ranking and observability stages are shared.
-    """
-    retrieval_started_at = perf_counter()
-
-    if embedding_timeout is None:
-        embedding_timeout = settings.embedding_http_timeout_seconds
-
-    q = _run_query_stage(
-        query=query,
-        api_key=api_key,
-        trace=trace,
-        precomputed_query_variants=precomputed_query_variants,
-        precomputed_variant_vectors=precomputed_variant_vectors,
-        precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
-        precomputed_rewritten_variant=precomputed_rewritten_variant,
-        embedding_timeout=embedding_timeout,
-    )
-    c = _run_candidate_stage(
-        tenant_id=tenant_id,
-        query=query,
-        query_stage=q,
-        top_k=top_k,
-        db=db,
-        trace=trace,
-        api_key=api_key,
-    )
-    if not c.vector_candidates:
-        return _build_empty_result_bundle(
-            q, c, round((perf_counter() - retrieval_started_at) * 1000, 2)
-        )
-
-    r = _run_ranking_stage(
-        query=query,
-        query_stage=q,
-        candidate_stage=c,
-        top_k=top_k,
-        trace=trace,
-    )
-    quality = _run_quality_stage(
-        final_results=r.final_results,
-        tenant_id=tenant_id,
-        db=db,
-        api_key=api_key,
-        trace=trace,
-    )
-    return SearchResultBundle(
-        results=r.final_results,
-        best_vector_similarity=c.best_vector_similarity,
-        vector_similarities=r.vector_similarities,
-        best_keyword_score=c.best_keyword_score,
-        has_lexical_signal=c.bm25_bundle.has_lexical_signal,
-        query_variants=q.query_variants,
-        query_script_bucket=q.query_script_bucket,
-        reliability=quality.reliability,
-        query_variant_count=q.query_variant_count,
-        variant_mode=q.variant_mode,
-        extra_variant_count=q.extra_variant_count,
-        embedded_query_count=q.embedded_query_count,
-        extra_embedded_queries=q.extra_embedded_queries,
-        embedding_api_request_count=q.embedding_api_request_count,
-        extra_embedding_api_requests=q.extra_embedding_api_requests,
-        vector_search_call_count=c.vector_search_call_count,
-        extra_vector_search_calls=max(c.vector_search_call_count - 1, 0),
-        bm25_expansion_mode=c.bm25_expansion_mode,
-        bm25_query_variant_count=len(c.bm25_bundle.variant_queries),
-        bm25_variant_eval_count=c.bm25_bundle.variant_eval_count,
-        extra_bm25_variant_evals=max(c.bm25_bundle.variant_eval_count - 1, 0),
-        bm25_merged_hit_count_before_cap=c.bm25_bundle.merged_hit_count_before_cap,
-        bm25_merged_hit_count_after_cap=c.bm25_bundle.merged_hit_count_after_cap,
-        retrieval_duration_ms=round((perf_counter() - retrieval_started_at) * 1000, 2),
-        query_embedding_duration_ms=q.query_embedding_duration_ms,
-        vector_search_duration_ms=c.vector_duration_ms,
-    )
-
-
-def _python_cosine_search(
-    tenant_id: uuid.UUID,
-    query_vector: list[float],
-    top_k: int,
-    db: Session,
-) -> list[tuple[Embedding, float]]:
-    """
-    Fallback: Python-based cosine similarity search.
-
-    Used for SQLite (tests) or when pgvector is not available.
-    Not recommended for production with large datasets.
-
-    Args:
-        tenant_id: Tenant ID for filtering.
-        query_vector: Pre-computed query embedding.
-        top_k: Number of results.
-        db: Database session.
-    """
-
-    embeddings = (
-        db.query(Embedding)
-        .join(Document, Embedding.document_id == Document.id)
-        .filter(Document.tenant_id == tenant_id)
-        .all()
-    )
-
-    scored: list[tuple[Embedding, float]] = []
-    for emb in embeddings:
-        if emb.vector is not None:
-            vector: list[float] | None = list(emb.vector)
-            meta_vec = (emb.metadata_json or {}).get("vector")
-            if meta_vec is not None and meta_vec != vector:
-                logger.warning(
-                    "embedding %s: emb.vector diverges from metadata_json[vector]",
-                    emb.id,
-                )
-        else:
-            meta = emb.metadata_json or {}
-            vector = meta.get("vector")
-
-        if not vector or not isinstance(vector, list) or len(vector) != len(query_vector):
-            continue
-
-        scored.append((emb, cosine_similarity(query_vector, vector)))
-
-    return _sort_scored_embeddings(scored)[:top_k]
-
-
-# ---------------------------------------------------------------------------
-# Async layer — Phase 3 async migration (PR 1: search/service.py)
+# Async retrieval pipeline — the only implementation of hybrid retrieval.
 #
-# All public async entry points are named with an ``_async`` suffix so sync
-# callers (chat/guards, migrating in PR 2-3) continue to work unchanged.
-# The async pipeline stages are private (``_async_*`` prefix).
+# Public entry points carry an ``async``/``_async`` affix (a naming relic of
+# the staged sync→async migration); the pipeline stages are private
+# (``_async_*`` prefix). The former sync twins were removed once the last
+# runtime callers (chat handlers, search routes) moved to this path.
 # ---------------------------------------------------------------------------
 
 
@@ -3276,7 +2308,11 @@ async def _async_rewrite_query_for_retrieval(
     api_key: str,
     langfuse_observation: Any | None = None,
 ) -> str | None:
-    """Async counterpart of :func:`_rewrite_query_for_retrieval`."""
+    """Rewrite the user question as doc-style English keywords for retrieval.
+
+    Bridges the framing gap between user problem-descriptions and
+    feature-name headings in docs. Returns ``None`` on any failure.
+    """
     try:
         client = get_async_openai_client(api_key, timeout=QUERY_REWRITE_HTTP_TIMEOUT_SECONDS)
         response = await async_call_openai_with_retry(
@@ -3373,7 +2409,7 @@ async def async_embed_queries(
 async def async_embed_queries_with_stats(
     queries: list[str], *, api_key: str, timeout: float | None = None
 ) -> tuple[list[list[float]], int]:
-    """Async counterpart of :func:`embed_queries_with_stats`."""
+    """Embed multiple queries and return the actual API request count used."""
     if not queries:
         return [], 0
     any_miss = any(_emb_cache.get(q) is None for q in queries)
@@ -3467,7 +2503,7 @@ async def _async_pgvector_search(
     top_k: int,
     db: AsyncSession,
 ) -> list[tuple[Embedding, float]]:
-    """Async counterpart of :func:`_pgvector_search`."""
+    """Native pgvector cosine-distance search (HNSW index)."""
     try:
         distance_expr = Embedding.vector.cosine_distance(query_vector)
         stmt = (
@@ -3493,7 +2529,7 @@ async def _async_python_cosine_search(
     top_k: int,
     db: AsyncSession,
 ) -> list[tuple[Embedding, float]]:
-    """Async counterpart of :func:`_python_cosine_search`."""
+    """Pure-Python cosine search over metadata vectors (SQLite fallback)."""
     stmt = (
         select(Embedding)
         .join(Document, Embedding.document_id == Document.id)
@@ -3531,7 +2567,7 @@ async def _async_build_vector_candidate_set(
     *,
     is_sqlite: bool = False,
 ) -> VectorCandidateSet:
-    """Async counterpart of :func:`_build_vector_candidate_set`."""
+    """Run one vector search per variant vector and dedupe by max similarity."""
     vector_started_at = perf_counter()
     vector_search_fn = _async_python_cosine_search if is_sqlite else _async_pgvector_search
     vector_candidate_map: dict[uuid.UUID, tuple[Embedding, float]] = {}
@@ -3562,7 +2598,7 @@ async def async_bm25_search_chunks(
     top_k: int,
     db: AsyncSession,
 ) -> list[tuple[Embedding, float]]:
-    """Async counterpart of :func:`bm25_search_chunks`."""
+    """Standalone BM25 search with an SQL token prefilter."""
     tokens = _bm25_prefilter_tokens(query)
     if not tokens:
         return []
@@ -3596,7 +2632,7 @@ async def async_entity_overlap_search(
     *,
     is_sqlite: bool = False,
 ) -> list[tuple[Embedding, float]]:
-    """Async counterpart of :func:`entity_overlap_search`."""
+    """Retrieve chunks whose ``entities`` overlap with the query's NER list."""
     if not query_entities or not tenant_id:
         return []
 
@@ -3644,7 +2680,11 @@ async def async_entity_overlap_search(
 async def _async_tenant_has_embeddings(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> bool:
-    """Async counterpart of :func:`_tenant_has_embeddings`."""
+    """Cheap existence check: does the tenant have any indexed chunk?
+
+    Gates the NER submission for the entity-overlap channel — tenants with
+    zero embeddings would hit the empty-vector early-return downstream.
+    """
     try:
         stmt = (
             select(Embedding.id)
@@ -3789,7 +2829,7 @@ async def _async_run_query_stage(
     precomputed_rewritten_variant: str | None,
     embedding_timeout: float | None,
 ) -> _QueryStageResult:
-    """Async counterpart of :func:`_run_query_stage`.
+    """Query stage: expand, rewrite, and embed the query variants.
 
     Key optimization: when not using precomputed variants, the query-rewrite
     LLM call and the embedding of base variants are launched concurrently via
@@ -3926,7 +2966,7 @@ async def _async_run_candidate_stage(
     trace: TraceHandle | None,
     api_key: str | None = None,
 ) -> _CandidateStageResult:
-    """Async counterpart of :func:`_run_candidate_stage`.
+    """Candidate stage: vector + BM25 + entity-overlap retrieval and RRF fusion.
 
     NER is run via ``run_in_executor`` so it remains concurrent with vector
     and BM25 retrieval without blocking the event loop.
@@ -4196,7 +3236,7 @@ async def _async_run_quality_stage(
     api_key: str,
     trace: TraceHandle | None,
 ) -> _QualityStageResult:
-    """Async counterpart of :func:`_run_quality_stage`.
+    """Quality stage: reliability assessment over the ranked results.
 
     ``adjudicate_contradictions`` is a sync LLM call; it runs in the default
     thread-pool executor so the event loop is not blocked.
@@ -4268,9 +3308,8 @@ async def search_similar_chunks_detailed_async(
     precomputed_rewritten_variant: str | None = None,
     embedding_timeout: float | None = None,
 ) -> SearchResultBundle:
-    """Async counterpart of :func:`search_similar_chunks_detailed`.
+    """Run the full hybrid retrieval pipeline and return a detailed bundle.
 
-    Runs the full hybrid retrieval pipeline on an ``AsyncSession``.
     The query-rewrite LLM call and embedding of base variants execute in
     parallel (``asyncio.gather``) for measurable latency savings on every turn.
     """
@@ -4355,7 +3394,7 @@ async def search_similar_chunks_async(
     *,
     api_key: str,
 ) -> list[tuple[Embedding, float]]:
-    """Async counterpart of :func:`search_similar_chunks`."""
+    """Compatibility wrapper returning ranked results only."""
     return (
         await search_similar_chunks_detailed_async(
             tenant_id=tenant_id,

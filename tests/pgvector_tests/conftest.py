@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import psycopg2
 import pytest
+import pytest_asyncio
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
@@ -121,6 +122,40 @@ def pg_db_session(pg_engine: sa.engine.Engine) -> Generator[Session, None, None]
         session.rollback()
     finally:
         session.close()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def pg_async_db_session(pg_engine: sa.engine.Engine):
+    """AsyncSession over the SAME PostgreSQL database as ``pg_db_session``.
+
+    Lets a test create fixtures with the sync session (committed) and run the
+    async retrieval pipeline against the same data. The async engine is
+    disposed before ``pg_engine`` teardown drops the database.
+    """
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    sync_url = pg_engine.url.render_as_string(hide_password=False)
+    async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    async_engine = create_async_engine(async_url, future=True, poolclass=NullPool)
+    SessionFactory = async_sessionmaker(
+        bind=async_engine,
+        class_=AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    try:
+        async with SessionFactory() as session:
+            try:
+                yield session
+            finally:
+                await session.rollback()
+    finally:
+        await async_engine.dispose()
 
 
 @pytest.fixture(autouse=True)

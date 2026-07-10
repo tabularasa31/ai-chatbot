@@ -2570,7 +2570,6 @@ class _PipelineState:
 
     # Speculative retrieval: started concurrently with the relevance guard and
     # consumed in _run_retrieval. Cancelled/discarded if the guard rejects.
-    retrieval_question: str | None = None
     retrieve_kwargs: dict[str, Any] = field(default_factory=dict)
     spec_retrieval_task: asyncio.Task[RetrievalContext] | None = None
 
@@ -2645,7 +2644,7 @@ async def async_run_chat_pipeline(
         # ``backend.chat.service.async_retrieve_context`` intercept the call.
         return await _svc.async_retrieve_context(
             tenant_id,
-            state.retrieval_question or question,
+            question,
             session,
             api_key,
             top_k=5,
@@ -3082,7 +3081,6 @@ async def async_run_chat_pipeline(
         # Retrieval always runs on the raw question plus the precomputed
         # variants — the dialog-aware rewrite variant (already embedded above)
         # carries the continuation context, so no query replacement is needed.
-        state.retrieval_question = question
         state.retrieve_kwargs = dict(
             precomputed_query_variants=state.query_variants,
             precomputed_variant_vectors=state.variant_vectors,

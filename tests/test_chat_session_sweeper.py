@@ -220,3 +220,25 @@ def test_escalation_closed_chat_is_skipped(
     assert captured == []
     db_session.refresh(chat)
     assert chat.session_ended_event_at is None
+
+
+def test_sweep_preserves_updated_at(db_session: Session, monkeypatch) -> None:
+    # The marker is an analytics write, not activity: updated_at must keep
+    # the real last-activity timestamp, otherwise conversation rotation sees
+    # the swept chat as fresh and resumes stale state.
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(db_session, tenant, age_minutes=90)
+    last_activity = chat.updated_at
+
+    monkeypatch.setattr(
+        chat_session_sweeper,
+        "_emit_chat_session_ended_event",
+        lambda **kwargs: None,
+    )
+
+    sweep_inactive_chats(db_session)
+
+    db_session.expire_all()
+    db_session.refresh(chat)
+    assert chat.session_ended_event_at is not None
+    assert chat.updated_at == last_activity

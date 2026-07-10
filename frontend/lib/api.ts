@@ -21,6 +21,9 @@ export type ChatSessionLogs = {
     feedback: "none" | "up" | "down";
     ideal_answer: string | null;
     created_at: string;
+    // Conversation the message belongs to; a session spans several after
+    // idle rotation. The UI draws a divider when chat_id changes.
+    chat_id?: string | null;
   }[];
 };
 

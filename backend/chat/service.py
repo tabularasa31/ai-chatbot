@@ -82,6 +82,7 @@ from backend.chat.persistence import (
     _source_docs_for_db,  # noqa: F401  (re-export)
 )
 from backend.chat.pii import redact
+from backend.chat.rotation import latest_chat_query, should_rotate
 from backend.contact_sessions.service import touch_user_session
 from backend.core import db as core_db
 from backend.core.config import (
@@ -441,21 +442,44 @@ async def _ensure_chat_async(
     user_context: dict | None,
     browser_locale: str | None,
 ) -> tuple[Chat, dict | None]:
-    """Async counterpart of :func:`_ensure_chat`.
+    """Load the session's current conversation, rotating it when stale.
 
-    Loads the Chat row via AsyncSession (``selectinload`` for messages) and
-    falls back to creating a new one when none exists.
+    Loads the latest Chat row for the session (``selectinload`` for messages)
+    and creates a new one when none exists — or when the latest one is idle
+    past the conversation threshold (see :mod:`backend.chat.rotation`), which
+    starts a fresh conversation under the same ``session_id``.
     """
     result = await db.execute(
-        select(Chat)
-        .options(selectinload(Chat.messages))
-        .where(Chat.session_id == session_id, Chat.tenant_id == tenant_id)
+        latest_chat_query(tenant_id, session_id).options(selectinload(Chat.messages))
     )
-    chat = result.scalar_one_or_none()
+    chat = result.scalars().first()
+
+    rotated_from: Chat | None = None
+    if chat is not None and should_rotate(chat):
+        # Serialize concurrent rotation: lock the stale row, then re-read the
+        # latest chat. If a parallel request rotated while we waited on the
+        # lock, the re-read (READ COMMITTED) sees its freshly committed Chat
+        # and we continue there instead of rotating a second time.
+        await db.execute(select(Chat.id).where(Chat.id == chat.id).with_for_update())
+        _res = await db.execute(
+            latest_chat_query(tenant_id, session_id).options(
+                selectinload(Chat.messages)
+            )
+        )
+        latest = _res.scalars().first()
+        if latest is not None and latest.id == chat.id and should_rotate(latest):
+            rotated_from = latest
+            chat = None
+        else:
+            chat = latest
 
     effective_user_ctx: dict | None = None
     if chat and chat.user_context:
         effective_user_ctx = dict(chat.user_context)
+    elif rotated_from is not None and rotated_from.user_context:
+        # The visitor identity survives rotation even though the conversation
+        # state does not.
+        effective_user_ctx = dict(rotated_from.user_context)
     elif user_context:
         effective_user_ctx = dict(user_context)
 
@@ -483,6 +507,18 @@ async def _ensure_chat_async(
             ),
         )
         await db.commit()
+        if rotated_from is not None:
+            # No chat_session_ended emission here: the old chat is past the
+            # same idle threshold the sweeper uses, so the sweeper reports it
+            # at-most-once via session_ended_event_at within one pass.
+            logger.info(
+                "conversation_rotated",
+                extra={
+                    "session_id": str(session_id),
+                    "old_chat_id": str(rotated_from.id),
+                    "new_chat_id": str(chat.id),
+                },
+            )
         # Re-query with selectinload so chat.messages is eagerly loaded.
         _res = await db.execute(
             select(Chat).options(selectinload(Chat.messages)).where(Chat.id == chat.id)

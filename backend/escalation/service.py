@@ -1350,6 +1350,7 @@ def perform_manual_escalation(
     chat = (
         db.query(Chat)
         .filter(Chat.session_id == session_id, Chat.tenant_id == tenant.id)
+        .order_by(Chat.created_at.desc())
         .first()
     )
     if not chat:

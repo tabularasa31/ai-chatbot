@@ -23,13 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from backend.chat.events import _emit_chat_session_ended_event, _session_duration_ms
+from backend.core.config import settings
 from backend.jobs._periodic import PeriodicJob
 from backend.models import Chat, Message
 from backend.models.base import _utcnow
 
 logger = logging.getLogger(__name__)
 
-_INACTIVITY_THRESHOLD_SECONDS = 3600  # 60 min of no activity ends a session
 _CHECK_INTERVAL_SECONDS = 300
 _STARTUP_DELAY_SECONDS = 60
 # Cap rows per pass so a large backlog drains over several passes (oldest
@@ -53,7 +53,10 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
     path emits its own event.
     """
     reference = now or _utcnow()
-    cutoff = reference - timedelta(seconds=_INACTIVITY_THRESHOLD_SECONDS)
+    # Same knob as lazy conversation rotation (backend/chat/rotation.py): one
+    # definition of "the conversation ended" for analytics and behavior. Read
+    # at call time so tests can override settings.
+    cutoff = reference - timedelta(seconds=settings.conversation_idle_timeout_seconds)
     has_messages_expr = (
         select(Message.id)
         .where(Message.chat_id == Chat.id)
@@ -82,8 +85,17 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         session_id = str(chat.session_id) if chat.session_id else None
         duration_ms = _session_duration_ms(chat.created_at, last_activity)
         try:
-            chat.session_ended_event_at = reference
-            db.add(chat)
+            # Query-level update with an explicit updated_at: the marker is an
+            # analytics write, not activity, and must not refresh updated_at
+            # (the column's onupdate would otherwise stamp sweep time, making
+            # the idle chat look fresh to conversation rotation).
+            db.query(Chat).filter(Chat.id == chat.id).update(
+                {
+                    "session_ended_event_at": reference,
+                    "updated_at": last_activity,
+                },
+                synchronize_session=False,
+            )
             db.commit()
         except Exception:
             logger.exception("chat_session_sweeper failed to mark chat %s", chat.id)

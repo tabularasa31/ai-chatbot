@@ -1198,6 +1198,44 @@ _SEMANTIC_REWRITE_PROMPT_SUFFIX = (
     "the user's symptom. Reply with ONLY the search query, nothing else."
 )
 
+# History-aware variant: given the recent dialog, the model itself decides
+# whether the current message continues the conversation (and needs the prior
+# topic folded into the query) or stands alone (and the history must be
+# ignored). This replaces surface heuristics — word counts and affirmation
+# dictionaries can't separate "yes, how do I check?" from "how to set up the
+# widget": both are short, but only the first needs the previous turn.
+_SEMANTIC_REWRITE_DIALOG_PREFIX = (
+    "Recent conversation between a customer and a product support chatbot:\n"
+)
+_SEMANTIC_REWRITE_DIALOG_BRIDGE = "\n\nThe customer now says:\n\""
+_SEMANTIC_REWRITE_DIALOG_SUFFIX = (
+    "\"\n\n"
+    "Write a short standalone search query (5-10 words) using product feature "
+    "terminology and technical concepts that would retrieve the relevant "
+    "documentation. If the customer's message reacts to the assistant's "
+    "previous turn (an affirmation like \"yes\", a short continuation, a "
+    "reference like \"and for teams?\"), resolve it against the conversation "
+    "so the query names the actual topic being discussed. If the message is "
+    "self-contained, ignore the conversation entirely. Focus on the FEATURE "
+    "or SETTING being asked about, not the user's symptom. Write the query "
+    "in the customer's language. Reply with ONLY the search query, nothing "
+    "else."
+)
+
+
+def _build_semantic_rewrite_prompt(query: str, dialog_context: str | None) -> str:
+    # Concatenation instead of .format() so curly braces in user input
+    # (e.g. "{name}", "{0}") don't raise KeyError / IndexError.
+    if dialog_context:
+        return (
+            _SEMANTIC_REWRITE_DIALOG_PREFIX
+            + dialog_context
+            + _SEMANTIC_REWRITE_DIALOG_BRIDGE
+            + query
+            + _SEMANTIC_REWRITE_DIALOG_SUFFIX
+        )
+    return _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
+
 
 def semantic_query_rewrite(
     query: str,
@@ -1206,6 +1244,7 @@ def semantic_query_rewrite(
     timeout: float = 2.0,
     bot_id: str | None = None,
     langfuse_observation: Any | None = None,
+    dialog_context: str | None = None,
 ) -> str | None:
     """LLM-based semantic rewrite: user symptom → feature/product terminology.
 
@@ -1215,14 +1254,18 @@ def semantic_query_rewrite(
     the same language as the query so the multilingual embedding model can
     match chunks regardless of what language the docs are in.
 
+    When ``dialog_context`` is provided (rendered by
+    ``backend.chat.followup.build_dialog_context``), the model additionally
+    resolves conversational continuations ("yes, how do I check?") into a
+    standalone query against the prior turns, and ignores the history for
+    self-contained questions.
+
     Returns None on any failure so the caller degrades gracefully to lexical
     variants only. Used for vector retrieval only, not BM25.
     """
     if not query or not api_key:
         return None
-    # Concatenation instead of .format() so curly braces in user input
-    # (e.g. "{name}", "{0}") don't raise KeyError / IndexError.
-    prompt = _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
+    prompt = _build_semantic_rewrite_prompt(query, dialog_context)
     try:
         client = get_openai_client(api_key, timeout=timeout)
         response = call_openai_with_retry(
@@ -3388,11 +3431,12 @@ async def async_semantic_query_rewrite(
     timeout: float = 2.0,
     bot_id: str | None = None,
     langfuse_observation: Any | None = None,
+    dialog_context: str | None = None,
 ) -> str | None:
     """Async counterpart of :func:`semantic_query_rewrite`."""
     if not query or not api_key:
         return None
-    prompt = _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
+    prompt = _build_semantic_rewrite_prompt(query, dialog_context)
     try:
         client = get_async_openai_client(api_key, timeout=timeout)
         response = await async_call_openai_with_retry(

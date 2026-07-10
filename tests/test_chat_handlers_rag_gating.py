@@ -113,6 +113,31 @@ def test_min_words_threshold_is_inclusive() -> None:
     assert reason == "short_query"
 
 
+def test_dialog_context_forces_rewrite_even_when_otherwise_eligible() -> None:
+    # A turn with prior dialog can always be a continuation ("да, а как
+    # именно проверить делегацию?") — no surface feature of the message can
+    # rule that out, so the rewrite must run to resolve it.
+    skip, reason = _should_skip_query_rewrite(
+        "how do I reset my password from the settings page",
+        language_match="native",
+        min_words=4,
+        has_dialog_context=True,
+    )
+    assert skip is False
+    assert reason == "has_dialog_context"
+
+
+def test_no_dialog_context_keeps_skip_for_eligible_query() -> None:
+    skip, reason = _should_skip_query_rewrite(
+        "how do I reset my password from the settings page",
+        language_match="native",
+        min_words=4,
+        has_dialog_context=False,
+    )
+    assert skip is True
+    assert reason == "eligible_to_skip"
+
+
 def test_lowercase_acronym_does_not_trigger_abbreviation_branch() -> None:
     # ``api`` is not all-caps — must not block the skip.
     skip, reason = _should_skip_query_rewrite(

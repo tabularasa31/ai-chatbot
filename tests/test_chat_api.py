@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.chat.language import LocalizationResult
 from backend.chat.service import RetrievalContext
 from backend.guards.reject_response import RejectReason, build_reject_response
-from tests._async_utils import as_async as _as_async, async_assert_not_called
+from tests._async_utils import as_async as _as_async, as_async_generate, async_assert_not_called
 from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
@@ -875,8 +875,10 @@ def test_chat_hybrid_high_vector_confidence_does_not_auto_escalate(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: ("Максимум 100 документов можно загрузить на аккаунт.", 8),
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(
+            lambda *args, **kwargs: ("Максимум 100 документов можно загрузить на аккаунт.", 8)
+        ),
     )
 
     def _unexpected_ticket(*args, **kwargs):
@@ -1013,8 +1015,8 @@ def test_chat_injection_detected(
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
 
     response = tenant.post(
@@ -1133,8 +1135,8 @@ def test_chat_injection_detected_skips_speculative_retrieval(
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
 
     response = tenant.post(
@@ -1215,8 +1217,8 @@ def test_chat_faq_direct(
         async_assert_not_called("async_retrieve_context"),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
 
     response = tenant.post(
@@ -1292,8 +1294,8 @@ def test_chat_not_relevant_returns_localized_reject(
         _as_async(lambda *args, **kwargs: speculative_retrieval),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
     monkeypatch.setattr(
         "backend.guards.reject_response.localize_text_result",

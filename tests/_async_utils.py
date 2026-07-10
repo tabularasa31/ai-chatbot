@@ -34,3 +34,24 @@ def async_assert_not_called(name: str) -> Callable[..., Any]:
         raise AssertionError(f"{name} should not have been called")
 
     return _raiser
+
+
+def as_async_generate(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Adapt a legacy sync ``generate_answer`` fake to the async 5-tuple contract.
+
+    The sync ``generate_answer`` twin (removed with the async-only migration)
+    returned ``(text, total_tokens)``; ``async_generate_answer`` returns
+    ``(text, total_tokens, input_tokens, output_tokens, offered_ticket)``.
+    Wraps the old-style fake for
+    ``monkeypatch.setattr("backend.chat.handlers.rag.async_generate_answer", ...)``
+    and normalizes a 2-tuple result to the 5-tuple shape.
+    """
+
+    async def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        out = fn(*args, **kwargs)
+        if isinstance(out, tuple) and len(out) == 2:
+            text, total = out
+            return (text, total, 0, 0, False)
+        return out
+
+    return _wrapped

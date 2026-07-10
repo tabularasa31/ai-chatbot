@@ -15,7 +15,7 @@ from backend.guards.reject_response import RejectReason, build_reject_response
 from backend.models import Tenant, TenantProfile
 from backend.search.service import build_reliability_assessment
 
-from tests._async_utils import as_async as _as_async, async_assert_not_called
+from tests._async_utils import as_async as _as_async, as_async_generate, async_assert_not_called
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -64,8 +64,8 @@ def test_injection_rejects_before_rag(
         _async_relevance_unused,
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("generate_answer called")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
 
     outcome = process_chat_message(
@@ -123,8 +123,8 @@ def test_low_retrieval_does_not_reject_if_any_vector_similarity_missing(
     monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: ("OK", 5),
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *args, **kwargs: ("OK", 5)),
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",
@@ -187,8 +187,8 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(lambda *args, **kwargs: retrieval))
 
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not generate")),
+        "backend.chat.handlers.rag.async_generate_answer",
+        async_assert_not_called("async_generate_answer"),
     )
 
     outcome = process_chat_message(

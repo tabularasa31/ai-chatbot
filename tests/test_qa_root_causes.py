@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -100,7 +100,9 @@ class TestLanguageNotValidated:
             return original_detect(text)
 
         monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve))
-        monkeypatch.setattr("backend.chat.service.generate_answer", _fake_generate)
+        monkeypatch.setattr(
+            "backend.chat.handlers.rag.async_generate_answer", as_async_generate(_fake_generate)
+        )
         monkeypatch.setattr("backend.chat.handlers.rag.detect_language", _fake_detect)
         monkeypatch.setattr("backend.chat.handlers.rag.translate_text_result", _fake_translate)
 
@@ -409,8 +411,8 @@ class TestTurboFlareFalseEscalation:
 
         monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve))
         monkeypatch.setattr(
-            "backend.chat.service.generate_answer",
-            lambda *a, **kw: (expected_answer, 50),
+            "backend.chat.handlers.rag.async_generate_answer",
+            as_async_generate(lambda *a, **kw: (expected_answer, 50)),
         )
 
         session_id = uuid.uuid4()

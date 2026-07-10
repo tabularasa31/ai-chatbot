@@ -48,8 +48,6 @@ from backend.chat.handlers.rag import (
     async_run_chat_pipeline,
     build_rag_messages,
     build_rag_prompt,
-    generate_answer,
-    retrieve_context,
 )
 from backend.chat.history_service import (
     PREVIEW_MAX_LEN,  # noqa: F401  (re-export)
@@ -168,8 +166,6 @@ __all__ = (
     "async_retrieve_context",
     "build_rag_messages",
     "build_rag_prompt",
-    "generate_answer",
-    "retrieve_context",
 )
 
 _HANDLER_ROUTER: HandlerRouter = default_router()

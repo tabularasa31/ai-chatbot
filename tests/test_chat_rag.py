@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import uuid
 from unittest.mock import Mock
@@ -11,13 +12,13 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers import rag as rag_handler
+from backend.chat.handlers.rag import async_generate_answer
 from backend.chat.language import LocalizationResult
 from backend.chat.service import (
     _quick_answer_keys_for_question,
     _quick_answers_context,
     build_rag_messages,
     build_rag_prompt,
-    generate_answer,
 )
 from backend.core.config import settings
 from backend.models import QuickAnswer, SourceSchedule, SourceStatus, UrlSource
@@ -61,7 +62,7 @@ def test_build_rag_messages_splits_system_and_user_parts() -> None:
 
 def test_generate_answer_no_context(mock_openai_client: Mock) -> None:
     """Empty chunks → canonical fallback, no OpenAI call."""
-    answer, tokens = generate_answer("question", [], api_key="sk-test")
+    answer, tokens, *_ = asyncio.run(async_generate_answer("question", [], api_key="sk-test"))
     assert answer == "I don't have information about this."
     assert tokens == 0
     mock_openai_client.chat.completions.create.assert_not_called()
@@ -75,11 +76,13 @@ def test_generate_answer_allows_quick_answers_without_retrieval_chunks(
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=42)
 
-    answer, tokens = generate_answer(
-        "Where is the documentation?",
-        [],
-        api_key="sk-test",
-        quick_answer_items=["Documentation: https://docs.example.com/"],
+    answer, tokens, *_ = asyncio.run(
+        async_generate_answer(
+            "Where is the documentation?",
+            [],
+            api_key="sk-test",
+            quick_answer_items=["Documentation: https://docs.example.com/"],
+        )
     )
 
     assert answer == "Documentation: https://docs.example.com/"
@@ -287,7 +290,7 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     ]
     mock_openai_client.chat.completions.create.return_value.usage = Mock(total_tokens=100)
 
-    answer, tokens = generate_answer("What?", ["chunk1"], api_key="sk-test")
+    answer, tokens, *_ = asyncio.run(async_generate_answer("What?", ["chunk1"], api_key="sk-test"))
     assert answer == "The answer is 42"
     assert tokens == 100
     mock_openai_client.chat.completions.create.assert_called_once()
@@ -326,12 +329,14 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
         prompt_tokens_details=Mock(cached_tokens=64),
     )
 
-    generate_answer(
-        "What?",
-        ["chunk1"],
-        api_key="sk-test",
-        metrics_tenant_id="ck_test",
-        metrics_bot_id="bot_test",
+    asyncio.run(
+        async_generate_answer(
+            "What?",
+            ["chunk1"],
+            api_key="sk-test",
+            metrics_tenant_id="ck_test",
+            metrics_bot_id="bot_test",
+        )
     )
 
     events = [event for event in captured_events if event["event"] == "$ai_generation"]
@@ -384,7 +389,9 @@ def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock
 
     assert chat_service.settings.observability_capture_full_prompts is False
 
-    generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+    asyncio.run(
+        async_generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+    )
 
     assert isinstance(trace.generation_input, dict)
     prefix_estimate = trace.generation_input.pop("prompt_cache_prefix_tokens_estimate")
@@ -429,7 +436,9 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
         True,
     )
 
-    generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+    asyncio.run(
+        async_generate_answer("What?", ["secret internal KB chunk"], api_key="sk-test", trace=trace)
+    )
 
     system_prompt, user_message = build_rag_messages("What?", ["secret internal KB chunk"])
     assert trace.generation_input == [
@@ -477,7 +486,7 @@ def test_generate_answer_ends_generation_on_openai_error(mock_openai_client: Moc
     mock_openai_client.chat.completions.create.side_effect = RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
-        generate_answer("What?", ["chunk1"], api_key="sk-test", trace=trace)
+        asyncio.run(async_generate_answer("What?", ["chunk1"], api_key="sk-test", trace=trace))
 
     assert len(trace.generation_handle.end_calls) == 1
     end_call = trace.generation_handle.end_calls[0]
@@ -499,11 +508,13 @@ def test_generate_answer_logs_tokens_with_operation_generate(
         lambda text, *, response_language, api_key: (text, 0),
     )
     with caplog.at_level("INFO"):
-        answer, tokens = generate_answer(
-            "What is X?",
-            ["chunk"],
-            api_key="sk-test",
-            response_language="fr",
+        answer, tokens, *_ = asyncio.run(
+            async_generate_answer(
+                "What is X?",
+                ["chunk"],
+                api_key="sk-test",
+                response_language="fr",
+            )
         )
 
     assert answer == "AI response"
@@ -666,12 +677,14 @@ def test_generate_answer_skips_language_guard_when_streaming(
     )
 
     streamed: list[str] = []
-    answer, tokens = generate_answer(
-        "How do I check SSL status?",
-        ["ctx"],
-        api_key="sk-test",
-        response_language="en",
-        stream_callback=streamed.append,
+    answer, tokens, *_ = asyncio.run(
+        async_generate_answer(
+            "How do I check SSL status?",
+            ["ctx"],
+            api_key="sk-test",
+            response_language="en",
+            stream_callback=streamed.append,
+        )
     )
 
     assert answer == russian_text
@@ -699,11 +712,13 @@ def test_generate_answer_adds_translation_tokens_to_total(
 
     monkeypatch.setattr(rag_handler, "translate_text_result", _fake_translate)
 
-    answer, tokens = generate_answer(
-        "How do I check SSL status?",
-        ["ctx"],
-        api_key="sk-test",
-        response_language="en",
+    answer, tokens, *_ = asyncio.run(
+        async_generate_answer(
+            "How do I check SSL status?",
+            ["ctx"],
+            api_key="sk-test",
+            response_language="en",
+        )
     )
 
     assert answer == "Translated answer in English."

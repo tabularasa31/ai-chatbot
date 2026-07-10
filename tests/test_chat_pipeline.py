@@ -17,7 +17,7 @@ from backend.chat.service import (
 )
 from backend.escalation.openai_escalation import complete_escalation_openai_turn
 from backend.search.service import build_reliability_assessment
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -186,8 +186,8 @@ def test_process_chat_message_adds_variant_summary_to_trace(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *args, **kwargs: ("Use the reset link in settings.", 17),
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *args, **kwargs: ("Use the reset link in settings.", 17)),
     )
     monkeypatch.setattr(
         "backend.chat.service.should_escalate",

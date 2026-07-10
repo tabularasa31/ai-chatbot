@@ -1,12 +1,14 @@
-"""Unit tests for retrieve_context."""
+"""Unit tests for async_retrieve_context."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 import pytest
 
-from backend.chat.service import retrieve_context
+from backend.chat.service import async_retrieve_context
+from tests._async_utils import as_async
 
 
 def test_retrieve_context_propagates_reliability_cap_reason(
@@ -23,8 +25,8 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     )
 
     monkeypatch.setattr(
-        "backend.chat.service.search_similar_chunks_detailed",
-        lambda *args, **kwargs: SearchResultBundle(
+        "backend.search.service.search_similar_chunks_detailed_async",
+        as_async(lambda *args, **kwargs: SearchResultBundle(
             results=[(embedding, 0.88)],
             best_vector_similarity=0.88,
             query_variants=["reset password"],
@@ -33,7 +35,7 @@ def test_retrieve_context_propagates_reliability_cap_reason(
                 result_count=5,
                 source_overlap_detected=True,
             ),
-        ),
+        )),
     )
 
     class FakeBind:
@@ -42,11 +44,13 @@ def test_retrieve_context_propagates_reliability_cap_reason(
     class FakeDB:
         bind = FakeBind()
 
-    context = retrieve_context(
-        tenant_id=uuid.uuid4(),
-        question="reset password",
-        db=FakeDB(),
-        api_key="sk-test",
+    context = asyncio.run(
+        async_retrieve_context(
+            tenant_id=uuid.uuid4(),
+            question="reset password",
+            db=FakeDB(),
+            api_key="sk-test",
+        )
     )
 
     assert context.reliability.source_overlap_detected is True
@@ -69,14 +73,14 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
     )
 
     monkeypatch.setattr(
-        "backend.chat.service.search_similar_chunks_detailed",
-        lambda *args, **kwargs: SearchResultBundle(
+        "backend.search.service.search_similar_chunks_detailed_async",
+        as_async(lambda *args, **kwargs: SearchResultBundle(
             results=[(embedding, 0.77)],
             best_vector_similarity=0.0,
             best_keyword_score=1.0,
             has_lexical_signal=True,
             query_variants=["secret number"],
-        ),
+        )),
     )
 
     class FakeBind:
@@ -85,11 +89,13 @@ def test_retrieve_context_uses_vector_confidence_and_lexical_mode(
     class FakeDB:
         bind = FakeBind()
 
-    context = retrieve_context(
-        tenant_id=uuid.uuid4(),
-        question="secret number",
-        db=FakeDB(),
-        api_key="sk-test",
+    context = asyncio.run(
+        async_retrieve_context(
+            tenant_id=uuid.uuid4(),
+            question="secret number",
+            db=FakeDB(),
+            api_key="sk-test",
+        )
     )
 
     assert context.mode == "hybrid"

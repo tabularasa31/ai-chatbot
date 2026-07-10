@@ -31,7 +31,7 @@ from backend.faq.faq_matcher import FAQMatchResult
 from backend.models import Chat, Document, DocumentStatus, DocumentType, Embedding, Tenant
 from backend.search.service import build_reliability_assessment
 
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -180,7 +180,9 @@ def test_first_zero_hits_emits_soft_reply_and_sets_flag(
     def _fail_generate(*_a, **_kw):  # pragma: no cover - asserts on hit
         raise AssertionError("answer LLM must not be called on zero hits")
 
-    monkeypatch.setattr("backend.chat.service.generate_answer", _fail_generate)
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", as_async_generate(_fail_generate)
+    )
 
     session_id = uuid.uuid4()
     outcome = process_chat_message(

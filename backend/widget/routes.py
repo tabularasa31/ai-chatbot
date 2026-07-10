@@ -399,7 +399,10 @@ def widget_chat(
                 ),
             )
         rotation_pending = should_rotate(existing_chat)
-        if existing_chat.bot_id is None:
+        if existing_chat.bot_id is None and not rotation_pending:
+            # Skip the backfill when rotation is pending: the commit would
+            # refresh updated_at (onupdate) and make the pipeline see the
+            # stale chat as fresh; the new Chat gets its bot_id on creation.
             existing_chat.bot_id = _bot.id
             db.add(existing_chat)
             db.commit()

@@ -85,8 +85,17 @@ def sweep_inactive_chats(db: Session, *, now: datetime | None = None) -> int:
         session_id = str(chat.session_id) if chat.session_id else None
         duration_ms = _session_duration_ms(chat.created_at, last_activity)
         try:
-            chat.session_ended_event_at = reference
-            db.add(chat)
+            # Query-level update with an explicit updated_at: the marker is an
+            # analytics write, not activity, and must not refresh updated_at
+            # (the column's onupdate would otherwise stamp sweep time, making
+            # the idle chat look fresh to conversation rotation).
+            db.query(Chat).filter(Chat.id == chat.id).update(
+                {
+                    "session_ended_event_at": reference,
+                    "updated_at": last_activity,
+                },
+                synchronize_session=False,
+            )
             db.commit()
         except Exception:
             logger.exception("chat_session_sweeper failed to mark chat %s", chat.id)

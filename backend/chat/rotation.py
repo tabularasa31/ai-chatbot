@@ -59,9 +59,17 @@ def should_rotate(chat: Chat, *, now: datetime | None = None) -> bool:
     escalation (``ended_at`` set), so a returning visitor gets a fresh
     conversation instead of a "session closed" dead end. Within the window a
     closed chat keeps today's acknowledge_closed_or_start_new behavior.
+
+    A chat the sweeper already reported ended (``session_ended_event_at``
+    set) rotates unconditionally: the marker is the system's own declaration
+    that the conversation is over. This also makes rotation robust against
+    ``updated_at`` refreshes caused by non-activity writes (the marker commit
+    itself bumps it via the column's ``onupdate``).
     """
     if chat.escalation_awaiting_ticket_id is not None:
         return False
+    if chat.session_ended_event_at is not None:
+        return True
     reference = now or _utcnow()
     idle_cutoff = reference - timedelta(
         seconds=settings.conversation_idle_timeout_seconds

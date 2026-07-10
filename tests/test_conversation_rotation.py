@@ -347,3 +347,34 @@ def test_delete_original_content_covers_all_conversations(
     )
 
     assert deleted == 2
+
+
+def test_sweeper_marker_forces_rotation_despite_fresh_updated_at(
+    db_session: Session,
+) -> None:
+    # The sweeper's marker commit used to refresh updated_at (onupdate),
+    # making the idle chat look fresh right after a sweep. The marker itself
+    # is the system's declaration that the conversation ended — rotate.
+    tenant = _make_tenant(db_session)
+    chat = _make_chat(
+        db_session,
+        tenant,
+        idle_minutes=1,
+        session_ended_event_at=_utcnow(),
+    )
+    assert should_rotate(chat) is True
+
+
+def test_live_ticket_blocks_rotation_even_with_sweeper_marker(
+    db_session: Session,
+) -> None:
+    tenant = _make_tenant(db_session)
+    ticket = _make_ticket(db_session, tenant)
+    chat = _make_chat(
+        db_session,
+        tenant,
+        idle_minutes=45,
+        session_ended_event_at=_utcnow(),
+        escalation_awaiting_ticket_id=ticket.id,
+    )
+    assert should_rotate(chat) is False

@@ -238,16 +238,34 @@ function LogsPageContent() {
                   <p className="text-slate-500 text-sm">No messages in this session.</p>
                 ) : (
                   <div className="space-y-4">
-                    {logs?.messages.map((msg) => (
-                      <MessageBubble
-                        key={msg.id}
-                        msg={msg}
-                        onFeedbackUpdate={async (m, feedback, idealAnswer) => {
-                          await api.chat.setFeedback(m.id, feedback, idealAnswer);
-                          await mutateLogs();
-                        }}
-                      />
-                    ))}
+                    {logs?.messages.map((msg, index) => {
+                      const prev = index > 0 ? logs.messages[index - 1] : null;
+                      const newConversation =
+                        prev != null &&
+                        msg.chat_id != null &&
+                        prev.chat_id != null &&
+                        msg.chat_id !== prev.chat_id;
+                      return (
+                        <div key={msg.id} className="space-y-4">
+                          {newConversation && (
+                            <div className="flex items-center gap-3 py-1">
+                              <div className="h-px flex-1 bg-slate-200" />
+                              <span className="text-xs uppercase tracking-wide text-slate-400">
+                                New conversation
+                              </span>
+                              <div className="h-px flex-1 bg-slate-200" />
+                            </div>
+                          )}
+                          <MessageBubble
+                            msg={msg}
+                            onFeedbackUpdate={async (m, feedback, idealAnswer) => {
+                              await api.chat.setFeedback(m.id, feedback, idealAnswer);
+                              await mutateLogs();
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

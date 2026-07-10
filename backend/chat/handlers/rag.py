@@ -975,18 +975,44 @@ def _prompt_cache_kwargs(*candidate_ids: str | None) -> dict[str, Any]:
 
 
 def _generation_sampling_kwargs(reasoning: bool) -> dict[str, Any]:
-    """Sampling kwargs for the main chat generation call.
+    """Sampling parameters for the main chat generation call (telemetry shape).
 
     Non-reasoning models keep the historical fixed ``temperature=0.2``.
     Reasoning models get ``reasoning_effort`` (the OpenAI default of "medium"
     dominated generation latency for gpt-5-mini) and, for the gpt-5 family
     only, ``verbosity`` — other reasoning models reject the parameter.
+
+    This flat dict is what trace metadata records; the actual request kwargs
+    are assembled by :func:`_generation_request_kwargs`, which relocates
+    ``verbosity`` into ``extra_body`` for SDK compatibility.
     """
     if not reasoning:
         return {"temperature": 0.2}
     kwargs: dict[str, Any] = {"reasoning_effort": settings.chat_reasoning_effort}
     if settings.chat_model.lower().startswith("gpt-5"):
         kwargs["verbosity"] = settings.chat_verbosity
+    return kwargs
+
+
+def _generation_request_kwargs(
+    sampling_kwargs: dict[str, Any], cache_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge sampling and prompt-cache kwargs into ``create()`` keyword args.
+
+    ``verbosity`` rides in ``extra_body`` alongside ``prompt_cache_key``:
+    older SDK releases allowed by ``requirements.txt`` (``openai>=1.70.0``)
+    predate the typed parameter and would raise ``TypeError`` if it were
+    spread as a direct keyword argument. ``reasoning_effort`` and
+    ``temperature`` have been typed parameters since well before 1.70, so
+    they stay top-level.
+    """
+    kwargs = dict(sampling_kwargs)
+    extra_body = dict(cache_kwargs.get("extra_body") or {})
+    verbosity = kwargs.pop("verbosity", None)
+    if verbosity is not None:
+        extra_body["verbosity"] = verbosity
+    if extra_body:
+        kwargs["extra_body"] = extra_body
     return kwargs
 
 
@@ -1636,6 +1662,7 @@ def generate_answer(
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
+    _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
     _max_completion_tokens = (
         settings.chat_response_max_tokens_reasoning
         if _reasoning
@@ -1690,11 +1717,10 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **_sampling_kwargs,
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -1734,9 +1760,8 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **_sampling_kwargs,
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -2611,6 +2636,7 @@ async def _async_generate_answer_native(
     openai_client = _svc.get_async_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
     _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
+    _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
     _max_completion_tokens = (
         settings.chat_response_max_tokens_reasoning
         if _reasoning
@@ -2664,11 +2690,10 @@ async def _async_generate_answer_native(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **_sampling_kwargs,
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -2716,9 +2741,8 @@ async def _async_generate_answer_native(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **_sampling_kwargs,
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,

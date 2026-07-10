@@ -297,11 +297,13 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["messages"][1]["role"] == "user"
     assert "prompt_cache_key" not in call_kwargs
     # gpt-5-mini is a reasoning model — temperature is omitted, larger token budget used,
-    # reasoning effort and verbosity are capped for latency
+    # reasoning effort and verbosity are capped for latency. verbosity rides in
+    # extra_body: SDK versions allowed by requirements.txt predate the typed kwarg.
     assert "temperature" not in call_kwargs
     assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens_reasoning
     assert call_kwargs["reasoning_effort"] == settings.chat_reasoning_effort
-    assert call_kwargs["verbosity"] == settings.chat_verbosity
+    assert "verbosity" not in call_kwargs
+    assert call_kwargs["extra_body"]["verbosity"] == settings.chat_verbosity
 
 
 def test_generate_answer_emits_cached_tokens_to_posthog(
@@ -347,9 +349,13 @@ def test_generate_answer_emits_cached_tokens_to_posthog(
     assert fingerprint == hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     # With a bot id present, the cache key is forwarded via extra_body (not a
     # named kwarg) so it works on every SDK version allowed by requirements.txt.
+    # verbosity shares extra_body for the same SDK-compat reason.
     call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
     assert "prompt_cache_key" not in call_kwargs
-    assert call_kwargs["extra_body"] == {"prompt_cache_key": "bot_test"}
+    assert call_kwargs["extra_body"] == {
+        "prompt_cache_key": "bot_test",
+        "verbosity": settings.chat_verbosity,
+    }
 
 
 def test_generate_answer_traces_summary_not_full_prompt(mock_openai_client: Mock) -> None:

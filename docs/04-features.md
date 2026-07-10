@@ -351,8 +351,8 @@ After these: high-confidence KB → `answer_with_citations`; remaining low-confi
 
 **Clarification budget**
 
-- Maximum **1 blocking clarifying question per session** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var).
-- `chats.clarification_count` tracks how many blocking clarifications have been issued in the session.
+- Maximum **1 blocking clarifying question per conversation** (`CLARIFICATION_TURN_LIMIT`, default 1, configurable via env var). The budget resets when conversation rotation opens a new Chat row (see "Sessions, conversations, and history") — a visitor returning after the idle timeout gets a full budget again.
+- `chats.clarification_count` tracks how many blocking clarifications have been issued in the conversation.
 - Counter increments only on `Decision.clarify(type=blocking)`, atomically in the same DB transaction as the assistant message.
 - Inline clarifications (`type=inline`, appended after a partial answer) are budget-free and never increment the counter.
 - When the budget is exhausted and the turn would otherwise produce a blocking clarify:
@@ -645,14 +645,14 @@ The explicit hint outranks browser deliberately. Reversing the order would silen
 
 #### Language locking — fixed contract
 
-Once a chat has settled on a language, it stops re-detecting and stays in that language for the rest of the session. Two rules can fire the lock:
+Once a chat has settled on a language, it stops re-detecting and stays in that language for the rest of the conversation (the lock resets when conversation rotation opens a new Chat row). Two rules can fire the lock:
 
 1. **First-turn confidence gate (non-English only).** When the user's first real message produces a reliable, high-confidence detection of a *non-English* language (e.g. Cyrillic message, Spanish/German/French sentence with diacritics, langdetect-confirmed Latin-script non-English), the chat locks to that language immediately. English is excluded from this branch because `en` is also the heuristic's fallback for any pure-ASCII multi-token input — locking on it would freeze ambiguous English-ish first turns.
 2. **Two consistent reliable turns.** If the lock didn't fire on turn 1 (English, low-conf detection, unreliable), it fires the moment a turn's detected language root matches the previous turn's response language root. This handles English (always waits for the second confirming turn) and any case where the first turn was ambiguous.
 
 After lock, `resolve_language_context` returns the stored `last_response_language` with `response_language_resolution_reason = "locked"` and skips the detector entirely. This is implemented in `_resolve_language_context_inner` (locked fast path) and `_decide_language_lock` in `backend/chat/language.py`. Stored on `Chat.language_locked` (boolean, default False); set once and never reset on existing chats.
 
-Bilingual mid-session switches require the user to start a new chat session. This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
+Bilingual mid-conversation switches require the user to start a new conversation (`Start new chat`, or returning after the idle timeout). This is a deliberate trade-off: real bilingual switches mid-conversation are rare in B2B support, and locking eliminates flip-flopping when one off-language turn would otherwise change the bot's reply language.
 
 ### Default greeting
 
@@ -665,9 +665,9 @@ Behavior details:
 - the canonical greeting is stored in English
 - it is localized using the pre-question locale chain above
 - `<product_name>` comes from `TenantProfile.product_name` when available, otherwise from the client name
-- the stock widget shows this greeting automatically only for a truly new empty session; resumed sessions within 24 hours do not repeat it
-- `Start new chat` creates a fresh session and allows the greeting to appear again
-- empty follow-up turns after the conversation has already started still return `422 Question is required`
+- the stock widget shows this greeting for every **new conversation**: a truly new session, a session resumed after the conversation idle timeout (`CONVERSATION_IDLE_TIMEOUT_SECONDS`, see "Sessions, conversations, and history"), or after `Start new chat`
+- resuming within the idle window does not repeat the greeting
+- empty follow-up turns inside an active conversation still return `422 Question is required`; an empty message on a rotation-pending session is the bootstrap for the new conversation's greeting
 
 ### Chat channels
 
@@ -679,9 +679,32 @@ Behavior details:
 
 The internal `/debug` and `/review` UI pages resolve the current bot automatically from the authenticated tenant; users are not expected to edit the URL manually.
 
-### Sessions and history
+### Sessions, conversations, and history
 
-Each conversation is a **session** (UUID). Messages within a session are stored and passed as history in subsequent turns (last N messages). Sessions are scoped to a client — no cross-client leakage.
+Two distinct notions:
+
+- A **session** (`session_id`, UUID) identifies the *visitor in a browser*. The stock widget stores it in localStorage per bot (and per identified user) with a **sliding 24-hour TTL** — the visitor-identity lifetime. Sessions are scoped to a client — no cross-client leakage.
+- A **conversation** (`Chat` row) is one continuous exchange. Messages within a conversation are stored and passed as history in subsequent turns (last N messages, `CHAT_HISTORY_TURNS`).
+
+**Conversation rotation.** A session spans multiple conversations over time. When a message arrives and the session's latest conversation has been idle longer than `CONVERSATION_IDLE_TIMEOUT_SECONDS` (default 1800 = 30 min, measured on the chat's last activity), the backend lazily opens a **new Chat row under the same session_id**. The same threshold drives the `chat_session_ended` analytics sweeper, so behavior and metrics share one definition of an ended conversation.
+
+What resets with a new conversation:
+
+- prompt history (the LLM no longer sees yesterday's turns)
+- clarification budget (`clarification_count`)
+- loop-detection window
+- greeting (shown again to the returning visitor)
+- language lock
+
+What survives rotation:
+
+- the session itself (`session_id`, widget localStorage, contact/user context)
+- previous conversations (archived; shown read-only in the widget above a "new conversation" separator, and listed in the dashboard Logs with per-conversation dividers)
+- an **active escalation ticket still collecting the user's email** — this is the one case that *blocks* rotation: the returning user completes the ticket in the old conversation first. Pending escalation questions with no ticket behind them (pre-confirm offer, "describe your problem" prompt, post-ticket follow-up) do not block rotation and are simply abandoned with the old conversation.
+
+A conversation closed by escalation (`ended_at` set) also rotates once idle: a visitor returning past the window starts fresh instead of hitting the "session is closed" reply.
+
+Widget protocol: `GET /widget/history` returns the last two conversations flattened, `boundary_indices` (positions where a newer conversation starts) and `conversation_rotated` (true when the next message will open a new conversation — the widget renders a separator and requests a fresh greeting by POSTing an empty message with the existing `session_id`).
 
 ---
 

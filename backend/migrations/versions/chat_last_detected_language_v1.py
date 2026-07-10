@@ -34,6 +34,18 @@ def upgrade() -> None:
             "chats",
             sa.Column("last_detected_language", sa.String(length=16), nullable=True),
         )
+    # Backfill already-locked chats: their locked fast path skips detection
+    # forever, so without a stored value they would keep emitting
+    # detected_language="unknown" until the session rotates. A lock is only
+    # ever set right after a reliable detection consistent with
+    # last_response_language, so that column is a faithful proxy. Guarded by
+    # IS NULL — idempotent and never overwrites detector-written values.
+    op.execute(
+        "UPDATE chats SET last_detected_language = last_response_language "
+        "WHERE language_locked = TRUE "
+        "AND last_response_language IS NOT NULL "
+        "AND last_detected_language IS NULL"
+    )
 
 
 def downgrade() -> None:

@@ -142,6 +142,12 @@ class Chat(Base):
         server_default="false",
     )
     last_response_language = Column(String(16), nullable=True)
+    # Last reliable per-turn detected_language in this chat. Observability
+    # fallback only: short follow-up turns ("Yes", "ok?") and locked chats
+    # (detection skipped) yield detected_language="unknown"; metadata then
+    # reuses this value with resolution reason "session_fallback". Never feeds
+    # response_language resolution.
+    last_detected_language = Column(String(16), nullable=True)
     # Once True, response_language is frozen at last_response_language and
     # detection is bypassed. Set by lock heuristic in backend/chat/language.py
     # (high-confidence first user turn or two consistent reliable turns).

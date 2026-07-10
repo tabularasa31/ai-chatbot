@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from backend.chat.language import (
 )
 from backend.core.crypto import decrypt_value
 from backend.models import Chat, Message, MessageRole, Tenant, TenantProfile
+from backend.observability.metrics import capture_event
 from backend.support_config import public_support_config_dict
 
 logger = logging.getLogger(__name__)
@@ -158,6 +160,67 @@ def _set_last_response_language(
         )
 
 
+def _apply_detected_language_session_fallback(
+    *,
+    db: Session,
+    chat: Chat,
+    context: ResolvedLanguageContext,
+) -> ResolvedLanguageContext:
+    """Backfill unreliable per-turn detection from the session — metadata only.
+
+    Short follow-up turns ("Yes", "ok?") and locked chats (where detection is
+    skipped entirely) leave detected_language="unknown", breaking language
+    observability even though response_language resolves correctly through its
+    own chain. When this turn's detection is unreliable and the chat has a
+    prior reliable detection, reuse it. Confidence and is_reliable keep their
+    raw values, so lock decisions and response_language are unaffected.
+    """
+    if context.is_reliable and context.detected_language != "unknown":
+        if chat.last_detected_language != context.detected_language:
+            chat.last_detected_language = context.detected_language
+            db.add(chat)
+        return context
+    if not context.is_reliable and chat.last_detected_language:
+        return replace(
+            context,
+            detected_language=chat.last_detected_language,
+            detected_language_resolution_reason="session_fallback",
+        )
+    return context
+
+
+def _emit_detected_language_metric(
+    *,
+    context: ResolvedLanguageContext,
+    raw_detected_language: str,
+    tenant_row: Tenant | None,
+    chat: Chat | None,
+) -> None:
+    """Emit chat_detected_language_unknown_rate — one event per real user turn.
+
+    is_unknown over these events, grouped by chat_id, gives the per-session
+    unknown rate in PostHog and measures the effect of the session fallback.
+    """
+    tenant_public_id = getattr(tenant_row, "public_id", None) if tenant_row is not None else None
+    if not tenant_public_id:
+        return
+    capture_event(
+        "chat_detected_language_unknown_rate",
+        distinct_id=str(tenant_public_id),
+        tenant_id=str(tenant_public_id),
+        properties={
+            "detected_language_raw": raw_detected_language,
+            "detected_language": context.detected_language,
+            "is_unknown": context.detected_language == "unknown",
+            "detected_language_resolution_reason": context.detected_language_resolution_reason,
+            "response_language": context.response_language,
+            "response_language_resolution_reason": context.response_language_resolution_reason,
+            "chat_id": str(chat.id) if chat is not None else None,
+        },
+        groups={"tenant": str(tenant_public_id)},
+    )
+
+
 def _resolve_chat_language_context(
     *,
     current_turn_text: str,
@@ -183,7 +246,7 @@ def _resolve_chat_language_context(
         if chat is not None and db is not None
         else [current_turn_text]
     )
-    return resolve_language_context(
+    context = resolve_language_context(
         current_turn_text=current_turn_text,
         is_bootstrap_turn=is_bootstrap_turn,
         bootstrap_user_locale=bootstrap_user_locale,
@@ -198,3 +261,16 @@ def _resolve_chat_language_context(
         tenant_id=getattr(tenant_row, "public_id", None) if tenant_row is not None else None,
         chat_id=str(chat.id) if chat is not None else None,
     )
+    raw_detected_language = context.detected_language
+    if chat is not None and db is not None and not is_bootstrap_turn:
+        context = _apply_detected_language_session_fallback(db=db, chat=chat, context=context)
+    if not is_bootstrap_turn:
+        # Bootstrap turns carry no user text, so their detected_language is
+        # "unknown" by design — counting them would inflate the unknown rate.
+        _emit_detected_language_metric(
+            context=context,
+            raw_detected_language=raw_detected_language,
+            tenant_row=tenant_row,
+            chat=chat,
+        )
+    return context

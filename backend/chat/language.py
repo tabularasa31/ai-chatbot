@@ -122,6 +122,10 @@ class ResolvedLanguageContext:
     response_language_resolution_reason: str
     escalation_language: str
     escalation_language_source: str
+    # How detected_language was obtained: "detector" (per-turn detection) or
+    # "session_fallback" (unreliable turn backfilled from the chat's last
+    # reliable detection — metadata only, never affects response_language).
+    detected_language_resolution_reason: str = "detector"
 
 
 @dataclass(frozen=True)

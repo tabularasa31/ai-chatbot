@@ -512,16 +512,8 @@ class Settings(BaseSettings):
     @field_validator("git_sha", mode="before")
     @classmethod
     def _normalize_git_sha(cls, v: str | None) -> str | None:
-        # Railway env can carry an unexpanded reference like the literal
-        # "$RAILWAY_GIT_COMMIT_SHA" when GIT_SHA is set with `$VAR` syntax
-        # instead of Railway's `${{VAR}}` reference syntax. Such a literal
-        # must never reach Langfuse `version`/`release`, Sentry `release`, or
-        # the PostHog `release` property — it breaks before/after release
-        # comparison and produces garbage like release="$RAILWA" (sha[:7]).
-        # Detect the unexpanded form, then fall back to the native
-        # RAILWAY_GIT_COMMIT_SHA that Railway injects automatically (the
-        # GIT_SHA alias masks it once GIT_SHA is set to anything at all),
-        # or None if that too is missing/unexpanded.
+        # Ignore unexpanded refs (e.g. literal "$RAILWAY_GIT_COMMIT_SHA" from
+        # `$VAR` env syntax) and fall back to the native RAILWAY_GIT_COMMIT_SHA.
         def _clean(value: str | None) -> str | None:
             if value is None:
                 return None

@@ -62,6 +62,13 @@ _circuit_opened_at: float | None = None
 # language-agnostic and per-language keyword lists are explicitly out of scope.
 # Off-topic short queries are caught downstream by the zero-RAG-hits fast path
 # in the chat pipeline, which doesn't depend on the question's surface form.
+#
+# The same applies to ≤4-word support complaints ("no one replied"): detecting
+# them here would need either a per-language phrase list (out of scope, above)
+# or an LLM call (which is exactly what the bypass avoids). They ride the
+# same downstream net: zero RAG hits → rephrase prompt, and the *next* turn's
+# force_llm_check pass — which does see the dialog context — classifies the
+# repeated complaint as support_complaint and offers the escalation handoff.
 SHORT_QUERY_WORD_LIMIT = 4
 
 _cache: dict[str, tuple[float, bool, str]] = {}

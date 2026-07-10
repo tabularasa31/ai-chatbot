@@ -9,11 +9,12 @@ Any level triggering → immediate reject; subsequent levels are skipped.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic, perf_counter
 
 from backend.core.config import settings
@@ -158,53 +159,90 @@ def _reset_reference_embeddings() -> None:
 # ---------------------------------------------------------------------------
 # Circuit breaker for the semantic (embedding-backed) level
 # ---------------------------------------------------------------------------
-# Mirrors the relevance guard's breaker: when the embedding service is down,
-# every turn otherwise pays the full ``injection_semantic_timeout_sec`` (~2 s)
-# waiting for level 2 to time out. After CIRCUIT_BREAKER_THRESHOLD consecutive
-# embedding failures (timeouts / errors) the circuit opens and level 2 is
-# skipped (pass-through) for CIRCUIT_HALF_OPEN_AFTER_SECONDS. After the cooldown
-# one probe request is allowed through: on success the circuit closes, on
-# failure the timer resets. Level 1 (structural) is unaffected and keeps gating.
+# Follows the relevance guard's breaker shape: when the embedding service is
+# unreachable, every turn otherwise pays the full ``injection_semantic_timeout_sec``
+# (~2 s) waiting for level 2 to time out. After CIRCUIT_BREAKER_THRESHOLD
+# consecutive embedding failures (timeouts / errors) the circuit opens and
+# level 2 is skipped (pass-through) for CIRCUIT_HALF_OPEN_AFTER_SECONDS; after
+# the cooldown one probe request is allowed through (on success the circuit
+# closes, on failure the timer resets). Level 1 (structural) always keeps gating.
+#
+# Unlike the relevance guard, the breaker is keyed PER OpenAI API KEY (i.e. per
+# tenant), not process-global. Level 2 is a security control: a global breaker
+# would let one tenant's bad/expired key (5 embedding failures) disable
+# natural-language injection detection for every other tenant on the worker for
+# the whole cooldown. Per-key scoping confines the fail-open to the tenant whose
+# key is actually failing; a genuine provider-wide outage still trips each
+# tenant's breaker independently after its own failures.
 CIRCUIT_BREAKER_THRESHOLD = 5
 CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
+# Bound on the number of distinct keys tracked at once (only currently-failing
+# keys hold state — success drops the entry), so a churn of bad keys can't grow
+# the map without limit.
+_CB_MAX_KEYS = 4096
+
+
+@dataclass
+class _BreakerState:
+    consecutive_failures: int = 0
+    circuit_opened_at: float | None = None
+    # Wall-clock-ish ordering token for eviction (monotonic seconds of last touch).
+    last_touch: float = field(default=0.0)
+
 
 _cb_lock = threading.Lock()
-_consecutive_failures: int = 0
-_circuit_opened_at: float | None = None
+_cb_states: dict[str, _BreakerState] = {}
 
 
-def _circuit_is_open() -> bool:
-    """True while the breaker is open (level 2 should be skipped)."""
-    global _circuit_opened_at
+def _cb_key(api_key: str) -> str:
+    """Per-tenant breaker bucket. Hash so raw secrets aren't held as map keys."""
+    return hashlib.sha256((api_key or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _circuit_is_open(api_key: str) -> bool:
+    """True while this key's breaker is open (level 2 should be skipped)."""
+    key = _cb_key(api_key)
     with _cb_lock:
-        if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
-            now = monotonic()
-            if _circuit_opened_at is None:
-                _circuit_opened_at = now
-            if now - _circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
-                return True
-            # Half-open: reset timer so only one probe gets through at a time.
-            _circuit_opened_at = None
-    return False
+        st = _cb_states.get(key)
+        if st is None or st.consecutive_failures < CIRCUIT_BREAKER_THRESHOLD:
+            return False
+        now = monotonic()
+        if st.circuit_opened_at is None:
+            st.circuit_opened_at = now
+        if now - st.circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
+            return True
+        # Half-open: reset timer so only one probe gets through at a time.
+        st.circuit_opened_at = None
+        return False
 
 
-def _record_semantic_failure() -> None:
-    global _consecutive_failures, _circuit_opened_at
+def _record_semantic_failure(api_key: str) -> None:
+    key = _cb_key(api_key)
+    now = monotonic()
     with _cb_lock:
-        _consecutive_failures += 1
-        _circuit_opened_at = monotonic()
+        st = _cb_states.get(key)
+        if st is None:
+            if len(_cb_states) >= _CB_MAX_KEYS:
+                # Evict the least-recently-touched breaker to stay bounded.
+                oldest = min(_cb_states, key=lambda k: _cb_states[k].last_touch)
+                _cb_states.pop(oldest, None)
+            st = _BreakerState()
+            _cb_states[key] = st
+        st.consecutive_failures += 1
+        st.circuit_opened_at = now
+        st.last_touch = now
 
 
-def _record_semantic_success() -> None:
-    global _consecutive_failures, _circuit_opened_at
+def _record_semantic_success(api_key: str) -> None:
+    # A closed breaker needs no state; dropping the entry keeps the map small.
     with _cb_lock:
-        _consecutive_failures = 0
-        _circuit_opened_at = None
+        _cb_states.pop(_cb_key(api_key), None)
 
 
 def _reset_circuit_breaker() -> None:
-    """For testing only — force the breaker back to the closed state."""
-    _record_semantic_success()
+    """For testing only — clear all breaker state."""
+    with _cb_lock:
+        _cb_states.clear()
 
 
 def _passthrough_result(normalized: str) -> InjectionDetectionResult:
@@ -234,7 +272,7 @@ def detect_injection_semantic(
     breaker opens and this level is skipped entirely (also pass-through) so a
     down embedding service does not add the timeout to every turn.
     """
-    if _circuit_is_open():
+    if _circuit_is_open(api_key):
         return _passthrough_result(normalized)
     try:
         embedding = embed_query(
@@ -247,7 +285,7 @@ def detect_injection_semantic(
         max_score = max(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
         )
-        _record_semantic_success()
+        _record_semantic_success(api_key)
         if max_score >= settings.injection_semantic_threshold:
             return InjectionDetectionResult(
                 detected=True,
@@ -266,7 +304,7 @@ def detect_injection_semantic(
             normalized_input=normalized,
         )
     except Exception as e:
-        _record_semantic_failure()
+        _record_semantic_failure(api_key)
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
             logger.warning("Semantic injection check timeout: %s", e)
         else:
@@ -286,10 +324,10 @@ async def async_detect_injection_semantic(
     Async counterpart of :func:`detect_injection_semantic`. Uses
     ``async_embed_query`` so the event loop is not blocked during the
     OpenAI HTTP call. On timeout or error → pass-through (detected=False).
-    Shares the module-level circuit breaker with the sync variant, so once it
-    opens both paths skip level 2 during an embedding-service outage.
+    Shares the per-key circuit breaker with the sync variant, so once a key's
+    breaker opens both paths skip level 2 for that tenant during the outage.
     """
-    if _circuit_is_open():
+    if _circuit_is_open(api_key):
         return _passthrough_result(normalized)
     try:
         embedding = await async_embed_query(
@@ -302,7 +340,7 @@ async def async_detect_injection_semantic(
         max_score = max(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
         )
-        _record_semantic_success()
+        _record_semantic_success(api_key)
         if max_score >= settings.injection_semantic_threshold:
             return InjectionDetectionResult(
                 detected=True,
@@ -321,7 +359,7 @@ async def async_detect_injection_semantic(
             normalized_input=normalized,
         )
     except Exception as e:
-        _record_semantic_failure()
+        _record_semantic_failure(api_key)
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
             logger.warning("Async semantic injection check timeout: %s", e)
         else:

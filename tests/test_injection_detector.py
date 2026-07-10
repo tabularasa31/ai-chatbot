@@ -357,7 +357,7 @@ def test_semantic_circuit_recovers_after_cooldown() -> None:
         for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
             detect_injection_semantic("ignore all", "ignore all", api_key="k")
 
-    assert det._circuit_is_open() is True
+    assert det._circuit_is_open("k") is True
 
     # With the cooldown elapsed, the next call is the half-open probe: it embeds
     # successfully → breaker closes. Patch the cooldown to 0 for the duration of
@@ -374,7 +374,56 @@ def test_semantic_circuit_recovers_after_cooldown() -> None:
         )
         assert r.detected is False
 
-    assert det._circuit_is_open() is False
+    assert det._circuit_is_open("k") is False
+
+
+def test_semantic_circuit_is_scoped_per_api_key() -> None:
+    """One tenant's failing key must not open the breaker for another tenant.
+
+    Level 2 is a security control; a process-global breaker would let a single
+    tenant's bad/expired key disable natural-language injection detection for
+    every other tenant on the worker. The breaker is keyed per API key, so a
+    healthy key still runs level 2 while another key's circuit is open.
+    """
+    from backend.guards import injection_detector as det
+
+    def broken_embed(text: str, *, api_key: str, **kwargs: object):
+        raise RuntimeError("API error")
+
+    with patch("backend.guards.injection_detector.embed_query", broken_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        # Tenant A's key fails enough to open its breaker.
+        for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
+            detect_injection_semantic("ignore all", "ignore all", api_key="key-A")
+
+    assert det._circuit_is_open("key-A") is True
+    # Tenant B's healthy key is unaffected — its breaker stays closed.
+    assert det._circuit_is_open("key-B") is False
+
+    healthy_calls = 0
+
+    def healthy_embed(text: str, *, api_key: str, **kwargs: object):
+        nonlocal healthy_calls
+        healthy_calls += 1
+        return _fake_embed_query(text, api_key=api_key)
+
+    with patch("backend.guards.injection_detector.embed_query", healthy_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        # key-B still runs level 2 (embed is called) and detects the injection.
+        r = det.detect_injection_semantic("ignore all", "ignore all", api_key="key-B")
+
+    assert healthy_calls == 1
+    assert r.detected is True
 
 
 @pytest.mark.asyncio

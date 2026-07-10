@@ -107,6 +107,46 @@ def _tail_of(text: str, max_chars: int = _TAIL_SENTENCE_CHARS) -> str:
     return text[-max_chars:].lstrip()
 
 
+_DIALOG_CONTEXT_TURNS = 2
+_DIALOG_CONTEXT_CHAR_CAP = 240
+
+
+def build_dialog_context(
+    messages: Iterable[Message],
+    *,
+    max_turns: int = _DIALOG_CONTEXT_TURNS,
+    char_cap: int = _DIALOG_CONTEXT_CHAR_CAP,
+) -> str | None:
+    """Render the last ``max_turns`` user/assistant exchanges as a plain block.
+
+    Used to give per-turn classifiers (the relevance guard) enough dialog
+    context to resolve anaphora ("what about X?", "and for businesses?")
+    against the preceding turns instead of judging the reply in isolation.
+    Each message is head-truncated to ``char_cap`` chars so long cited answers
+    don't blow up the classifier prompt. Returns None when there is no prior
+    dialog to render.
+    """
+    ordered = sorted(
+        messages,
+        key=lambda m: (m.created_at or _MIN_DATETIME, m.id or 0),
+    )
+    recent: list[str] = []
+    turns_seen = 0
+    for m in reversed(ordered):
+        content = (m.content or "").strip()
+        if not content:
+            continue
+        label = "User" if m.role == MessageRole.user else "Assistant"
+        recent.append(f"{label}: {content[:char_cap]}")
+        if m.role == MessageRole.user:
+            turns_seen += 1
+            if turns_seen >= max_turns:
+                break
+    if not recent:
+        return None
+    return "\n".join(reversed(recent))
+
+
 def build_contextual_retrieval_query(
     messages: Iterable[Message],
     current_text: str,

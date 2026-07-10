@@ -406,9 +406,14 @@ def compute_priority(
     tier = (plan_tier or (user_context or {}).get("plan_tier") or "").lower()
     enterprise = tier in ("enterprise", "pro")
 
-    if trigger == EscalationTrigger.user_request and enterprise:
+    # user_complaint (guard-detected frustration about support silence) ranks
+    # with an explicit human request: the user is already waiting on a reply.
+    if (
+        trigger in (EscalationTrigger.user_request, EscalationTrigger.user_complaint)
+        and enterprise
+    ):
         return EscalationPriority.critical
-    if trigger == EscalationTrigger.user_request:
+    if trigger in (EscalationTrigger.user_request, EscalationTrigger.user_complaint):
         return EscalationPriority.high
     if trigger in (
         EscalationTrigger.low_similarity,

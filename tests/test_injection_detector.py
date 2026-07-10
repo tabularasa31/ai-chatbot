@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from backend.guards.injection_detector import (
+    _reset_circuit_breaker,
     _reset_reference_embeddings,
     async_detect_injection,
     async_detect_injection_semantic,
@@ -30,8 +31,10 @@ def _fake_embed_queries(texts: list[str], *, api_key: str, **kwargs: object) -> 
 @pytest.fixture(autouse=True)
 def _clear_embedding_cache():
     _reset_reference_embeddings()
+    _reset_circuit_breaker()
     yield
     _reset_reference_embeddings()
+    _reset_circuit_breaker()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -291,3 +294,164 @@ async def test_async_semantic_disabled_skips_embed() -> None:
         )
 
     assert embed_called is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Level 2 — circuit breaker (embedding-service outage)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_semantic_circuit_opens_after_threshold_failures() -> None:
+    """After CIRCUIT_BREAKER_THRESHOLD failures, level 2 stops calling embed.
+
+    Simulates a down embedding service: the first N calls each pay the timeout
+    (and record a failure); once the breaker opens, subsequent calls short-
+    circuit to pass-through without ever invoking the embedding client, so no
+    further fixed-timeout cost is paid per turn.
+    """
+    from backend.guards import injection_detector as det
+
+    call_count = 0
+
+    def broken_embed(text: str, *, api_key: str, **kwargs: object):
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("API error")
+
+    with patch("backend.guards.injection_detector.embed_query", broken_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        # Drive the breaker open.
+        for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
+            r = detect_injection_semantic("ignore all", "ignore all", api_key="k")
+            assert r.detected is False
+
+        assert call_count == det.CIRCUIT_BREAKER_THRESHOLD
+
+        # Breaker now open: further calls must not touch the embedding client.
+        for _ in range(3):
+            r = detect_injection_semantic("ignore all", "ignore all", api_key="k")
+            assert r.detected is False
+
+        assert call_count == det.CIRCUIT_BREAKER_THRESHOLD
+
+
+def test_semantic_circuit_recovers_after_cooldown() -> None:
+    """A success after the half-open cooldown closes the breaker again."""
+    from backend.guards import injection_detector as det
+
+    def broken_embed(text: str, *, api_key: str, **kwargs: object):
+        raise RuntimeError("API error")
+
+    with patch("backend.guards.injection_detector.embed_query", broken_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
+            detect_injection_semantic("ignore all", "ignore all", api_key="k")
+
+    assert det._circuit_is_open("k") is True
+
+    # With the cooldown elapsed, the next call is the half-open probe: it embeds
+    # successfully → breaker closes. Patch the cooldown to 0 for the duration of
+    # the probe so we don't consume the single probe slot with a direct check.
+    with patch("backend.guards.injection_detector.CIRCUIT_HALF_OPEN_AFTER_SECONDS", 0.0), \
+         patch("backend.guards.injection_detector.embed_query", _fake_embed_query), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        r = detect_injection_semantic(
+            "how do I reset my password", "how do i reset my password", api_key="k"
+        )
+        assert r.detected is False
+
+    assert det._circuit_is_open("k") is False
+
+
+def test_semantic_circuit_is_scoped_per_api_key() -> None:
+    """One tenant's failing key must not open the breaker for another tenant.
+
+    Level 2 is a security control; a process-global breaker would let a single
+    tenant's bad/expired key disable natural-language injection detection for
+    every other tenant on the worker. The breaker is keyed per API key, so a
+    healthy key still runs level 2 while another key's circuit is open.
+    """
+    from backend.guards import injection_detector as det
+
+    def broken_embed(text: str, *, api_key: str, **kwargs: object):
+        raise RuntimeError("API error")
+
+    with patch("backend.guards.injection_detector.embed_query", broken_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        # Tenant A's key fails enough to open its breaker.
+        for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
+            detect_injection_semantic("ignore all", "ignore all", api_key="key-A")
+
+    assert det._circuit_is_open("key-A") is True
+    # Tenant B's healthy key is unaffected — its breaker stays closed.
+    assert det._circuit_is_open("key-B") is False
+
+    healthy_calls = 0
+
+    def healthy_embed(text: str, *, api_key: str, **kwargs: object):
+        nonlocal healthy_calls
+        healthy_calls += 1
+        return _fake_embed_query(text, api_key=api_key)
+
+    with patch("backend.guards.injection_detector.embed_query", healthy_embed), \
+         patch("backend.guards.injection_detector.embed_queries", _fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        # key-B still runs level 2 (embed is called) and detects the injection.
+        r = det.detect_injection_semantic("ignore all", "ignore all", api_key="key-B")
+
+    assert healthy_calls == 1
+    assert r.detected is True
+
+
+@pytest.mark.asyncio
+async def test_async_semantic_circuit_opens_after_threshold_failures() -> None:
+    """Async path shares the breaker: it opens after the same threshold."""
+    from backend.guards import injection_detector as det
+
+    call_count = 0
+
+    async def broken_embed(text: str, *, api_key: str, **kwargs: object) -> list[float]:
+        nonlocal call_count
+        call_count += 1
+        raise RuntimeError("API error")
+
+    with patch("backend.guards.injection_detector.async_embed_query", broken_embed), \
+         patch("backend.guards.injection_detector.async_embed_queries", _async_fake_embed_queries), \
+         patch("backend.guards.injection_detector.settings") as mock_settings:
+        mock_settings.injection_semantic_threshold = 0.82
+        mock_settings.injection_semantic_timeout_sec = 0.1
+        mock_settings.injection_semantic_enabled = True
+
+        for _ in range(det.CIRCUIT_BREAKER_THRESHOLD):
+            r = await async_detect_injection_semantic("ignore all", "ignore all", api_key="k")
+            assert r.detected is False
+
+        assert call_count == det.CIRCUIT_BREAKER_THRESHOLD
+
+        for _ in range(3):
+            await async_detect_injection_semantic("ignore all", "ignore all", api_key="k")
+
+        assert call_count == det.CIRCUIT_BREAKER_THRESHOLD

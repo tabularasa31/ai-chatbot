@@ -283,3 +283,82 @@ def test_approved_candidate_can_be_promoted_for_direct(monkeypatch: pytest.Monke
     assert result.selected_score == second_approved.score
     assert result.faq_items == [second_approved]
     assert result.decision_reason == "approved_promoted_high_score_guard_passed"
+
+
+# ---------------------------------------------------------------------------
+# Async FAQ matching — timeout degradation (86ey7x2vg)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_async_match_faq_timeout_degrades_to_rag_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow/stuck FAQ vector lookup must degrade to rag_only, not stall the turn."""
+    import asyncio
+
+    from backend.faq.faq_matcher import async_match_faq
+
+    monkeypatch.setattr(settings, "faq_match_timeout_sec", 0.05)
+
+    async def slow_fetch(**_kwargs):
+        await asyncio.sleep(0.5)
+        return _fake_rows()
+
+    monkeypatch.setattr("backend.faq.faq_matcher._async_fetch_top_faq_rows", slow_fetch)
+
+    db = Mock()
+
+    async def _rollback():
+        return None
+
+    db.rollback = _rollback
+
+    result = await async_match_faq(
+        tenant_id=uuid.uuid4(),
+        question="How can I reset password?",
+        question_embedding=[0.1] * 1536,
+        db=db,
+    )
+
+    assert result.strategy == "rag_only"
+    assert result.decision_reason == "faq_match_timeout_degraded_to_rag_only"
+    assert result.faq_items == []
+
+
+@pytest.mark.asyncio
+async def test_async_match_faq_within_timeout_classifies_normally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the lookup returns in time, classification proceeds as usual."""
+    from backend.faq.faq_matcher import async_match_faq
+
+    monkeypatch.setattr(settings, "faq_match_timeout_sec", 2.0)
+    monkeypatch.setattr(settings, "faq_direct_threshold", 0.92)
+    monkeypatch.setattr(settings, "faq_context_threshold", 0.75)
+
+    row = FAQRow(
+        id=uuid.uuid4(),
+        question="How do I reset my password?",
+        answer="Use the reset link.",
+        approved=True,
+        score=0.95,
+    )
+
+    async def fast_fetch(**_kwargs):
+        return _fake_rows(row)
+
+    monkeypatch.setattr("backend.faq.faq_matcher._async_fetch_top_faq_rows", fast_fetch)
+    monkeypatch.setattr(
+        "backend.faq.faq_matcher.direct_applicability_guard", lambda **_: True
+    )
+
+    result = await async_match_faq(
+        tenant_id=uuid.uuid4(),
+        question="How can I reset password?",
+        question_embedding=[0.1] * 1536,
+        db=Mock(),
+    )
+
+    assert result.strategy == "faq_direct"
+    assert result.faq_items == [row]

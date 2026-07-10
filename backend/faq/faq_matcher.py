@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +14,22 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.models import TenantFaq
 from backend.search.service import cosine_similarity
+
+logger = logging.getLogger(__name__)
+
+
+def _rag_only_result(decision_reason: str) -> FAQMatchResult:
+    """Degraded match result that routes the turn through the RAG pipeline."""
+    return FAQMatchResult(
+        strategy="rag_only",
+        faq_items=[],
+        top_score=None,
+        selected_score=None,
+        selected_faq_id=None,
+        direct_guard_used=False,
+        direct_guard_passed=False,
+        decision_reason=decision_reason,
+    )
 
 
 @dataclass(frozen=True)
@@ -439,11 +457,34 @@ async def async_match_faq(
     question_embedding: list[float],
     db: AsyncSession,
 ) -> FAQMatchResult:
-    """Async counterpart of :func:`match_faq`."""
-    rows = await _async_fetch_top_faq_rows(
-        tenant_id=tenant_id,
-        question_embedding=question_embedding,
-        db=db,
-        limit=3,
-    )
+    """Async counterpart of :func:`match_faq`.
+
+    The pgvector lookup is bounded by ``faq_match_timeout_sec``. On timeout the
+    matcher degrades to ``rag_only`` (the query is cancelled and the session
+    rolled back) so a slow/stuck FAQ query never stalls the chat turn.
+    """
+    try:
+        rows = await asyncio.wait_for(
+            _async_fetch_top_faq_rows(
+                tenant_id=tenant_id,
+                question_embedding=question_embedding,
+                db=db,
+                limit=3,
+            ),
+            timeout=settings.faq_match_timeout_sec,
+        )
+    except TimeoutError:
+        logger.warning(
+            "faq_match_timeout_degraded_to_rag_only tenant_id=%s timeout_s=%s",
+            tenant_id,
+            settings.faq_match_timeout_sec,
+        )
+        # The wait_for cancellation interrupts the in-flight query; roll back so
+        # the session is clean for the caller (best-effort — the caller closes
+        # it shortly after regardless).
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        return _rag_only_result("faq_match_timeout_degraded_to_rag_only")
     return _classify_faq_match(rows=rows, question=question)

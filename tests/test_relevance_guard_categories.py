@@ -272,6 +272,49 @@ def test_social_turn_gets_polite_acknowledgement(
     assert chat.escalation_pre_confirm_pending is False
 
 
+def test_social_question_about_bot_gets_short_reply(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: a social question about the bot itself ("do you speak Russian?")
+    gets a short friendly invite, not the off-topic refusal, and never runs the
+    answer LLM or arms escalation."""
+    cl_row, api_key = _create_client(
+        tenant, db_session, email="gc-social-q@example.com"
+    )
+    _stub_common(monkeypatch)
+    _stub_guard_verdict(monkeypatch, (False, "social_question", _PROFILE_STUB))
+    _identity_localize(monkeypatch)
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("answer LLM must not run on a social question")
+        )),
+    )
+
+    session_id = uuid.uuid4()
+    outcome = process_chat_message(
+        cl_row.id,
+        "Hi, can you speak Russian?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert "what would you like to know" in outcome.text.lower()
+    assert "can't help" not in outcome.text
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is False
+
+
 def test_offtopic_is_still_rejected_with_support_offer(
     mock_openai_client: Mock,
     tenant: TestClient,

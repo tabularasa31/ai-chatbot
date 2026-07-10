@@ -67,6 +67,7 @@ from backend.guards.reject_response import (
 )
 from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
+    CATEGORY_SOCIAL_QUESTION,
     CATEGORY_SUPPORT_COMPLAINT,
 )
 from backend.models import Chat, MessageRole, TenantProfile
@@ -313,7 +314,17 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "rephrase", "social"] | None
+    reject_reason: (
+        Literal[
+            "injection",
+            "not_relevant",
+            "low_retrieval",
+            "rephrase",
+            "social",
+            "social_question",
+        ]
+        | None
+    )
     is_reject: bool
     is_faq_direct: bool
     # retrieval
@@ -1655,6 +1666,7 @@ class RagHandler(PipelineHandler):
                 "low_retrieval": "guard_reject_low_retrieval",
                 "rephrase": "guard_reject_rephrase",
                 "social": "guard_social_reply",
+                "social_question": "guard_social_question_reply",
             }
             if result.is_reject:
                 source = source_map.get(result.reject_reason or "", "guard_reject")
@@ -3125,17 +3137,22 @@ async def async_run_chat_pipeline(
                     language_context=language_context,
                 )
 
-            # Pure social turns (thanks / farewell) that slipped past the
-            # greeting handler get a polite acknowledgement, not a refusal.
-            reject_reason: Literal["not_relevant", "social"] = (
-                "social" if guard_reason == CATEGORY_SOCIAL else "not_relevant"
-            )
+            # Social turns that slipped past the greeting handler get a polite
+            # reply, not a refusal: a pure thanks/farewell gets a closing
+            # acknowledgement, and a question about the bot itself ("do you
+            # speak English?") gets a short friendly invite.
+            reject_reason: Literal["not_relevant", "social", "social_question"]
+            if guard_reason == CATEGORY_SOCIAL:
+                reject_reason, _reject_enum = "social", RejectReason.SOCIAL
+            elif guard_reason == CATEGORY_SOCIAL_QUESTION:
+                reject_reason, _reject_enum = (
+                    "social_question",
+                    RejectReason.SOCIAL_QUESTION,
+                )
+            else:
+                reject_reason, _reject_enum = "not_relevant", RejectReason.NOT_RELEVANT
             reject_result = await async_build_reject_response_result(
-                reason=(
-                    RejectReason.SOCIAL
-                    if guard_reason == CATEGORY_SOCIAL
-                    else RejectReason.NOT_RELEVANT
-                ),
+                reason=_reject_enum,
                 profile=state.profile,
                 response_language=language_context.response_language,
                 api_key=api_key,
@@ -3396,9 +3413,14 @@ async def async_run_chat_pipeline(
                     **_fast_path_extras,
                 )
 
-            if relevance_reason == CATEGORY_SOCIAL:
+            if relevance_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
+                _is_social_question = relevance_reason == CATEGORY_SOCIAL_QUESTION
                 social_reply = await async_build_reject_response_result(
-                    reason=RejectReason.SOCIAL,
+                    reason=(
+                        RejectReason.SOCIAL_QUESTION
+                        if _is_social_question
+                        else RejectReason.SOCIAL
+                    ),
                     profile=state.profile,
                     response_language=language_context.response_language,
                     api_key=api_key,
@@ -3416,7 +3438,9 @@ async def async_run_chat_pipeline(
                     tokens_used=social_reply.tokens_used,
                     tokens_output=social_reply.tokens_used,
                     strategy="guard_reject",
-                    reject_reason="social",
+                    reject_reason=(
+                        "social_question" if _is_social_question else "social"
+                    ),
                     is_reject=True,
                     is_faq_direct=False,
                     retrieval=retrieval,

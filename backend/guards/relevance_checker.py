@@ -108,6 +108,18 @@ def _profile_is_empty(profile: TenantProfileModel) -> bool:
     return False
 
 
+def _profile_cache_version(profile: TenantProfileModel) -> str:
+    """Token that changes whenever the tenant profile is edited.
+
+    Folded into the relevance cache key so a topics/glossary/product-name
+    update invalidates cached verdicts immediately instead of leaving them
+    stale for up to ``CACHE_TTL_SECONDS``. ``updated_at`` carries
+    ``onupdate=utcnow`` on the model, so any profile write bumps it.
+    """
+    updated_at = getattr(profile, "updated_at", None)
+    return str(updated_at) if updated_at is not None else "-"
+
+
 def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
     modules_list = profile.topics or []
     glossary_items = profile.glossary or []
@@ -299,11 +311,17 @@ def check_relevance_with_profile(
             input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
         )
 
-    # Cache key: hash(tenant_id + question[:100] + dialog tail). The dialog
-    # context changes the verdict (a follow-up is relevant only in context),
-    # so it must be part of the key — otherwise a context-dependent verdict
-    # would be replayed for the same text in a different conversation state.
-    key_src = f"{tenant_id}:{user_question[:100]}:{(dialog_context or '')[-200:]}"
+    # Cache key: hash(tenant_id + profile version + question[:100] + dialog
+    # tail). The dialog context changes the verdict (a follow-up is relevant
+    # only in context), so it must be part of the key — otherwise a
+    # context-dependent verdict would be replayed for the same text in a
+    # different conversation state. The profile version (updated_at) is included
+    # so a topics/glossary edit invalidates prior verdicts immediately rather
+    # than after the TTL.
+    key_src = (
+        f"{tenant_id}:{_profile_cache_version(profile)}:"
+        f"{user_question[:100]}:{(dialog_context or '')[-200:]}"
+    )
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -431,7 +449,12 @@ async def async_check_relevance_with_profile(
             input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
         )
 
-    key_src = f"{tenant_id}:{user_question[:100]}:{(dialog_context or '')[-200:]}"
+    # See sync variant: the profile version invalidates cached verdicts on a
+    # profile edit instead of leaving them stale for the TTL.
+    key_src = (
+        f"{tenant_id}:{_profile_cache_version(profile)}:"
+        f"{user_question[:100]}:{(dialog_context or '')[-200:]}"
+    )
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:

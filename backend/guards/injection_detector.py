@@ -11,9 +11,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 import unicodedata
 from dataclasses import dataclass
-from time import perf_counter
+from time import monotonic, perf_counter
 
 from backend.core.config import settings
 from backend.observability import TraceHandle, record_stage_ms
@@ -154,6 +155,70 @@ def _reset_reference_embeddings() -> None:
     _reference_embeddings = None
 
 
+# ---------------------------------------------------------------------------
+# Circuit breaker for the semantic (embedding-backed) level
+# ---------------------------------------------------------------------------
+# Mirrors the relevance guard's breaker: when the embedding service is down,
+# every turn otherwise pays the full ``injection_semantic_timeout_sec`` (~2 s)
+# waiting for level 2 to time out. After CIRCUIT_BREAKER_THRESHOLD consecutive
+# embedding failures (timeouts / errors) the circuit opens and level 2 is
+# skipped (pass-through) for CIRCUIT_HALF_OPEN_AFTER_SECONDS. After the cooldown
+# one probe request is allowed through: on success the circuit closes, on
+# failure the timer resets. Level 1 (structural) is unaffected and keeps gating.
+CIRCUIT_BREAKER_THRESHOLD = 5
+CIRCUIT_HALF_OPEN_AFTER_SECONDS = 60.0
+
+_cb_lock = threading.Lock()
+_consecutive_failures: int = 0
+_circuit_opened_at: float | None = None
+
+
+def _circuit_is_open() -> bool:
+    """True while the breaker is open (level 2 should be skipped)."""
+    global _circuit_opened_at
+    with _cb_lock:
+        if _consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+            now = monotonic()
+            if _circuit_opened_at is None:
+                _circuit_opened_at = now
+            if now - _circuit_opened_at < CIRCUIT_HALF_OPEN_AFTER_SECONDS:
+                return True
+            # Half-open: reset timer so only one probe gets through at a time.
+            _circuit_opened_at = None
+    return False
+
+
+def _record_semantic_failure() -> None:
+    global _consecutive_failures, _circuit_opened_at
+    with _cb_lock:
+        _consecutive_failures += 1
+        _circuit_opened_at = monotonic()
+
+
+def _record_semantic_success() -> None:
+    global _consecutive_failures, _circuit_opened_at
+    with _cb_lock:
+        _consecutive_failures = 0
+        _circuit_opened_at = None
+
+
+def _reset_circuit_breaker() -> None:
+    """For testing only — force the breaker back to the closed state."""
+    _record_semantic_success()
+
+
+def _passthrough_result(normalized: str) -> InjectionDetectionResult:
+    """Level-2 non-detection result (open circuit or timeout/error)."""
+    return InjectionDetectionResult(
+        detected=False,
+        level=None,
+        method=None,
+        pattern=None,
+        score=None,
+        normalized_input=normalized,
+    )
+
+
 def detect_injection_semantic(
     text: str,
     normalized: str,
@@ -165,8 +230,12 @@ def detect_injection_semantic(
     Uses the OpenAI HTTP client timeout (``INJECTION_SEMANTIC_TIMEOUT_SEC``)
     so requests are cancelled at the transport layer instead of leaving work
     running in a background thread after a futures timeout.
-    On timeout or error → pass-through.
+    On timeout or error → pass-through. After repeated failures the circuit
+    breaker opens and this level is skipped entirely (also pass-through) so a
+    down embedding service does not add the timeout to every turn.
     """
+    if _circuit_is_open():
+        return _passthrough_result(normalized)
     try:
         embedding = embed_query(
             text,
@@ -178,6 +247,7 @@ def detect_injection_semantic(
         max_score = max(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
         )
+        _record_semantic_success()
         if max_score >= settings.injection_semantic_threshold:
             return InjectionDetectionResult(
                 detected=True,
@@ -196,19 +266,13 @@ def detect_injection_semantic(
             normalized_input=normalized,
         )
     except Exception as e:
+        _record_semantic_failure()
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
             logger.warning("Semantic injection check timeout: %s", e)
         else:
             logger.error("Semantic injection check error: %s", e)
 
-    return InjectionDetectionResult(
-        detected=False,
-        level=None,
-        method=None,
-        pattern=None,
-        score=None,
-        normalized_input=normalized,
-    )
+    return _passthrough_result(normalized)
 
 
 async def async_detect_injection_semantic(
@@ -222,7 +286,11 @@ async def async_detect_injection_semantic(
     Async counterpart of :func:`detect_injection_semantic`. Uses
     ``async_embed_query`` so the event loop is not blocked during the
     OpenAI HTTP call. On timeout or error → pass-through (detected=False).
+    Shares the module-level circuit breaker with the sync variant, so once it
+    opens both paths skip level 2 during an embedding-service outage.
     """
+    if _circuit_is_open():
+        return _passthrough_result(normalized)
     try:
         embedding = await async_embed_query(
             text,
@@ -234,6 +302,7 @@ async def async_detect_injection_semantic(
         max_score = max(
             cosine_similarity(embedding, ref) for ref in ref_embeddings
         )
+        _record_semantic_success()
         if max_score >= settings.injection_semantic_threshold:
             return InjectionDetectionResult(
                 detected=True,
@@ -252,19 +321,13 @@ async def async_detect_injection_semantic(
             normalized_input=normalized,
         )
     except Exception as e:
+        _record_semantic_failure()
         if "timeout" in type(e).__name__.lower() or "timeout" in str(e).lower():
             logger.warning("Async semantic injection check timeout: %s", e)
         else:
             logger.error("Async semantic injection check error: %s", e)
 
-    return InjectionDetectionResult(
-        detected=False,
-        level=None,
-        method=None,
-        pattern=None,
-        score=None,
-        normalized_input=normalized,
-    )
+    return _passthrough_result(normalized)
 
 
 # ---------------------------------------------------------------------------

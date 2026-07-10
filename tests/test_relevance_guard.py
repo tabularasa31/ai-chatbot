@@ -534,6 +534,62 @@ async def test_async_relevance_cache_hit(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_async_relevance_cache_invalidated_on_profile_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A profile edit (bumped ``updated_at``) must invalidate cached verdicts.
+
+    Without folding the profile version into the cache key, a topics/glossary
+    update would be ignored for up to CACHE_TTL_SECONDS. Here the second call
+    uses the same question but a newer ``updated_at``, so the guard must re-run
+    the LLM instead of replaying the stale cached verdict.
+    """
+    from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
+
+    _cache.clear()
+    call_count = 0
+
+    async def counting_create(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return Mock(
+            choices=[Mock(message=Mock(content='{"category": "relevant", "reason": "ok"}'))]
+        )
+
+    mock_client = Mock()
+    mock_client.chat.completions.create = counting_create
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    question = "how do I configure the integration module"
+
+    profile_v1 = _make_profile(tid)
+    profile_v1.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile_v1, api_key="sk-test"
+    )
+    assert call_count == 1
+
+    # Same profile version → cache hit, no new LLM call.
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile_v1, api_key="sk-test"
+    )
+    assert call_count == 1
+
+    # Tenant edits topics: updated_at advances → cached verdict must be dropped.
+    profile_v2 = _make_profile(tid)
+    profile_v2.topics = ["ModA", "ModB"]
+    profile_v2.updated_at = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile_v2, api_key="sk-test"
+    )
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_async_relevance_uses_model_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     from backend.guards.relevance_checker import async_check_relevance_with_profile, _cache
 

@@ -445,6 +445,14 @@ class Settings(BaseSettings):
     faq_context_threshold: float = Field(0.70, alias="FAQ_CONTEXT_THRESHOLD")
     faq_context_max_items: int = Field(2, alias="FAQ_CONTEXT_MAX_ITEMS", ge=1)
     faq_approved_promotion_delta: float = Field(0.02, alias="FAQ_APPROVED_PROMOTION_DELTA")
+    # Hard wall-clock timeout for the FAQ pgvector lookup in the chat hot path.
+    # On timeout the matcher degrades to rag_only so a slow/stuck FAQ query never
+    # stalls the turn — the RAG pipeline still answers from retrieved chunks.
+    faq_match_timeout_sec: float = Field(
+        2.5,
+        alias="FAQ_MATCH_TIMEOUT_SEC",
+        description="Wall-clock timeout (seconds) for the FAQ vector lookup; degrades to rag_only on breach.",
+    )
     # Hours between cron-triggered analysis runs
     log_analysis_cron_hours: int = Field(24, alias="LOG_ANALYSIS_CRON_HOURS")
     # Threshold: number of new messages that triggers an analysis job

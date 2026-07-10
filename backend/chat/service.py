@@ -817,6 +817,7 @@ async def async_process_chat_message(
     _lang_span.end(
         output={
             "detected_language": language_context.detected_language,
+            "detected_language_resolution_reason": language_context.detected_language_resolution_reason,
             "response_language": language_context.response_language,
             "confidence": language_context.confidence,
             "is_reliable": language_context.is_reliable,
@@ -834,6 +835,7 @@ async def async_process_chat_message(
             "question": redacted_question,
             "has_user_context": bool(effective_user_ctx),
             "detected_language": language_context.detected_language,
+            "detected_language_resolution_reason": language_context.detected_language_resolution_reason,
             "confidence": language_context.confidence,
             "is_reliable": language_context.is_reliable,
             "response_language": language_context.response_language,

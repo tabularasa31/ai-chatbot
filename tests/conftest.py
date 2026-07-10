@@ -63,6 +63,15 @@ def clear_detect_language_cache() -> Generator[None, None, None]:
 
 
 @pytest.fixture(autouse=True)
+def clear_pre_confirm_render_cache() -> Generator[None, None, None]:
+    from backend.escalation.openai_escalation import _PRE_CONFIRM_RENDER_CACHE
+
+    _PRE_CONFIRM_RENDER_CACHE.clear()
+    yield
+    _PRE_CONFIRM_RENDER_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
 def reset_gap_analyzer_job_runner_state() -> Generator[None, None, None]:
     import backend.gap_analyzer.jobs as gap_jobs
 

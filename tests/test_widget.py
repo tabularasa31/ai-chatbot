@@ -737,6 +737,105 @@ def test_widget_chat_stream_sse(
     assert done_events[0]["chat_ended"] is False
 
 
+def test_widget_stream_language_mismatch_aborts_before_client_sees_it(
+    mock_openai_client,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrong-language streamed answer is aborted by the language gate BEFORE
+    any chunk reaches the SSE client; the forced-language retry is the only
+    text streamed (task 86ey7x2p6 — no visible answer swap, no full double
+    generation running to completion)."""
+    import uuid as _uuid
+
+    from backend.chat.handlers.rag import detect_language as _real_detect
+    from backend.chat.language import LanguageDetectionResult
+    from backend.chat.service import RetrievalContext
+    from backend.search.service import build_reliability_assessment
+    from tests._async_utils import as_async as _as_async
+
+    bot_public_id = _setup_widget_tenant(
+        tenant, db_session, "widget-lang-gate@example.com"
+    )
+    doc_id = _uuid.uuid4()
+
+    def _fake_retrieve(*args, **kwargs) -> RetrievalContext:
+        return RetrievalContext(
+            chunk_texts=["Inline mode is available."],
+            document_ids=[doc_id],
+            scores=[0.9],
+            mode="hybrid",
+            best_rank_score=0.9,
+            best_confidence_score=0.9,
+            confidence_source="vector_similarity",
+            reliability=build_reliability_assessment(top_score=0.9, result_count=1),
+        )
+
+    generate_calls: list[str | None] = []
+
+    async def _fake_async_generate(question, context_chunks, **kwargs):
+        lang = kwargs.get("response_language")
+        generate_calls.append(lang)
+        sc = kwargs.get("stream_callback")
+        if len(generate_calls) == 1:
+            # Wrong language (Dutch) — long enough to cross the gate threshold;
+            # the gate raises out of this callback invocation.
+            sc(
+                "Ja, de inline modus is beschikbaar in de instellingen. "
+                "Open het configuratiescherm en schakel de optie in."
+            )
+            raise AssertionError("gate must abort before the fake returns")
+        sc("Sí, el modo inline está disponible.")
+        return ("Sí, el modo inline está disponible.", 60, 40, 20, False)
+
+    def _fake_detect(text: str) -> LanguageDetectionResult:
+        if "beschikbaar" in text:
+            return LanguageDetectionResult(
+                detected_language="nl", confidence=0.95, is_reliable=True
+            )
+        if "disponible" in text or "¿" in text:
+            return LanguageDetectionResult(
+                detected_language="es", confidence=0.95, is_reliable=True
+            )
+        return _real_detect(text)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve)
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer", _fake_async_generate
+    )
+    monkeypatch.setattr("backend.chat.handlers.rag.detect_language", _fake_detect)
+
+    r = tenant.post(
+        _widget_url(bot_public_id),
+        json={"message": "¿Hay un modo inline disponible?"},
+    )
+    assert r.status_code == 200
+
+    import json as _json
+
+    chunk_texts: list[str] = []
+    for raw in r.text.split("\n\n"):
+        raw = raw.strip()
+        if not raw.startswith("data:"):
+            continue
+        event = _json.loads(raw[len("data:"):].strip())
+        if event.get("type") == "chunk":
+            chunk_texts.append(event["text"])
+
+    streamed = "".join(chunk_texts)
+    assert "beschikbaar" not in streamed, (
+        "no wrong-language text may reach the client"
+    )
+    assert streamed == "Sí, el modo inline está disponible."
+    assert len(generate_calls) == 2
+    assert generate_calls[1] == "es", (
+        f"retry must force the expected language, got {generate_calls[1]}"
+    )
+
+
 def test_widget_chat_returns_plain_answer_payload(
     tenant: TestClient,
     db_session: Session,

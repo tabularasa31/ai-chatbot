@@ -26,6 +26,8 @@ from sqlalchemy.util import await_only
 
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import localize_text_to_language_result
+from backend.core.config import settings
+from backend.escalation.openai_escalation import pre_confirm_fallback_result
 from backend.escalation.service import (
     _clear_escalation_clarify_flag,
     _escalation_clarify_already_asked,
@@ -753,17 +755,23 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.add(chat)
                 if pre_confirm_span is not None:
                     pre_confirm_span.end(output={"decision": decision})
-                out_declined = await_only(
-                    asyncio.to_thread(
-                        _svc.render_pre_confirm_text,
-                        variant="declined",
-                        response_language=ctx.language_context.response_language,
-                        api_key=ctx.api_key,
-                        tenant_id=str(ctx.tenant_id),
-                        bot_id=str(ctx.bot_id) if ctx.bot_id else None,
-                        chat_id=str(chat.id),
+                try:
+                    out_declined = await_only(
+                        asyncio.wait_for(
+                            asyncio.to_thread(
+                                _svc.render_pre_confirm_text,
+                                variant="declined",
+                                response_language=ctx.language_context.response_language,
+                                api_key=ctx.api_key,
+                                tenant_id=str(ctx.tenant_id),
+                                bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                                chat_id=str(chat.id),
+                            ),
+                            timeout=settings.escalation_pre_confirm_render_timeout_seconds,
+                        )
                     )
-                )
+                except TimeoutError:
+                    out_declined = pre_confirm_fallback_result("declined")
                 out_declined.tokens_used += classify_tokens
                 return _svc._escalation_turn_response(
                     db=ctx.db,
@@ -805,17 +813,23 @@ class EscalationStateMachine(PipelineHandler):
             ctx.db.add(chat)
             if pre_confirm_span is not None:
                 pre_confirm_span.end(output={"decision": decision, "clarify": True})
-            out_clarify = await_only(
-                asyncio.to_thread(
-                    _svc.render_pre_confirm_text,
-                    variant="clarify",
-                    response_language=ctx.language_context.response_language,
-                    api_key=ctx.api_key,
-                    tenant_id=str(ctx.tenant_id),
-                    bot_id=str(ctx.bot_id) if ctx.bot_id else None,
-                    chat_id=str(chat.id),
+            try:
+                out_clarify = await_only(
+                    asyncio.wait_for(
+                        asyncio.to_thread(
+                            _svc.render_pre_confirm_text,
+                            variant="clarify",
+                            response_language=ctx.language_context.response_language,
+                            api_key=ctx.api_key,
+                            tenant_id=str(ctx.tenant_id),
+                            bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                            chat_id=str(chat.id),
+                        ),
+                        timeout=settings.escalation_pre_confirm_render_timeout_seconds,
+                    )
                 )
-            )
+            except TimeoutError:
+                out_clarify = pre_confirm_fallback_result("clarify")
             out_clarify.tokens_used += classify_tokens
             return _svc._escalation_turn_response(
                 db=ctx.db,

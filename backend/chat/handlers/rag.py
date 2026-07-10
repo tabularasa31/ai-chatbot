@@ -825,6 +825,82 @@ class ThoughtStreamFilter:
                 break
 
 
+class LanguageMismatchStreamAbortError(Exception):
+    """Raised by :class:`LanguageGateStreamFilter` when the streamed answer is
+    reliably detected in a language other than the expected one before any
+    text has been forwarded to the client.
+
+    The caller catches this and regenerates once with the expected language
+    forced, streaming the retry to the client instead — the user never sees
+    the wrong-language attempt, and the wrong-language generation is aborted
+    early instead of running to completion.
+    """
+
+    def __init__(self, detected_language: str) -> None:
+        super().__init__(f"streamed answer language mismatch: {detected_language}")
+        self.detected_language = detected_language
+
+
+class LanguageGateStreamFilter:
+    """Hold back the head of a streamed answer until its language is verified.
+
+    Sits between the marker/thought filters and the real SSE emit callback.
+    Buffers user-visible text until ``min_chars`` accumulate, runs
+    :func:`detect_language` on the buffered head once, then either flushes and
+    becomes a transparent passthrough (language matches, or detection is
+    unreliable — fail open) or raises :exc:`LanguageMismatchStreamAbortError`
+    before a single character reaches the client.
+
+    ``flush_end`` runs the same check for answers shorter than ``min_chars``;
+    short texts usually fail the ``is_reliable`` bar and fail open.
+    """
+
+    def __init__(
+        self,
+        emit: Callable[[str], None],
+        *,
+        expected_language: str,
+        min_chars: int = 80,
+    ) -> None:
+        self._emit = emit
+        self._expected_root = _language_root(expected_language)
+        self._min_chars = min_chars
+        self._buf: list[str] = []
+        self._buffered_len = 0
+        self._passthrough = False
+
+    def feed(self, text: str) -> None:
+        if self._passthrough:
+            self._emit(text)
+            return
+        self._buf.append(text)
+        self._buffered_len += len(text)
+        if self._buffered_len >= self._min_chars:
+            self._check_and_flush()
+
+    def flush_end(self) -> None:
+        if not self._passthrough and self._buf:
+            self._check_and_flush()
+
+    def _check_and_flush(self) -> None:
+        head = "".join(self._buf)
+        try:
+            detection = detect_language(head)
+        except LangDetectError:
+            detection = None
+        if (
+            detection is not None
+            and detection.is_reliable
+            and detection.detected_language != "unknown"
+            and _language_root(detection.detected_language) != self._expected_root
+        ):
+            raise LanguageMismatchStreamAbortError(detection.detected_language)
+        self._passthrough = True
+        self._buf = []
+        self._buffered_len = 0
+        self._emit(head)
+
+
 def _user_context_prompt_line(ctx: dict | None) -> str | None:
     """LLM-safe line: only plan_tier, locale, audience_tag (FR-6.4)."""
     if not ctx:
@@ -896,6 +972,48 @@ def _prompt_cache_kwargs(*candidate_ids: str | None) -> dict[str, Any]:
         if candidate:
             return {"extra_body": {"prompt_cache_key": candidate}}
     return {}
+
+
+def _generation_sampling_kwargs(reasoning: bool) -> dict[str, Any]:
+    """Sampling parameters for the main chat generation call (telemetry shape).
+
+    Non-reasoning models keep the historical fixed ``temperature=0.2``.
+    Reasoning models get ``reasoning_effort`` (the OpenAI default of "medium"
+    dominated generation latency for gpt-5-mini) and, for the gpt-5 family
+    only, ``verbosity`` — other reasoning models reject the parameter.
+
+    This flat dict is what trace metadata records; the actual request kwargs
+    are assembled by :func:`_generation_request_kwargs`, which relocates
+    ``verbosity`` into ``extra_body`` for SDK compatibility.
+    """
+    if not reasoning:
+        return {"temperature": 0.2}
+    kwargs: dict[str, Any] = {"reasoning_effort": settings.chat_reasoning_effort}
+    if settings.chat_model.lower().startswith("gpt-5"):
+        kwargs["verbosity"] = settings.chat_verbosity
+    return kwargs
+
+
+def _generation_request_kwargs(
+    sampling_kwargs: dict[str, Any], cache_kwargs: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge sampling and prompt-cache kwargs into ``create()`` keyword args.
+
+    ``verbosity`` rides in ``extra_body`` alongside ``prompt_cache_key``:
+    older SDK releases allowed by ``requirements.txt`` (``openai>=1.70.0``)
+    predate the typed parameter and would raise ``TypeError`` if it were
+    spread as a direct keyword argument. ``reasoning_effort`` and
+    ``temperature`` have been typed parameters since well before 1.70, so
+    they stay top-level.
+    """
+    kwargs = dict(sampling_kwargs)
+    extra_body = dict(cache_kwargs.get("extra_body") or {})
+    verbosity = kwargs.pop("verbosity", None)
+    if verbosity is not None:
+        extra_body["verbosity"] = verbosity
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    return kwargs
 
 
 def _estimate_prompt_tokens(text: str) -> int:
@@ -1543,7 +1661,8 @@ def generate_answer(
     _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
     openai_client = _svc.get_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
-    _temperature: float | None = None if _reasoning else 0.2
+    _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
+    _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
     _max_completion_tokens = (
         settings.chat_response_max_tokens_reasoning
         if _reasoning
@@ -1566,7 +1685,7 @@ def generate_answer(
             model=settings.chat_model,
             input=generation_input,
             metadata={
-                **({"temperature": _temperature} if _temperature is not None else {}),
+                **_sampling_kwargs,
                 "max_completion_tokens": _max_completion_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
@@ -1598,11 +1717,10 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -1642,9 +1760,8 @@ def generate_answer(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -1853,6 +1970,7 @@ class RagHandler(PipelineHandler):
         from backend.chat.decision import (
             TurnContext as DecisionTurnContext,
         )
+        from backend.escalation.openai_escalation import pre_confirm_fallback_result
         from backend.escalation.service import chunks_preview_from_results
         from backend.models import EscalationTrigger
         from backend.search.service import (
@@ -2123,17 +2241,30 @@ class RagHandler(PipelineHandler):
                     "support_contact" if ctx.support_contact_question else "no_answer"
                 )
                 _esc_openai_start = perf_counter()
-                esc = await_only(
-                    asyncio.to_thread(
-                        render_pre_confirm_text,
-                        variant=_pre_confirm_variant,
-                        response_language=ctx.language_context.response_language,
-                        api_key=ctx.api_key,
-                        tenant_id=str(ctx.tenant_id),
-                        bot_id=str(ctx.bot_id) if ctx.bot_id else None,
-                        chat_id=str(chat.id),
+                try:
+                    esc = await_only(
+                        asyncio.wait_for(
+                            asyncio.to_thread(
+                                render_pre_confirm_text,
+                                variant=_pre_confirm_variant,
+                                response_language=ctx.language_context.response_language,
+                                api_key=ctx.api_key,
+                                tenant_id=str(ctx.tenant_id),
+                                bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                                chat_id=str(chat.id),
+                            ),
+                            timeout=settings.escalation_pre_confirm_render_timeout_seconds,
+                        )
                     )
-                )
+                except TimeoutError:
+                    # Hard deadline: keep the escalation armed and degrade to
+                    # the canonical English template rather than stalling the
+                    # turn on a slow localization call (observed up to 21s).
+                    logger.warning(
+                        "pre-confirm render exceeded %.1fs, using canonical template",
+                        settings.escalation_pre_confirm_render_timeout_seconds,
+                    )
+                    esc = pre_confirm_fallback_result(_pre_confirm_variant)
                 record_stage_ms(
                     ctx.trace,
                     "escalation_openai_ms",
@@ -2504,7 +2635,8 @@ async def _async_generate_answer_native(
     _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
     openai_client = _svc.get_async_openai_client(api_key)
     _reasoning = is_reasoning_model(settings.chat_model)
-    _temperature: float | None = None if _reasoning else 0.2
+    _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
+    _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
     _max_completion_tokens = (
         settings.chat_response_max_tokens_reasoning
         if _reasoning
@@ -2526,7 +2658,7 @@ async def _async_generate_answer_native(
             model=settings.chat_model,
             input=generation_input,
             metadata={
-                **({"temperature": _temperature} if _temperature is not None else {}),
+                **_sampling_kwargs,
                 "max_completion_tokens": _max_completion_tokens,
                 "response_language": response_language,
                 "context_chunk_count": len(context_chunks),
@@ -2558,11 +2690,10 @@ async def _async_generate_answer_native(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -2572,25 +2703,35 @@ async def _async_generate_answer_native(
             total_tokens = 0
             _offer_filter = OfferMarkerStreamFilter(stream_callback)
             _filter = ThoughtStreamFilter(_offer_filter.feed, on_phase_change=status_callback)
-            async for chunk in stream:
-                if isinstance(getattr(chunk, "model", None), str):
-                    actual_model = chunk.model
-                if getattr(chunk, "usage", None):
-                    total_tokens = chunk.usage.total_tokens or 0
-                    prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                    completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
-                    cached_tokens_raw = _usage_cached_tokens(chunk.usage)
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason
-                delta = getattr(choice.delta, "content", None) if choice.delta else None
-                if delta:
-                    chunks.append(delta)
-                    _filter.feed(delta)
-            _filter.flush_end()
-            _offer_filter.flush_end()
+            try:
+                async for chunk in stream:
+                    if isinstance(getattr(chunk, "model", None), str):
+                        actual_model = chunk.model
+                    if getattr(chunk, "usage", None):
+                        total_tokens = chunk.usage.total_tokens or 0
+                        prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
+                        completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
+                        cached_tokens_raw = _usage_cached_tokens(chunk.usage)
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    if getattr(choice, "finish_reason", None):
+                        finish_reason = choice.finish_reason
+                    delta = getattr(choice.delta, "content", None) if choice.delta else None
+                    if delta:
+                        chunks.append(delta)
+                        _filter.feed(delta)
+                _filter.flush_end()
+                _offer_filter.flush_end()
+            except LanguageMismatchStreamAbortError:
+                # The language gate rejected the streamed head before anything
+                # reached the client. Stop consuming OpenAI tokens immediately;
+                # the caller regenerates once with the expected language forced.
+                try:
+                    await stream.close()
+                except Exception:
+                    logger.debug("stream close after language abort failed", exc_info=True)
+                raise
             _raw_answer = "".join(chunks)
             _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
             answer_text = _strip_thought_tags(_raw_answer)
@@ -2600,9 +2741,8 @@ async def _async_generate_answer_native(
                 lambda: openai_client.chat.completions.create(
                     model=settings.chat_model,
                     messages=messages,
-                    **({} if _reasoning else {"temperature": 0.2}),
+                    **_request_kwargs,
                     max_completion_tokens=_max_completion_tokens,
-                    **_cache_kwargs,
                 ),
                 bot_id=retry_bot_id,
                 emit_chat_failed=True,
@@ -2704,6 +2844,19 @@ async def _async_generate_answer_native(
         else:
             final_text = answer_text.strip()
         return (final_text, total_tokens, _input_tokens, _output_tokens, offered_ticket)
+    except LanguageMismatchStreamAbortError as abort_exc:
+        # Not an error: the language gate aborted the stream early so the
+        # caller can regenerate in the expected language. End the observation
+        # cleanly with the abort reason instead of an ERROR status.
+        if generation is not None:
+            generation.end(
+                metadata={
+                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
+                    "aborted_reason": "language_mismatch",
+                    "detected_language": abort_exc.detected_language,
+                },
+            )
+        raise
     except Exception as exc:
         log_llm_tokens(
             operation="generate",
@@ -3701,33 +3854,8 @@ async def async_run_chat_pipeline(
                 logger.debug("status_callback(writing) failed", exc_info=True)
 
         llm_start = perf_counter()
-        raw_answer, tokens_used, _input_toks, _output_toks, llm_offered_ticket = await async_generate_answer(
-            question,
-            retrieval.chunk_texts,
-            api_key=api_key,
-            response_language=language_context.response_language,
-            user_context_line=user_context_line,
-            disclosure_config=disclosure_config,
-            client_product_name=state.client_product_name,
-            topic_hint=state.topic_hint,
-            faq_context_items=state.faq_context_items,
-            quick_answer_items=state.quick_answer_items,
-            agent_instructions=agent_instructions,
-            low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
-            allow_clarification=allow_clarification,
-            trace=trace,
-            retry_bot_id=retry_bot_id,
-            stream_callback=stream_callback,
-            status_callback=status_callback,
-            metrics_tenant_id=tenant_public_id,
-            metrics_bot_id=bot_public_id,
-            prior_messages=prior_messages,
-        )
-        llm_ms = int((perf_counter() - llm_start) * 1000)
-        record_stage_ms(trace, "llm_ms", llm_ms)
-        _lang_retry_ms = 0   # set below if the language-mismatch retry fires
 
-        # --- 7b. Language check ---
+        # --- 7b. Expected output language (resolved BEFORE generation) ---
         # Use the pre-resolved response_language as the expected output language for confirmed
         # non-English conversations. For "en" (often a resolution fallback, not a confirmed
         # detection) and unset/auto cases, fall back to detect_language(question) to preserve
@@ -3748,13 +3876,60 @@ async def async_run_chat_pipeline(
                 if _q_lang.is_reliable and _q_lang.detected_language not in ("unknown", "en")
                 else None
             )
-        a_lang = detect_language(raw_answer)
-        if (
-            _expected_lang
-            and _expected_lang not in ("en",)
-            and a_lang.is_reliable
-            and a_lang.detected_language not in ("unknown", _expected_lang)
-        ):
+
+        # Streaming: verify the language on the buffered head of the stream
+        # BEFORE any text reaches the client. On a reliable mismatch the gate
+        # aborts the stream (nothing shown yet) and we regenerate once with the
+        # expected language forced, streaming the retry to the client. This
+        # replaces the old post-hoc check that regenerated AFTER the user had
+        # already watched the wrong-language answer stream in, then silently
+        # swapped the persisted text.
+        _gate: LanguageGateStreamFilter | None = None
+        _gated_stream_callback = stream_callback
+        if stream_callback is not None and _expected_lang and _expected_lang != "en":
+            _gate = LanguageGateStreamFilter(
+                stream_callback, expected_language=_expected_lang
+            )
+            _gated_stream_callback = _gate.feed
+
+        _lang_retry_ms = 0   # set below if the language-mismatch retry fires
+        raw_answer = ""
+        tokens_used = 0
+        _input_toks = 0
+        _output_toks = 0
+        llm_offered_ticket = False
+        try:
+            raw_answer, tokens_used, _input_toks, _output_toks, llm_offered_ticket = await async_generate_answer(
+                question,
+                retrieval.chunk_texts,
+                api_key=api_key,
+                response_language=language_context.response_language,
+                user_context_line=user_context_line,
+                disclosure_config=disclosure_config,
+                client_product_name=state.client_product_name,
+                topic_hint=state.topic_hint,
+                faq_context_items=state.faq_context_items,
+                quick_answer_items=state.quick_answer_items,
+                agent_instructions=agent_instructions,
+                low_context=not state.reranker_rescued and retrieval.reliability.score == "low",
+                allow_clarification=allow_clarification,
+                trace=trace,
+                retry_bot_id=retry_bot_id,
+                stream_callback=_gated_stream_callback,
+                status_callback=status_callback,
+                metrics_tenant_id=tenant_public_id,
+                metrics_bot_id=bot_public_id,
+                prior_messages=prior_messages,
+            )
+            if _gate is not None:
+                # Answers shorter than the gate threshold are checked here;
+                # a reliable mismatch still aborts (nothing was emitted yet).
+                _gate.flush_end()
+        except LanguageMismatchStreamAbortError as _abort:
+            # The aborted attempt's tokens are not returned by the closed
+            # stream, so they are absent from the per-turn usage totals; the
+            # abort fires within the first ~80 visible chars, so the loss is
+            # bounded and rare.
             _lang_retry_start = perf_counter()
             lang_span = None
             if trace is not None:
@@ -3762,7 +3937,8 @@ async def async_run_chat_pipeline(
                     name="language-check",
                     input={
                         "expected_lang": _expected_lang,
-                        "answer_lang": a_lang.detected_language,
+                        "answer_lang": _abort.detected_language,
+                        "stream_aborted_early": True,
                     },
                 )
             retry_answer, retry_tokens, retry_in, retry_out, retry_offered_ticket = await async_generate_answer(
@@ -3781,24 +3957,21 @@ async def async_run_chat_pipeline(
                 allow_clarification=allow_clarification,
                 trace=trace,
                 retry_bot_id=retry_bot_id,
-                stream_callback=None,
+                # Retry streams to the REAL callback: the user has seen nothing
+                # yet, and gating the retry too could loop on a stubborn model.
+                stream_callback=stream_callback,
+                status_callback=status_callback,
                 metrics_tenant_id=tenant_public_id,
                 metrics_bot_id=bot_public_id,
                 prior_messages=prior_messages,
             )
+            # Accumulate rather than assign: when the abort came from
+            # _gate.flush_end() (short answer), the first attempt completed and
+            # its token counts were already assigned above.
             raw_answer = retry_answer
             tokens_used += retry_tokens
             _input_toks += retry_in
             _output_toks += retry_out
-            # OR the markers — never reset to False. On the streaming path
-            # the user has ALREADY seen the first attempt's reply via
-            # stream_callback by the time we run the language guard; if that
-            # reply ended with a ticket offer, the user can legitimately
-            # answer "yes" on the next turn even though the retry text we
-            # persist no longer contains the offer. Losing the signal here
-            # would re-introduce the exact greeting-instead-of-handoff bug
-            # this PR fixes, just through a narrower (language-mismatch)
-            # trigger.
             llm_offered_ticket = llm_offered_ticket or retry_offered_ticket
             _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
             record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
@@ -3810,6 +3983,58 @@ async def async_run_chat_pipeline(
                         "retry_ms": _lang_retry_ms,
                     }
                 )
+        llm_ms = int((perf_counter() - llm_start) * 1000)
+        record_stage_ms(trace, "llm_ms", llm_ms)
+
+        # Non-streamed generation: nothing has been shown to the client, but a
+        # full regeneration is still the wrong tool — translate the finished
+        # answer with the localization model instead. (generate_answer's own
+        # _enforce_response_language guard compares against response_language;
+        # this covers the residual case where response_language was an "en"
+        # fallback while the question was reliably non-English.)
+        if stream_callback is None and _expected_lang and _expected_lang != "en":
+            a_lang = detect_language(raw_answer)
+            if (
+                a_lang.is_reliable
+                and a_lang.detected_language != "unknown"
+                and _language_root(a_lang.detected_language) != _language_root(_expected_lang)
+            ):
+                _lang_retry_start = perf_counter()
+                lang_span = None
+                if trace is not None:
+                    lang_span = trace.span(
+                        name="language-check",
+                        input={
+                            "expected_lang": _expected_lang,
+                            "answer_lang": a_lang.detected_language,
+                        },
+                    )
+                try:
+                    _translation = await asyncio.to_thread(
+                        translate_text_result,
+                        source_text=raw_answer,
+                        target_language=_expected_lang,
+                        api_key=api_key,
+                    )
+                    if _translation.text:
+                        raw_answer = _translation.text
+                        tokens_used += int(_translation.tokens_used or 0)
+                        _output_toks += int(_translation.tokens_used or 0)
+                except Exception as _translate_exc:
+                    logger.warning(
+                        "language-mismatch translation failed, keeping original answer: %s",
+                        _translate_exc,
+                    )
+                _lang_retry_ms = int((perf_counter() - _lang_retry_start) * 1000)
+                record_stage_ms(trace, "llm_lang_retry_ms", _lang_retry_ms)
+                if lang_span is not None:
+                    lang_span.end(
+                        output={
+                            "translated": True,
+                            "forced_language": _expected_lang,
+                            "retry_ms": _lang_retry_ms,
+                        }
+                    )
 
         raw_answer = _strip_inline_citations(raw_answer)
 

@@ -2008,6 +2008,92 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     assert "couldn't find" not in PRE_CONFIRM_SUPPORT_CONTACT_EN.lower()
 
 
+def test_detect_human_request_empty_message_skips_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bootstrap (empty) message is answered deterministically without an
+    OpenAI call — nothing to classify."""
+    from backend.escalation import service as esc_service
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("empty message must not reach the OpenAI client")
+
+    monkeypatch.setattr("backend.escalation.service.get_openai_client", _fail)
+
+    for message in ("", "   ", "\n\t"):
+        result = esc_service.detect_human_request(message, "sk-test")
+        assert result.human_request is False
+        assert result.message_has_request_content is False
+        assert esc_service.detect_support_contact_question(message, "sk-test") is False
+
+
+def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical templates are static, so a successful localization is
+    reused for the process lifetime — the localization LLM call is paid at most
+    once per (variant, language)."""
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import render_pre_confirm_text
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_localize(*, canonical_text: str, target_language: str, **_kwargs: object) -> LocalizationResult:
+        calls.append((canonical_text, target_language))
+        return LocalizationResult(text=f"[{target_language}] {canonical_text}", tokens_used=7)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    first = render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    second = render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    assert len(calls) == 1, "second render of the same (variant, language) must hit the cache"
+    assert second.message_to_user == first.message_to_user
+    assert second.tokens_used == 0
+
+    render_pre_confirm_text(variant="initial", response_language="de", api_key="k")
+    render_pre_confirm_text(variant="declined", response_language="ru", api_key="k")
+    assert len(calls) == 3, "a different language or variant is localized separately"
+
+
+def test_render_pre_confirm_text_does_not_cache_degraded_localization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 0-token result for a non-English target means the localization helper
+    degraded (missing key / failure) — it must be retried, not pinned."""
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import render_pre_confirm_text
+
+    calls: list[str] = []
+
+    def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+        calls.append(canonical_text)
+        return LocalizationResult(text=canonical_text, tokens_used=0)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    assert len(calls) == 2, "degraded localization must not be cached"
+
+
+def test_pre_confirm_fallback_result_returns_canonical_text() -> None:
+    from backend.escalation.openai_escalation import (
+        PRE_CONFIRM_NO_ANSWER_EN,
+        pre_confirm_fallback_result,
+    )
+
+    out = pre_confirm_fallback_result("no_answer")
+    assert out.message_to_user == PRE_CONFIRM_NO_ANSWER_EN
+    assert out.tokens_used == 0
+    assert out.followup_decision is None
+
+
 def test_classify_pre_confirm_reply_parses_decision_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

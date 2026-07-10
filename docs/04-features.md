@@ -519,7 +519,11 @@ Guard decisions (in priority order):
   2. capability question         → capability_response  (positive "I can help with…")
   3. FAQ direct match            → faq_direct  (skip retrieval)
   4. relevance score < threshold → guard_reject / low_retrieval
-  5. relevance check failed      → guard_reject / not_relevant
+  5. relevance LLM category:
+       offtopic                  → guard_reject / not_relevant  (refusal ends with a
+                                    support-handoff offer, never a dead end)
+       support_complaint         → escalation offer  (pre-confirm, trigger user_complaint)
+       social                    → guard_social_reply  (polite localized acknowledgement)
   ↓
 Hybrid search → top-k chunks  (vector + BM25 + RRF)
   ↓
@@ -548,9 +552,36 @@ Store message → return response
 | Reason | Trigger |
 |---|---|
 | `injection` | Prompt injection pattern detected |
-| `not_relevant` | Relevance LLM check returned false |
+| `not_relevant` | Relevance LLM classified the message as `offtopic` |
 | `low_retrieval` | Best vector similarity below `RELEVANCE_RETRIEVAL_THRESHOLD` (default 0.22) |
 | `insufficient_confidence` | Answer validation confidence below threshold |
+| `rephrase` | First strict zero-RAG-hits turn — soft "couldn't find an answer, please rephrase" prompt |
+| `social` | Relevance LLM classified the message as a pure social turn (thanks / farewell) — polite acknowledgement, not a refusal |
+
+**Relevance guard: dialog context & message categories.** The relevance guard
+(`backend/guards/relevance_checker.py`) does not judge messages in isolation: both call
+sites (the pre-retrieval check and the consecutive zero-hits `force_llm_check` pass) hand
+it the last 1–2 dialog turns (`build_dialog_context` in `backend/chat/followup.py`), so
+anaphoric follow-ups ("what about a cloudflare certificate?", "and for legal entities?")
+in an on-topic conversation resolve against context instead of being rejected. The guard's
+5-minute verdict cache keys on the dialog tail as well, so a context-dependent verdict is
+never replayed for the same text in a different conversation state.
+
+The guard LLM classifies each message into one of four categories in a single call:
+
+| Category | Routing |
+|---|---|
+| `relevant` | Continue the RAG pipeline |
+| `offtopic` | `guard_reject / not_relevant`; the refusal text ends with an offer to forward the request to support |
+| `support_complaint` | User complains support hasn't replied / they've been waiting — pre-confirm escalation offer (`user_complaint` trigger), never a refusal |
+| `social` | Pure thanks / farewell that slipped past the greeting handler — polite localized acknowledgement |
+
+Language-agnostic by design: classification is a pure LLM verdict (no per-language keyword
+lists), and every user-facing reply is a canonical English template routed through the
+localization layer. Known trade-off: messages of ≤4 words bypass the guard LLM entirely
+(`short_query_bypass`), so a very short complaint ("no one replied") rides the zero-hits
+net instead — rephrase prompt first, then the next turn's forced check (which sees the
+dialog context) classifies the repeat as `support_complaint` and offers the handoff.
 
 **Cross-lingual note:** Russian / other non-English queries against English docs produce cosine similarities of 0.22–0.27 even when content is perfectly relevant. The default threshold of 0.22 is calibrated for this. Set `RELEVANCE_RETRIEVAL_THRESHOLD` env var to override.
 
@@ -665,6 +696,7 @@ When the bot cannot adequately answer, the conversation is **escalated to a huma
 | Low similarity score | No retrieved chunk is relevant enough |
 | No documents | Client has no embedded documents |
 | User phrase | Message contains phrases like "talk to a person", "human", "agent" |
+| Support complaint (`user_complaint`) | Relevance guard classified the message as a complaint about support silence ("they haven't replied for two weeks") — pre-confirm offer leads with an apology; ticket priority ranks with an explicit human request |
 | Manual escalation | Client calls `POST /chat/{session_id}/escalate` |
 
 ### What happens on escalation

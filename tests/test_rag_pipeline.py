@@ -16,7 +16,7 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.models import Tenant, Document, DocumentStatus, DocumentType, Embedding
 from backend.search.service import build_reliability_assessment
 
-from tests._async_utils import as_async as _as_async
+from tests._async_utils import as_async as _as_async, as_async_generate
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
@@ -321,8 +321,8 @@ def test_langfuse_faq_match_span(
     )
 
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *_, **__: ("Answer", 1),
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_, **__: ("Answer", 1)),
     )
 
     process_chat_message(
@@ -400,7 +400,10 @@ def test_upstream_query_embedding_span_present_with_precomputed_path(
             vector_similarities=None,
         )),
     )
-    monkeypatch.setattr("backend.chat.service.generate_answer", lambda *_, **__: ("Answer", 1))
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_, **__: ("Answer", 1)),
+    )
     # Suppress LLM-driven query rewrites so only the base embedding batch runs.
     async def _no_rewrite(*_, **__):
         return None
@@ -478,7 +481,10 @@ def test_faq_direct_skips_retrieval_and_generation(
         raise AssertionError("generate_answer must not be called")
 
     monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_unexpected_retrieve))
-    monkeypatch.setattr("backend.chat.service.generate_answer", _unexpected_generate)
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(_unexpected_generate),
+    )
 
     outcome = process_chat_message(
         cl_row.id,
@@ -556,8 +562,8 @@ def test_guard_error_degrades_to_context(
         )),
     )
     monkeypatch.setattr(
-        "backend.chat.service.generate_answer",
-        lambda *_, **__: (called.__setitem__("generation", True) or "Answer", 1),
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_, **__: (called.__setitem__("generation", True) or "Answer", 1)),
     )
 
     process_chat_message(
@@ -583,7 +589,9 @@ def test_guard_error_degrades_to_context(
 def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
     mock_openai_client: Mock,
 ) -> None:
-    from backend.chat.service import generate_answer
+    import asyncio
+
+    from backend.chat.handlers.rag import async_generate_answer
 
     mock_openai_client.chat.completions.create.return_value.choices = [
         Mock(message=Mock(content="Answer from FAQ hint"))
@@ -598,11 +606,13 @@ def test_faq_context_without_retrieval_chunks_still_generates_with_faq_hints(
         score=0.88,
     )
 
-    answer, tokens = generate_answer(
-        "How can I reset password?",
-        context_chunks=[],
-        api_key="sk-test",
-        faq_context_items=[faq_item],
+    answer, tokens, *_ = asyncio.run(
+        async_generate_answer(
+            "How can I reset password?",
+            context_chunks=[],
+            api_key="sk-test",
+            faq_context_items=[faq_item],
+        )
     )
 
     assert answer == "Answer from FAQ hint"

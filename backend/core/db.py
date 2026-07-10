@@ -82,7 +82,7 @@ async def run_sync(
     Single named entry point for the ``AsyncSession.run_sync`` pattern that
     bridges async chat handlers to sync DB helpers. Two reasons we cross the
     boundary: aiosqlite's greenlet context must be active for sync session
-    ops, and tests monkeypatch sync paths (e.g. ``retrieve_context``) — both
+    ops, and tests monkeypatch sync paths — both
     only fire when the call goes through ``run_sync``.
     """
     return await db.run_sync(fn)

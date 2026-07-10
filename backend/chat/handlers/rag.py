@@ -1,7 +1,7 @@
 """RAG handler module.
 
 Owns the async RAG pipeline (``async_run_chat_pipeline``) plus its direct
-collaborators (``retrieve_context``, ``generate_answer``,
+collaborators (``async_retrieve_context``, ``async_generate_answer``,
 ``build_rag_prompt``, ``build_rag_messages``) and the dataclasses they hand
 back to the caller (``RetrievalContext``, ``ChatPipelineResult``).
 
@@ -13,7 +13,7 @@ escalation side effects only.
 
 Symbols that tests monkeypatch on ``backend.chat.service`` (e.g.
 ``async_detect_injection``, ``match_faq``, ``capture_event``,
-``retrieve_context``) are looked up dynamically via ``backend.chat.service``
+``async_retrieve_context``) are looked up dynamically via ``backend.chat.service``
 rather than imported at module top — that way
 ``monkeypatch.setattr("backend.chat.service.X", ...)`` in tests still affects
 the call sites that now live here.
@@ -57,7 +57,7 @@ from backend.chat.language import (
 from backend.chat.presets import COT_REASONING_BLOCK
 from backend.core.config import settings
 from backend.core.openai_client import is_reasoning_model
-from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.disclosure_config import resolve_level
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
@@ -1245,123 +1245,6 @@ def _build_prior_messages_for_llm(
     return out or None
 
 
-def retrieve_context(
-    tenant_id: uuid.UUID,
-    question: str,
-    db: Session,
-    api_key: str,
-    top_k: int = 5,
-    trace: TraceHandle | None = None,
-    precomputed_query_variants: list[str] | None = None,
-    precomputed_variant_vectors: list[list[float]] | None = None,
-    precomputed_embedding_api_request_count: int | None = None,
-    rewritten_variant: str | None = None,
-) -> RetrievalContext:
-    """
-    Retrieve context chunks for RAG plus a separate confidence signal for escalation.
-
-    Uses tenant-scoped search with:
-    - rank scores for ordering/debug
-    - vector similarity for escalation confidence
-    tenant_id filtering enforced at DB level.
-    """
-    # Look up search_similar_chunks_detailed via service module so test
-    # monkeypatches against backend.chat.service.search_similar_chunks_detailed
-    # are honored.
-    from backend.chat import service as _svc
-
-    _retrieval_start = perf_counter()
-    try:
-        bundle = _svc.search_similar_chunks_detailed(
-            tenant_id=tenant_id,
-            query=question,
-            top_k=top_k,
-            db=db,
-            api_key=api_key,
-            trace=trace,
-            precomputed_query_variants=precomputed_query_variants,
-            precomputed_variant_vectors=precomputed_variant_vectors,
-            precomputed_embedding_api_request_count=precomputed_embedding_api_request_count,
-            precomputed_rewritten_variant=rewritten_variant,
-        )
-    except (APITimeoutError, APIConnectionError, RateLimitError):
-        retrieval_duration_ms = round((perf_counter() - _retrieval_start) * 1000, 2)
-        logger.warning("retrieve_context_embedding_failed", exc_info=True)
-        return RetrievalContext(
-            chunk_texts=[],
-            document_ids=[],
-            scores=[],
-            mode="none",
-            best_rank_score=None,
-            best_confidence_score=None,
-            confidence_source="none",
-            retrieval_duration_ms=retrieval_duration_ms,
-        )
-    results = bundle.results
-
-    if not results:
-        return RetrievalContext(
-            chunk_texts=[],
-            document_ids=[],
-            scores=[],
-            mode="none",
-            best_rank_score=None,
-            best_confidence_score=None,
-            confidence_source="none",
-            reliability=bundle.reliability,
-            variant_mode=bundle.variant_mode,
-            query_variant_count=bundle.query_variant_count,
-            extra_embedded_queries=bundle.extra_embedded_queries,
-            extra_embedding_api_requests=bundle.extra_embedding_api_requests,
-            extra_vector_search_calls=bundle.extra_vector_search_calls,
-            bm25_expansion_mode=bundle.bm25_expansion_mode,
-            bm25_query_variant_count=bundle.bm25_query_variant_count,
-            bm25_variant_eval_count=bundle.bm25_variant_eval_count,
-            extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
-            bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
-            bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
-            retrieval_duration_ms=bundle.retrieval_duration_ms,
-            vector_similarities=None,
-        )
-
-    best_rank_score = results[0][1]
-    if bundle.has_lexical_signal:
-        mode: Literal["vector", "hybrid", "none"] = "hybrid"
-    else:
-        mode = "vector"
-    best_confidence_score = bundle.best_vector_similarity
-    confidence_source: Literal["vector_similarity", "none"] = "vector_similarity"
-
-    chunk_texts = [r[0].chunk_text or "" for r in results]
-    document_ids = [r[0].document_id for r in results]
-    scores = [r[1] for r in results]
-
-    return RetrievalContext(
-        chunk_texts=chunk_texts,
-        document_ids=document_ids,
-        scores=scores,
-        mode=mode,
-        best_rank_score=best_rank_score,
-        best_confidence_score=best_confidence_score,
-        confidence_source=confidence_source,
-        reliability=bundle.reliability,
-        variant_mode=bundle.variant_mode,
-        query_variant_count=bundle.query_variant_count,
-        extra_embedded_queries=bundle.extra_embedded_queries,
-        extra_embedding_api_requests=bundle.extra_embedding_api_requests,
-        extra_vector_search_calls=bundle.extra_vector_search_calls,
-        bm25_expansion_mode=bundle.bm25_expansion_mode,
-        bm25_query_variant_count=bundle.bm25_query_variant_count,
-        bm25_variant_eval_count=bundle.bm25_variant_eval_count,
-        extra_bm25_variant_evals=bundle.extra_bm25_variant_evals,
-        bm25_merged_hit_count_before_cap=bundle.bm25_merged_hit_count_before_cap,
-        bm25_merged_hit_count_after_cap=bundle.bm25_merged_hit_count_after_cap,
-        retrieval_duration_ms=bundle.retrieval_duration_ms,
-        vector_similarities=bundle.vector_similarities,
-    )
-
-
-
 def build_rag_prompt(
     question: str,
     context_chunks: list[str],
@@ -1581,299 +1464,6 @@ def build_rag_messages(
 
     system_prompt, remainder = prompt.split("\n\nContext:\n", 1)
     return system_prompt, remainder
-
-
-def generate_answer(
-    question: str,
-    context_chunks: list[str],
-    *,
-    api_key: str,
-    response_language: str = "en",
-    user_context_line: str | None = None,
-    disclosure_config: dict[str, Any] | None = None,
-    client_product_name: str | None = None,
-    topic_hint: str | None = None,
-    faq_context_items: list[FAQRow] | None = None,
-    quick_answer_items: list[str] | None = None,
-    agent_instructions: str | None = None,
-    low_context: bool = False,
-    allow_clarification: bool = True,
-    trace: TraceHandle | None = None,
-    retry_bot_id: str | None = None,
-    stream_callback: Callable[[str], None] | None = None,
-    status_callback: Callable[[str], None] | None = None,
-    metrics_tenant_id: str | None = None,
-    metrics_bot_id: str | None = None,
-    prior_messages: list[dict[str, str]] | None = None,
-) -> tuple[str, int]:
-    """
-    Call OpenAI chat model with RAG prompt.
-
-    Args:
-        question: User question.
-        context_chunks: Retrieved context chunks.
-        allow_clarification: Passed through to build_rag_prompt; when False the
-            model is instructed not to ask clarifying questions.
-        prior_messages: Optional trailing transcript (user/assistant pairs)
-            inserted between the system prompt and the current user message,
-            so the model can resolve short follow-up replies in context.
-
-    Returns:
-        Tuple of (answer_text, total_tokens).
-        If context_chunks is empty, returns a localized no-information string with 0 tokens.
-    """
-    # Look up get_openai_client via service module so monkeypatches against
-    # backend.chat.service.get_openai_client are honored (tests patch this in
-    # conftest fixtures).
-    from backend.chat import service as _svc
-
-    # For faq_context strategy we may intentionally have no retrieval chunks,
-    # but still want generation to use VERIFIED FAQ CANDIDATES hints.
-    if not context_chunks and not faq_context_items and not quick_answer_items:
-        text = localize_text_to_language_result(
-            canonical_text="I don't have information about this.",
-            target_language=response_language,
-            api_key=api_key,
-        ).text
-        return (text, 0)
-
-    system_prompt, user_message = build_rag_messages(
-        question,
-        context_chunks,
-        response_language=response_language,
-        user_context_line=user_context_line,
-        disclosure_config=disclosure_config,
-        client_product_name=client_product_name,
-        topic_hint=topic_hint,
-        faq_context_items=faq_context_items,
-        quick_answer_items=quick_answer_items,
-        agent_instructions=agent_instructions,
-        low_context=low_context,
-        allow_clarification=allow_clarification,
-    )
-    messages = _assemble_chat_messages(
-        system_prompt=system_prompt,
-        user_message=user_message,
-        prior_messages=prior_messages,
-    )
-    prompt_cache_prefix_tokens_estimate = _estimate_prompt_tokens(system_prompt)
-    prompt_cache_prefix_fingerprint = _prompt_prefix_fingerprint(system_prompt)
-    _cache_kwargs = _prompt_cache_kwargs(metrics_bot_id, retry_bot_id)
-    openai_client = _svc.get_openai_client(api_key)
-    _reasoning = is_reasoning_model(settings.chat_model)
-    _sampling_kwargs = _generation_sampling_kwargs(_reasoning)
-    _request_kwargs = _generation_request_kwargs(_sampling_kwargs, _cache_kwargs)
-    _max_completion_tokens = (
-        settings.chat_response_max_tokens_reasoning
-        if _reasoning
-        else settings.chat_response_max_tokens
-    )
-    generation = None
-    if trace is not None:
-        generation_input: Any
-        if settings.observability_capture_full_prompts:
-            generation_input = messages
-        else:
-            generation_input = {
-                "question_preview": truncate_text(question),
-                "context_chunk_count": len(context_chunks),
-                "quick_answer_count": len(quick_answer_items or []),
-                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
-            }
-        generation = trace.generation(
-            name="llm-generation",
-            model=settings.chat_model,
-            input=generation_input,
-            metadata={
-                **_sampling_kwargs,
-                "max_completion_tokens": _max_completion_tokens,
-                "response_language": response_language,
-                "context_chunk_count": len(context_chunks),
-                "quick_answer_count": len(quick_answer_items or []),
-                "prompt_cache_prefix_tokens_estimate": prompt_cache_prefix_tokens_estimate,
-                "prompt_cache_prefix_meets_minimum": prompt_cache_prefix_tokens_estimate >= 1024,
-                "prompt_cache_prefix_fingerprint": prompt_cache_prefix_fingerprint,
-                "captures_full_prompt": settings.observability_capture_full_prompts,
-                "finish_reason_expected": "stop_or_length",
-                "system_prompt": (
-                    system_prompt if settings.observability_capture_full_prompts else None
-                ),
-                "context_chunks": (
-                    context_chunks if settings.observability_capture_full_prompts else None
-                ),
-            },
-        )
-    started_at = perf_counter()
-    try:
-        prompt_tokens_raw = 0
-        completion_tokens_raw = 0
-        cached_tokens_raw = 0
-        finish_reason: str | None = None
-        actual_model: str = settings.chat_model
-        _thought_truncated: bool = False
-        if stream_callback is not None:
-            stream = call_openai_with_retry(
-                "chat_generate_stream",
-                lambda: openai_client.chat.completions.create(
-                    model=settings.chat_model,
-                    messages=messages,
-                    **_request_kwargs,
-                    max_completion_tokens=_max_completion_tokens,
-                    stream=True,
-                    stream_options={"include_usage": True},
-                ),
-                bot_id=retry_bot_id,
-                emit_chat_failed=True,
-                langfuse_observation=generation,
-            )
-            chunks: list[str] = []
-            total_tokens = 0
-            # Chain: chunks → ThoughtStreamFilter (strip <thought>) →
-            # OfferMarkerStreamFilter (strip <offered_ticket/>) → stream_callback.
-            _offer_filter = OfferMarkerStreamFilter(stream_callback)
-            _filter = ThoughtStreamFilter(_offer_filter.feed, on_phase_change=status_callback)
-            for chunk in stream:
-                if isinstance(getattr(chunk, "model", None), str):
-                    actual_model = chunk.model
-                if getattr(chunk, "usage", None):
-                    total_tokens = chunk.usage.total_tokens or 0
-                    prompt_tokens_raw = getattr(chunk.usage, "prompt_tokens", 0) or 0
-                    completion_tokens_raw = getattr(chunk.usage, "completion_tokens", 0) or 0
-                    cached_tokens_raw = _usage_cached_tokens(chunk.usage)
-                if not chunk.choices:
-                    continue
-                choice = chunk.choices[0]
-                if getattr(choice, "finish_reason", None):
-                    finish_reason = choice.finish_reason
-                delta = getattr(choice.delta, "content", None) if choice.delta else None
-                if delta:
-                    chunks.append(delta)
-                    _filter.feed(delta)
-            _filter.flush_end()
-            _offer_filter.flush_end()
-            _raw_answer = "".join(chunks)
-            _thought_truncated = "<thought>" in _raw_answer and "</thought>" not in _raw_answer
-            answer_text = _strip_thought_tags(_raw_answer)
-        else:
-            response = call_openai_with_retry(
-                "chat_generate",
-                lambda: openai_client.chat.completions.create(
-                    model=settings.chat_model,
-                    messages=messages,
-                    **_request_kwargs,
-                    max_completion_tokens=_max_completion_tokens,
-                ),
-                bot_id=retry_bot_id,
-                emit_chat_failed=True,
-                langfuse_observation=generation,
-            )
-            actual_model = response.model if isinstance(getattr(response, "model", None), str) else settings.chat_model
-            _raw_content = response.choices[0].message.content or ""
-            _thought_truncated = "<thought>" in _raw_content and "</thought>" not in _raw_content
-            answer_text = _strip_thought_tags(_raw_content)
-            total_tokens = response.usage.total_tokens if response.usage else 0
-            if response.usage:
-                prompt_tokens_raw = getattr(response.usage, "prompt_tokens", 0) or 0
-                completion_tokens_raw = getattr(response.usage, "completion_tokens", 0) or 0
-                cached_tokens_raw = _usage_cached_tokens(response.usage)
-            if response.choices:
-                finish_reason = getattr(response.choices[0], "finish_reason", None)
-        # Strip the language-agnostic ticket-offer marker before any downstream
-        # processing (telemetry, language guard, return). The sync path doesn't
-        # need the detection boolean — only async_generate_answer surfaces it
-        # for the runtime escalation arming. The follow-up scrub removes any
-        # mid-text occurrence the LLM may have mis-placed against the prompt
-        # contract, so the literal never reaches the UI.
-        answer_text, _ = _strip_and_detect_offer_marker(answer_text)
-        answer_text = _scrub_offer_marker_literal(answer_text)
-        log_llm_tokens(
-            operation="generate",
-            target_language=response_language,
-            tokens=total_tokens,
-            model=actual_model,
-        )
-        _input_tokens = _safe_int(prompt_tokens_raw)
-        _output_tokens = _safe_int(completion_tokens_raw)
-        _cached_tokens = _safe_int(cached_tokens_raw)
-        _cost_usd = settings.compute_cost_usd(actual_model, _input_tokens, _output_tokens)
-        _duration_s = perf_counter() - started_at
-        _gen_duration_ms = round(_duration_s * 1000, 2)
-        if generation is not None:
-            _cost_rates = settings.openai_model_costs.get(
-                actual_model,
-                {
-                    "input": settings.openai_default_cost_per_1m_input_tokens,
-                    "output": settings.openai_default_cost_per_1m_output_tokens,
-                },
-            )
-            generation.end(
-                output=answer_text.strip(),
-                usage={
-                    "input": _input_tokens,
-                    "output": _output_tokens,
-                },
-                metadata={
-                    "total_tokens": _safe_int(total_tokens),
-                    "finish_reason": finish_reason,
-                    "thought_truncated": _thought_truncated,
-                    "cost_usd": _cost_usd,
-                    "cost_rate_usd_per_1m": _cost_rates,
-                    "duration_ms": _gen_duration_ms,
-                    "prompt_cache_cached_tokens": _cached_tokens,
-                    "prompt_cache_hit": _cached_tokens > 0,
-                },
-            )
-        if trace is not None:
-            record_stage_ms(trace, "llm_generate_ms", _gen_duration_ms)
-        if metrics_tenant_id is not None or metrics_bot_id is not None:
-            from backend.chat.events import _emit_ai_generation_event
-            _emit_ai_generation_event(
-                tenant_public_id=metrics_tenant_id,
-                bot_public_id=metrics_bot_id,
-                model=actual_model,
-                input_tokens=_input_tokens,
-                output_tokens=_output_tokens,
-                cached_tokens=_cached_tokens,
-                prompt_cache_prefix_tokens_estimate=prompt_cache_prefix_tokens_estimate,
-                prompt_cache_prefix_fingerprint=prompt_cache_prefix_fingerprint,
-                cost_usd=_cost_usd,
-                latency_s=_duration_s,
-                operation="chat/generate",
-                trace_id=getattr(generation, "posthog_trace_id", None),
-                span_id=getattr(generation, "posthog_span_id", None),
-                parent_id=getattr(generation, "posthog_parent_id", None),
-            )
-        # Post-gen language guard runs only on non-streamed generation. In the
-        # streaming path the answer was already emitted to the client chunk-by-
-        # chunk via ``stream_callback``; rewriting the final text here would
-        # produce a UI/history mismatch. Streaming relies on the prompt-level
-        # directive (build_rag_prompt) for language enforcement.
-        if stream_callback is None:
-            final_text, extra_tokens = _enforce_response_language(
-                answer_text.strip(),
-                response_language=response_language,
-                api_key=api_key,
-            )
-            total_tokens = (total_tokens or 0) + extra_tokens
-        else:
-            final_text = answer_text.strip()
-        return (final_text, total_tokens)
-    except Exception as exc:
-        log_llm_tokens(
-            operation="generate",
-            target_language=response_language,
-            tokens=0,
-            model=settings.chat_model,
-        )
-        if generation is not None:
-            generation.end(
-                metadata={
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 2),
-                },
-                level="ERROR",
-                status_message=str(exc),
-            )
-        raise
 
 
 def _enforce_response_language(
@@ -2296,7 +1886,7 @@ class RagHandler(PipelineHandler):
         # Safety net: decide() may classify a turn as a confident answer while
         # the LLM still ends its reply with a ticket offer (the system prompt
         # allows this when it judges the docs incomplete). The LLM signals
-        # the offer by appending OFFER_MARKER, which generate_answer strips
+        # the offer by appending OFFER_MARKER, which async_generate_answer strips
         # and surfaces as ``result.llm_offered_ticket``. Without arming
         # pre_confirm here, the user's "yes" / "да" / "ja" / "oui" reaches the
         # next turn as an ordinary RAG query and is answered afresh instead of
@@ -2468,7 +2058,7 @@ async def async_retrieve_context(
     precomputed_embedding_api_request_count: int | None = None,
     rewritten_variant: str | None = None,
 ) -> RetrievalContext:
-    """Async counterpart of :func:`retrieve_context`.
+    """Async retrieval: embed the query and run hybrid search.
 
     Uses ``search_similar_chunks_detailed_async`` so the event loop is not
     blocked during embedding and pgvector queries.
@@ -2585,7 +2175,7 @@ async def _async_generate_answer_native(
     metrics_bot_id: str | None = None,
     prior_messages: list[dict[str, str]] | None = None,
 ) -> tuple[str, int, int, int, bool]:
-    """Native async port of :func:`generate_answer`.
+    """Native async LLM answer generation.
 
     Same behaviour and telemetry shape as the sync version, but uses
     ``AsyncOpenAI`` + ``async_call_openai_with_retry``. The stream loop is
@@ -2880,26 +2470,13 @@ async def async_generate_answer(
     context_chunks: list[str],
     **kwargs: Any,
 ) -> tuple[str, int, int, int, bool]:
-    """Native-async generation entry point.
+    """Generation entry point and the test seam for the LLM hop.
 
-    Production path uses :func:`_async_generate_answer_native` to avoid the
-    ``to_thread`` hop on the dominant LLM call. When tests monkeypatch
-    ``backend.chat.service.generate_answer`` (the sync sibling), the patch is
-    honoured by falling back to ``asyncio.to_thread`` of the patched function
-    so existing test fakes continue to work without modification. The
-    monkeypatched sync path doesn't surface the offered-ticket signal, so
-    that boolean is reported as False — test fakes never emit OFFER_MARKER
-    anyway, so this matches actual behaviour.
+    Kept as a thin wrapper (rather than exposing the native function
+    directly) so tests can monkeypatch
+    ``backend.chat.handlers.rag.async_generate_answer`` with an async fake;
+    the pipeline resolves this name from module globals at call time.
     """
-    from backend.chat import service as _svc
-
-    # Identity check: if the sync alias on the service module has been
-    # replaced by a test monkeypatch, route through it. Otherwise use the
-    # native async path so the LLM hop no longer occupies a default-executor
-    # thread for ~5-15 s per turn.
-    if _svc.generate_answer is not generate_answer:
-        text, total = await asyncio.to_thread(_svc.generate_answer, question, context_chunks, **kwargs)
-        return (text, total, 0, 0, False)
     return await _async_generate_answer_native(question, context_chunks, **kwargs)
 
 
@@ -3988,7 +3565,7 @@ async def async_run_chat_pipeline(
 
         # Non-streamed generation: nothing has been shown to the client, but a
         # full regeneration is still the wrong tool — translate the finished
-        # answer with the localization model instead. (generate_answer's own
+        # answer with the localization model instead. (async_generate_answer's own
         # _enforce_response_language guard compares against response_language;
         # this covers the residual case where response_language was an "en"
         # fallback while the question was reliably non-English.)

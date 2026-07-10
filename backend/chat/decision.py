@@ -99,13 +99,21 @@ class TurnContext:
     # True when retrieval returned zero chunks (guides escalation over clarify)
     low_retrieval_no_chunks: bool = False
 
-    # Loop-detection signals: True when the last N assistant turns drew on
-    # the same set of source documents (Jaccard overlap >= configured
-    # threshold), suggesting the user is stuck and KB cannot help further.
-    # Computed upstream from chat.messages by _compute_loop_signal.
+    # Loop-detection signals, computed upstream from chat.messages by
+    # _compute_loop_signal. loop_detected is True only when BOTH hold:
+    #   - the last N assistant turns drew on the same set of source documents
+    #     (docs Jaccard overlap >= threshold), AND
+    #   - the current user question repeats a recent prior question
+    #     (length-weighted token Jaccard similarity >= threshold).
+    # Document overlap alone is not a loop: a tenant whose whole KB is one
+    # document produces overlap=1.0 on every coherent conversation. The
+    # component signals are carried separately for trace observability.
     loop_detected: bool = False
     loop_overlap_ratio: float | None = None
     loop_window_size: int = 0
+    loop_docs_repeat: bool = False
+    loop_questions_repeat: bool = False
+    loop_question_similarity: float | None = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +163,12 @@ class Decision:
             "loop_detected": turn.loop_detected,
             "loop_overlap_ratio": turn.loop_overlap_ratio,
             "loop_window_size": turn.loop_window_size,
+            # Component signals: a docs-only repeat (loop_docs_repeat=True,
+            # loop_questions_repeat=False) is the single-document-tenant case
+            # where the generated answer is delivered instead of escalating.
+            "loop_docs_repeat": turn.loop_docs_repeat,
+            "loop_questions_repeat": turn.loop_questions_repeat,
+            "loop_question_similarity": turn.loop_question_similarity,
         }
 
 
@@ -201,9 +215,10 @@ def decide(turn: TurnContext) -> Decision:
         return Decision(kind=DecisionKind.answer_from_faq)
 
     # Block rule 6b: Loop detected — the last N assistant turns drew on the
-    # same source documents, so re-answering won't help. Force escalation
-    # through the existing pre-confirm flow rather than emit yet another
-    # rephrased answer.
+    # same source documents AND the user is repeating the same question, so
+    # re-answering won't help. Force escalation through the existing
+    # pre-confirm flow rather than emit yet another rephrased answer.
+    # (Docs overlap alone never sets loop_detected — see TurnContext.)
     if turn.loop_detected:
         return Decision(
             kind=DecisionKind.escalate,

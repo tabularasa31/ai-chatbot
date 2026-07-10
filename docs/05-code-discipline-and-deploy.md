@@ -310,6 +310,16 @@ AUTH_COOKIE_SECURE=true
 # Global OPENAI_API_KEY is optional—clients set keys in the dashboard
 ```
 
+> **Do NOT set `GIT_SHA` manually.** Railway injects `RAILWAY_GIT_COMMIT_SHA`
+> automatically, and `backend/core/config.py` reads it via an alias — the commit
+> sha flows into Langfuse `version`/`release`, Sentry `release`, and the PostHog
+> `release` property with no config needed. If you must set `GIT_SHA` yourself,
+> use Railway's reference syntax `GIT_SHA=${{RAILWAY_GIT_COMMIT_SHA}}` — the
+> `$RAILWAY_GIT_COMMIT_SHA` (`$VAR`) form is **not** expanded and leaks the
+> literal string into every trace (release ends up as `"$RAILWA"`). The config
+> validator now defends against this (ignores unexpanded `$…` values and falls
+> back to the native var), but the clean setup is to simply leave `GIT_SHA` unset.
+
 **Step 4: Deploy**
 ```bash
 # Railway: deploy from the configured production branch (`main`)

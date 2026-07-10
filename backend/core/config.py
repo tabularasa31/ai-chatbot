@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import AliasChoices, Field, field_validator
@@ -507,6 +508,24 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_posthog_host(cls, v: str) -> str:
         return v.strip().strip("'\"")
+
+    @field_validator("git_sha", mode="before")
+    @classmethod
+    def _normalize_git_sha(cls, v: str | None) -> str | None:
+        # Ignore unexpanded refs (e.g. literal "$RAILWAY_GIT_COMMIT_SHA" from
+        # `$VAR` env syntax) and fall back to the native RAILWAY_GIT_COMMIT_SHA.
+        def _clean(value: str | None) -> str | None:
+            if value is None:
+                return None
+            s = value.strip().strip("'\"")
+            if not s or s.startswith("$"):
+                return None
+            return s
+
+        cleaned = _clean(v)
+        if cleaned is not None:
+            return cleaned
+        return _clean(os.environ.get("RAILWAY_GIT_COMMIT_SHA"))
 
     @field_validator("auth_cookie_domain", mode="before")
     @classmethod

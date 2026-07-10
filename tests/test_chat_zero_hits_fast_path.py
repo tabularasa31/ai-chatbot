@@ -589,17 +589,23 @@ def test_session_ended_event_stales_rephrase_flag(
         cl_row.id, "Returning question", session_id, db_session, api_key=api_key,
     )
 
-    # New soft-reply, not escalation. last_reply_was_rephrase_prompt re-armed
-    # for the freshly observed zero-hits turn.
+    # New soft-reply, not escalation. The sweeper marker now triggers
+    # conversation rotation, so the turn lands in a fresh Chat row (same
+    # session) with the rephrase flag re-armed for the freshly observed
+    # zero-hits turn; the stale flag stays behind on the archived chat.
     assert outcome.text
     db_session.expire_all()
-    chat = (
+    chats = (
         db_session.query(Chat)
         .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
-        .one()
+        .order_by(Chat.created_at.asc())
+        .all()
     )
-    assert chat.last_reply_was_rephrase_prompt is True
-    assert chat.escalation_pre_confirm_pending is False
+    assert len(chats) == 2
+    old_chat, new_chat = chats
+    assert old_chat.session_ended_event_at is not None
+    assert new_chat.last_reply_was_rephrase_prompt is True
+    assert new_chat.escalation_pre_confirm_pending is False
 
 
 def test_relevance_force_check_failure_does_not_pollute_circuit_breaker(

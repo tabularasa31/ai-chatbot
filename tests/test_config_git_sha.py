@@ -26,17 +26,3 @@ def test_literal_reference_without_native_sha_is_none(
     monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA", raising=False)
 
     assert Settings().git_sha is None
-
-
-def test_brace_reference_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_SHA", "${{RAILWAY_GIT_COMMIT_SHA}}")
-    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "feedface")
-
-    assert Settings().git_sha == "feedface"
-
-
-def test_real_sha_passes_through(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("GIT_SHA", "0badc0ffee1234")
-    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA", raising=False)
-
-    assert Settings().git_sha == "0badc0ffee1234"

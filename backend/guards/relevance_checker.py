@@ -126,17 +126,32 @@ def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
 
 
 # Categories the guard LLM classifies each message into. Only "relevant"
-# continues the RAG pipeline; the other three are routed by the caller
-# (offtopic → reject, support_complaint → escalation offer, social → polite
-# social reply). The category is returned in the ``reason`` slot of the
-# guard's (relevant, reason, profile) result tuple.
+# continues the RAG pipeline; the others are routed by the caller (offtopic →
+# reject, support_complaint → escalation offer, social → polite closing reply,
+# social_question → short friendly reply about the bot). The category is
+# returned in the ``reason`` slot of the guard's (relevant, reason, profile)
+# result tuple.
 CATEGORY_RELEVANT = "relevant"
 CATEGORY_OFFTOPIC = "offtopic"
 CATEGORY_SUPPORT_COMPLAINT = "support_complaint"
 CATEGORY_SOCIAL = "social"
+# A social turn that *asks* something about the bot itself (its capabilities,
+# which languages it speaks, whether it is a bot) rather than the product. It
+# is not a product question, so it can't be answered from the knowledge base,
+# but refusing it ("I can't help with that") reads as a malfunction — it gets a
+# short friendly reply that answers in the user's language and steers back to
+# the product. Kept separate from ``social`` because that closing
+# acknowledgement ("thanks for reaching out") is the wrong shape for a question.
+CATEGORY_SOCIAL_QUESTION = "social_question"
 
 _VALID_CATEGORIES = frozenset(
-    {CATEGORY_RELEVANT, CATEGORY_OFFTOPIC, CATEGORY_SUPPORT_COMPLAINT, CATEGORY_SOCIAL}
+    {
+        CATEGORY_RELEVANT,
+        CATEGORY_OFFTOPIC,
+        CATEGORY_SUPPORT_COMPLAINT,
+        CATEGORY_SOCIAL,
+        CATEGORY_SOCIAL_QUESTION,
+    }
 )
 
 
@@ -150,7 +165,8 @@ def _build_prompts(
     system_prompt = (
         "You are a message classifier for a customer support bot.\n"
         'Answer ONLY with a JSON object: {"category": "relevant" | "offtopic" | '
-        '"support_complaint" | "social", "reason": "one sentence"}\n'
+        '"support_complaint" | "social" | "social_question", '
+        '"reason": "one sentence"}\n'
         "Categories:\n"
         "- relevant: any message that could plausibly be about the product, its "
         "features, pricing, account management, or how to use it — even if the "
@@ -164,6 +180,12 @@ def _build_prompts(
         "about being ignored.\n"
         "- social: a pure greeting, thanks, farewell, or politeness with no "
         "question and no actionable request.\n"
+        "- social_question: a greeting or small talk that also asks about the bot "
+        "itself rather than the product — what it can do, which languages it "
+        "speaks, whether it is a bot or a human, and similar meta questions "
+        "(\"can you speak English?\", \"what can you help with?\", \"are you a "
+        "robot?\"). Use this only when the question is about the assistant, not "
+        "about the product.\n"
         "- offtopic: clearly unrelated to the product: general coding tasks, "
         "math, creative writing, or unrelated tech support.\n"
         "When in doubt, return relevant."

@@ -67,6 +67,7 @@ from backend.guards.reject_response import (
 )
 from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
+    CATEGORY_SOCIAL_QUESTION,
     CATEGORY_SUPPORT_COMPLAINT,
 )
 from backend.models import Chat, MessageRole, TenantProfile
@@ -313,7 +314,17 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "rephrase", "social"] | None
+    reject_reason: (
+        Literal[
+            "injection",
+            "not_relevant",
+            "low_retrieval",
+            "rephrase",
+            "social",
+            "social_question",
+        ]
+        | None
+    )
     is_reject: bool
     is_faq_direct: bool
     # retrieval
@@ -1655,6 +1666,7 @@ class RagHandler(PipelineHandler):
                 "low_retrieval": "guard_reject_low_retrieval",
                 "rephrase": "guard_reject_rephrase",
                 "social": "guard_social_reply",
+                "social_question": "guard_social_question_reply",
             }
             if result.is_reject:
                 source = source_map.get(result.reject_reason or "", "guard_reject")
@@ -2531,6 +2543,12 @@ class _PipelineState:
     # consecutive-zero-hits force check (stage 2) so both verdicts see the
     # same context and share the guard cache entry.
     guard_dialog_context: str | None = None
+    # True when the pre-retrieval relevance guard skipped the LLM via the
+    # short-query bypass (≤ SHORT_QUERY_WORD_LIMIT words) and so never produced
+    # a real category verdict. The zero-hits fast path reads this to classify a
+    # short bot-meta / social turn on the *first* turn instead of only catching
+    # it on the second consecutive zero-hit turn's force check.
+    guard_bypassed_short_query: bool = False
     profile: TenantProfile | None = None
     client_product_name: str | None = None
     topic_hint: str | None = None
@@ -3083,6 +3101,7 @@ async def async_run_chat_pipeline(
             relevant, guard_reason, state.profile = await rel_task
         except asyncio.CancelledError:
             relevant, guard_reason, state.profile = True, "cancelled", _guard_profile
+        state.guard_bypassed_short_query = guard_reason == "short_query_bypass"
         _rel_latency_s = perf_counter() - _rel_start
         if tenant_public_id is not None or bot_public_id is not None:
             from backend.chat.events import _emit_ai_span_event
@@ -3125,17 +3144,22 @@ async def async_run_chat_pipeline(
                     language_context=language_context,
                 )
 
-            # Pure social turns (thanks / farewell) that slipped past the
-            # greeting handler get a polite acknowledgement, not a refusal.
-            reject_reason: Literal["not_relevant", "social"] = (
-                "social" if guard_reason == CATEGORY_SOCIAL else "not_relevant"
-            )
+            # Social turns that slipped past the greeting handler get a polite
+            # reply, not a refusal: a pure thanks/farewell gets a closing
+            # acknowledgement, and a question about the bot itself ("do you
+            # speak English?") gets a short friendly invite.
+            reject_reason: Literal["not_relevant", "social", "social_question"]
+            if guard_reason == CATEGORY_SOCIAL:
+                reject_reason, _reject_enum = "social", RejectReason.SOCIAL
+            elif guard_reason == CATEGORY_SOCIAL_QUESTION:
+                reject_reason, _reject_enum = (
+                    "social_question",
+                    RejectReason.SOCIAL_QUESTION,
+                )
+            else:
+                reject_reason, _reject_enum = "not_relevant", RejectReason.NOT_RELEVANT
             reject_result = await async_build_reject_response_result(
-                reason=(
-                    RejectReason.SOCIAL
-                    if guard_reason == CATEGORY_SOCIAL
-                    else RejectReason.NOT_RELEVANT
-                ),
+                reason=_reject_enum,
                 profile=state.profile,
                 response_language=language_context.response_language,
                 api_key=api_key,
@@ -3325,7 +3349,71 @@ async def async_run_chat_pipeline(
                 "retrieval_ms": _retrieval_ms,
             }
 
+            async def _social_no_hits_result(category: str) -> ChatPipelineResult:
+                """Build the polite social reply for a zero-hits social turn.
+
+                Shared by the first-turn short-query path and the consecutive
+                force-check path so both emit the identical reply shape and
+                ``guard_reject`` telemetry.
+                """
+                is_social_question = category == CATEGORY_SOCIAL_QUESTION
+                social_reply = await async_build_reject_response_result(
+                    reason=(
+                        RejectReason.SOCIAL_QUESTION
+                        if is_social_question
+                        else RejectReason.SOCIAL
+                    ),
+                    profile=state.profile,
+                    response_language=language_context.response_language,
+                    api_key=api_key,
+                )
+                _emit_no_rag_hits_event(
+                    outcome="social_reply",
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                    relevance_reason=category,
+                )
+                return ChatPipelineResult(
+                    raw_answer=social_reply.text,
+                    final_answer=social_reply.text,
+                    tokens_used=social_reply.tokens_used,
+                    tokens_output=social_reply.tokens_used,
+                    strategy="guard_reject",
+                    reject_reason=(
+                        "social_question" if is_social_question else "social"
+                    ),
+                    is_reject=True,
+                    is_faq_direct=False,
+                    retrieval=retrieval,
+                    escalation_recommended=False,
+                    escalation_trigger=None,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                    **_fast_path_extras,
+                )
+
             if not is_consecutive:
+                # A short query bypassed the pre-retrieval guard (≤4 words), so
+                # it never received a category verdict. Now that retrieval is
+                # also empty, classify it once: a social turn or a bot-meta
+                # question ("do you speak English?") gets its friendly reply on
+                # the first turn instead of the generic rephrase prompt. Other
+                # verdicts (in-domain / off-topic / complaint) keep the existing
+                # turn-1 rephrase and only escalate on the next consecutive miss.
+                if state.guard_bypassed_short_query:
+                    _, _short_reason, _ = await async_check_relevance_with_profile(
+                        tenant_id=tenant_id,
+                        user_question=question,
+                        profile=state.profile,
+                        api_key=api_key,
+                        trace=trace,
+                        force_llm_check=True,
+                        dialog_context=state.guard_dialog_context,
+                    )
+                    if _short_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
+                        return await _social_no_hits_result(_short_reason)
+
                 soft_reply = await async_build_reject_response_result(
                     reason=RejectReason.REPHRASE_REQUEST,
                     profile=state.profile,
@@ -3396,36 +3484,8 @@ async def async_run_chat_pipeline(
                     **_fast_path_extras,
                 )
 
-            if relevance_reason == CATEGORY_SOCIAL:
-                social_reply = await async_build_reject_response_result(
-                    reason=RejectReason.SOCIAL,
-                    profile=state.profile,
-                    response_language=language_context.response_language,
-                    api_key=api_key,
-                )
-                _emit_no_rag_hits_event(
-                    outcome="social_reply",
-                    tenant_public_id=tenant_public_id,
-                    bot_public_id=bot_public_id,
-                    chat_id=chat_id,
-                    relevance_reason=relevance_reason,
-                )
-                return ChatPipelineResult(
-                    raw_answer=social_reply.text,
-                    final_answer=social_reply.text,
-                    tokens_used=social_reply.tokens_used,
-                    tokens_output=social_reply.tokens_used,
-                    strategy="guard_reject",
-                    reject_reason="social",
-                    is_reject=True,
-                    is_faq_direct=False,
-                    retrieval=retrieval,
-                    escalation_recommended=False,
-                    escalation_trigger=None,
-                    faq_match=state.faq_match,
-                    language_context=language_context,
-                    **_fast_path_extras,
-                )
+            if relevance_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
+                return await _social_no_hits_result(relevance_reason)
             # Only escalate when the relevance model actually rendered a
             # positive verdict. Fail-open reasons (``no_profile`` for tenants
             # without an onboarded profile; ``timeout`` / ``error`` during

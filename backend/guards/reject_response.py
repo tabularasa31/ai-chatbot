@@ -31,6 +31,11 @@ class RejectReason(enum.Enum):
     # acknowledgement instead of the off-topic refusal — a refusal in reply to
     # "thanks, goodbye" reads as a malfunction.
     SOCIAL = "social"
+    # A social question about the bot itself ("do you speak English?", "what can
+    # you do?"). Answered with a short friendly invite instead of the off-topic
+    # refusal. The canonical text is localized into the user's language, so the
+    # reply itself demonstrates the answer to a "which language" question.
+    SOCIAL_QUESTION = "social_question"
 
 
 def _resolve_reject_target_language(
@@ -77,6 +82,12 @@ def _build_canonical_reject_response(
         return (
             f"Thank you for reaching out! If any other questions about "
             f"{product_name} come up, I'm here to help."
+        )
+
+    if reason == RejectReason.SOCIAL_QUESTION:
+        return (
+            f"Yes, I'm here and happy to help. I'm the {product_name} "
+            f"assistant — what would you like to know?"
         )
 
     if reason == RejectReason.INSUFFICIENT_CONFIDENCE:

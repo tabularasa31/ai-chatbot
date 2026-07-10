@@ -272,6 +272,111 @@ def test_social_turn_gets_polite_acknowledgement(
     assert chat.escalation_pre_confirm_pending is False
 
 
+def test_social_question_about_bot_gets_short_reply(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2: a social question about the bot itself ("do you speak Russian?")
+    gets a short friendly invite, not the off-topic refusal, and never runs the
+    answer LLM or arms escalation."""
+    cl_row, api_key = _create_client(
+        tenant, db_session, email="gc-social-q@example.com"
+    )
+    _stub_common(monkeypatch)
+    _stub_guard_verdict(monkeypatch, (False, "social_question", _PROFILE_STUB))
+    _identity_localize(monkeypatch)
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("answer LLM must not run on a social question")
+        )),
+    )
+
+    session_id = uuid.uuid4()
+    outcome = process_chat_message(
+        cl_row.id,
+        "Hi, can you speak Russian?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert "what would you like to know" in outcome.text.lower()
+    assert "can't help" not in outcome.text
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is False
+
+
+def test_short_social_question_classified_on_first_zero_hits_turn(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC2 (short form): a ≤4-word bot-meta question ("do you speak English?")
+    bypasses the pre-retrieval guard, so on the first zero-RAG-hits turn the
+    pipeline re-classifies it via the force check and returns the friendly
+    social reply instead of the generic rephrase prompt."""
+    cl_row, api_key = _create_client(
+        tenant, db_session, email="gc-short-social-q@example.com"
+    )
+    _stub_common(monkeypatch)
+    # Retrieval comes back empty so the zero-hits fast path runs.
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: RetrievalContext(
+            chunk_texts=[],
+            document_ids=[],
+            scores=[],
+            mode="none",
+            best_rank_score=None,
+            best_confidence_score=None,
+            confidence_source="none",
+            reliability=build_reliability_assessment(top_score=0.0, result_count=0),
+            vector_similarities=None,
+        )),
+    )
+    _identity_localize(monkeypatch)
+
+    # First (pre-retrieval) guard call bypasses on the short query; the forced
+    # zero-hits re-check classifies it as a social question about the bot.
+    async def _guard(**kwargs):
+        if kwargs.get("force_llm_check"):
+            return (False, "social_question", _PROFILE_STUB)
+        return (True, "short_query_bypass", _PROFILE_STUB)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile", _guard
+    )
+    monkeypatch.setattr(
+        "backend.chat.handlers.rag.async_generate_answer",
+        as_async_generate(lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("answer LLM must not run on a social question")
+        )),
+    )
+
+    session_id = uuid.uuid4()
+    outcome = process_chat_message(
+        cl_row.id,
+        "do you speak English?",
+        session_id,
+        db_session,
+        api_key=api_key,
+    )
+
+    assert "what would you like to know" in outcome.text.lower()
+    assert "rephrase" not in outcome.text.lower()
+    assert "couldn't find" not in outcome.text.lower()
+
+
 def test_offtopic_is_still_rejected_with_support_offer(
     mock_openai_client: Mock,
     tenant: TestClient,

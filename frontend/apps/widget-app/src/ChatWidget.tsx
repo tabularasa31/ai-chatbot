@@ -12,6 +12,7 @@ import { LoadingIndicator } from "./LoadingIndicator";
 import {
   appendSystemMarker,
   createLlmUnavailableMessage,
+  createSystemMessage,
   createTextMessage,
   getLastEndedMarkerIndex,
   type ChatWidgetMessage,
@@ -202,6 +203,9 @@ function readStoredSession(botId: string, userId?: string | null): string | null
   return storedSessionId;
 }
 
+// The sliding 24h TTL is the lifetime of the visitor identity, not of a
+// conversation: the server rotates conversations on its own idle timeout and
+// keeps them linked to this session_id.
 function persistSession(botId: string, sessionId: string, userId?: string | null): void {
   if (typeof window === "undefined") return;
   try {
@@ -406,57 +410,6 @@ export function ChatWidget({
   }, [botId, localeParam, apiBase]);
 
   useEffect(() => {
-    if (!sessionHydrated || !sessionId || historyLoaded) return;
-    let cancelled = false;
-    setLoading(true);
-    const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
-    fetch(`${apiBase}/widget/history?${params}`)
-      .then(async (r) => {
-        if (r.status === 404) {
-          // Session no longer exists on the backend — start fresh
-          if (!cancelled) {
-            clearStoredSession(botId, userIdRef.current);
-            setSessionId(null);
-          }
-          return null;
-        }
-        if (!r.ok) {
-          // Transient error (5xx, network) — keep session, silently skip history
-          return null;
-        }
-        return r.json() as Promise<{
-          messages: { role: string; content: string }[];
-          chat_ended: boolean;
-          ticket_number?: string | null;
-        }>;
-      })
-      .then((data) => {
-        if (cancelled || !data) return;
-        if (data.messages.length > 0) {
-          const hydrated = data.messages
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => createTextMessage(m.role as "user" | "assistant", m.content));
-          setMessages(hydrated);
-          if (data.ticket_number) setActiveTicket(data.ticket_number);
-          if (data.chat_ended) {
-            setChatClosed(true);
-            setMessages((prev) => appendSystemMarker(prev, "conversation_ended"));
-          }
-        }
-      })
-      .catch(() => {
-        // Network-level failure — keep session for next page load
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setHistoryLoaded(true);
-          setLoading(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase]);
-
-  useEffect(() => {
     if (!isOpen) return;
     const el = messagesRef.current;
     if (!el) return;
@@ -626,10 +579,13 @@ export function ChatWidget({
     return { res, payload };
   }, [botId, localeParam, apiBase]);
 
-  const fetchGreeting = useCallback(async () => {
+  // attemptSessionId is null for a brand-new session; after conversation
+  // rotation it carries the existing session so the greeting opens the new
+  // conversation server-side instead of minting another session.
+  const fetchGreeting = useCallback(async (attemptSessionId: string | null = null) => {
     const { res, payload } = await requestWidgetTurn({
       message: "",
-      attemptSessionId: null,
+      attemptSessionId,
     });
     if (!res.ok) {
       throw new Error(formatApiDetail(payload.detail, `API error: ${res.status}`));
@@ -647,6 +603,77 @@ export function ChatWidget({
       persistSession(botId, data.session_id, userIdRef.current);
     }
   }, [applyAssistantMessage, botId, requestWidgetTurn]);
+
+  useEffect(() => {
+    if (!sessionHydrated || !sessionId || historyLoaded) return;
+    let cancelled = false;
+    setLoading(true);
+    const params = new URLSearchParams({ bot_id: botId, session_id: sessionId });
+    fetch(`${apiBase}/widget/history?${params}`)
+      .then(async (r) => {
+        if (r.status === 404) {
+          // Session no longer exists on the backend — start fresh
+          if (!cancelled) {
+            clearStoredSession(botId, userIdRef.current);
+            setSessionId(null);
+          }
+          return null;
+        }
+        if (!r.ok) {
+          // Transient error (5xx, network) — keep session, silently skip history
+          return null;
+        }
+        return r.json() as Promise<{
+          messages: { role: string; content: string }[];
+          chat_ended: boolean;
+          ticket_number?: string | null;
+          boundary_indices?: number[];
+          conversation_rotated?: boolean;
+        }>;
+      })
+      .then((data) => {
+        if (cancelled || !data) return;
+        if (data.messages.length > 0) {
+          const boundaries = new Set(data.boundary_indices ?? []);
+          const hydrated: ChatWidgetMessage[] = [];
+          data.messages.forEach((m, index) => {
+            if (m.role !== "user" && m.role !== "assistant") return;
+            if (boundaries.has(index)) {
+              hydrated.push(createSystemMessage("new_conversation"));
+            }
+            hydrated.push(createTextMessage(m.role, m.content));
+          });
+          setMessages(hydrated);
+          if (data.ticket_number) setActiveTicket(data.ticket_number);
+          if (data.chat_ended) {
+            setChatClosed(true);
+            setMessages((prev) => appendSystemMarker(prev, "conversation_ended"));
+          }
+        }
+        if (data.conversation_rotated) {
+          // Returning visitor past the idle threshold: keep the old messages
+          // as read-only context, mark the boundary, and greet afresh — the
+          // greeting POST opens the new conversation server-side.
+          if (data.messages.length > 0) {
+            setMessages((prev) => appendSystemMarker(prev, "new_conversation"));
+          }
+          void fetchGreeting(sessionId).catch(() => {
+            // Best-effort: without a greeting the visitor still gets a fresh
+            // conversation on their first real message.
+          });
+        }
+      })
+      .catch(() => {
+        // Network-level failure — keep session for next page load
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setHistoryLoaded(true);
+          setLoading(false);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [sessionHydrated, sessionId, historyLoaded, botId, apiBase, fetchGreeting]);
 
   useEffect(() => {
     // Wait for history fetch to complete (or determine there's no stored session)

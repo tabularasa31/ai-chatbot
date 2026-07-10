@@ -201,6 +201,11 @@ def detect_human_request(
     `tenant_id` partitions the in-memory result cache so tenants never read
     each other's classifications.
     """
+    # An empty message (widget-open bootstrap turn) has nothing to classify —
+    # answer deterministically instead of spending an LLM call on it.
+    if not message or not message.strip():
+        return HumanRequestResult(human_request=False, message_has_request_content=False)
+
     cache_key = hashlib.sha256(
         f"{tenant_id}:{message}".encode()
     ).hexdigest()
@@ -325,6 +330,10 @@ def detect_support_contact_question(
     LLM-classified so it works across all languages. Fails safe to False on
     timeout/error to keep the standard no-answer copy.
     """
+    # An empty message (widget-open bootstrap turn) cannot be a contact question.
+    if not message or not message.strip():
+        return False
+
     cache_key = hashlib.sha256(f"{tenant_id}:{message}".encode()).hexdigest()
     cached = _support_contact_cache.get(cache_key)
     if cached is not None:

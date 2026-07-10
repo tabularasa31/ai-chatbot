@@ -68,6 +68,25 @@ class Settings(BaseSettings):
         alias="CHAT_MODEL",
         description="OpenAI model for main chat response generation.",
     )
+    chat_reasoning_effort: Literal["minimal", "low", "medium", "high"] = Field(
+        "low",
+        alias="CHAT_REASONING_EFFORT",
+        description=(
+            "reasoning_effort for reasoning chat models (o-series / gpt-5 family). "
+            "The OpenAI default is 'medium', which dominated llm_generate_ms "
+            "(~13s median for gpt-5-mini); 'low' cuts internal chain-of-thought "
+            "while keeping grounded-QA quality. 'minimal' is gpt-5-family only."
+        ),
+    )
+    chat_verbosity: Literal["low", "medium", "high"] = Field(
+        "low",
+        alias="CHAT_VERBOSITY",
+        description=(
+            "verbosity for gpt-5-family chat models (ignored for other models). "
+            "Complements the prompt's conciseness rule at the API level: support "
+            "answers should lead short, offering to go deeper on request."
+        ),
+    )
     human_request_model: str = Field(
         "gpt-4.1-mini",
         alias="HUMAN_REQUEST_MODEL",
@@ -122,6 +141,17 @@ class Settings(BaseSettings):
         600,
         alias="ESCALATION_MAX_COMPLETION_TOKENS",
         ge=1,
+    )
+    escalation_pre_confirm_render_timeout_seconds: float = Field(
+        5.0,
+        alias="ESCALATION_PRE_CONFIRM_RENDER_TIMEOUT_SECONDS",
+        gt=0,
+        description=(
+            "Hard wall-clock deadline for localizing the pre-confirm escalation "
+            "text in the chat hot path. Prod p90 is ~1.4s; on timeout the "
+            "canonical English template is used so the handoff stays armed "
+            "instead of stalling the turn (observed up to 21s without a cap)."
+        ),
     )
     escalation_alert_threshold: int = Field(
         10,

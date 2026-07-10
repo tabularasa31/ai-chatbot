@@ -296,9 +296,12 @@ def test_generate_answer_with_context(mock_openai_client: Mock) -> None:
     assert call_kwargs["messages"][0]["role"] == "system"
     assert call_kwargs["messages"][1]["role"] == "user"
     assert "prompt_cache_key" not in call_kwargs
-    # gpt-5-mini is a reasoning model — temperature is omitted, larger token budget used
+    # gpt-5-mini is a reasoning model — temperature is omitted, larger token budget used,
+    # reasoning effort and verbosity are capped for latency
     assert "temperature" not in call_kwargs
     assert call_kwargs["max_completion_tokens"] == settings.chat_response_max_tokens_reasoning
+    assert call_kwargs["reasoning_effort"] == settings.chat_reasoning_effort
+    assert call_kwargs["verbosity"] == settings.chat_verbosity
 
 
 def test_generate_answer_emits_cached_tokens_to_posthog(
@@ -433,7 +436,10 @@ def test_generate_answer_can_trace_full_prompt_when_enabled(
     prefix_fingerprint = trace.generation_metadata.pop("prompt_cache_prefix_fingerprint")
     assert prefix_fingerprint == hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     assert trace.generation_metadata == {
-        # gpt-5-mini is a reasoning model — temperature omitted, larger token budget
+        # gpt-5-mini is a reasoning model — temperature omitted, larger token budget,
+        # reasoning effort and verbosity capped for latency
+        "reasoning_effort": settings.chat_reasoning_effort,
+        "verbosity": settings.chat_verbosity,
         "max_completion_tokens": settings.chat_response_max_tokens_reasoning,
         "response_language": "en",
         "context_chunk_count": 1,

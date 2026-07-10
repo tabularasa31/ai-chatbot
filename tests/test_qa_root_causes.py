@@ -2,7 +2,10 @@
 
   RC-2 (C2)    — language mismatch detection added after generate_answer:
         detect_language(question) vs detect_language(answer); if they differ,
-        the answer is regenerated with response_language=detected_question_lang.
+        the finished answer is translated to the detected question language.
+        (The second full generation was replaced by a translation call in the
+        latency task 86ey7x2p6; the streaming path aborts the wrong-language
+        stream early via LanguageGateStreamFilter instead.)
 
   RC-3 (K2)   — ticket_number now passed to _escalation_turn_response in
         _handle_awaiting_email so ChatTurnOutcome.ticket_number is populated.
@@ -29,16 +32,16 @@ from tests.conftest import register_and_verify_user, set_client_openai_key
 class TestLanguageNotValidated:
     """RC-2/C2: pipeline now has a language-check span after llm-generation."""
 
-    def test_language_mismatch_triggers_regeneration(
+    def test_language_mismatch_triggers_translation(
         self,
         mock_openai_client: Mock,
         tenant: TestClient,
         db_session: Session,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The language-check span in run_chat_pipeline detects mismatches and
-        regenerates. When detect_language signals a mismatch, generate_answer is
-        called a second time with the corrected response_language."""
+        """The language-check in run_chat_pipeline detects mismatches on the
+        non-streamed path and translates the finished answer to the detected
+        question language instead of paying a second full generation."""
         import uuid as _uuid
         from backend.chat.handlers.rag import detect_language as _detect_language
         from backend.chat.language import LanguageDetectionResult
@@ -72,19 +75,21 @@ class TestLanguageNotValidated:
                 reliability=build_reliability_assessment(top_score=0.9, result_count=1),
             )
 
-        call_index = [0]
-
         def _fake_generate(*args, **kwargs) -> tuple[str, int]:
-            call_index[0] += 1
             lang = kwargs.get("response_language", "en")
             generate_calls.append(lang)
-            if call_index[0] == 1:
-                # First call returns Dutch (wrong language for Spanish question).
-                return ("Ja, inline modus is beschikbaar.", 60)
-            # Second call (retry) returns Spanish.
-            return ("Sí, el modo inline está disponible.", 60)
+            # Returns Dutch (wrong language for Spanish question).
+            return ("Ja, inline modus is beschikbaar.", 60)
 
-        # Simulate detect_language: question=es, first answer=nl → mismatch triggers retry.
+        translate_calls: list[str] = []
+
+        def _fake_translate(*, source_text: str, target_language: str, api_key: str, **_kw):
+            from backend.chat.language import LocalizationResult
+
+            translate_calls.append(target_language)
+            return LocalizationResult(text="Sí, el modo inline está disponible.", tokens_used=30)
+
+        # Simulate detect_language: question=es, answer=nl → mismatch triggers translation.
         original_detect = _detect_language
 
         def _fake_detect(text: str) -> LanguageDetectionResult:
@@ -97,6 +102,7 @@ class TestLanguageNotValidated:
         monkeypatch.setattr("backend.chat.service.async_retrieve_context", _as_async(_fake_retrieve))
         monkeypatch.setattr("backend.chat.service.generate_answer", _fake_generate)
         monkeypatch.setattr("backend.chat.handlers.rag.detect_language", _fake_detect)
+        monkeypatch.setattr("backend.chat.handlers.rag.translate_text_result", _fake_translate)
 
         session_id = _uuid.uuid4()
         response = tenant.post(
@@ -109,14 +115,18 @@ class TestLanguageNotValidated:
         )
         assert response.status_code == 200
 
-        # generate_answer must have been called twice: first with en/default, then
-        # with 'es' forced by the language-check span on mismatch detection.
-        assert len(generate_calls) >= 2, (
-            "RC-2 fix: generate_answer must be called a second time when language "
-            f"mismatch is detected. Calls seen: {generate_calls}"
+        # generate_answer runs exactly once — a mismatch must be repaired by
+        # translation, never by a second full generation.
+        assert len(generate_calls) == 1, (
+            "RC-2: language mismatch must not trigger a second full generation. "
+            f"Calls seen: {generate_calls}"
         )
-        assert generate_calls[-1] == "es", (
-            f"RC-2 fix: retry call must use detected question language 'es', got '{generate_calls[-1]}'"
+        assert translate_calls == ["es"], (
+            "RC-2: the finished answer must be translated to the detected "
+            f"question language 'es'. Translate calls seen: {translate_calls}"
+        )
+        assert "inline está disponible" in response.json()["text"], (
+            "RC-2: the translated answer must be the one returned to the client"
         )
 
     def test_language_check_span_imported_in_rag_handler(self) -> None:

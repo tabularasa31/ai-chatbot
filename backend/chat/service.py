@@ -103,6 +103,7 @@ from backend.escalation.openai_escalation import (
     render_pre_confirm_text,  # noqa: F401
 )
 from backend.escalation.service import (
+    HumanRequestResult,
     build_chat_messages_for_openai,  # noqa: F401
     create_escalation_ticket,  # noqa: F401
     detect_human_request,
@@ -700,12 +701,21 @@ async def async_process_chat_message(
     # result is consumed only on the rarer escalation path but classifying it
     # here (in parallel) keeps that path from paying a second serialized ~3s call.
     _hrc_start = perf_counter()
-    human_request_result, support_contact_question = await asyncio.gather(
-        asyncio.to_thread(detect_human_request, redacted_question, api_key, tenant_id),
-        asyncio.to_thread(
-            detect_support_contact_question, redacted_question, api_key, tenant_id
-        ),
-    )
+    if not redacted_question.strip():
+        # Bootstrap turn (widget open) carries an empty question — there is
+        # nothing to classify, so skip both classifier LLM calls entirely and
+        # keep the greeting latency out of the OpenAI round-trip budget.
+        human_request_result = HumanRequestResult(
+            human_request=False, message_has_request_content=False
+        )
+        support_contact_question = False
+    else:
+        human_request_result, support_contact_question = await asyncio.gather(
+            asyncio.to_thread(detect_human_request, redacted_question, api_key, tenant_id),
+            asyncio.to_thread(
+                detect_support_contact_question, redacted_question, api_key, tenant_id
+            ),
+        )
     explicit_human_request = human_request_result.human_request
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)
 

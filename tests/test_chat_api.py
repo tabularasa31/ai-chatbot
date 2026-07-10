@@ -538,6 +538,40 @@ def test_chat_empty_question_returns_default_greeting(
     assert data["chat_ended"] is False
 
 
+def test_chat_bootstrap_turn_skips_classifier_llm_calls(
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A widget-open bootstrap turn (empty question) must not spend LLM calls
+    on the human-request / support-contact classifiers — task 86ey7x2p6 measured
+    ~2s of pure greeting latency from them."""
+    token = register_and_verify_user(tenant, db_session, email="bootstrap-skip@example.com")
+    cl_resp = tenant.post(
+        "/tenants",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Bootstrap Skip Tenant"},
+    )
+    set_client_openai_key(tenant, token)
+    api_key = cl_resp.json()["api_key"]
+
+    def _fail_classifier(*args, **kwargs):
+        raise AssertionError("classifier LLM call must be skipped on bootstrap turns")
+
+    monkeypatch.setattr("backend.chat.service.detect_human_request", _fail_classifier)
+    monkeypatch.setattr(
+        "backend.chat.service.detect_support_contact_question", _fail_classifier
+    )
+
+    response = tenant.post(
+        "/chat",
+        headers={"X-API-Key": api_key},
+        json={"question": ""},
+    )
+    assert response.status_code == 200
+    assert response.json()["text"]
+
+
 def test_chat_empty_question_uses_browser_locale_for_greeting(
     tenant: TestClient,
     db_session: Session,

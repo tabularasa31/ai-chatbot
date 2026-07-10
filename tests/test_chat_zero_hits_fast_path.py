@@ -267,6 +267,75 @@ def test_consecutive_zero_hits_relevant_escalates(
     assert any(call.get("force_llm_check") is True for call in consecutive_calls)
 
 
+def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
+    mock_openai_client: Mock,
+    tenant: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow pre-confirm localization call (observed up to 21s in prod) is cut
+    by the hard deadline; the canonical English template is used and the
+    escalation FSM stays armed instead of the turn stalling."""
+    import time as _time
+
+    from backend.escalation.openai_escalation import PRE_CONFIRM_NO_ANSWER_EN
+
+    cl_row, api_key = _create_client(tenant, db_session, email="zh-esc-timeout@example.com")
+    _insert_chunk(db_session, tenant_id=cl_row.id)
+
+    profile_stub = SimpleNamespace(product_name="Product", topics=["Topic"])
+    _stub_pre_retrieval(monkeypatch, relevance=(True, "ok", profile_stub))
+
+    async def _post_retrieval_relevance(**_kwargs):
+        return (True, "in_domain", profile_stub)
+
+    monkeypatch.setattr(
+        "backend.chat.service.async_check_relevance_with_profile",
+        _post_retrieval_relevance,
+    )
+    monkeypatch.setattr(
+        "backend.chat.service.async_retrieve_context",
+        _as_async(lambda *_a, **_kw: _empty_retrieval()),
+    )
+
+    session_id = uuid.uuid4()
+    chat = Chat(
+        tenant_id=cl_row.id,
+        session_id=session_id,
+        last_reply_was_rephrase_prompt=True,
+    )
+    db_session.add(chat)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "backend.core.config.settings.escalation_pre_confirm_render_timeout_seconds",
+        0.05,
+    )
+
+    def _slow_render(**_kw):
+        _time.sleep(0.5)
+        return SimpleNamespace(message_to_user="too late", tokens_used=1)
+
+    monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _slow_render)
+
+    outcome = process_chat_message(
+        cl_row.id, "Question with no docs", session_id, db_session,
+        api_key=api_key,
+    )
+
+    db_session.expire_all()
+    chat = (
+        db_session.query(Chat)
+        .filter(Chat.tenant_id == cl_row.id, Chat.session_id == session_id)
+        .one()
+    )
+    assert chat.escalation_pre_confirm_pending is True, (
+        "timeout must degrade the text, not drop the escalation"
+    )
+    assert outcome.text == PRE_CONFIRM_NO_ANSWER_EN
+    assert outcome.text != "too late"
+
+
 def test_consecutive_zero_hits_not_relevant_emits_offtopic_reject(
     mock_openai_client: Mock,
     tenant: TestClient,

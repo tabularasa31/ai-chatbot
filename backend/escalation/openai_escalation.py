@@ -83,9 +83,42 @@ class EscalationLlmResult(BaseModel):
     tokens_used: int = 0
 
 
+PreConfirmVariant = Literal["initial", "no_answer", "support_contact", "clarify", "declined"]
+
+_PRE_CONFIRM_CANONICALS: dict[str, str] = {
+    "initial": PRE_CONFIRM_QUESTION_EN,
+    "no_answer": PRE_CONFIRM_NO_ANSWER_EN,
+    "support_contact": PRE_CONFIRM_SUPPORT_CONTACT_EN,
+    "clarify": PRE_CONFIRM_CLARIFY_EN,
+    "declined": PRE_CONFIRM_DECLINED_EN,
+}
+
+# The canonical templates are fixed strings, so their localization for a given
+# target language never changes — cache it and pay the localization LLM call at
+# most once per (variant, language) per process. The templates are
+# tenant-agnostic, so the cache is safely shared across tenants. Bounded by
+# variants x languages; no TTL needed.
+_PRE_CONFIRM_RENDER_CACHE: dict[tuple[str, str], str] = {}
+_PRE_CONFIRM_RENDER_CACHE_MAX = 2048
+
+
+def pre_confirm_fallback_result(variant: PreConfirmVariant) -> EscalationLlmResult:
+    """Canonical (English) pre_confirm text, used when localization cannot run.
+
+    Degrading to the canonical template mirrors the existing missing-api-key
+    behaviour of ``localize_text_to_language_result`` and keeps the escalation
+    FSM armed instead of dropping the handoff on a slow OpenAI call.
+    """
+    return EscalationLlmResult(
+        message_to_user=_PRE_CONFIRM_CANONICALS[variant],
+        followup_decision=None,
+        tokens_used=0,
+    )
+
+
 def render_pre_confirm_text(
     *,
-    variant: Literal["initial", "no_answer", "support_contact", "clarify", "declined"],
+    variant: PreConfirmVariant,
     response_language: str,
     api_key: str,
     tenant_id: str | None = None,
@@ -101,13 +134,15 @@ def render_pre_confirm_text(
     no-answer question (failed KB lookup), repeat after an ambiguous reply,
     or polite acknowledgement of a decline.
     """
-    canonical = {
-        "initial": PRE_CONFIRM_QUESTION_EN,
-        "no_answer": PRE_CONFIRM_NO_ANSWER_EN,
-        "support_contact": PRE_CONFIRM_SUPPORT_CONTACT_EN,
-        "clarify": PRE_CONFIRM_CLARIFY_EN,
-        "declined": PRE_CONFIRM_DECLINED_EN,
-    }[variant]
+    canonical = _PRE_CONFIRM_CANONICALS[variant]
+    cache_key = (variant, (response_language or "en").lower())
+    cached = _PRE_CONFIRM_RENDER_CACHE.get(cache_key)
+    if cached is not None:
+        return EscalationLlmResult(
+            message_to_user=cached,
+            followup_decision=None,
+            tokens_used=0,
+        )
     localization = localize_text_to_language_result(
         canonical_text=canonical,
         target_language=response_language,
@@ -117,6 +152,16 @@ def render_pre_confirm_text(
         bot_id=bot_id,
         chat_id=chat_id,
     )
+    # Only cache real localizations: a 0-token result for a non-English target
+    # means the helper degraded (missing key / detection skip / failure) and
+    # should be retried on the next call rather than pinned for the process
+    # lifetime.
+    if localization.text and (
+        localization.tokens_used > 0 or (response_language or "en").lower().startswith("en")
+    ):
+        if len(_PRE_CONFIRM_RENDER_CACHE) >= _PRE_CONFIRM_RENDER_CACHE_MAX:
+            _PRE_CONFIRM_RENDER_CACHE.clear()
+        _PRE_CONFIRM_RENDER_CACHE[cache_key] = localization.text
     return EscalationLlmResult(
         message_to_user=localization.text,
         followup_decision=None,

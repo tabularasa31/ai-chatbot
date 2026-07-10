@@ -67,6 +67,15 @@ PRE_CONFIRM_SUPPORT_CONTACT_EN = (
     "Would you like me to forward your request to our support team "
     "so they can reply by email?"
 )
+# Used when the relevance guard classified the message as a complaint about
+# support being unresponsive (waiting on a reply, being ignored). Leads with
+# an apology so the handoff offer reads as a reaction to the frustration, not
+# a canned refusal.
+PRE_CONFIRM_SUPPORT_COMPLAINT_EN = (
+    "I'm sorry you're still waiting for a reply. "
+    "Would you like me to forward your request to our support team "
+    "so they can follow up by email?"
+)
 PRE_CONFIRM_CLARIFY_EN = (
     "Just to confirm — should I forward your request to our support team "
     "for an email reply?"
@@ -83,12 +92,15 @@ class EscalationLlmResult(BaseModel):
     tokens_used: int = 0
 
 
-PreConfirmVariant = Literal["initial", "no_answer", "support_contact", "clarify", "declined"]
+PreConfirmVariant = Literal[
+    "initial", "no_answer", "support_contact", "support_complaint", "clarify", "declined"
+]
 
 _PRE_CONFIRM_CANONICALS: dict[str, str] = {
     "initial": PRE_CONFIRM_QUESTION_EN,
     "no_answer": PRE_CONFIRM_NO_ANSWER_EN,
     "support_contact": PRE_CONFIRM_SUPPORT_CONTACT_EN,
+    "support_complaint": PRE_CONFIRM_SUPPORT_COMPLAINT_EN,
     "clarify": PRE_CONFIRM_CLARIFY_EN,
     "declined": PRE_CONFIRM_DECLINED_EN,
 }

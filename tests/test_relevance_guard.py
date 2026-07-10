@@ -299,7 +299,7 @@ def test_relevance_checker_uses_relevance_guard_model(
     )
 
     assert relevant is True
-    assert reason == "ok"
+    assert reason == "relevant"
     assert mock_openai.chat.completions.create.call_args.kwargs["model"] == "gpt-test-relevance"
 
 
@@ -370,7 +370,7 @@ async def test_async_relevance_force_llm_check_bypasses_short_query(
 
     async_mock = AsyncMock(
         return_value=Mock(
-            choices=[Mock(message=Mock(content='{"relevant": false, "reason": "off_topic"}'))]
+            choices=[Mock(message=Mock(content='{"category": "offtopic", "reason": "greeting only"}'))]
         )
     )
     mock_client = Mock()
@@ -391,7 +391,7 @@ async def test_async_relevance_force_llm_check_bypasses_short_query(
         force_llm_check=True,
     )
     assert relevant is False
-    assert reason == "off_topic"
+    assert reason == "offtopic"
     assert async_mock.await_count == 1
 
 
@@ -403,7 +403,7 @@ async def test_async_relevance_llm_returns_relevant(monkeypatch: pytest.MonkeyPa
 
     async_mock = AsyncMock(
         return_value=Mock(
-            choices=[Mock(message=Mock(content='{"relevant": true, "reason": "on topic"}'))]
+            choices=[Mock(message=Mock(content='{"category": "relevant", "reason": "on topic"}'))]
         )
     )
     mock_client = Mock()
@@ -424,7 +424,7 @@ async def test_async_relevance_llm_returns_relevant(monkeypatch: pytest.MonkeyPa
         api_key="sk-test",
     )
     assert relevant is True
-    assert reason == "on topic"
+    assert reason == "relevant"
     assert p is profile
 
 
@@ -456,8 +456,10 @@ async def test_async_relevance_llm_returns_not_relevant(monkeypatch: pytest.Monk
         profile=profile,
         api_key="sk-test",
     )
+    # Legacy {"relevant": false} responses (no category field) must still be
+    # honoured and normalize to the offtopic category token.
     assert relevant is False
-    assert reason == "off topic"
+    assert reason == "offtopic"
 
 
 @pytest.mark.asyncio
@@ -565,3 +567,130 @@ async def test_async_relevance_uses_model_from_settings(monkeypatch: pytest.Monk
     )
 
     assert async_mock.call_args.kwargs["model"] == "gpt-test-async"
+
+
+# ---------------------------------------------------------------------------
+# Category classification + dialog context (86ey7x2mh)
+# ---------------------------------------------------------------------------
+
+
+def _mock_guard_client(monkeypatch: pytest.MonkeyPatch, content: str) -> AsyncMock:
+    async_mock = AsyncMock(
+        return_value=Mock(choices=[Mock(message=Mock(content=content))])
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+    return async_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["support_complaint", "social", "offtopic"])
+async def test_async_relevance_non_relevant_categories_returned_as_reason(
+    monkeypatch: pytest.MonkeyPatch, category: str
+) -> None:
+    """Non-relevant verdicts surface the category token in the reason slot so
+    the chat pipeline can route the reply shape (escalation offer / social
+    acknowledgement / off-topic reject) without a second LLM call."""
+    from backend.guards.relevance_checker import _cache, async_check_relevance_with_profile
+
+    _cache.clear()
+    _mock_guard_client(
+        monkeypatch, f'{{"category": "{category}", "reason": "whatever"}}'
+    )
+
+    relevant, reason, _p = await async_check_relevance_with_profile(
+        tenant_id=uuid.uuid4(),
+        user_question="they have not answered me for two weeks",
+        profile=_make_profile(uuid.uuid4()),
+        api_key="sk-test",
+    )
+    assert relevant is False
+    assert reason == category
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_unknown_category_falls_back_to_relevant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A malformed category with no legacy relevant field fails open."""
+    from backend.guards.relevance_checker import _cache, async_check_relevance_with_profile
+
+    _cache.clear()
+    _mock_guard_client(monkeypatch, '{"category": "banana", "reason": "?"}')
+
+    relevant, reason, _p = await async_check_relevance_with_profile(
+        tenant_id=uuid.uuid4(),
+        user_question="how do I configure the integration module",
+        profile=_make_profile(uuid.uuid4()),
+        api_key="sk-test",
+    )
+    assert relevant is True
+    assert reason == "relevant"
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_dialog_context_reaches_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rendered dialog tail must be embedded in the classifier prompt so
+    anaphoric follow-ups are judged against the conversation."""
+    from backend.guards.relevance_checker import _cache, async_check_relevance_with_profile
+
+    _cache.clear()
+    async_mock = _mock_guard_client(
+        monkeypatch, '{"category": "relevant", "reason": "follow-up"}'
+    )
+
+    context = "User: how do I set up SSL?\nAssistant: Upload a certificate in settings."
+    await async_check_relevance_with_profile(
+        tenant_id=uuid.uuid4(),
+        user_question="what if I have a cloudflare certificate?",
+        profile=_make_profile(uuid.uuid4()),
+        api_key="sk-test",
+        dialog_context=context,
+    )
+
+    messages = async_mock.call_args.kwargs["messages"]
+    user_prompt = messages[1]["content"]
+    assert "Recent conversation:" in user_prompt
+    assert "cloudflare certificate" in user_prompt
+    assert "how do I set up SSL?" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_cache_key_includes_dialog_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same text in a different conversation state must not replay a
+    cached context-dependent verdict."""
+    from backend.guards.relevance_checker import _cache, async_check_relevance_with_profile
+
+    _cache.clear()
+    async_mock = _mock_guard_client(
+        monkeypatch, '{"category": "relevant", "reason": "ok"}'
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+    question = "what about legal entities and their billing options?"
+
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile, api_key="sk-test",
+        dialog_context="User: pricing?\nAssistant: Plans start at $10.",
+    )
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile, api_key="sk-test",
+        dialog_context="User: unrelated\nAssistant: something else entirely.",
+    )
+    assert async_mock.await_count == 2
+
+    # Identical context → cache hit, no third call.
+    await async_check_relevance_with_profile(
+        tenant_id=tid, user_question=question, profile=profile, api_key="sk-test",
+        dialog_context="User: unrelated\nAssistant: something else entirely.",
+    )
+    assert async_mock.await_count == 2

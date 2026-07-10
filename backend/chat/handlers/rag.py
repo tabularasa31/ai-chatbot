@@ -40,6 +40,7 @@ from sqlalchemy.util import await_only
 from backend.chat.decision import KbConfidence
 from backend.chat.followup import (
     build_contextual_retrieval_query,
+    build_dialog_context,
     looks_like_short_followup,
 )
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
@@ -63,6 +64,10 @@ from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
     RejectReason,
     async_build_reject_response_result,
+)
+from backend.guards.relevance_checker import (
+    CATEGORY_SOCIAL,
+    CATEGORY_SUPPORT_COMPLAINT,
 )
 from backend.models import Chat, MessageRole, TenantProfile
 from backend.observability import TraceHandle, record_stage_ms
@@ -274,6 +279,21 @@ class RetrievalContext:
     vector_similarities: list[float | None] | None = None
 
 
+def _empty_retrieval_context() -> RetrievalContext:
+    """A no-hits RetrievalContext for pipeline exits that skip retrieval but
+    must still flow through the escalation branch of ``_handle_sync`` (which
+    dereferences ``result.retrieval``)."""
+    return RetrievalContext(
+        chunk_texts=[],
+        document_ids=[],
+        scores=[],
+        mode="none",
+        best_rank_score=None,
+        best_confidence_score=None,
+        confidence_source="none",
+    )
+
+
 @dataclass
 class ChatPipelineResult:
     """
@@ -293,7 +313,7 @@ class ChatPipelineResult:
     tokens_used: int
     # decision
     strategy: Literal["faq_direct", "faq_context", "rag_only", "guard_reject"]
-    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "rephrase"] | None
+    reject_reason: Literal["injection", "not_relevant", "low_retrieval", "rephrase", "social"] | None
     is_reject: bool
     is_faq_direct: bool
     # retrieval
@@ -594,7 +614,7 @@ def _emit_speculative_retrieval_event(
 
 def _emit_no_rag_hits_event(
     *,
-    outcome: Literal["soft_reply", "escalation", "offtopic_reply"],
+    outcome: Literal["soft_reply", "escalation", "offtopic_reply", "social_reply"],
     tenant_public_id: str | None,
     bot_public_id: str | None,
     chat_id: str | None,
@@ -1634,6 +1654,7 @@ class RagHandler(PipelineHandler):
                 "not_relevant": "guard_reject_not_relevant",
                 "low_retrieval": "guard_reject_low_retrieval",
                 "rephrase": "guard_reject_rephrase",
+                "social": "guard_social_reply",
             }
             if result.is_reject:
                 source = source_map.get(result.reject_reason or "", "guard_reject")
@@ -1827,9 +1848,14 @@ class RagHandler(PipelineHandler):
                 # the handoff as a failure. The intent is classified up front
                 # (in parallel with the human-request classifier) and threaded
                 # via ``ctx``, so this path adds no extra serialized LLM call.
-                _pre_confirm_variant = (
-                    "support_contact" if ctx.support_contact_question else "no_answer"
-                )
+                if esc_trigger == EscalationTrigger.user_complaint:
+                    # Guard-detected complaint about support silence: lead
+                    # with an apology, not "I couldn't find an answer".
+                    _pre_confirm_variant = "support_complaint"
+                elif ctx.support_contact_question:
+                    _pre_confirm_variant = "support_contact"
+                else:
+                    _pre_confirm_variant = "no_answer"
                 _esc_openai_start = perf_counter()
                 try:
                     esc = await_only(
@@ -2501,6 +2527,10 @@ class _PipelineState:
     rewritten_variant: str | None = None
     query_rewrite_skip_reason: str | None = None
     faq_match: FAQMatchResult | None = None
+    # Dialog tail rendered for the relevance guard (stage 1); reused by the
+    # consecutive-zero-hits force check (stage 2) so both verdicts see the
+    # same context and share the guard cache entry.
+    guard_dialog_context: str | None = None
     profile: TenantProfile | None = None
     client_product_name: str | None = None
     topic_hint: str | None = None
@@ -2779,6 +2809,12 @@ async def async_run_chat_pipeline(
         # (2-10 s OpenAI call) rather than the residual wait after FAQ/embed
         # work already overlapped with it.
         _rel_start = perf_counter()
+        # Give the guard the dialog tail so anaphoric follow-ups ("what about
+        # X?", "and for businesses?") are judged against the conversation
+        # instead of in isolation — judged alone they read as off-topic.
+        state.guard_dialog_context = (
+            build_dialog_context(chat.messages) if chat is not None else None
+        )
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
             async_check_relevance_with_profile(
                 tenant_id=tenant_id,
@@ -2786,6 +2822,7 @@ async def async_run_chat_pipeline(
                 profile=_guard_profile,
                 api_key=api_key,
                 trace=trace,
+                dialog_context=state.guard_dialog_context,
             )
         )
         base_embed_task: asyncio.Task[list[list[float]]] = asyncio.create_task(
@@ -3043,9 +3080,9 @@ async def async_run_chat_pipeline(
         # rel_task (the relevance guard OpenAI call, 2-10 s).
         await db.close()
         try:
-            relevant, _, state.profile = await rel_task
+            relevant, guard_reason, state.profile = await rel_task
         except asyncio.CancelledError:
-            relevant, state.profile = True, _guard_profile
+            relevant, guard_reason, state.profile = True, "cancelled", _guard_profile
         _rel_latency_s = perf_counter() - _rel_start
         if tenant_public_id is not None or bot_public_id is not None:
             from backend.chat.events import _emit_ai_span_event
@@ -3063,8 +3100,42 @@ async def async_run_chat_pipeline(
 
         if not relevant:
             await _cancel_speculative_retrieval()
+
+            # A complaint about support being unresponsive must never dead-end
+            # in a refusal — offer the escalation handoff instead. The empty
+            # retrieval context routes _handle_sync through the same
+            # pre-confirm arming path as the consecutive-zero-hits escalation.
+            if guard_reason == CATEGORY_SUPPORT_COMPLAINT:
+                from backend.escalation.openai_escalation import pre_confirm_fallback_result
+                from backend.models import EscalationTrigger
+
+                fallback = pre_confirm_fallback_result("support_complaint")
+                return ChatPipelineResult(
+                    raw_answer=fallback.message_to_user,
+                    final_answer=fallback.message_to_user,
+                    tokens_used=fallback.tokens_used,
+                    strategy="rag_only",
+                    reject_reason=None,
+                    is_reject=False,
+                    is_faq_direct=False,
+                    retrieval=_empty_retrieval_context(),
+                    escalation_recommended=True,
+                    escalation_trigger=EscalationTrigger.user_complaint,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                )
+
+            # Pure social turns (thanks / farewell) that slipped past the
+            # greeting handler get a polite acknowledgement, not a refusal.
+            reject_reason: Literal["not_relevant", "social"] = (
+                "social" if guard_reason == CATEGORY_SOCIAL else "not_relevant"
+            )
             reject_result = await async_build_reject_response_result(
-                reason=RejectReason.NOT_RELEVANT,
+                reason=(
+                    RejectReason.SOCIAL
+                    if guard_reason == CATEGORY_SOCIAL
+                    else RejectReason.NOT_RELEVANT
+                ),
                 profile=state.profile,
                 response_language=language_context.response_language,
                 api_key=api_key,
@@ -3074,7 +3145,7 @@ async def async_run_chat_pipeline(
                 final_answer=reject_result.text,
                 tokens_used=reject_result.tokens_used,
                 strategy="guard_reject",
-                reject_reason="not_relevant",
+                reject_reason=reject_reason,
                 is_reject=True,
                 is_faq_direct=False,
                 retrieval=None,
@@ -3292,7 +3363,69 @@ async def async_run_chat_pipeline(
                 api_key=api_key,
                 trace=trace,
                 force_llm_check=True,
+                dialog_context=state.guard_dialog_context,
             )
+
+            # Category routing mirrors the main guard site: a support
+            # complaint gets the escalation offer, a social turn a polite
+            # acknowledgement — neither should fall into the off-topic reject.
+            if relevance_reason == CATEGORY_SUPPORT_COMPLAINT:
+                from backend.escalation.openai_escalation import pre_confirm_fallback_result
+
+                complaint_fallback = pre_confirm_fallback_result("support_complaint")
+                _emit_no_rag_hits_event(
+                    outcome="escalation",
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                    relevance_reason=relevance_reason,
+                )
+                return ChatPipelineResult(
+                    raw_answer=complaint_fallback.message_to_user,
+                    final_answer=complaint_fallback.message_to_user,
+                    tokens_used=complaint_fallback.tokens_used,
+                    strategy="rag_only",
+                    reject_reason=None,
+                    is_reject=False,
+                    is_faq_direct=False,
+                    retrieval=retrieval,
+                    escalation_recommended=True,
+                    escalation_trigger=EscalationTrigger.user_complaint,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                    **_fast_path_extras,
+                )
+
+            if relevance_reason == CATEGORY_SOCIAL:
+                social_reply = await async_build_reject_response_result(
+                    reason=RejectReason.SOCIAL,
+                    profile=state.profile,
+                    response_language=language_context.response_language,
+                    api_key=api_key,
+                )
+                _emit_no_rag_hits_event(
+                    outcome="social_reply",
+                    tenant_public_id=tenant_public_id,
+                    bot_public_id=bot_public_id,
+                    chat_id=chat_id,
+                    relevance_reason=relevance_reason,
+                )
+                return ChatPipelineResult(
+                    raw_answer=social_reply.text,
+                    final_answer=social_reply.text,
+                    tokens_used=social_reply.tokens_used,
+                    tokens_output=social_reply.tokens_used,
+                    strategy="guard_reject",
+                    reject_reason="social",
+                    is_reject=True,
+                    is_faq_direct=False,
+                    retrieval=retrieval,
+                    escalation_recommended=False,
+                    escalation_trigger=None,
+                    faq_match=state.faq_match,
+                    language_context=language_context,
+                    **_fast_path_extras,
+                )
             # Only escalate when the relevance model actually rendered a
             # positive verdict. Fail-open reasons (``no_profile`` for tenants
             # without an onboarded profile; ``timeout`` / ``error`` during

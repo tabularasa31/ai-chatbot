@@ -62,6 +62,13 @@ _circuit_opened_at: float | None = None
 # language-agnostic and per-language keyword lists are explicitly out of scope.
 # Off-topic short queries are caught downstream by the zero-RAG-hits fast path
 # in the chat pipeline, which doesn't depend on the question's surface form.
+#
+# The same applies to ≤4-word support complaints ("no one replied"): detecting
+# them here would need either a per-language phrase list (out of scope, above)
+# or an LLM call (which is exactly what the bypass avoids). They ride the
+# same downstream net: zero RAG hits → rephrase prompt, and the *next* turn's
+# force_llm_check pass — which does see the dialog context — classifies the
+# repeated complaint as support_complaint and offers the escalation handoff.
 SHORT_QUERY_WORD_LIMIT = 4
 
 _cache: dict[str, tuple[float, bool, str]] = {}
@@ -118,38 +125,78 @@ def _build_context(profile: TenantProfileModel) -> tuple[str, str, str]:
     )
 
 
+# Categories the guard LLM classifies each message into. Only "relevant"
+# continues the RAG pipeline; the other three are routed by the caller
+# (offtopic → reject, support_complaint → escalation offer, social → polite
+# social reply). The category is returned in the ``reason`` slot of the
+# guard's (relevant, reason, profile) result tuple.
+CATEGORY_RELEVANT = "relevant"
+CATEGORY_OFFTOPIC = "offtopic"
+CATEGORY_SUPPORT_COMPLAINT = "support_complaint"
+CATEGORY_SOCIAL = "social"
+
+_VALID_CATEGORIES = frozenset(
+    {CATEGORY_RELEVANT, CATEGORY_OFFTOPIC, CATEGORY_SUPPORT_COMPLAINT, CATEGORY_SOCIAL}
+)
+
+
 def _build_prompts(
     profile: TenantProfileModel,
     user_question: str,
+    dialog_context: str | None = None,
 ) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for the relevance LLM call."""
     product_name, modules_list, glossary_terms_list = _build_context(profile)
     system_prompt = (
-        "You are a relevance classifier for a customer support bot.\n"
-        'Answer ONLY with a JSON object: {"relevant": true/false, "reason": "one sentence"}\n'
-        "Return relevant=true for any question that could plausibly be about the product, "
-        "its features, pricing, account management, or how to use it — even if the answer "
-        "is not in the documentation.\n"
-        "Return relevant=false ONLY for questions that are clearly unrelated to the product: "
-        "e.g. general coding tasks, math, creative writing, or unrelated tech support.\n"
-        "When in doubt, return true."
+        "You are a message classifier for a customer support bot.\n"
+        'Answer ONLY with a JSON object: {"category": "relevant" | "offtopic" | '
+        '"support_complaint" | "social", "reason": "one sentence"}\n'
+        "Categories:\n"
+        "- relevant: any message that could plausibly be about the product, its "
+        "features, pricing, account management, or how to use it — even if the "
+        "answer is not in the documentation. Short follow-ups that continue an "
+        "on-topic conversation (\"what about X?\", \"and for businesses?\") are "
+        "relevant: resolve pronouns and ellipsis against the recent conversation. "
+        "A user describing their setup or status in an on-topic conversation is "
+        "also relevant.\n"
+        "- support_complaint: the user complains that support / the team has not "
+        "replied, that they have been waiting too long, or expresses frustration "
+        "about being ignored.\n"
+        "- social: a pure greeting, thanks, farewell, or politeness with no "
+        "question and no actionable request.\n"
+        "- offtopic: clearly unrelated to the product: general coding tasks, "
+        "math, creative writing, or unrelated tech support.\n"
+        "When in doubt, return relevant."
+    )
+    context_block = (
+        f"Recent conversation:\n{dialog_context}\n" if dialog_context else ""
     )
     user_prompt = (
         f"The support bot is for: {product_name}\n"
         f"Known topics: {modules_list}\n"
         f"Key terms: {glossary_terms_list}\n"
-        f"User question: {json.dumps(user_question)}\n"
-        "Is this question related to this product or its use?"
+        f"{context_block}"
+        f"Latest user message: {json.dumps(user_question)}\n"
+        "Classify the latest user message."
     )
     return system_prompt, user_prompt
 
 
 def _parse_llm_response(content: str | None) -> tuple[bool, str]:
+    """Parse the guard verdict into (relevant, category).
+
+    The category token doubles as the machine-readable ``reason`` so callers
+    can route non-relevant verdicts (offtopic / support_complaint / social)
+    without a second call. Falls back to the legacy ``relevant`` boolean for
+    responses that omit the category field.
+    """
     raw = content or "{}"
     parsed = json.loads(raw)
-    relevant = bool(parsed.get("relevant", True))
-    reason = str(parsed.get("reason", "")) or "unknown"
-    return relevant, reason
+    category = str(parsed.get("category", "")).strip().lower()
+    if category not in _VALID_CATEGORIES:
+        relevant = bool(parsed.get("relevant", True))
+        category = CATEGORY_RELEVANT if relevant else CATEGORY_OFFTOPIC
+    return category == CATEGORY_RELEVANT, category
 
 
 def _check_circuit_breaker() -> tuple[bool, str] | None:
@@ -189,6 +236,7 @@ def check_relevance_with_profile(
     api_key: str,
     trace: TraceHandle | None = None,
     force_llm_check: bool = False,
+    dialog_context: str | None = None,
 ) -> tuple[bool, str, TenantProfileModel | None]:
     """Relevance pre-check using an already-loaded profile (no DB access).
 
@@ -201,7 +249,13 @@ def check_relevance_with_profile(
     pipeline on a second consecutive zero-RAG-hits turn, where we need the
     model's verdict on domain relevance even for ≤4-word questions.
 
-    Returns: (relevant, reason, profile_for_guard)
+    ``dialog_context`` (rendered by ``backend.chat.followup.build_dialog_context``)
+    lets the classifier resolve anaphoric follow-ups against the preceding
+    turns instead of judging the message in isolation.
+
+    Returns: (relevant, reason, profile_for_guard) — on a non-relevant LLM
+    verdict ``reason`` is the category token (offtopic / support_complaint /
+    social) so callers can route the reply shape.
     """
     if not profile or _profile_is_empty(profile):
         return True, "no_profile", None
@@ -223,8 +277,11 @@ def check_relevance_with_profile(
             input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
         )
 
-    # Cache key: hash(tenant_id + question[:100])
-    key_src = f"{tenant_id}:{user_question[:100]}"
+    # Cache key: hash(tenant_id + question[:100] + dialog tail). The dialog
+    # context changes the verdict (a follow-up is relevant only in context),
+    # so it must be part of the key — otherwise a context-dependent verdict
+    # would be replayed for the same text in a different conversation state.
+    key_src = f"{tenant_id}:{user_question[:100]}:{(dialog_context or '')[-200:]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -237,7 +294,7 @@ def check_relevance_with_profile(
         _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
         return relevant, reason, profile
 
-    system_prompt, user_prompt = _build_prompts(profile, user_question)
+    system_prompt, user_prompt = _build_prompts(profile, user_question, dialog_context)
 
     def _call_llm() -> tuple[bool, str]:
         openai_client = get_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)
@@ -321,6 +378,7 @@ async def async_check_relevance_with_profile(
     api_key: str,
     trace: TraceHandle | None = None,
     force_llm_check: bool = False,
+    dialog_context: str | None = None,
 ) -> tuple[bool, str, TenantProfileModel | None]:
     """Async counterpart of :func:`check_relevance_with_profile`.
 
@@ -351,7 +409,7 @@ async def async_check_relevance_with_profile(
             input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
         )
 
-    key_src = f"{tenant_id}:{user_question[:100]}"
+    key_src = f"{tenant_id}:{user_question[:100]}:{(dialog_context or '')[-200:]}"
     cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
     cached = _cache_get(cache_key)
     if cached is not None:
@@ -364,7 +422,7 @@ async def async_check_relevance_with_profile(
         _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
         return relevant, reason, profile
 
-    system_prompt, user_prompt = _build_prompts(profile, user_question)
+    system_prompt, user_prompt = _build_prompts(profile, user_question, dialog_context)
 
     async def _call_llm_async() -> tuple[bool, str]:
         client = get_async_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)

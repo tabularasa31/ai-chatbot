@@ -236,3 +236,41 @@ def test_build_prior_messages_for_llm_skips_empty_content() -> None:
     chat_stub = SimpleNamespace(messages=[blank, real])
     out = _build_prior_messages_for_llm(chat_stub, max_messages=6, char_cap=1500)
     assert out == [{"role": "assistant", "content": "real reply"}]
+
+
+# ---------------------------------------------------------------------------
+# build_dialog_context
+# ---------------------------------------------------------------------------
+
+
+def test_build_dialog_context_renders_last_turns_in_order() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    messages = [
+        _StubMessage(MessageRole.user, "old question", idx=1),
+        _StubMessage(MessageRole.assistant, "old answer", idx=2),
+        _StubMessage(MessageRole.user, "how do I set up SSL?", idx=3),
+        _StubMessage(MessageRole.assistant, "Upload a certificate.", idx=4),
+    ]
+    ctx = build_dialog_context(messages, max_turns=1)
+    assert ctx == "User: how do I set up SSL?\nAssistant: Upload a certificate."
+
+
+def test_build_dialog_context_caps_message_length() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    messages = [
+        _StubMessage(MessageRole.user, "q", idx=1),
+        _StubMessage(MessageRole.assistant, "a" * 1000, idx=2),
+    ]
+    ctx = build_dialog_context(messages, char_cap=50)
+    assert ctx is not None
+    for line in ctx.splitlines():
+        assert len(line) <= 50 + len("Assistant: ")
+
+
+def test_build_dialog_context_empty_history_returns_none() -> None:
+    from backend.chat.followup import build_dialog_context
+
+    assert build_dialog_context([]) is None
+    assert build_dialog_context([_StubMessage(MessageRole.user, "   ", idx=1)]) is None

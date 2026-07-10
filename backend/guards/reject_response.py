@@ -26,6 +26,11 @@ class RejectReason(enum.Enum):
     # off-topic refusal — at this point we don't yet know whether the question
     # is off-topic or just poorly worded.
     REPHRASE_REQUEST = "rephrase"
+    # The relevance guard classified the message as a pure social turn
+    # (thanks, farewell, politeness with no request). Answered with a polite
+    # acknowledgement instead of the off-topic refusal — a refusal in reply to
+    # "thanks, goodbye" reads as a malfunction.
+    SOCIAL = "social"
 
 
 def _resolve_reject_target_language(
@@ -68,6 +73,12 @@ def _build_canonical_reject_response(
             "Could you rephrase your question?"
         )
 
+    if reason == RejectReason.SOCIAL:
+        return (
+            f"Thank you for reaching out! If any other questions about "
+            f"{product_name} come up, I'm here to help."
+        )
+
     if reason == RejectReason.INSUFFICIENT_CONFIDENCE:
         if topic_hint:
             return (
@@ -84,15 +95,21 @@ def _build_canonical_reject_response(
     # the small-talk early exit; use a soft invite rather than a blunt refusal.
     if question is not None and len(question.split()) <= _SOFT_REJECT_MAX_WORDS:
         return f"Hi! I'm here to help with {product_name} questions. What would you like to know?"
+    # Both refusals end with a support handoff offer so an off-topic verdict
+    # (which can be a guard false positive) is never a dead end for the user.
     if topic_hint:
         return (
             f"Sorry, but I can't help with that question. "
             f"I can answer questions about {product_name} or its settings, "
-            f"for example about {topic_hint}."
+            f"for example about {topic_hint}. "
+            f"If you need something else, just ask me to forward your request "
+            f"to the support team."
         )
     return (
         f"Sorry, but I can't help with that question. "
-        f"I can answer questions about {product_name} or its settings."
+        f"I can answer questions about {product_name} or its settings. "
+        f"If you need something else, just ask me to forward your request "
+        f"to the support team."
     )
 
 

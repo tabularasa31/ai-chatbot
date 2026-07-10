@@ -57,6 +57,12 @@ class EscalationTrigger(str, enum.Enum):
     # don't conflate "retrieval was poor" with "model judged itself short on
     # information despite a healthy KB hit".
     llm_self_offer = "llm_self_offer"
+    # The relevance guard classified the message as a complaint about support
+    # being unresponsive (waiting on a reply, being ignored). Routed to the
+    # pre-confirm escalation offer instead of an off-topic reject. Value must
+    # stay ≤ 15 chars: the escalation_tickets.trigger column was narrowed to
+    # the longest legacy value's length (VARCHAR(15)) by 67aaa83e5689.
+    user_complaint = "user_complaint"
 
 
 class EscalationPriority(str, enum.Enum):

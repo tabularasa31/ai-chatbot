@@ -38,11 +38,7 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.util import await_only
 
 from backend.chat.decision import KbConfidence
-from backend.chat.followup import (
-    build_contextual_retrieval_query,
-    build_dialog_context,
-    looks_like_short_followup,
-)
+from backend.chat.followup import build_dialog_context
 from backend.chat.handlers.base import ChatTurnOutcome, HandlerContext, PipelineHandler
 from backend.chat.language import (
     LangDetectError,
@@ -233,12 +229,23 @@ def _should_skip_query_rewrite(
     question: str,
     language_match: str,
     min_words: int,
+    *,
+    has_dialog_context: bool = False,
 ) -> tuple[bool, str]:
     """Decide whether ``async_semantic_query_rewrite`` can be skipped.
 
     Returns ``(skip, reason)``. ``reason`` is always set — it doubles as a
     log/trace marker so we can compute "% rewrite skipped" from telemetry.
+
+    ``has_dialog_context`` forces the rewrite on any turn with prior dialog:
+    the rewrite is the only stage that can resolve a conversational
+    continuation ("yes, how do I check?") into a retrievable query, and no
+    surface feature of the current message (length, wording) can rule a
+    continuation out — so the skip optimization only applies to the first
+    turn of a conversation.
     """
+    if has_dialog_context:
+        return False, "has_dialog_context"
     if language_match != "native":
         return False, "language_mismatch"
     if len(question.split()) < min_words:
@@ -2539,9 +2546,10 @@ class _PipelineState:
     rewritten_variant: str | None = None
     query_rewrite_skip_reason: str | None = None
     faq_match: FAQMatchResult | None = None
-    # Dialog tail rendered for the relevance guard (stage 1); reused by the
-    # consecutive-zero-hits force check (stage 2) so both verdicts see the
-    # same context and share the guard cache entry.
+    # Dialog tail rendered once per turn; shared by the semantic query rewrite
+    # (continuation resolution), the relevance guard (stage 1) and the
+    # consecutive-zero-hits force check (stage 2) so all consumers see the
+    # same context and the guard verdicts share a cache entry.
     guard_dialog_context: str | None = None
     # True when the pre-retrieval relevance guard skipped the LLM via the
     # short-query bypass (≤ SHORT_QUERY_WORD_LIMIT words) and so never produced
@@ -2562,7 +2570,6 @@ class _PipelineState:
 
     # Speculative retrieval: started concurrently with the relevance guard and
     # consumed in _run_retrieval. Cancelled/discarded if the guard rejects.
-    retrieval_question: str | None = None
     retrieve_kwargs: dict[str, Any] = field(default_factory=dict)
     spec_retrieval_task: asyncio.Task[RetrievalContext] | None = None
 
@@ -2632,36 +2639,12 @@ async def async_run_chat_pipeline(
 
     state = _PipelineState()
 
-    def _build_retrieval_plan() -> tuple[str, dict[str, Any]]:
-        """Compute the retrieval question + precomputed-embedding kwargs.
-
-        Pure and deterministic, so the speculative launch and the (fallback)
-        in-stage retrieval share identical inputs. For a short follow-up the
-        query is rewritten from chat history and embeddings are recomputed
-        downstream (no precomputed kwargs).
-        """
-        contextual_retrieval_query: str | None = None
-        if chat is not None and looks_like_short_followup(question):
-            contextual_retrieval_query = build_contextual_retrieval_query(chat.messages, question)
-        retrieval_question = (
-            contextual_retrieval_query if contextual_retrieval_query is not None else question
-        )
-        retrieve_kwargs: dict[str, Any] = {}
-        if contextual_retrieval_query is None:
-            retrieve_kwargs = dict(
-                precomputed_query_variants=state.query_variants,
-                precomputed_variant_vectors=state.variant_vectors,
-                precomputed_embedding_api_request_count=state.embed_api_request_count,
-                rewritten_variant=state.rewritten_variant,
-            )
-        return retrieval_question, retrieve_kwargs
-
     async def _execute_retrieval(session: AsyncSession) -> RetrievalContext:
         # Looked up via _svc so test monkeypatches on
         # ``backend.chat.service.async_retrieve_context`` intercept the call.
         return await _svc.async_retrieve_context(
             tenant_id,
-            state.retrieval_question or question,
+            question,
             session,
             api_key,
             top_k=5,
@@ -2743,6 +2726,16 @@ async def async_run_chat_pipeline(
         else:
             state.query_kb_language_match = "mismatch"
 
+        # Render the dialog tail once. Three consumers share it: the semantic
+        # query rewrite (resolves continuations like "yes, how do I check?"
+        # into standalone retrieval queries), the relevance guard (stage 1,
+        # anaphora resolution) and the consecutive-zero-hits force check
+        # (stage 2). ``chat.messages`` holds only prior turns here — the
+        # current user message is persisted after the pipeline runs.
+        state.guard_dialog_context = (
+            build_dialog_context(chat.messages) if chat is not None else None
+        )
+
         # Decide whether to skip the (LLM-backed) semantic query rewrite. Cross-
         # lingual rewrites below are gated separately by KB-script mismatch and
         # stay independent of this decision.
@@ -2750,6 +2743,7 @@ async def async_run_chat_pipeline(
             question,
             state.query_kb_language_match,
             settings.query_rewrite_skip_min_words,
+            has_dialog_context=state.guard_dialog_context is not None,
         )
         state.query_rewrite_skip_reason = rewrite_skip_reason
         logger.info(
@@ -2827,12 +2821,6 @@ async def async_run_chat_pipeline(
         # (2-10 s OpenAI call) rather than the residual wait after FAQ/embed
         # work already overlapped with it.
         _rel_start = perf_counter()
-        # Give the guard the dialog tail so anaphoric follow-ups ("what about
-        # X?", "and for businesses?") are judged against the conversation
-        # instead of in isolation — judged alone they read as off-topic.
-        state.guard_dialog_context = (
-            build_dialog_context(chat.messages) if chat is not None else None
-        )
         rel_task: asyncio.Task[tuple[bool, str, TenantProfile | None]] = asyncio.create_task(
             async_check_relevance_with_profile(
                 tenant_id=tenant_id,
@@ -2857,6 +2845,7 @@ async def async_run_chat_pipeline(
                     api_key=api_key,
                     timeout=settings.semantic_query_rewrite_timeout_sec,
                     bot_id=retry_bot_id,
+                    dialog_context=state.guard_dialog_context,
                 )
             )
 
@@ -3089,7 +3078,15 @@ async def async_run_chat_pipeline(
         # 2-10 s guard call saves ~150-500 ms on p50. On guard reject the task
         # is cancelled and its result discarded (see _speculative_retrieval for
         # why this leaves no DB artifacts and no dangling connections).
-        state.retrieval_question, state.retrieve_kwargs = _build_retrieval_plan()
+        # Retrieval always runs on the raw question plus the precomputed
+        # variants — the dialog-aware rewrite variant (already embedded above)
+        # carries the continuation context, so no query replacement is needed.
+        state.retrieve_kwargs = dict(
+            precomputed_query_variants=state.query_variants,
+            precomputed_variant_vectors=state.variant_vectors,
+            precomputed_embedding_api_request_count=state.embed_api_request_count,
+            rewritten_variant=state.rewritten_variant,
+        )
         if state.variant_vectors:
             state.spec_retrieval_task = asyncio.create_task(_speculative_retrieval())
 

@@ -150,6 +150,86 @@ class TestSemanticQueryRewriteHappyPath:
 
 
 # ---------------------------------------------------------------------------
+# Dialog-context (history-aware) prompt variant
+# ---------------------------------------------------------------------------
+
+class TestSemanticQueryRewriteDialogContext:
+    """With dialog_context the prompt lets the model resolve continuations."""
+
+    @staticmethod
+    def _sent_prompt(mock_retry, inner_client) -> str:
+        """Extract the prompt content from the lambda handed to the retry helper."""
+        fn = mock_retry.call_args[0][1]
+        inner_client.chat.completions.create.return_value = _make_openai_response("x")
+        fn()
+        return inner_client.chat.completions.create.call_args[1]["messages"][0]["content"]
+
+    def test_prompt_includes_dialog_and_resolution_instruction(self):
+        dialog = (
+            "User: как подключить домен?\n"
+            "Assistant: Настройте делегацию. Хотите помогу проверить?"
+        )
+        with (
+            patch("backend.search.service.get_openai_client") as mock_client,
+            patch("backend.search.service.call_openai_with_retry") as mock_retry,
+        ):
+            inner = MagicMock()
+            mock_client.return_value = inner
+            mock_retry.return_value = _make_openai_response(
+                "проверка настройки делегации домена"
+            )
+
+            result = semantic_query_rewrite(
+                "да, как проверить?",
+                api_key="sk-test",
+                dialog_context=dialog,
+            )
+            content = self._sent_prompt(mock_retry, inner)
+
+        assert result == "проверка настройки делегации домена"
+        assert dialog in content
+        assert "да, как проверить?" in content
+        # The model — not a heuristic — decides continuation vs standalone.
+        assert "self-contained, ignore the conversation" in content
+        assert "FEATURE or SETTING" in content
+
+    def test_prompt_without_dialog_context_is_unchanged(self):
+        with (
+            patch("backend.search.service.get_openai_client") as mock_client,
+            patch("backend.search.service.call_openai_with_retry") as mock_retry,
+        ):
+            inner = MagicMock()
+            mock_client.return_value = inner
+            mock_retry.return_value = _make_openai_response("widget setup embed")
+
+            semantic_query_rewrite(
+                "как настроить виджет",
+                api_key="sk-test",
+                dialog_context=None,
+            )
+            content = self._sent_prompt(mock_retry, inner)
+
+        assert content.startswith("A customer asked a product support chatbot:")
+        assert "conversation" not in content
+
+    def test_curly_braces_in_dialog_do_not_crash(self):
+        with (
+            patch("backend.search.service.get_openai_client") as mock_client,
+            patch("backend.search.service.call_openai_with_retry") as mock_retry,
+        ):
+            mock_client.return_value = MagicMock()
+            mock_retry.return_value = _make_openai_response("feature settings config")
+
+            result = semantic_query_rewrite(
+                "yes {please}",
+                api_key="sk-test",
+                dialog_context="Assistant: use {placeholders} like {0}",
+            )
+
+        assert result == "feature settings config"
+
+
+# ---------------------------------------------------------------------------
 # Failure / edge-case tests
 # ---------------------------------------------------------------------------
 

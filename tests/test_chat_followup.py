@@ -1,11 +1,10 @@
-"""Tests for the dialogue follow-up bridge.
+"""Tests for the dialog-context bridge.
 
 Covers:
-  * ``looks_like_short_followup`` heuristic for ru/en affirmations and short
-    replies, with negative cases for normal questions.
-  * ``build_contextual_retrieval_query`` stitches the last assistant tail with
-    the current user reply and returns ``None`` when no assistant context
-    exists.
+  * ``build_dialog_context`` renders the recent exchanges for per-turn LLM
+    helpers (relevance guard, history-aware query rewrite), keeping the tail
+    of assistant messages so the bot's trailing follow-up question survives
+    truncation.
   * ``generate_answer`` inserts ``prior_messages`` between the system prompt
     and the current user message before calling OpenAI.
 """
@@ -14,12 +13,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
-from backend.chat.followup import (
-    build_contextual_retrieval_query,
-    looks_like_short_followup,
-)
 from backend.models import MessageRole
 
 
@@ -29,111 +22,6 @@ class _StubMessage:
         self.content = content
         self.id = idx
         self.created_at = None
-
-
-# ---------------------------------------------------------------------------
-# looks_like_short_followup
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "да",
-        "Да!",
-        "ок",
-        "ну да",
-        "yes",
-        "yes please",
-        "ok",
-        "go ahead",
-        "конечно",
-        "пожалуйста",
-        "давай",
-    ],
-)
-def test_looks_like_short_followup_positive(text: str) -> None:
-    assert looks_like_short_followup(text) is True
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "как настроить виджет",
-        "what is the pricing",
-        "сколько стоит подписка для команды",
-        "Tell me about your refund policy",
-        "",
-        "   ",
-    ],
-)
-def test_looks_like_short_followup_negative(text: str) -> None:
-    assert looks_like_short_followup(text) is False
-
-
-# ---------------------------------------------------------------------------
-# build_contextual_retrieval_query
-# ---------------------------------------------------------------------------
-
-
-def test_contextual_query_combines_assistant_tail_and_user_reply() -> None:
-    messages = [
-        _StubMessage(MessageRole.user, "как настроить виджет?", idx=1),
-        _StubMessage(
-            MessageRole.assistant,
-            "Виджет настраивается через Settings → Widget. "
-            "Хотите помогу с цветовой темой?",
-            idx=2,
-        ),
-    ]
-    out = build_contextual_retrieval_query(messages, "да")
-    assert out is not None
-    assert "цветовой темой" in out
-    assert out.endswith("\nда")
-
-
-def test_contextual_query_picks_latest_assistant_when_messages_out_of_order() -> None:
-    # Chat.messages has no DB ``order_by``; the helper must not blindly trust
-    # iteration order. Build a list where the older assistant message comes
-    # AFTER the newer one and confirm the latest tail (by created_at) wins.
-    from datetime import datetime, timedelta
-
-    base = datetime(2026, 1, 1, 12, 0, 0)
-    older_assistant = _StubMessage(
-        MessageRole.assistant,
-        "Старый ответ. Хотите старую тему?",
-        idx=1,
-    )
-    older_assistant.created_at = base
-    newer_assistant = _StubMessage(
-        MessageRole.assistant,
-        "Свежий ответ. Хотите помогу с цветовой темой?",
-        idx=2,
-    )
-    newer_assistant.created_at = base + timedelta(minutes=5)
-    out = build_contextual_retrieval_query(
-        [newer_assistant, older_assistant],  # intentionally reversed
-        "да",
-    )
-    assert out is not None
-    assert "цветовой темой" in out
-    assert "старую тему" not in out
-
-
-def test_contextual_query_returns_none_without_assistant_history() -> None:
-    messages = [_StubMessage(MessageRole.user, "первый ход", idx=1)]
-    assert build_contextual_retrieval_query(messages, "да") is None
-
-
-def test_contextual_query_caps_long_assistant_tail() -> None:
-    long_text = "x" * 2000 + " Хотите помогу с настройкой?"
-    messages = [_StubMessage(MessageRole.assistant, long_text, idx=1)]
-    out = build_contextual_retrieval_query(messages, "да")
-    assert out is not None
-    # Tail cap (400) + reply length, well under the original 2k+ assistant text.
-    assert len(out) < 600
-    assert "Хотите помогу с настройкой?" in out
-    assert out.endswith("\nда")
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +155,52 @@ def test_build_dialog_context_caps_message_length() -> None:
     assert ctx is not None
     for line in ctx.splitlines():
         assert len(line) <= 50 + len("Assistant: ")
+
+
+def test_build_dialog_context_keeps_assistant_tail_question() -> None:
+    # The bot's follow-up question sits at the END of its reply; truncation
+    # must keep the tail, or continuation resolution ("да, как проверить?")
+    # loses exactly the sentence it needs.
+    from backend.chat.followup import build_dialog_context
+
+    long_answer = "x" * 2000 + " Хотите помогу с настройкой делегации?"
+    messages = [
+        _StubMessage(MessageRole.user, "как подключить домен?", idx=1),
+        _StubMessage(MessageRole.assistant, long_answer, idx=2),
+    ]
+    ctx = build_dialog_context(messages)
+    assert ctx is not None
+    assert "Хотите помогу с настройкой делегации?" in ctx
+
+
+def test_build_dialog_context_keeps_user_head() -> None:
+    # User messages state the topic up front — keep the head on truncation.
+    from backend.chat.followup import build_dialog_context
+
+    long_question = "как подключить домен к виджету " + "и " * 500
+    messages = [
+        _StubMessage(MessageRole.user, long_question, idx=1),
+        _StubMessage(MessageRole.assistant, "ответ", idx=2),
+    ]
+    ctx = build_dialog_context(messages)
+    assert ctx is not None
+    assert "как подключить домен к виджету" in ctx
+
+
+def test_build_dialog_context_orders_by_created_at_not_list_order() -> None:
+    # Chat.messages has no DB ``order_by``; the helper must sort by
+    # created_at instead of trusting iteration order.
+    from datetime import datetime, timedelta
+
+    from backend.chat.followup import build_dialog_context
+
+    base = datetime(2026, 1, 1, 12, 0, 0)
+    newer = _StubMessage(MessageRole.assistant, "свежий ответ", idx=2)
+    newer.created_at = base + timedelta(minutes=5)
+    older = _StubMessage(MessageRole.user, "старый вопрос", idx=1)
+    older.created_at = base
+    ctx = build_dialog_context([newer, older])  # intentionally reversed
+    assert ctx == "User: старый вопрос\nAssistant: свежий ответ"
 
 
 def test_build_dialog_context_empty_history_returns_none() -> None:

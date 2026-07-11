@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
+from backend.core.rls import set_tenant_context
 from backend.models import Bot, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
@@ -131,7 +132,11 @@ def get_tenant_by_api_key(api_key: str, db: Session) -> Tenant | None:
     on /chat.
     """
     result = find_active_tenant_by_plain_key(api_key, db)
-    return None if result is None else result[0]
+    if result is None:
+        return None
+    tenant = result[0]
+    set_tenant_context(db, tenant.id)
+    return tenant
 
 
 def get_primary_api_key_hint(tenant_id: uuid.UUID, db: Session) -> str | None:

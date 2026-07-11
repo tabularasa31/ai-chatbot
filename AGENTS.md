@@ -362,6 +362,44 @@ In short: models live only in `backend/models.py`; HTTP handlers use `Depends(ge
 
 **Full checklist** — `.cursor/rules/backend-data-layer.mdc` (applies when working under `backend/**/*.py`).
 
+### Tenant isolation (Postgres RLS)
+
+Tenant isolation has two contours:
+
+1. **ORM filters** (`tenant_id == ...` in every service query) — the primary contour.
+2. **Postgres row-level security** (`backend/core/rls.py`) — defence-in-depth: once the
+   request's tenant is resolved, the database itself refuses rows of other tenants even
+   if a service forgot the filter.
+
+How the second contour works:
+
+- The resolved tenant id is stored in a `ContextVar` at the auth boundary — JWT
+  dependency (`backend/auth/middleware.py::get_current_user`), widget bot gate
+  (`backend/tenants/widget_chat_gate.py`), and X-API-Key resolve
+  (`backend/tenants/service.py::get_tenant_by_api_key`) all call `set_tenant_context`.
+- An engine-level `begin` listener emits `SET LOCAL app.tenant_id` on every new
+  transaction (transaction-scoped, so pooled connections cannot leak context).
+- Policies are **fail-open when no context is set**: background jobs, cron sweeps and
+  Alembic run unchanged. With context set, cross-tenant reads return 0 rows and
+  cross-tenant writes raise a row-level security error.
+- Auth-boundary tables (`tenants`, `users`, `bots`, `tenant_api_keys`) are exempt —
+  they are queried before the tenant is known.
+- Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`,
+  `gap_question_message_links`) are scoped via a parent-FK `EXISTS` policy.
+- **Enforcement requires a non-superuser DB role** (superusers bypass RLS). Tables use
+  `FORCE ROW LEVEL SECURITY`, so any non-superuser connection — including the table
+  owner — is enforced. While `DATABASE_URL` connects as a superuser, RLS is inert but
+  harmless; measured overhead with a non-superuser role is within noise (< ~5%) on
+  retrieval-shaped queries.
+
+**Adding a new tenant-scoped table**: add it to `TENANT_SCOPED_TABLES` (or
+`CHILD_SCOPED_TABLES`) in `backend/core/rls.py` **and** write a new Alembic migration
+applying `rls_statements()` for it (see `rls_tenant_isolation_v1.py` — the migration
+keeps a frozen snapshot; never import the app registry from a migration).
+`tests/test_rls_registry.py` fails if a table with `tenant_id` is left unclassified;
+`tests/pgvector_tests/test_rls_isolation.py` verifies actual isolation through a
+dedicated non-superuser role.
+
 ---
 
 ## Other editing guidelines

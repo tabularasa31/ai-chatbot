@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from backend.core.rls import set_tenant_context
 from backend.models import Bot, Tenant
 
 
@@ -36,6 +37,7 @@ def get_tenant_eligible_for_widget_chat(db: Session, public_id: str) -> Tenant:
     key = tenant.openai_api_key
     if not key or not str(key).strip():
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.NO_OPENAI)
+    set_tenant_context(db, tenant.id)
     return tenant
 
 
@@ -52,6 +54,7 @@ def _resolve_active_bot_and_tenant(db: Session, bot_public_id: str) -> tuple[Bot
     bot, tenant = result
     if not tenant.is_active:
         raise WidgetChatTenantGateError(WidgetChatTenantGateError.INACTIVE)
+    set_tenant_context(db, tenant.id)
     return bot, tenant
 
 

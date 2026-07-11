@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
+from backend.core.rls import set_tenant_context
 from backend.core.security import decode_access_token
 from backend.models import User
 
@@ -60,6 +61,8 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
         )
+    if user.tenant_id is not None:
+        set_tenant_context(db, user.tenant_id)
     return user
 
 

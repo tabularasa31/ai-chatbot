@@ -45,7 +45,12 @@ function ensureLoaderScript(): Promise<void> {
   return scriptReady;
 }
 
-export function DashboardWidgetLoader() {
+export function DashboardWidgetLoader({
+  email = null,
+}: {
+  /** Session email decoded server-side in the layout; when present, skips the /auth/me fetch. */
+  email?: string | null;
+}) {
   useEffect(() => {
     if (!BOT_ID) return;
 
@@ -69,7 +74,9 @@ export function DashboardWidgetLoader() {
     }
 
     ensureLoaderScript()
-      .then(() => api.auth.getMe().catch(() => null))
+      .then(() =>
+        email ? { email } : api.auth.getMe().catch(() => null),
+      )
       .then((user) => {
         if (cancelled) return;
         const hints: UserHints | null = user?.email ? { email: user.email } : null;
@@ -87,7 +94,7 @@ export function DashboardWidgetLoader() {
       const w = window as WindowWithChat9Widget;
       w.Chat9Widget?.stop();
     };
-  }, []);
+  }, [email]);
 
   return null;
 }

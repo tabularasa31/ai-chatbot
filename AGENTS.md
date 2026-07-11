@@ -63,6 +63,24 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 
 ---
 
+## Chat pipeline layout (`backend/chat/`)
+
+The RAG turn pipeline is split into explicit steps with typed I/O:
+
+- `pipeline.py` — orchestrator (`async_run_chat_pipeline`), a flat top-down flow of step calls; concurrency (relevance guard ∥ embeddings ∥ rewrite, speculative retrieval) lives inside the steps via tasks stored on `PipelineState`.
+- `steps/pre_retrieval.py` — injection guard, concurrent task launch, query plan (rewrite + embeddings), FAQ match, relevance guard, generation inputs.
+- `steps/retrieval.py` — hybrid retrieval (incl. speculative-task consumption), zero-hits fast path, low-retrieval guard.
+- `steps/generate.py` — LLM generation, language-mismatch retry, result assembly.
+- `steps/refusal.py` — reject-result builders shared by the guard paths.
+- `types.py` — `PipelineRun` / `PipelineState` / `RetrievalContext` / `ChatPipelineResult`.
+- `prompts.py` — system-prompt blocks + `build_rag_prompt` / `build_rag_messages` (see the prompt caching contract below).
+- `streaming.py` — SSE stream filters (citations, thought tags, offer marker, language gate).
+- `handlers/rag.py` — `RagHandler` (persistence / analytics / escalation side effects) and the pipeline's re-export + **test-seam surface**: tests monkeypatch `backend.chat.handlers.rag.async_generate_answer` / `detect_language` / `translate_text_result`, and the steps resolve those names through that module at call time. LLM-backed helpers are likewise resolved via `backend.chat.service` at call time.
+
+Every step is wrapped in (or internally creates) a Langfuse span — `injection guard`, `query_rewrite`, `query-embedding`, `faq_match`, relevance guard, `retrieval`, `zero-hits-check`, `refusal`, `llm-generation`, `language-check`, `escalation-check` — so a trace shows exactly where a turn short-circuited.
+
+---
+
 ## Guards (`backend/guards/`)
 
 Every chat turn passes through two guards **before** LLM generation (async, awaited in the chat pipeline). Either guard can short-circuit the request with a reject response.
@@ -203,7 +221,7 @@ The service is **language-agnostic**: the bot must reply in whatever language th
 - Soft rejections, clarification prompts, and escalation fallbacks are localized via the shared helpers in `backend/chat/language.py`. The localization LLM surface is async-only (`localize_text_result`, `translate_text_result`, `render_direct_faq_answer_result`, `generate_greeting_in_language_result`, `async_localize_text_to_language_result`); there is no sync localization path.
 - New hardcoded strings (error messages, fallback copy, etc.) must go through these helpers — never hardcode English-only text in the chat pipeline.
 
-## Prompt caching contract (`backend/chat/handlers/rag.py`)
+## Prompt caching contract (`backend/chat/prompts.py`)
 
 The main generation call relies on OpenAI **automatic prompt caching** to avoid re-billing the stable instruction prefix on every turn. Two hard rules — break either and the cache silently stops working (no error, just a low `$ai_cached_tokens / $ai_input_tokens` in PostHog):
 

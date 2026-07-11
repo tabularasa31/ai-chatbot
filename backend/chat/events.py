@@ -71,10 +71,138 @@ def _check_escalation_rate(tenant_public_id: str | None, bot_public_id: str | No
 
 
 def _metrics_distinct_id(bot_public_id: str | None, tenant_public_id: str | None) -> str:
-    # Import lazily to avoid a module-load cycle: handlers.rag imports service,
-    # which now imports events — keep the heavyweight rag module out of events init.
-    from backend.chat.handlers.rag import _metrics_distinct_id as _impl
-    return _impl(bot_public_id, tenant_public_id)
+    return bot_public_id or tenant_public_id or "unknown"
+
+
+def _emit_quick_answer_lookup_event(
+    *,
+    selected_keys: list[str],
+    matched_count: int,
+    text_length: int,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+) -> None:
+    # Skip when neither identifier is known to avoid collapsing events under
+    # distinct_id="unknown" and polluting per-tenant rollups.
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    # Look up capture_event via service module so monkeypatches against
+    # backend.chat.service.capture_event continue to work.
+    from backend.chat import service as _svc
+    try:
+        _svc.capture_event(
+            "quick_answer.lookup",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "selected_keys": ",".join(selected_keys),
+                "selected_count": len(selected_keys),
+                "matched_count": matched_count,
+                "found": matched_count > 0,
+                "text_length": text_length,
+                "chat_id": chat_id,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit quick_answer.lookup event", exc_info=True)
+
+
+def _emit_speculative_retrieval_event(
+    *,
+    outcome: str,
+    duration_ms: float | None,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    cross_lingual: bool | None = None,
+    variant_mode: str | None = None,
+    retrieval_mode: str | None = None,
+) -> None:
+    """Emit a PostHog event for one speculative-retrieval outcome.
+
+    Lets us monitor the extra pgvector load the optimization introduces:
+    ``wasted_reject`` counts the (rare) turns where retrieval ran but the guard
+    rejected, so the result was thrown away.
+
+    ``strategy`` derives from ``outcome`` and labels the retrieval path
+    ("speculative" / "fallback" / "speculative_cancelled") so PostHog breakdowns
+    can distinguish which path each turn took. ``cross_lingual``, ``variant_mode``
+    and ``retrieval_mode`` add orthogonal dimensions for richer breakdowns.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    from backend.chat import service as _svc
+    strategy = {
+        "used": "speculative",
+        "fallback": "fallback",
+        "wasted_reject": "speculative_cancelled",
+    }[outcome]
+    try:
+        _svc.capture_event(
+            "speculative_retrieval.outcome",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "outcome": outcome,
+                "strategy": strategy,
+                "duration_ms": duration_ms,
+                "chat_id": chat_id,
+                "cross_lingual": cross_lingual,
+                "variant_mode": variant_mode,
+                "retrieval_mode": retrieval_mode,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit speculative_retrieval.outcome event", exc_info=True)
+
+
+def _emit_no_rag_hits_event(
+    *,
+    outcome: str,
+    tenant_public_id: str | None,
+    bot_public_id: str | None,
+    chat_id: str | None,
+    relevance_reason: str | None = None,
+) -> None:
+    """Emit a PostHog event for one strict-zero-hits outcome.
+
+    Fires from the chat pipeline's zero-RAG-hits fast path:
+
+    * ``soft_reply``      — first zero-hits turn, returned a "couldn't find an
+                            answer, please rephrase" prompt instead of calling
+                            the answer LLM.
+    * ``escalation``      — second consecutive zero-hits turn AND the relevance
+                            model judged the question in-domain; pre-confirm
+                            handoff was triggered.
+    * ``offtopic_reply``  — second consecutive zero-hits turn AND the relevance
+                            model judged it off-topic; standard NOT_RELEVANT
+                            reject was emitted.
+    * ``social_reply``    — zero-hits turn classified as social / bot-meta;
+                            polite acknowledgement instead of a reject.
+    """
+    if tenant_public_id is None and bot_public_id is None:
+        return
+    from backend.chat import service as _svc
+    try:
+        _svc.capture_event(
+            "no_rag_hits.outcome",
+            distinct_id=_metrics_distinct_id(bot_public_id, tenant_public_id),
+            tenant_id=tenant_public_id,
+            bot_id=bot_public_id,
+            properties={
+                "outcome": outcome,
+                "chat_id": chat_id,
+                "relevance_reason": relevance_reason,
+            },
+            groups={"tenant": tenant_public_id} if tenant_public_id else None,
+        )
+    except Exception:
+        logger.warning("Failed to emit no_rag_hits.outcome event", exc_info=True)
 
 
 def _emit_chat_turn_event(

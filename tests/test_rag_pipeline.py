@@ -582,7 +582,7 @@ class TestStripThoughtTags:
         import logging
 
         text = "<thought>Let me think about this. The user is asking about pricing,"
-        with caplog.at_level(logging.WARNING, logger="backend.chat.handlers.rag"):
+        with caplog.at_level(logging.WARNING, logger="backend.chat.streaming"):
             result = self._strip(text)
         assert result == ""
         assert any("thought_tag_truncated" in r.message for r in caplog.records)

@@ -8,7 +8,7 @@ import pytest
 
 from backend.chat.language import (
     LocalizationResult,
-    _invoke_localize_llm,
+    _async_invoke_localize_llm,
     resolve_language_context,
 )
 
@@ -108,54 +108,8 @@ def test_resolve_language_context_distinct_id_falls_back_to_tenant(captured_even
     assert resolved[0]["distinct_id"] == "tnt_only"
 
 
-def test_invoke_localize_llm_emits_localized(captured_events):
-    fake_response = type(
-        "R",
-        (),
-        {
-            "usage": type("U", (), {"total_tokens": 42})(),
-            "choices": [
-                type(
-                    "C",
-                    (),
-                    {"message": type("M", (), {"content": "Bonjour"})()},
-                )()
-            ],
-        },
-    )()
-
-    with patch("backend.chat.language.get_openai_client", return_value=object()), patch(
-        "backend.chat.language.call_openai_with_retry", return_value=fake_response
-    ):
-        result = _invoke_localize_llm(
-            canonical_text="Hello there",
-            target_language="fr",
-            api_key="sk-test",
-            operation="localize",
-            tenant_id="tnt_test",
-            bot_id="bot_test",
-            chat_id="chat_test",
-        )
-
-    assert isinstance(result, LocalizationResult)
-    localized = _events_named(captured_events, "language.localized")
-    assert len(localized) == 1
-    props = localized[0]["properties"]
-    assert props["target_lang"] == "fr"
-    assert props["input_chars"] == len("Hello there")
-    assert props["output_chars"] == len("Bonjour")
-    assert isinstance(props["latency_ms"], int)
-    assert props["latency_ms"] >= 0
-    assert props["operation"] == "localize"
-    assert props["chat_id"] == "chat_test"
-
-
 @pytest.mark.asyncio
 async def test_async_invoke_localize_llm_emits_localized(captured_events):
-    """The async twin shares the result/telemetry post-processing with the
-    sync core; verify the event fires through the async path too."""
-    from backend.chat.language import _async_invoke_localize_llm
-
     fake_response = type(
         "R",
         (),
@@ -191,25 +145,40 @@ async def test_async_invoke_localize_llm_emits_localized(captured_events):
     assert result.text == "Bonjour"
     localized = _events_named(captured_events, "language.localized")
     assert len(localized) == 1
-    assert localized[0]["properties"]["target_lang"] == "fr"
+    props = localized[0]["properties"]
+    assert props["target_lang"] == "fr"
+    assert props["input_chars"] == len("Hello there")
+    assert props["output_chars"] == len("Bonjour")
+    assert isinstance(props["latency_ms"], int)
+    assert props["latency_ms"] >= 0
+    assert props["operation"] == "localize"
+    assert props["chat_id"] == "chat_test"
 
 
-def test_invoke_localize_llm_skips_emit_when_no_identifiers(captured_events):
-    fake_response = type(
+def _fake_localize_response(content: str = "Bonjour"):
+    return type(
         "R",
         (),
         {
             "usage": type("U", (), {"total_tokens": 1})(),
             "choices": [
-                type("C", (), {"message": type("M", (), {"content": "Bonjour"})()})()
+                type("C", (), {"message": type("M", (), {"content": content})()})()
             ],
         },
     )()
 
-    with patch("backend.chat.language.get_openai_client", return_value=object()), patch(
-        "backend.chat.language.call_openai_with_retry", return_value=fake_response
+
+@pytest.mark.asyncio
+async def test_async_invoke_localize_llm_skips_emit_when_no_identifiers(captured_events):
+    fake_response = _fake_localize_response()
+
+    async def _fake_retry(_operation, _fn, **_kwargs):
+        return fake_response
+
+    with patch("backend.chat.language.get_async_openai_client", return_value=object()), patch(
+        "backend.chat.language.async_call_openai_with_retry", new=_fake_retry
     ):
-        result = _invoke_localize_llm(
+        result = await _async_invoke_localize_llm(
             canonical_text="Hello",
             target_language="fr",
             api_key="sk-test",
@@ -220,27 +189,22 @@ def test_invoke_localize_llm_skips_emit_when_no_identifiers(captured_events):
     assert _events_named(captured_events, "language.localized") == []
 
 
-def test_invoke_localize_llm_returns_output_when_capture_event_raises(monkeypatch):
-    fake_response = type(
-        "R",
-        (),
-        {
-            "usage": type("U", (), {"total_tokens": 1})(),
-            "choices": [
-                type("C", (), {"message": type("M", (), {"content": "Bonjour"})()})()
-            ],
-        },
-    )()
+@pytest.mark.asyncio
+async def test_async_invoke_localize_llm_returns_output_when_capture_event_raises(monkeypatch):
+    fake_response = _fake_localize_response()
 
     def boom(*args, **kwargs):
         raise RuntimeError("posthog down")
 
     monkeypatch.setattr("backend.chat.language.capture_event", boom)
 
-    with patch("backend.chat.language.get_openai_client", return_value=object()), patch(
-        "backend.chat.language.call_openai_with_retry", return_value=fake_response
+    async def _fake_retry(_operation, _fn, **_kwargs):
+        return fake_response
+
+    with patch("backend.chat.language.get_async_openai_client", return_value=object()), patch(
+        "backend.chat.language.async_call_openai_with_retry", new=_fake_retry
     ):
-        result = _invoke_localize_llm(
+        result = await _async_invoke_localize_llm(
             canonical_text="Hello",
             target_language="fr",
             api_key="sk-test",
@@ -252,12 +216,13 @@ def test_invoke_localize_llm_returns_output_when_capture_event_raises(monkeypatc
     assert result.text == "Bonjour"
 
 
-def test_invoke_localize_llm_does_not_emit_on_failure(captured_events):
+@pytest.mark.asyncio
+async def test_async_invoke_localize_llm_does_not_emit_on_failure(captured_events):
     with patch(
-        "backend.chat.language.get_openai_client",
+        "backend.chat.language.get_async_openai_client",
         side_effect=RuntimeError("boom"),
     ):
-        result = _invoke_localize_llm(
+        result = await _async_invoke_localize_llm(
             canonical_text="Hello",
             target_language="fr",
             api_key="sk-test",

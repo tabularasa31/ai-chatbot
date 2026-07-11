@@ -373,7 +373,6 @@ def mock_openai_client():
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.search.service.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.search.contradiction_adjudication.get_openai_client", return_value=mock_client), \
-         patch("backend.chat.language.get_openai_client", return_value=mock_client), \
          patch("backend.chat.language.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.chat.service.get_async_openai_client", return_value=async_mock_client), \
          patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True), \

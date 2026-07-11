@@ -200,7 +200,7 @@ The service is **language-agnostic**: the bot must reply in whatever language th
 
 - Before the first real user question, greetings and fallback-only turns use `user_context.locale → user_context.browser_locale → English`.
 - After the first real question, bot replies **follow the language of that question** — do not force English.
-- Soft rejections, clarification prompts, and escalation fallbacks are localized via the shared helpers in `backend/chat/language.py`. The localization LLM surface is async (`localize_text_result`, `translate_text_result`, `render_direct_faq_answer_result`, `generate_greeting_in_language_result`, `async_localize_text_to_language_result`); the sync `localize_text_to_language_result` exists only for sync threadpool endpoints (`backend/widget/routes.py`) and must never be called from a coroutine.
+- Soft rejections, clarification prompts, and escalation fallbacks are localized via the shared helpers in `backend/chat/language.py`. The localization LLM surface is async-only (`localize_text_result`, `translate_text_result`, `render_direct_faq_answer_result`, `generate_greeting_in_language_result`, `async_localize_text_to_language_result`); there is no sync localization path.
 - New hardcoded strings (error messages, fallback copy, etc.) must go through these helpers — never hardcode English-only text in the chat pipeline.
 
 ## Prompt caching contract (`backend/chat/handlers/rag.py`)

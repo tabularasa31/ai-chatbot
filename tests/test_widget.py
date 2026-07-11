@@ -230,7 +230,7 @@ def test_widget_config_skips_localization_when_link_safety_disabled(
     bot_public_id = _create_bot(tenant, token)
 
     localize = Mock(side_effect=AssertionError("localization should not run when link safety is disabled"))
-    monkeypatch.setattr("backend.widget.routes.localize_text_to_language_result", localize)
+    monkeypatch.setattr("backend.widget.routes.async_localize_text_to_language_result", localize)
 
     r = tenant.get(f"/widget/config?bot_id={bot_public_id}&locale=ru-RU")
     assert r.status_code == 200

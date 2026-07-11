@@ -19,7 +19,7 @@ from backend.admin.schemas import (
     AdminTenantMetricsItem,
     AdminTenantMetricsList,
 )
-from backend.auth.middleware import require_admin_user, require_verified_user
+from backend.auth.middleware import get_platform_admin_user
 from backend.core.db import get_db
 from backend.models import (
     Chat,
@@ -39,14 +39,14 @@ admin_router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 def get_admin_user(
-    current_user: Annotated[User, Depends(require_verified_user)],
+    current_user: Annotated[User, Depends(get_platform_admin_user)],
 ) -> User:
-    """Require admin role. Raises 403 if not admin."""
-    if not current_user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin only",
-        )
+    """Require admin role for platform-wide endpoints. Raises 403 if not admin.
+
+    Every endpoint in this router reads or mutates data across ALL tenants
+    (global metrics, PII retention), so the dependency also clears the RLS
+    tenant context set at login — see get_platform_admin_user.
+    """
     return current_user
 
 
@@ -173,7 +173,7 @@ def get_tenant_metrics(
 
 @admin_router.get("/privacy/pii-events", response_model=AdminPiiEventList)
 def list_pii_events(
-    _: Annotated[User, Depends(require_admin_user)],
+    _: Annotated[User, Depends(get_platform_admin_user)],
     db: Annotated[Session, Depends(get_db)],
     limit: Annotated[int, Query(ge=0, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -223,7 +223,7 @@ def list_pii_events(
 
 @admin_router.delete("/privacy/pii-events/retention", response_model=DeletedCountResponse)
 def cleanup_pii_events(
-    _: Annotated[User, Depends(require_admin_user)],
+    _: Annotated[User, Depends(get_platform_admin_user)],
     db: Annotated[Session, Depends(get_db)],
     retention_days: Annotated[int, Query(ge=1)] = 365,
 ) -> DeletedCountResponse:

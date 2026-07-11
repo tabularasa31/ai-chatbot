@@ -2031,6 +2031,185 @@ async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonic
     assert "couldn't find" not in PRE_CONFIRM_SUPPORT_CONTACT_EN.lower()
 
 
+def _fake_pre_confirm_context_client(content: str, tokens: int = 11) -> object:
+    """Fake OpenAI client whose completions.create returns ``content``."""
+
+    class _FakeMessage:
+        pass
+
+    _FakeMessage.content = content
+
+    class _FakeChoice:
+        message = _FakeMessage()
+
+    class _FakeUsage:
+        total_tokens = tokens
+
+    class _FakeResponse:
+        choices = [_FakeChoice()]
+        usage = _FakeUsage()
+
+    class _FakeClient:
+        class chat:  # noqa: N801
+            class completions:  # noqa: N801
+                @staticmethod
+                async def create(**kwargs: object) -> object:
+                    _FakeClient.last_create_kwargs = kwargs
+                    return _FakeResponse()
+
+    return _FakeClient
+
+
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_context_aware_summarizes_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a transcript is passed for a bot-initiated variant, the offer is
+    drafted by the narrow context-aware call (grounded in the dialog) instead
+    of the canonical template, and the result is never cached (86exn3x9u)."""
+    from backend.escalation.openai_escalation import (
+        _PRE_CONFIRM_RENDER_CACHE,
+        render_pre_confirm_text,
+    )
+
+    fake_client = _fake_pre_confirm_context_client(
+        '{"message_to_user": "I see your PDF is stuck in Processing — '
+        'shall I forward a summary of your case to our support team?"}'
+    )
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        lambda *_a, **_k: fake_client,
+    )
+
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
+    )
+
+    def _no_localize(**_kwargs: object) -> object:
+        raise AssertionError("context-aware path must not localize the template")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _no_localize,
+    )
+
+    transcript = [
+        {"role": "user", "content": "загрузил pdf, статус Processing"},
+        {"role": "assistant", "content": "попробуйте перезагрузить"},
+        {"role": "user", "content": "уже полчаса в Processing, что делать?"},
+    ]
+    out = await render_pre_confirm_text(
+        variant="no_answer",
+        response_language="ru",
+        api_key="sk-test",
+        chat_messages=transcript,
+    )
+
+    assert "stuck in Processing" in out.message_to_user
+    assert out.followup_decision is None
+    assert out.tokens_used == 11
+    assert not _PRE_CONFIRM_RENDER_CACHE, "dialog-specific text must not be cached"
+    # The drafting prompt must carry the transcript and the response language.
+    sent = fake_client.last_create_kwargs["messages"]
+    assert "уже полчаса в Processing" in sent[1]["content"]
+    assert "RESPONSE_LANGUAGE:\nru" in sent[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_context_failure_degrades_to_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any failure of the context-aware call (API error, empty message) must
+    fall back to the canonical-template localization, never raise."""
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import (
+        PRE_CONFIRM_NO_ANSWER_EN,
+        render_pre_confirm_text,
+    )
+
+    def _broken_client(*_a: object, **_k: object) -> object:
+        raise RuntimeError("openai down")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        _broken_client,
+    )
+
+    localized: list[str] = []
+
+    async def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+        localized.append(canonical_text)
+        return LocalizationResult(text="LOCALIZED FALLBACK", tokens_used=3)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    out = await render_pre_confirm_text(
+        variant="no_answer",
+        response_language="ru",
+        api_key="sk-test",
+        chat_messages=[{"role": "user", "content": "вопрос"}],
+    )
+
+    assert out.message_to_user == "LOCALIZED FALLBACK"
+    assert localized == [PRE_CONFIRM_NO_ANSWER_EN]
+
+
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_admin_variants_ignore_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """clarify/declined/initial are direct reactions to the user's escalation
+    answer — they stay templated even when a transcript is passed."""
+    from backend.chat.language import LocalizationResult
+    from backend.escalation.openai_escalation import (
+        PRE_CONFIRM_CLARIFY_EN,
+        PRE_CONFIRM_DECLINED_EN,
+        PRE_CONFIRM_QUESTION_EN,
+        render_pre_confirm_text,
+    )
+
+    def _no_llm(*_a: object, **_k: object) -> object:
+        raise AssertionError("administrative variants must not hit the drafting LLM")
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.get_async_openai_client",
+        _no_llm,
+    )
+
+    seen: list[str] = []
+
+    async def _fake_localize(*, canonical_text: str, **_kwargs: object) -> LocalizationResult:
+        seen.append(canonical_text)
+        return LocalizationResult(text=canonical_text, tokens_used=1)
+
+    monkeypatch.setattr(
+        "backend.escalation.openai_escalation.async_localize_text_to_language_result",
+        _fake_localize,
+    )
+
+    transcript = [{"role": "user", "content": "проблема"}]
+    for variant in ("initial", "clarify", "declined"):
+        await render_pre_confirm_text(
+            variant=variant,  # type: ignore[arg-type]
+            response_language="ru",
+            api_key="sk-test",
+            chat_messages=transcript,
+        )
+
+    assert seen == [
+        PRE_CONFIRM_QUESTION_EN,
+        PRE_CONFIRM_CLARIFY_EN,
+        PRE_CONFIRM_DECLINED_EN,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_detect_human_request_empty_message_skips_llm(
     monkeypatch: pytest.MonkeyPatch,

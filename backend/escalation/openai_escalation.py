@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any, Literal
@@ -10,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel
 
 from backend.chat.language import (
-    localize_text_to_language_result,
+    async_localize_text_to_language_result,
     log_llm_tokens,
 )
 from backend.core.config import settings
@@ -38,7 +37,7 @@ FALLBACK_EN_GENERIC = (
 #
 # Pre-confirm content has essentially zero variation by case — it's the same
 # one-sentence question every time. We render it via the same canonical-text
-# + ``localize_text_to_language_result`` pipeline used for the fallback
+# + ``async_localize_text_to_language_result`` pipeline used for the fallback
 # message, which kills the prompt-mixing problem at the root. The yes/no
 # classification stays on the LLM, but in a separate narrow call
 # (``classify_pre_confirm_reply``) whose only output is the decision label —
@@ -119,7 +118,7 @@ def pre_confirm_fallback_result(variant: PreConfirmVariant) -> EscalationLlmResu
     """Canonical (English) pre_confirm text, used when localization cannot run.
 
     Degrading to the canonical template mirrors the existing missing-api-key
-    behaviour of ``localize_text_to_language_result`` and keeps the escalation
+    behaviour of ``async_localize_text_to_language_result`` and keeps the escalation
     FSM armed instead of dropping the handoff on a slow OpenAI call.
     """
     return EscalationLlmResult(
@@ -146,10 +145,6 @@ async def render_pre_confirm_text(
     gets localized — bare initial question (explicit human request),
     no-answer question (failed KB lookup), repeat after an ambiguous reply,
     or polite acknowledgement of a decline.
-
-    The localization helper (``backend/chat/language.py``) is still sync and
-    makes its own OpenAI call for non-English targets, so it runs in a worker
-    thread here; cache hits stay on the event loop.
     """
     canonical = _PRE_CONFIRM_CANONICALS[variant]
     cache_key = (variant, (response_language or "en").lower())
@@ -160,8 +155,7 @@ async def render_pre_confirm_text(
             followup_decision=None,
             tokens_used=0,
         )
-    localization = await asyncio.to_thread(
-        localize_text_to_language_result,
+    localization = await async_localize_text_to_language_result(
         canonical_text=canonical,
         target_language=response_language,
         api_key=api_key,
@@ -363,10 +357,7 @@ async def complete_escalation_openai_turn(
         )
         msg = (data.get("message_to_user") or "").strip()
         if not msg:
-            # Sync localization helper (see render_pre_confirm_text) — keep it
-            # off the event loop.
-            localization = await asyncio.to_thread(
-                localize_text_to_language_result,
+            localization = await async_localize_text_to_language_result(
                 canonical_text=FALLBACK_EN_GENERIC,
                 target_language=response_language,
                 api_key=api_key,
@@ -390,8 +381,7 @@ async def complete_escalation_openai_turn(
             tokens=0,
             model=model_name,
         )
-        localization = await asyncio.to_thread(
-            localize_text_to_language_result,
+        localization = await async_localize_text_to_language_result(
             canonical_text=FALLBACK_EN_GENERIC,
             target_language=response_language,
             api_key=api_key,

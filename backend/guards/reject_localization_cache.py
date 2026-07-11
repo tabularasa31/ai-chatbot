@@ -9,9 +9,11 @@ always correct.
 Sized for ~10 reject canonicals across ~30 reasonable target languages
 with slack for variants.
 
-Thread safety: callers reach this module from ``asyncio.to_thread`` worker
-threads (see ``backend.guards.reject_response.async_build_reject_response_result``),
-so a single ``threading.Lock`` guards every read/write. The GIL makes
+Thread safety: the primary caller
+(``backend.guards.reject_response.build_reject_response_result``) is a
+coroutine on the event loop, but sync threadpool endpoints and worker
+threads can still reach the localization helpers, so a single
+``threading.Lock`` guards every read/write. The GIL makes
 individual dict ops atomic, but the eviction sweep in ``put`` and the
 ``values()`` iteration in ``stats`` are not atomic by themselves — without
 a lock they would race into ``RuntimeError: dictionary changed size during

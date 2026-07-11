@@ -124,6 +124,9 @@ def _link_safety_labels(
     tenant_id: str,
     bot_id: str,
 ) -> WidgetLinkSafetyLabels:
+    # Documented sync consumer of ``localize_text_to_language_result``: this
+    # runs inside the sync ``widget_config`` endpoint on a FastAPI threadpool
+    # thread, so the blocking localization call cannot stall the event loop.
     target_language = sanitize_locale(locale)
     labels = _default_link_safety_labels()
     if not target_language:

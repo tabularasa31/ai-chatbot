@@ -83,7 +83,7 @@ class TestLanguageNotValidated:
 
         translate_calls: list[str] = []
 
-        def _fake_translate(*, source_text: str, target_language: str, api_key: str, **_kw):
+        async def _fake_translate(*, source_text: str, target_language: str, api_key: str, **_kw):
             from backend.chat.language import LocalizationResult
 
             translate_calls.append(target_language)

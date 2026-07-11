@@ -44,11 +44,11 @@ from backend.chat.language import (
     LangDetectError,
     ResolvedLanguageContext,
     _language_root,
-    async_render_direct_faq_answer_result,
+    async_localize_text_to_language_result,
     detect_language,
     language_display_name,
-    localize_text_to_language_result,
     log_llm_tokens,
+    render_direct_faq_answer_result,
     translate_text_result,
 )
 from backend.chat.presets import COT_REASONING_BLOCK
@@ -59,7 +59,7 @@ from backend.disclosure_config import resolve_level
 from backend.faq.faq_matcher import FAQMatchResult, FAQRow
 from backend.guards.reject_response import (
     RejectReason,
-    async_build_reject_response_result,
+    build_reject_response_result,
 )
 from backend.guards.relevance_checker import (
     CATEGORY_SOCIAL,
@@ -1504,7 +1504,7 @@ def build_rag_messages(
     return system_prompt, remainder
 
 
-def _enforce_response_language(
+async def _enforce_response_language(
     answer_text: str,
     *,
     response_language: str,
@@ -1537,7 +1537,7 @@ def _enforce_response_language(
     if _language_root(detection.detected_language) == _language_root(response_language):
         return answer_text, 0
     try:
-        result = translate_text_result(
+        result = await translate_text_result(
             source_text=answer_text,
             target_language=response_language,
             api_key=api_key,
@@ -2223,21 +2223,14 @@ async def _async_generate_answer_native(
     Same behaviour and telemetry shape as the sync version, but uses
     ``AsyncOpenAI`` + ``async_call_openai_with_retry``. The stream loop is
     ``async for`` so back-pressure on slow OpenAI tokens does not occupy a
-    default-executor thread for the full duration of the call. The post-gen
-    language guard (``_enforce_response_language``) and ``stream_callback``
-    are kept sync — both are bounded and mostly CPU-cheap; ``stream_callback``
-    is called inline because it's a thin synchronous push to the queue
-    backing the SSE response.
+    default-executor thread for the full duration of the call.
+    ``stream_callback`` is kept sync — it's a thin synchronous push to the
+    queue backing the SSE response.
     """
     from backend.chat import service as _svc
 
     if not context_chunks and not faq_context_items and not quick_answer_items:
-        # ``localize_text_to_language_result`` does its own sync OpenAI call for
-        # non-English targets — push to the default executor so this fallback
-        # branch doesn't reblock the loop the rest of this function works hard
-        # to keep free.
-        result = await asyncio.to_thread(
-            localize_text_to_language_result,
+        result = await async_localize_text_to_language_result(
             canonical_text="I don't have information about this.",
             target_language=response_language,
             api_key=api_key,
@@ -2462,12 +2455,9 @@ async def _async_generate_answer_native(
         # Post-gen language guard runs only on non-streamed generation. In
         # the streaming path the answer was already emitted to the client
         # chunk-by-chunk via ``stream_callback``; rewriting the final text
-        # here would produce a UI/history mismatch. The guard does its own
-        # sync OpenAI call inside translate_text_result, so we keep it on a
-        # worker thread to avoid blocking the loop.
+        # here would produce a UI/history mismatch.
         if stream_callback is None:
-            final_text, extra_tokens = await asyncio.to_thread(
-                _enforce_response_language,
+            final_text, extra_tokens = await _enforce_response_language(
                 answer_text.strip(),
                 response_language=response_language,
                 api_key=api_key,
@@ -2787,7 +2777,7 @@ async def async_run_chat_pipeline(
                 },
             )
         if injection_result.detected:
-            reject_result = await async_build_reject_response_result(
+            reject_result = await build_reject_response_result(
                 reason=RejectReason.INJECTION_DETECTED,
                 profile=None,
                 response_language=language_context.response_language,
@@ -3048,7 +3038,7 @@ async def async_run_chat_pipeline(
             if not rel_task.done():
                 rel_task.cancel()
                 await asyncio.gather(rel_task, return_exceptions=True)
-            direct_answer_result = await async_render_direct_faq_answer_result(
+            direct_answer_result = await render_direct_faq_answer_result(
                 answer_text=state.faq_match.faq_items[0].answer
                 if state.faq_match.faq_items
                 else "",
@@ -3153,7 +3143,7 @@ async def async_run_chat_pipeline(
                 )
             else:
                 reject_reason, _reject_enum = "not_relevant", RejectReason.NOT_RELEVANT
-            reject_result = await async_build_reject_response_result(
+            reject_result = await build_reject_response_result(
                 reason=_reject_enum,
                 profile=state.profile,
                 response_language=language_context.response_language,
@@ -3352,7 +3342,7 @@ async def async_run_chat_pipeline(
                 ``guard_reject`` telemetry.
                 """
                 is_social_question = category == CATEGORY_SOCIAL_QUESTION
-                social_reply = await async_build_reject_response_result(
+                social_reply = await build_reject_response_result(
                     reason=(
                         RejectReason.SOCIAL_QUESTION
                         if is_social_question
@@ -3409,7 +3399,7 @@ async def async_run_chat_pipeline(
                     if _short_reason in (CATEGORY_SOCIAL, CATEGORY_SOCIAL_QUESTION):
                         return await _social_no_hits_result(_short_reason)
 
-                soft_reply = await async_build_reject_response_result(
+                soft_reply = await build_reject_response_result(
                     reason=RejectReason.REPHRASE_REQUEST,
                     profile=state.profile,
                     response_language=language_context.response_language,
@@ -3504,7 +3494,7 @@ async def async_run_chat_pipeline(
                 # in-language instead of returning an empty string. The
                 # handler also re-arms the rephrase tracker in that catch so
                 # the next turn doesn't loop on the same prompt.
-                fallback = await async_build_reject_response_result(
+                fallback = await build_reject_response_result(
                     reason=RejectReason.REPHRASE_REQUEST,
                     profile=state.profile,
                     response_language=language_context.response_language,
@@ -3535,7 +3525,7 @@ async def async_run_chat_pipeline(
                     **_fast_path_extras,
                 )
 
-            offtopic_reply = await async_build_reject_response_result(
+            offtopic_reply = await build_reject_response_result(
                 reason=RejectReason.NOT_RELEVANT,
                 profile=state.profile,
                 response_language=language_context.response_language,
@@ -3578,7 +3568,7 @@ async def async_run_chat_pipeline(
             and all(sim is not None for sim in retrieval.vector_similarities)
             and all(float(sim) < threshold for sim in retrieval.vector_similarities if sim is not None)
         ):
-            reject_result = await async_build_reject_response_result(
+            reject_result = await build_reject_response_result(
                 reason=RejectReason.LOW_RETRIEVAL_SCORE,
                 profile=state.profile,
                 response_language=language_context.response_language,
@@ -3775,8 +3765,7 @@ async def async_run_chat_pipeline(
                         },
                     )
                 try:
-                    _translation = await asyncio.to_thread(
-                        translate_text_result,
+                    _translation = await translate_text_result(
                         source_text=raw_answer,
                         target_language=_expected_lang,
                         api_key=api_key,

@@ -122,11 +122,12 @@ def _stub_guard_verdict(
 
 
 def _identity_localize(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _localize(**kwargs):
+        return LocalizationResult(text=kwargs["canonical_text"], tokens_used=0)
+
     monkeypatch.setattr(
         "backend.guards.reject_response.localize_text_result",
-        lambda **kwargs: LocalizationResult(
-            text=kwargs["canonical_text"], tokens_used=0
-        ),
+        _localize,
     )
 
 

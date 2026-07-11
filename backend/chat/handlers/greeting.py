@@ -46,7 +46,7 @@ def _resolve_product_name(
     return product_name or "this product"
 
 
-def _build_greeting_result(
+async def _build_greeting_result(
     *,
     product_name: str,
     response_language: str,
@@ -56,7 +56,7 @@ def _build_greeting_result(
         f"I'm the {product_name} assistant and can help with documentation, "
         "product setup, integrations, and finding the right information. Ask your question."
     )
-    return generate_greeting_in_language_result(
+    return await generate_greeting_in_language_result(
         product_name=product_name,
         target_language=response_language,
         api_key=api_key,
@@ -110,9 +110,29 @@ class GreetingHandler(PipelineHandler):
     async def handle(self, ctx: HandlerContext) -> ChatTurnOutcome:
         from backend.core.db import run_sync
 
-        return await run_sync(ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db))
+        product_name = await run_sync(
+            ctx.async_db,
+            lambda sync_db: _resolve_product_name(
+                tenant=ctx.tenant_row,
+                db=sync_db,
+                profile=ctx.tenant_profile,
+            ),
+        )
+        # Awaited natively on the event loop: the greeting generator makes an
+        # OpenAI call for non-English targets and must not run inside the
+        # run_sync greenlet (which lives on the loop thread).
+        greeting = await _build_greeting_result(
+            product_name=product_name,
+            response_language=ctx.language_context.response_language,
+            api_key=ctx.api_key,
+        )
+        return await run_sync(
+            ctx.async_db, lambda sync_db: self._handle_sync(ctx, sync_db, greeting)
+        )
 
-    def _handle_sync(self, ctx: HandlerContext, sync_db: Session) -> ChatTurnOutcome:
+    def _handle_sync(
+        self, ctx: HandlerContext, sync_db: Session, greeting: LocalizationResult
+    ) -> ChatTurnOutcome:
         # Lazy import: service.py imports the router at module load, so importing
         # the persistence helpers at module top would create a cycle.
         from backend.chat.service import (
@@ -121,15 +141,6 @@ class GreetingHandler(PipelineHandler):
         )
 
         ctx.db = sync_db
-        greeting = _build_greeting_result(
-            product_name=_resolve_product_name(
-                tenant=ctx.tenant_row,
-                db=sync_db,
-                profile=ctx.tenant_profile,
-            ),
-            response_language=ctx.language_context.response_language,
-            api_key=ctx.api_key,
-        )
 
         is_bootstrap = not ctx.question_text
         if is_bootstrap:

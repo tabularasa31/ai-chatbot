@@ -24,7 +24,7 @@ from backend.chat.history_service import (
     get_session_logs,
     list_chat_sessions,
 )
-from backend.chat.language import detect_language, localize_text_to_language_result
+from backend.chat.language import async_localize_text_to_language_result, detect_language
 from backend.chat.llm_unavailable import LlmFailureType, classify_llm_failure
 from backend.chat.schemas import (
     BadAnswerItem,
@@ -76,9 +76,12 @@ from backend.tenants.service import get_tenant_by_api_key, get_tenant_by_user
 logger = logging.getLogger(__name__)
 
 
-def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", api_key: str | None = None) -> str:
-    """Log the quota-exceeded event to Sentry and return the user-facing
-    error detail string (includes support email if known).
+def _notify_quota_exceeded(tenant: "Tenant", db: "Session") -> str:
+    """Log the quota-exceeded event to Sentry and return the canonical
+    (English) user-facing error detail string (includes support email if
+    known). Runs inside a ``run_sync`` greenlet on the event loop thread, so
+    it must not make provider calls — the caller localizes the returned text
+    via ``async_localize_text_to_language_result``.
 
     Tenant alert state + email are raised separately via ``apply_llm_failure``
     in a ``to_thread`` (off the event loop) — see the chat handler below.
@@ -105,15 +108,23 @@ def _notify_quota_exceeded(tenant: "Tenant", db: "Session", lang: str = "en", ap
     profile = db.get(TenantProfile, tenant.id)
     support_email: str | None = profile.support_email if profile else None
     contact = f" at {support_email}" if support_email else ""
-    canonical = (
+    return (
         "We're currently experiencing technical difficulties and are unable to respond via chat. "
         f"We apologize for the inconvenience — please contact our support team{contact} by email."
     )
-    return localize_text_to_language_result(
+
+
+async def _quota_exceeded_detail(
+    tenant: "Tenant", db: "AsyncSession", *, lang: str, api_key: str | None
+) -> str:
+    """Sentry notification + localized user-facing detail for the 402 path."""
+    canonical = await run_sync(db, lambda s: _notify_quota_exceeded(tenant, s))
+    result = await async_localize_text_to_language_result(
         canonical_text=canonical,
         target_language=lang,
         api_key=api_key,
-    ).text
+    )
+    return result.text
 
 
 chat_router = APIRouter(tags=["chat"])
@@ -212,9 +223,8 @@ async def chat(
         except RateLimitError as exc:
             if is_quota_exceeded(exc):
                 lang = detect_language(body.question).detected_language
-                detail = await run_sync(
-                    db,
-                    lambda s: _notify_quota_exceeded(tenant, s, lang=lang, api_key=tenant.openai_api_key),
+                detail = await _quota_exceeded_detail(
+                    tenant, db, lang=lang, api_key=tenant.openai_api_key
                 )
                 # Raise the tenant-level alert + throttled email off the
                 # event loop (sync httpx + DB inside).
@@ -299,11 +309,8 @@ async def chat_escalate(
     except RateLimitError as exc:
         if is_quota_exceeded(exc):
             lang = detect_language(body.user_note).detected_language if body.user_note else "en"
-            detail = await run_sync(
-                db,
-                lambda s: _notify_quota_exceeded(
-                    tenant, s, lang=lang, api_key=tenant.openai_api_key
-                ),
+            detail = await _quota_exceeded_detail(
+                tenant, db, lang=lang, api_key=tenant.openai_api_key
             )
             raise HTTPException(status_code=402, detail=detail) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None

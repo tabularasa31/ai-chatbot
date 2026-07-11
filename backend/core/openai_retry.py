@@ -16,6 +16,26 @@ Each fires exactly once per real retry. Per-turn retry rate =
 ``<one of the above> / count(chat turns)``. Do NOT sum a per-attempt counter
 like ``attempt - 1`` — summed across the attempt events of one call it
 double-counts (0+1+2 = 3 for a call that retried twice).
+
+``openai_retry.exhausted`` does NOT imply any retry happened. It commonly
+fires at ``final_attempt=1`` with no preceding ``retry_scheduled`` /
+``is_retry=true`` — e.g. an ``APITimeoutError`` (reason ``timeout_no_retry``:
+retrying a call that already burned the client timeout only doubles
+user-facing latency under the per-turn budget), a ``retry-after`` that
+exceeds the whole budget (``rate_limit_over_budget``), or any transient
+failure at a call site that passed ``max_attempts=1`` to disable retries
+(reason ``max_attempts``, still attempt 1). So ``count(exhausted) > 0`` while
+``count(attempt WHERE is_retry=true) = 0`` is EXPECTED, not a tracking bug.
+
+To decide whether retries actually ran, use ``final_attempt > 1`` (equal to
+``attempt_count``) or ``count(attempt WHERE is_retry=true)`` — NOT the
+``reason`` bucket. ``reason`` explains *why the loop stopped*, not *how many
+attempts ran*: ``max_attempts`` fires on attempt 1 when retries are disabled,
+and ``timeout_no_retry`` / ``rate_limit_over_budget`` can carry
+``final_attempt > 1`` when a non-retryable failure lands on a later attempt
+after an earlier transient one already retried. Breaking ``exhausted`` down by
+``reason`` is still useful for *categorizing* failures, but gate any "lost
+retries" chart/alert on ``final_attempt > 1`` (or ``is_retry=true``).
 """
 
 from __future__ import annotations

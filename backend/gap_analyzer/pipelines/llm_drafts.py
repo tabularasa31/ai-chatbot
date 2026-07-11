@@ -1,10 +1,10 @@
 """LLM-backed FAQ draft generation for Mode B gap clusters.
 
-Generate / refine paths are sync in V1; an SSE-streaming variant lands in E2.
-The output is always a structured ``DraftPayload`` (title, question, markdown)
-in the tenant's preferred language. Generation never publishes — the draft is
-stored on the cluster and only an explicit admin click promotes it into
-``tenant_faq``.
+Generate / refine paths are async (AsyncOpenAI); an SSE-streaming variant
+lands in E2. The output is always a structured ``DraftPayload`` (title,
+question, markdown) in the tenant's preferred language. Generation never
+publishes — the draft is stored on the cluster and only an explicit admin
+click promotes it into ``tenant_faq``.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass
 
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client
+from backend.core.openai_client import get_async_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +88,7 @@ def _parse_draft_payload(raw: str) -> DraftContent:
     return DraftContent(title=title, question=question, markdown=markdown)
 
 
-def generate_draft(
+async def generate_draft(
     *,
     encrypted_api_key: str,
     label: str,
@@ -103,7 +103,7 @@ def generate_draft(
     and to persist the result. This function does no I/O beyond the OpenAI call.
     """
     output_language = _normalize_language(language)
-    client = get_openai_client(encrypted_api_key, timeout=30.0)
+    client = get_async_openai_client(encrypted_api_key, timeout=30.0)
     user_prompt = (
         f"Topic label: {label}\n"
         f"Coverage score: {coverage_score if coverage_score is not None else 'unknown'}\n"
@@ -112,7 +112,7 @@ def generate_draft(
         f"Output language: {output_language}\n"
         "Return JSON with title, question, markdown."
     )
-    response = client.chat.completions.create(
+    response = await client.chat.completions.create(
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": _FAQ_DRAFT_SYSTEM},
@@ -125,7 +125,7 @@ def generate_draft(
     return _parse_draft_payload(raw_content)
 
 
-def refine_draft(
+async def refine_draft(
     *,
     encrypted_api_key: str,
     current_title: str,
@@ -138,7 +138,7 @@ def refine_draft(
 ) -> DraftContent:
     """Revise an existing draft according to the admin's guidance."""
     output_language = _normalize_language(language)
-    client = get_openai_client(encrypted_api_key, timeout=30.0)
+    client = get_async_openai_client(encrypted_api_key, timeout=30.0)
     user_prompt = (
         f"Cluster topic: {label}\n"
         f"Example customer questions:\n{_format_questions(example_questions)}\n\n"
@@ -149,7 +149,7 @@ def refine_draft(
         f"Admin guidance: {guidance.strip()}\n\n"
         "Return JSON with title, question, markdown."
     )
-    response = client.chat.completions.create(
+    response = await client.chat.completions.create(
         model=settings.extraction_model,
         messages=[
             {"role": "system", "content": _FAQ_REFINE_SYSTEM},

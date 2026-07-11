@@ -65,7 +65,7 @@ Gap Analyzer orchestration is backed by durable `gap_analyzer_jobs` rows with cl
 
 ## Guards (`backend/guards/`)
 
-Every chat turn passes through two synchronous guards **before** LLM generation. Either guard can short-circuit the request with a reject response.
+Every chat turn passes through two guards **before** LLM generation (async, awaited in the chat pipeline). Either guard can short-circuit the request with a reject response.
 
 | Guard | File | What it does |
 |---|---|---|

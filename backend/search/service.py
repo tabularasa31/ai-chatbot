@@ -19,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session, selectinload
 
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client, get_openai_client
-from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.knowledge.entity_extractor import extract_entities_from_query
 from backend.models import Document, Embedding, Tenant
 from backend.observability import TraceHandle
@@ -1191,57 +1191,6 @@ def _build_semantic_rewrite_prompt(query: str, dialog_context: str | None) -> st
     return _SEMANTIC_REWRITE_PROMPT_PREFIX + query + _SEMANTIC_REWRITE_PROMPT_SUFFIX
 
 
-def semantic_query_rewrite(
-    query: str,
-    *,
-    api_key: str,
-    timeout: float = 2.0,
-    bot_id: str | None = None,
-    langfuse_observation: Any | None = None,
-    dialog_context: str | None = None,
-) -> str | None:
-    """LLM-based semantic rewrite: user symptom → feature/product terminology.
-
-    Bridges the semantic gap between how users describe problems ("bot replies
-    only in Russian") and how documentation describes features ("language
-    detection multilingual settings"). Language-agnostic: the LLM stays in
-    the same language as the query so the multilingual embedding model can
-    match chunks regardless of what language the docs are in.
-
-    When ``dialog_context`` is provided (rendered by
-    ``backend.chat.followup.build_dialog_context``), the model additionally
-    resolves conversational continuations ("yes, how do I check?") into a
-    standalone query against the prior turns, and ignores the history for
-    self-contained questions.
-
-    Returns None on any failure so the caller degrades gracefully to lexical
-    variants only. Used for vector retrieval only, not BM25.
-    """
-    if not query or not api_key:
-        return None
-    prompt = _build_semantic_rewrite_prompt(query, dialog_context)
-    try:
-        client = get_openai_client(api_key, timeout=timeout)
-        response = call_openai_with_retry(
-            "semantic_query_rewrite",
-            lambda: client.chat.completions.create(
-                model=settings.query_rewrite_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
-            ),
-            bot_id=bot_id,
-            langfuse_observation=langfuse_observation,
-        )
-        rewrite = (response.choices[0].message.content or "").strip()
-        # Sanity: non-empty, single line, not too long
-        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
-            return rewrite
-    except Exception:
-        pass
-    return None
-
-
 # ── Cross-lingual retrieval helpers ──────────────────────────────────────────
 
 # module-level caches: str(tenant_id) -> (value, monotonic_ts)
@@ -1272,208 +1221,11 @@ def _language_to_script_bucket(language: str | None) -> str | None:
     return None
 
 
-def _kb_bucket_counts_from_languages(
-    tenant_id: uuid.UUID, db: Session
-) -> dict[str, int] | None:
-    """Count documents by script bucket using ``Document.language``.
-
-    Returns ``None`` when no rows have a non-null language — callers can then
-    fall back to chunk sampling for backward compatibility with KBs indexed
-    before parse-time language detection landed.
-    """
-    try:
-        rows: list[tuple[str | None]] = (
-            db.query(Document.language)
-            .filter(Document.tenant_id == tenant_id)
-            .filter(Document.language.isnot(None))
-            .all()
-        )
-    except Exception:
-        return None
-    if not rows:
-        return None
-    counts: dict[str, int] = {}
-    for (lang,) in rows:
-        bucket = _language_to_script_bucket(lang)
-        if bucket is None:
-            continue
-        counts[bucket] = counts.get(bucket, 0) + 1
-    return counts
-
-
-def _kb_bucket_counts_from_chunk_sample(
-    tenant_id: uuid.UUID, db: Session
-) -> dict[str, int] | None:
-    """Legacy fallback: sample chunk text when no Document.language is set."""
-    try:
-        sample: list[tuple[str]] = (
-            db.query(Embedding.chunk_text)
-            .join(Document, Embedding.document_id == Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .limit(_KB_SCRIPT_SAMPLE_SIZE)
-            .all()
-        )
-    except Exception:
-        return None
-    if not sample:
-        return None
-    counts: dict[str, int] = {}
-    for (chunk_text,) in sample:
-        bucket = detect_query_script_bucket(chunk_text or "")
-        if bucket in ("cyrillic", "latin"):
-            counts[bucket] = counts.get(bucket, 0) + 1
-    return counts
-
-
-def _tenant_has_unlabeled_documents(
-    tenant_id: uuid.UUID, db: Session
-) -> bool:
-    """True when at least one document for this tenant has language IS NULL.
-
-    Used to decide whether labeled-only counts can be trusted: a partially
-    labeled KB (legacy unlabeled rows + a few new uploads with language set)
-    must still consider the unlabeled half, otherwise a single new EN doc
-    on top of 100 legacy RU docs misclassifies the KB as Latin-only.
-    """
-    try:
-        return (
-            db.query(Document.id)
-            .filter(Document.tenant_id == tenant_id)
-            .filter(Document.language.is_(None))
-            .limit(1)
-            .first()
-            is not None
-        )
-    except Exception:
-        return False
-
-
-def _resolve_kb_bucket_counts(
-    tenant_id: uuid.UUID, db: Session
-) -> dict[str, int]:
-    """Return per-bucket document counts, preferring stored Document.language.
-
-    When the KB is partially labeled (some documents still NULL after the
-    add_documents_language_v1 migration), augment the labeled counts with a
-    chunk sample so unlabeled legacy documents are not silently dropped.
-    """
-    labeled = _kb_bucket_counts_from_languages(tenant_id, db)
-    if labeled is None:
-        # Pure legacy KB — no documents have language stored.
-        return _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
-    if not _tenant_has_unlabeled_documents(tenant_id, db):
-        # Fully labeled — labeled counts are authoritative.
-        return labeled
-    # Partial labeling — merge with chunk sample so unlabeled docs still
-    # contribute to bucket detection.
-    sampled = _kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
-    merged = dict(labeled)
-    for bucket, count in sampled.items():
-        merged[bucket] = merged.get(bucket, 0) + count
-    return merged
-
-
-def detect_tenant_kb_script(tenant_id: uuid.UUID, db: Session) -> str | None:
-    """Return the predominant script bucket of a tenant's KB.
-
-    Backed by ``Document.language`` written at parse time; falls back to chunk
-    sampling for KBs that pre-date parse-time detection. Cached per tenant to
-    avoid a DB round-trip on every chat turn. Returns None when no documents
-    map to a known script bucket.
-    """
-    key = str(tenant_id)
-    now = time.monotonic()
-    cached = _TENANT_KB_SCRIPT_CACHE.get(key)
-    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
-        return cached[0]
-
-    counts = _resolve_kb_bucket_counts(tenant_id, db)
-    result: str | None = None
-    if counts:
-        dominant = max(counts, key=counts.__getitem__)
-        if dominant in ("cyrillic", "latin"):
-            result = dominant
-
-    _TENANT_KB_SCRIPT_CACHE[key] = (result, now)
-    return result
-
-
-def detect_tenant_kb_scripts(
-    tenant_id: uuid.UUID, db: Session
-) -> frozenset[str]:
-    """Return every script bucket present in the tenant's KB.
-
-    Mirrors :func:`detect_tenant_kb_script` but returns the full set so
-    callers can issue cross-lingual rewrites for *each* KB language a query
-    does not natively cover (mixed EN+RU KBs in particular).
-    """
-    key = str(tenant_id)
-    now = time.monotonic()
-    cached = _TENANT_KB_SCRIPTS_CACHE.get(key)
-    if cached is not None and now - cached[1] < _TENANT_KB_SCRIPT_CACHE_TTL:
-        return cached[0]
-
-    counts = _resolve_kb_bucket_counts(tenant_id, db)
-    result = frozenset(b for b in counts if b in ("cyrillic", "latin"))
-    _TENANT_KB_SCRIPTS_CACHE[key] = (result, now)
-    return result
-
-
 def invalidate_tenant_kb_script_cache(tenant_id: uuid.UUID) -> None:
     """Drop the cached KB scripts for this tenant (call after document upload/delete)."""
     key = str(tenant_id)
     _TENANT_KB_SCRIPT_CACHE.pop(key, None)
     _TENANT_KB_SCRIPTS_CACHE.pop(key, None)
-
-
-def semantic_query_rewrite_for_kb(
-    query: str,
-    *,
-    kb_script: str,
-    api_key: str,
-    timeout: float = 2.0,
-    bot_id: str | None = None,
-    langfuse_observation: Any | None = None,
-) -> str | None:
-    """Rewrite the user query in the language of the knowledge base.
-
-    Used when the query language and KB language differ (e.g. English query
-    against a Cyrillic corpus).  Generates a KB-language variant that is added
-    to the vector query pool so embeddings match same-language chunks more
-    reliably.  Fails silently — returns None on any error.
-    """
-    lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
-    if not lang_name or not query or not api_key:
-        return None
-    prompt = (
-        _SEMANTIC_REWRITE_PROMPT_PREFIX
-        + query
-        + "\"\n\n"
-        "Write a short technical search query (5-10 words) using product feature "
-        "terminology and technical concepts that would retrieve the relevant "
-        f"documentation. Focus on the FEATURE or SETTING being asked about, not "
-        f"the user's symptom. Output ONLY in {lang_name}, regardless of the input "
-        "language. Reply with ONLY the search query, nothing else."
-    )
-    try:
-        client = get_openai_client(api_key, timeout=timeout)
-        response = call_openai_with_retry(
-            "semantic_query_rewrite_for_kb",
-            lambda: client.chat.completions.create(
-                model=settings.query_rewrite_model,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_completion_tokens=_SEMANTIC_REWRITE_MAX_TOKENS,
-            ),
-            bot_id=bot_id,
-            langfuse_observation=langfuse_observation,
-        )
-        rewrite = (response.choices[0].message.content or "").strip()
-        if rewrite and "\n" not in rewrite and len(rewrite) <= 200:
-            return rewrite
-    except Exception:
-        pass
-    return None
 
 
 def _normalize_query_variants(values: list[str]) -> list[str]:
@@ -1490,80 +1242,6 @@ def _normalize_query_variants(values: list[str]) -> list[str]:
         seen.add(key)
         variants.append(normalized)
     return variants
-
-
-def embed_query(
-    query: str,
-    *,
-    api_key: str,
-    timeout: float | None = None,
-    max_attempts: int | None = None,
-    langfuse_observation: Any | None = None,
-) -> list[float]:
-    """
-    Embed a search query using OpenAI embeddings API.
-
-    Args:
-        query: Text to embed.
-        api_key: OpenAI API key.
-        timeout: Optional HTTP timeout (seconds); defaults to global OpenAI timeout.
-        max_attempts: Override retry attempts (pass 1 to disable retries).
-
-    Returns:
-        1536-dimensional embedding vector.
-    """
-    cached = _emb_cache.get(query)
-    if cached is not None:
-        return cached
-    openai_client = get_openai_client(api_key, timeout=timeout)
-    response = call_openai_with_retry(
-        "search_embed_query",
-        lambda: openai_client.embeddings.create(
-            model=settings.embedding_model,
-            input=query,
-        ),
-        call_type="embedding",
-        max_attempts=max_attempts,
-        langfuse_observation=langfuse_observation,
-    )
-    vector = response.data[0].embedding
-    _emb_cache.put(query, vector)
-    return vector
-
-
-def embed_queries(
-    queries: list[str],
-    *,
-    api_key: str,
-    timeout: float | None = None,
-    langfuse_observation: Any | None = None,
-) -> list[list[float]]:
-    """Embed multiple search queries in one OpenAI API round-trip.
-
-    Vectors for texts already in the in-process cache are returned without
-    an API call; only unique cache misses are sent to OpenAI as a single batch.
-    """
-    if not queries:
-        return []
-    cached_map: dict[str, list[float] | None] = {q: _emb_cache.get(q) for q in queries}
-    misses = [q for q in queries if cached_map[q] is None]
-    if not misses:
-        return [cached_map[q] for q in queries]  # type: ignore[return-value]
-    unique_misses = list(dict.fromkeys(misses))
-    openai_client = get_openai_client(api_key, timeout=timeout)
-    response = call_openai_with_retry(
-        "search_embed_queries",
-        lambda: openai_client.embeddings.create(
-            model=settings.embedding_model,
-            input=unique_misses,
-        ),
-        call_type="embedding",
-        langfuse_observation=langfuse_observation,
-    )
-    for text, item in zip(unique_misses, response.data, strict=True):
-        _emb_cache.put(text, item.embedding)
-        cached_map[text] = item.embedding
-    return [cached_map[q] for q in queries]  # type: ignore[return-value]
 
 
 def _bm25_score_candidates_with_signal(
@@ -2394,7 +2072,11 @@ async def async_embed_query(
     max_attempts: int | None = None,
     langfuse_observation: Any | None = None,
 ) -> list[float]:
-    """Async counterpart of :func:`embed_query`."""
+    """Embed a search query using the OpenAI embeddings API.
+
+    Returns the cached vector when the query text was embedded before;
+    otherwise makes one embeddings call and caches the result.
+    """
     cached = _emb_cache.get(query)
     if cached is not None:
         return cached
@@ -2421,7 +2103,7 @@ async def async_embed_queries(
     timeout: float | None = None,
     langfuse_observation: Any | None = None,
 ) -> list[list[float]]:
-    """Async counterpart of :func:`embed_queries`.
+    """Embed multiple search queries in one OpenAI API round-trip.
 
     Vectors for texts already in the in-process cache are returned without
     an API call; only unique cache misses are sent to OpenAI as a single batch.
@@ -2469,7 +2151,23 @@ async def async_semantic_query_rewrite(
     langfuse_observation: Any | None = None,
     dialog_context: str | None = None,
 ) -> str | None:
-    """Async counterpart of :func:`semantic_query_rewrite`."""
+    """LLM-based semantic rewrite: user symptom → feature/product terminology.
+
+    Bridges the semantic gap between how users describe problems ("bot replies
+    only in Russian") and how documentation describes features ("language
+    detection multilingual settings"). Language-agnostic: the LLM stays in
+    the same language as the query so the multilingual embedding model can
+    match chunks regardless of what language the docs are in.
+
+    When ``dialog_context`` is provided (rendered by
+    ``backend.chat.followup.build_dialog_context``), the model additionally
+    resolves conversational continuations ("yes, how do I check?") into a
+    standalone query against the prior turns, and ignores the history for
+    self-contained questions.
+
+    Returns None on any failure so the caller degrades gracefully to lexical
+    variants only. Used for vector retrieval only, not BM25.
+    """
     if not query or not api_key:
         return None
     prompt = _build_semantic_rewrite_prompt(query, dialog_context)
@@ -2503,7 +2201,13 @@ async def async_semantic_query_rewrite_for_kb(
     bot_id: str | None = None,
     langfuse_observation: Any | None = None,
 ) -> str | None:
-    """Async counterpart of :func:`semantic_query_rewrite_for_kb`."""
+    """Rewrite the user query in the language of the knowledge base.
+
+    Used when the query language and KB language differ (e.g. English query
+    against a Cyrillic corpus).  Generates a KB-language variant that is added
+    to the vector query pool so embeddings match same-language chunks more
+    reliably.  Fails silently — returns None on any error.
+    """
     lang_name = _SCRIPT_TO_LANGUAGE_NAME.get(kb_script)
     if not lang_name or not query or not api_key:
         return None
@@ -2746,6 +2450,12 @@ async def _async_tenant_has_embeddings(
 async def _async_kb_bucket_counts_from_languages(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> dict[str, int] | None:
+    """Count documents by script bucket using ``Document.language``.
+
+    Returns ``None`` when no rows have a non-null language — callers can then
+    fall back to chunk sampling for backward compatibility with KBs indexed
+    before parse-time language detection landed.
+    """
     try:
         stmt = (
             select(Document.language)
@@ -2770,6 +2480,7 @@ async def _async_kb_bucket_counts_from_languages(
 async def _async_kb_bucket_counts_from_chunk_sample(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> dict[str, int] | None:
+    """Legacy fallback: sample chunk text when no Document.language is set."""
     try:
         stmt = (
             select(Embedding.chunk_text)
@@ -2794,6 +2505,13 @@ async def _async_kb_bucket_counts_from_chunk_sample(
 async def _async_tenant_has_unlabeled_documents(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> bool:
+    """True when at least one document for this tenant has language IS NULL.
+
+    Used to decide whether labeled-only counts can be trusted: a partially
+    labeled KB (legacy unlabeled rows + a few new uploads with language set)
+    must still consider the unlabeled half, otherwise a single new EN doc
+    on top of 100 legacy RU docs misclassifies the KB as Latin-only.
+    """
     try:
         stmt = (
             select(Document.id)
@@ -2810,11 +2528,21 @@ async def _async_tenant_has_unlabeled_documents(
 async def _async_resolve_kb_bucket_counts(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> dict[str, int]:
+    """Return per-bucket document counts, preferring stored Document.language.
+
+    When the KB is partially labeled (some documents still NULL after the
+    add_documents_language_v1 migration), augment the labeled counts with a
+    chunk sample so unlabeled legacy documents are not silently dropped.
+    """
     labeled = await _async_kb_bucket_counts_from_languages(tenant_id, db)
     if labeled is None:
+        # Pure legacy KB — no documents have language stored.
         return await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
     if not await _async_tenant_has_unlabeled_documents(tenant_id, db):
+        # Fully labeled — labeled counts are authoritative.
         return labeled
+    # Partial labeling — merge with chunk sample so unlabeled docs still
+    # contribute to bucket detection.
     sampled = await _async_kb_bucket_counts_from_chunk_sample(tenant_id, db) or {}
     merged = dict(labeled)
     for bucket, count in sampled.items():
@@ -2825,7 +2553,13 @@ async def _async_resolve_kb_bucket_counts(
 async def async_detect_tenant_kb_script(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> str | None:
-    """Async counterpart of :func:`detect_tenant_kb_script`."""
+    """Return the predominant script bucket of a tenant's KB.
+
+    Backed by ``Document.language`` written at parse time; falls back to chunk
+    sampling for KBs that pre-date parse-time detection. Cached per tenant to
+    avoid a DB round-trip on every chat turn. Returns None when no documents
+    map to a known script bucket.
+    """
     key = str(tenant_id)
     now = time.monotonic()
     cached = _TENANT_KB_SCRIPT_CACHE.get(key)
@@ -2846,7 +2580,12 @@ async def async_detect_tenant_kb_script(
 async def async_detect_tenant_kb_scripts(
     tenant_id: uuid.UUID, db: AsyncSession
 ) -> frozenset[str]:
-    """Async counterpart of :func:`detect_tenant_kb_scripts`."""
+    """Return every script bucket present in the tenant's KB.
+
+    Mirrors :func:`async_detect_tenant_kb_script` but returns the full set so
+    callers can issue cross-lingual rewrites for *each* KB language a query
+    does not natively cover (mixed EN+RU KBs in particular).
+    """
     key = str(tenant_id)
     now = time.monotonic()
     cached = _TENANT_KB_SCRIPTS_CACHE.get(key)

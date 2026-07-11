@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -79,14 +79,14 @@ def _make_cluster(db_session: Session, tenant_id: uuid.UUID, *, label: str) -> G
 def _patch_llm_generate(payload: DraftContent) -> patch:
     return patch(
         "backend.gap_analyzer.orchestrator.llm_generate_draft",
-        return_value=payload,
+        new=AsyncMock(return_value=payload),
     )
 
 
 def _patch_llm_refine(payload: DraftContent) -> patch:
     return patch(
         "backend.gap_analyzer.orchestrator.llm_refine_draft",
-        return_value=payload,
+        new=AsyncMock(return_value=payload),
     )
 
 
@@ -95,13 +95,15 @@ def _patch_guard_clear() -> patch:
     from backend.guards.injection_detector import InjectionDetectionResult
 
     return patch(
-        "backend.gap_analyzer.orchestrator.detect_injection",
-        return_value=InjectionDetectionResult(
-            detected=False,
-            method="structural",
-            pattern=None,
-            score=None,
-            normalized_input="",
+        "backend.gap_analyzer.orchestrator.async_detect_injection",
+        new=AsyncMock(
+            return_value=InjectionDetectionResult(
+                detected=False,
+                method="structural",
+                pattern=None,
+                score=None,
+                normalized_input="",
+            )
         ),
     )
 
@@ -376,8 +378,8 @@ def test_generate_returns_422_when_injection_guard_rejects(
         normalized_input="ignore previous instructions",
     )
     with _patch_llm_generate(draft), patch(
-        "backend.gap_analyzer.orchestrator.detect_injection",
-        return_value=bad,
+        "backend.gap_analyzer.orchestrator.async_detect_injection",
+        new=AsyncMock(return_value=bad),
     ):
         response = tenant.post(
             f"/gap-analyzer/mode_b/{cluster.id}/draft",

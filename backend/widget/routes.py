@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome
 from backend.chat.handlers.rag import _CitationStreamFilter
-from backend.chat.language import localize_text_to_language_result
+from backend.chat.language import async_localize_text_to_language_result
 from backend.chat.llm_unavailable import classify_llm_failure
 from backend.chat.llm_unavailable_copy import fallback_text
 from backend.chat.rotation import should_rotate
@@ -117,71 +117,56 @@ def widget_health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-def _link_safety_labels(
+async def _link_safety_labels(
     locale: str | None,
     *,
     encrypted_api_key: str | None,
     tenant_id: str,
     bot_id: str,
 ) -> WidgetLinkSafetyLabels:
-    # Documented sync consumer of ``localize_text_to_language_result``: this
-    # runs inside the sync ``widget_config`` endpoint on a FastAPI threadpool
-    # thread, so the blocking localization call cannot stall the event loop.
     target_language = sanitize_locale(locale)
     labels = _default_link_safety_labels()
     if not target_language:
         return labels
 
+    async def localize(canonical_text: str) -> str:
+        result = await async_localize_text_to_language_result(
+            canonical_text=canonical_text,
+            target_language=target_language,
+            api_key=encrypted_api_key,
+            fallback_locale=target_language,
+            operation="widget_link_safety_localize",
+            tenant_id=tenant_id,
+            bot_id=bot_id,
+        )
+        return result.text
+
+    title, body, continue_label, cancel_label = await asyncio.gather(
+        localize(labels.title),
+        localize(labels.body),
+        localize(labels.continue_label),
+        localize(labels.cancel_label),
+    )
     return WidgetLinkSafetyLabels(
-        title=localize_text_to_language_result(
-            canonical_text=labels.title,
-            target_language=target_language,
-            api_key=encrypted_api_key,
-            fallback_locale=target_language,
-            operation="widget_link_safety_localize",
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-        ).text,
-        body=localize_text_to_language_result(
-            canonical_text=labels.body,
-            target_language=target_language,
-            api_key=encrypted_api_key,
-            fallback_locale=target_language,
-            operation="widget_link_safety_localize",
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-        ).text,
-        continue_label=localize_text_to_language_result(
-            canonical_text=labels.continue_label,
-            target_language=target_language,
-            api_key=encrypted_api_key,
-            fallback_locale=target_language,
-            operation="widget_link_safety_localize",
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-        ).text,
-        cancel_label=localize_text_to_language_result(
-            canonical_text=labels.cancel_label,
-            target_language=target_language,
-            api_key=encrypted_api_key,
-            fallback_locale=target_language,
-            operation="widget_link_safety_localize",
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-        ).text,
+        title=title,
+        body=body,
+        continue_label=continue_label,
+        cancel_label=cancel_label,
     )
 
 
 @widget_router.get("/config", response_model=WidgetConfigResponse)
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
-def widget_config(
+async def widget_config(
     request: Request,
     bot_id: Annotated[str, Query(description="Bot public ID")],
     locale: Annotated[str | None, Query(description="Browser locale hint (e.g. ru-RU)")] = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> WidgetConfigResponse:
     try:
-        bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+        bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise HTTPException(status_code=404, detail="Bot not found") from e
@@ -194,7 +179,7 @@ def widget_config(
 
     allowed_domains = bot.allowed_domains if isinstance(bot.allowed_domains, list) else []
     labels = (
-        _link_safety_labels(
+        await _link_safety_labels(
             locale,
             encrypted_api_key=tenant.openai_api_key,
             tenant_id=str(tenant.id),

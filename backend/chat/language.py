@@ -3,15 +3,14 @@ from __future__ import annotations
 import logging
 import re
 import time
-import warnings
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client, get_openai_client
-from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.observability.metrics import capture_event
 
 logger = logging.getLogger(__name__)
@@ -959,7 +958,7 @@ def _localize_to_language_fast_path(
     api_key: str | None,
     operation: str,
 ) -> LocalizationResult | None:
-    """Shared no-LLM short-circuits for localize_text_to_language_result.
+    """Shared no-LLM short-circuits for async_localize_text_to_language_result.
 
     Returns the passthrough result when no provider call is needed
     (empty input, missing key, English target, or text already in the
@@ -975,44 +974,6 @@ def _localize_to_language_fast_path(
         log_llm_tokens(operation=operation, target_language=normalized_target, tokens=0)
         return LocalizationResult(text=canonical_text, tokens_used=0)
     return None
-
-
-def localize_text_to_language_result(
-    *,
-    canonical_text: str,
-    target_language: str | None,
-    api_key: str | None,
-    fallback_locale: str | None = None,
-    operation: str = "localize_to_language",
-    tenant_id: str | None = None,
-    bot_id: str | None = None,
-    chat_id: str | None = None,
-) -> LocalizationResult:
-    """Sync variant, kept ONLY for sync HTTP endpoints that run in the
-    FastAPI threadpool (backend/widget/routes.py link-safety labels).
-    Everything on the async chat path must use
-    :func:`async_localize_text_to_language_result` instead — this one makes
-    a blocking OpenAI call and would freeze the event loop.
-    """
-    normalized_target = _resolve_localize_target(target_language, fallback_locale)
-    fast = _localize_to_language_fast_path(
-        canonical_text=canonical_text,
-        normalized_target=normalized_target,
-        api_key=api_key,
-        operation=operation,
-    )
-    if fast is not None:
-        return fast
-
-    return _invoke_localize_llm(
-        canonical_text=canonical_text,
-        target_language=normalized_target,
-        api_key=api_key,
-        operation=operation,
-        tenant_id=tenant_id,
-        bot_id=bot_id,
-        chat_id=chat_id,
-    )
 
 
 async def async_localize_text_to_language_result(
@@ -1041,39 +1002,6 @@ async def async_localize_text_to_language_result(
         target_language=normalized_target,
         api_key=api_key,
         operation=operation,
-        tenant_id=tenant_id,
-        bot_id=bot_id,
-        chat_id=chat_id,
-    )
-
-
-def localize_text_to_question_language_result(
-    *,
-    canonical_text: str,
-    question: str | None,
-    api_key: str | None,
-    fallback_locale: str | None = None,
-    tenant_id: str | None = None,
-    bot_id: str | None = None,
-    chat_id: str | None = None,
-) -> LocalizationResult:
-    warnings.warn(
-        "localize_text_to_question_language_result is deprecated; resolve language via "
-        "resolve_language_context and call localize_text_to_language_result",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    detected = detect_language(question or "")
-    target_language = (
-        detected.detected_language
-        if detected.is_reliable and detected.detected_language != "unknown"
-        else fallback_locale
-    )
-    return localize_text_to_language_result(
-        canonical_text=canonical_text,
-        target_language=target_language,
-        api_key=api_key,
-        fallback_locale=fallback_locale,
         tenant_id=tenant_id,
         bot_id=bot_id,
         chat_id=chat_id,
@@ -1136,46 +1064,6 @@ def _localize_result_from_response(
         chat_id=chat_id,
     )
     return LocalizationResult(text=output_text, tokens_used=tokens_used)
-
-
-def _invoke_localize_llm(
-    *,
-    canonical_text: str,
-    target_language: str,
-    api_key: str | None,
-    operation: str,
-    tenant_id: str | None = None,
-    bot_id: str | None = None,
-    chat_id: str | None = None,
-    langfuse_observation: Any | None = None,
-) -> LocalizationResult:
-    """Blocking localization call — see localize_text_to_language_result for
-    why a sync path survives at all."""
-    started_at = time.monotonic()
-    try:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
-            operation,
-            lambda: client.chat.completions.create(
-                model=settings.localization_model,
-                temperature=0,
-                messages=_localize_llm_messages(canonical_text, target_language),
-            ),
-            langfuse_observation=langfuse_observation,
-        )
-        return _localize_result_from_response(
-            response,
-            canonical_text=canonical_text,
-            target_language=target_language,
-            operation=operation,
-            started_at=started_at,
-            tenant_id=tenant_id,
-            bot_id=bot_id,
-            chat_id=chat_id,
-        )
-    except Exception as exc:
-        logger.warning("Localization failed; using canonical text: %s", exc)
-        return LocalizationResult(text=canonical_text, tokens_used=0)
 
 
 async def _async_invoke_localize_llm(

@@ -1,7 +1,7 @@
 # ruff: noqa: RUF001
 """Static i18n table for LLM-unavailable copy.
 
-Why static (and not localize_text_to_language_result): the localize helper
+Why static (and not async_localize_text_to_language_result): the localize helper
 itself calls the LLM, which is precisely what is broken in this code path.
 A small lookup table is the only reliable way to surface a fallback string
 when OpenAI is unreachable.

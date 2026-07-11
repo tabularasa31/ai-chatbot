@@ -11,10 +11,9 @@ from backend.chat.language import (
     LanguageDetectionResult,
     LangDetectError,
     LocalizationResult,
+    async_localize_text_to_language_result,
     detect_language,
     localize_text_result,
-    localize_text_to_language_result,
-    localize_text_to_question_language_result,
     render_direct_faq_answer_result,
     resolve_language_context,
 )
@@ -126,83 +125,84 @@ async def test_build_reject_response_uses_canonical_english_without_question() -
 
 
 # ---------------------------------------------------------------------------
-# localize_text_to_language_result
+# async_localize_text_to_language_result
 # ---------------------------------------------------------------------------
 
 
-def test_localize_to_language_falls_back_to_locale_hint_when_target_missing(
+class _FakeAsyncLocalizeClient:
+    """Async OpenAI stub capturing the chat.completions.create kwargs."""
+
+    def __init__(self, captured: dict[str, object]) -> None:
+        outer = self
+
+        class _Completions:
+            @staticmethod
+            async def create(**kwargs: object) -> Mock:
+                outer.captured.update(kwargs)
+                return Mock(
+                    choices=[Mock(message=Mock(content="Bonjour"))],
+                    usage=Mock(total_tokens=21),
+                )
+
+        class _Chat:
+            completions = _Completions()
+
+        self.captured = captured
+        self.chat = _Chat()
+
+
+@pytest.mark.asyncio
+async def test_localize_to_language_falls_back_to_locale_hint_when_target_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_messages: list[dict[str, str]] = []
-
-    class FakeClient:
-        class chat:
-            class completions:
-                @staticmethod
-                def create(**kwargs: object) -> Mock:
-                    nonlocal captured_messages
-                    captured_messages = kwargs["messages"]  # type: ignore[assignment]
-                    return Mock(
-                        choices=[Mock(message=Mock(content="Bonjour"))],
-                        usage=Mock(total_tokens=21),
-                    )
-
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
-        "backend.chat.language.get_openai_client",
-        lambda _api_key: FakeClient(),
+        "backend.chat.language.get_async_openai_client",
+        lambda _api_key: _FakeAsyncLocalizeClient(captured),
     )
 
-    result = localize_text_to_language_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="Hello",
         target_language=None,
         api_key="sk-test",
         fallback_locale="fr-FR",
     )
 
+    captured_messages = captured["messages"]
     assert result == LocalizationResult(text="Bonjour", tokens_used=21)
     assert captured_messages[0]["content"].endswith("strictly in fr-FR. Preserve meaning, tone, product names, module names, placeholders, quoted config keys, commands, code snippets, links, and ticket tokens exactly. Return only the localized assistant message.")
     assert captured_messages[1]["content"] == "Assistant message to localize:\nHello"
 
 
-def test_localize_to_language_uses_resolved_language_without_question_content(
+@pytest.mark.asyncio
+async def test_localize_to_language_uses_resolved_language_without_question_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured_messages: list[dict[str, str]] = []
-
-    class FakeClient:
-        class chat:
-            class completions:
-                @staticmethod
-                def create(**kwargs: object) -> Mock:
-                    nonlocal captured_messages
-                    captured_messages = kwargs["messages"]  # type: ignore[assignment]
-                    return Mock(
-                        choices=[Mock(message=Mock(content="Bonjour"))],
-                        usage=Mock(total_tokens=21),
-                    )
-
+    captured: dict[str, object] = {}
     monkeypatch.setattr(
-        "backend.chat.language.get_openai_client",
-        lambda _api_key: FakeClient(),
+        "backend.chat.language.get_async_openai_client",
+        lambda _api_key: _FakeAsyncLocalizeClient(captured),
     )
 
-    localize_text_to_language_result(
+    await async_localize_text_to_language_result(
         canonical_text="Hello",
         target_language="ru",
         api_key="sk-test",
         fallback_locale=None,
     )
 
+    captured_messages = captured["messages"]
     assert "same language as the user's question" not in captured_messages[0]["content"]
     assert "PWNED" not in captured_messages[0]["content"]
     assert "PWNED" not in captured_messages[1]["content"]
     assert captured_messages[1]["content"] == "Assistant message to localize:\nHello"
 
 
-def test_localize_to_language_short_circuits_for_english_target(
+@pytest.mark.asyncio
+async def test_localize_to_language_short_circuits_for_english_target(
     mock_openai_client: Mock,
 ) -> None:
-    result = localize_text_to_language_result(
+    result = await async_localize_text_to_language_result(
         canonical_text="Hello",
         target_language="en-US",
         api_key="sk-test",
@@ -210,29 +210,6 @@ def test_localize_to_language_short_circuits_for_english_target(
 
     assert result == LocalizationResult(text="Hello", tokens_used=0)
     mock_openai_client.chat.completions.create.assert_not_called()
-
-
-def test_deprecated_shim_still_works(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "backend.chat.language.detect_language",
-        lambda _text: LanguageDetectionResult("fr", 0.99, True),
-    )
-    monkeypatch.setattr(
-        "backend.chat.language.localize_text_to_language_result",
-        lambda **kwargs: LocalizationResult(text="Bonjour", tokens_used=5),
-    )
-
-    with pytest.warns(DeprecationWarning):
-        result = localize_text_to_question_language_result(
-            canonical_text="Hello",
-            question="bonjour",
-            api_key="sk-test",
-            fallback_locale="de",
-        )
-
-    assert result == LocalizationResult(text="Bonjour", tokens_used=5)
 
 
 @pytest.mark.asyncio

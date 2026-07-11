@@ -47,7 +47,7 @@ from backend.models.base import _utcnow
 
 # Canonical (English) copy shown when the user asks for a human but has not yet
 # stated a forwardable problem. Localized to the user's language at runtime via
-# ``localize_text_to_language_result`` — never hardcode translations here. Sets
+# ``async_localize_text_to_language_result`` — never hardcode translations here. Sets
 # the expectation that this chat is not real-time and answers arrive by email,
 # then asks for the actual question so support receives a real request rather
 # than an empty ticket.

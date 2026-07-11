@@ -28,7 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.core import db as core_db
 from backend.core.db import async_commit_or_rollback
-from backend.models import Tenant
+from backend.models import Base, Chat, Tenant
 
 
 def _valid_tenant() -> Tenant:
@@ -77,6 +77,45 @@ async def test_raw_commit_leaves_session_poisoned(
     async_db_session.add(_valid_tenant())
     with pytest.raises(PendingRollbackError):
         await async_db_session.commit()
+
+
+def test_finalize_surfaces_turn_row_flush_error_unmasked() -> None:
+    """A flush failure on the turn's own rows propagates as the original
+    exception, not a masked ``PendingRollbackError``.
+
+    ``_finalize_persisted_messages`` flushes the messages/chat update before
+    the best-effort session-turn savepoint. Regression guard: ``begin_nested()``
+    implicitly flushes pending state, so if the flush were left to happen inside
+    the tracking ``try`` the real error would be swallowed by its ``except`` and
+    re-surface as ``PendingRollbackError`` at commit.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from backend.chat.persistence import _finalize_persisted_messages
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine, autoflush=False, future=True)()
+
+    # ``tenant_id`` is NOT NULL with no default → the chat row fails at flush,
+    # standing in for the asyncpg DataError seen in production.
+    bad_chat = Chat(tenant_id=None, session_id=uuid.uuid4(), user_context={})
+
+    with pytest.raises(IntegrityError):
+        _finalize_persisted_messages(
+            db=db,
+            chat=bad_chat,
+            tenant_id=uuid.uuid4(),
+            extra_tokens=0,
+        )
+
+    # Session recovered: a follow-up write on the same session succeeds.
+    good = Tenant(name="Acme", settings={})
+    db.add(good)
+    db.commit()
+    assert db.get(Tenant, good.id) is not None
+    db.close()
 
 
 @pytest.mark.asyncio

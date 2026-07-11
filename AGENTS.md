@@ -384,6 +384,11 @@ How the second contour works:
   cross-tenant writes raise a row-level security error.
 - Auth-boundary tables (`tenants`, `users`, `bots`, `tenant_api_keys`) are exempt —
   they are queried before the tenant is known.
+- **Platform-wide admin endpoints** (cross-tenant metrics, PII retention cleanup) use
+  `Depends(get_platform_admin_user)`, which explicitly clears the tenant context set at
+  login — otherwise their global reads/writes would be silently scoped to the admin's
+  own tenant. `require_admin_user` keeps the context: use it for admin endpoints that
+  operate within the admin's own tenant.
 - Tables without a `tenant_id` column (`messages`, `embeddings`, `url_source_runs`,
   `gap_question_message_links`) are scoped via a parent-FK `EXISTS` policy.
 - **Enforcement requires a non-superuser DB role** (superusers bypass RLS). Tables use

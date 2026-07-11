@@ -13,7 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from backend.core.db import get_db
-from backend.core.rls import set_tenant_context
+from backend.core.rls import clear_tenant_context, set_tenant_context
 from backend.core.security import decode_access_token
 from backend.models import User
 
@@ -84,10 +84,31 @@ async def require_verified_user(
 async def require_admin_user(
     current_user: User = Depends(require_verified_user),
 ) -> User:
-    """Ensure that the current user has admin privileges."""
+    """Ensure that the current user has admin privileges.
+
+    Keeps the RLS tenant context set by ``get_current_user`` — use this for
+    admin endpoints operating within the admin's own tenant. Platform-wide
+    endpoints must use ``get_platform_admin_user`` instead.
+    """
     if not current_user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin only",
         )
+    return current_user
+
+
+async def get_platform_admin_user(
+    current_user: User = Depends(require_admin_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """Admin dependency for PLATFORM-WIDE endpoints (cross-tenant reads and
+    writes: global metrics, PII retention cleanup).
+
+    ``get_current_user`` scopes the request to the admin's own tenant for
+    RLS; without this explicit bypass, global queries would silently see only
+    that tenant's rows once RLS is enforced. Clearing covers both the current
+    transaction and every later one in the request.
+    """
+    clear_tenant_context(db)
     return current_user

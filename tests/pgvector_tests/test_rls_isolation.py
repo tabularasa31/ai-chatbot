@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from backend.core.rls import (
+    clear_tenant_context,
     install_rls_listener,
     reset_tenant_context,
     rls_statements,
@@ -227,6 +228,33 @@ def test_set_tenant_context_applies_to_open_transaction(
         assert db.query(Chat).count() == 2
         set_tenant_context(db, seed.tenant_a)
         assert db.query(Chat).count() == 1
+    reset_tenant_context()
+
+
+def test_platform_admin_bypass(rls_engine: sa.engine.Engine, seed: _Seed) -> None:
+    """get_platform_admin_user contour: after get_current_user has scoped the
+    request to the admin's own tenant, clear_tenant_context restores global
+    visibility for cross-tenant reads AND writes (metrics, retention cleanup)
+    — in the already-open transaction and in later ones."""
+    from backend.models import Chat, Document
+
+    session_factory = sessionmaker(bind=rls_engine, future=True)
+    reset_tenant_context()
+    with session_factory() as db:
+        set_tenant_context(db, seed.tenant_a)  # login: admin's own tenant
+        assert db.query(Document).count() == 1
+        clear_tenant_context(db)  # platform-wide endpoint bypass
+        assert db.query(Document).count() == 2
+        assert db.query(Chat).count() == 2
+        # Retention-style cross-tenant write now reaches the other tenant.
+        result = db.execute(
+            text("UPDATE chats SET tokens_used = 1 WHERE id = :id"),
+            {"id": str(seed.chat_b)},
+        )
+        assert result.rowcount == 1
+        db.commit()
+        # Later transactions in the same request stay unscoped too.
+        assert db.query(Chat).count() == 2
     reset_tenant_context()
 
 

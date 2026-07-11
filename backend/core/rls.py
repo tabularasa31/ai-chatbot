@@ -167,6 +167,21 @@ def reset_tenant_context() -> None:
     _current_tenant_id.set(None)
 
 
+def clear_tenant_context(db: Session | None = None) -> None:
+    """Explicit platform-wide bypass: drop the tenant context for this request.
+
+    For platform-admin operations (cross-tenant metrics, retention cleanup)
+    that must see every tenant's rows after ``get_current_user`` has already
+    scoped the request. Clears the ContextVar (future transactions) and, when
+    ``db`` is an open Postgres session, blanks the GUC in the *current*
+    transaction too — an empty string hits the fail-open ``NULLIF`` branch of
+    every policy.
+    """
+    _current_tenant_id.set(None)
+    if db is not None and db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SET LOCAL app.tenant_id = ''"))
+
+
 @contextmanager
 def tenant_context(tenant_id: uuid.UUID | str) -> Iterator[None]:
     """Scope RLS tenant context around a block (background jobs, scripts)."""

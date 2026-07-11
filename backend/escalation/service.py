@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import MissingGreenlet
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.util import await_only
@@ -707,6 +708,23 @@ def _build_escalation_email_headers(
 _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS = 60
 
 
+def _send_email_off_loop(*args: Any, **kwargs: Any) -> str | None:
+    """Send the notification without blocking the event loop.
+
+    ``send_email`` is a synchronous Brevo HTTP call (up to 10s). The escalation
+    notify helpers run in two contexts: inside the chat pipeline / async
+    escalate routes they execute in a ``run_sync`` greenlet ON the event-loop
+    thread, where a direct call would stall every in-flight turn for the
+    duration of the send — bridge it to a worker thread via ``await_only`` +
+    ``asyncio.to_thread``. In plain sync contexts (tests, sync tooling) there
+    is no greenlet, so fall back to the direct call.
+    """
+    try:
+        return await_only(asyncio.to_thread(send_email, *args, **kwargs))
+    except MissingGreenlet:
+        return send_email(*args, **kwargs)
+
+
 def _notify_tenant_new_ticket(
     tenant: Tenant,
     ticket: EscalationTicket,
@@ -766,7 +784,7 @@ def _notify_tenant_new_ticket(
     # know from the bot's acknowledgement message.
     subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
     try:
-        send_result = send_email(
+        send_result = _send_email_off_loop(
             recipient,
             subject,
             body,
@@ -998,7 +1016,7 @@ def _notify_tenant_ticket_update(
     subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
 
     try:
-        send_result = send_email(
+        send_result = _send_email_off_loop(
             recipient,
             subject,
             body,

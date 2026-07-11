@@ -11,6 +11,8 @@ import docx
 import yaml
 from pypdf import PdfReader
 
+from backend.chunkers.html import html_to_markdown_text
+
 OPENAPI_OPERATION_SEPARATOR = "\n\n<<<OPENAPI_OPERATION>>>\n\n"
 OPENAPI_OPERATION_START_MARKER = "\n\n<<<OPENAPI_OPERATION_START>>>\n"
 OPENAPI_OPERATION_END_MARKER = "\n\n<<<OPENAPI_OPERATION_END>>>\n"
@@ -52,7 +54,22 @@ class OpenAPIChunk:
 
 
 def parse_pdf(content: bytes) -> str:
-    """Extract text from PDF using pypdf."""
+    """Extract text from PDF, layout-aware when pdfplumber is available.
+
+    The layout-aware path detects two-column pages (each column extracted
+    separately instead of interleaving lines) and renders detected tables as
+    markdown pipe tables so the pdf chunker can index them as standalone
+    chunks. Any failure degrades to the plain pypdf extraction; a PDF that
+    neither library can read raises ``ValueError``.
+    """
+    try:
+        return _parse_pdf_layout(content)
+    except Exception:
+        return _parse_pdf_basic(content)
+
+
+def _parse_pdf_basic(content: bytes) -> str:
+    """Plain pypdf extraction (no layout handling) — the safety net."""
     try:
         reader = PdfReader(BytesIO(content))
         parts: list[str] = []
@@ -65,9 +82,114 @@ def parse_pdf(content: bytes) -> str:
         raise ValueError(f"PDF is corrupted or unreadable: {e}") from e
 
 
+def _parse_pdf_layout(content: bytes) -> str:
+    import pdfplumber
+
+    parts: list[str] = []
+    with pdfplumber.open(BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            tables = page.find_tables()
+            prose_page = page
+            for table in tables:
+                bbox = _clamp_bbox(table.bbox, page.bbox)
+                if bbox:
+                    prose_page = prose_page.outside_bbox(bbox)
+            text = _extract_page_prose(prose_page)
+            if text:
+                parts.append(text)
+            for table in tables:
+                rendered = _table_rows_to_markdown(table.extract())
+                if rendered:
+                    parts.append(rendered)
+    return "\n\n".join(parts)
+
+
+def _clamp_bbox(
+    bbox: tuple[float, float, float, float],
+    page_bbox: tuple[float, float, float, float],
+) -> tuple[float, float, float, float] | None:
+    x0 = max(bbox[0], page_bbox[0])
+    top = max(bbox[1], page_bbox[1])
+    x1 = min(bbox[2], page_bbox[2])
+    bottom = min(bbox[3], page_bbox[3])
+    if x0 >= x1 or top >= bottom:
+        return None
+    return (x0, top, x1, bottom)
+
+
+def _extract_page_prose(page: Any) -> str:
+    """Extract non-table page text, splitting two-column layouts."""
+    words = page.extract_words()
+    columns = _detect_column_split(words, page.bbox[0], page.bbox[2])
+    if columns is None:
+        return (page.extract_text() or "").strip()
+    left, right = columns
+    left_text = (page.crop((page.bbox[0], page.bbox[1], left, page.bbox[3])).extract_text() or "").strip()
+    right_text = (page.crop((right, page.bbox[1], page.bbox[2], page.bbox[3])).extract_text() or "").strip()
+    return "\n\n".join(part for part in (left_text, right_text) if part)
+
+
+def _detect_column_split(
+    words: list[dict[str, Any]],
+    page_x0: float,
+    page_x1: float,
+) -> tuple[float, float] | None:
+    """Detect a two-column layout; return (left_edge, right_edge) of the gutter.
+
+    Heuristic: almost no words cross the horizontal midline while both halves
+    hold a substantial share of the words. Returns None for single-column
+    pages (the common case).
+    """
+    if len(words) < 20:
+        return None
+    mid = (page_x0 + page_x1) / 2
+    left = [w for w in words if w["x1"] <= mid]
+    right = [w for w in words if w["x0"] >= mid]
+    crossing = len(words) - len(left) - len(right)
+    if crossing > max(2, len(words) * 0.02):
+        return None
+    if min(len(left), len(right)) < len(words) * 0.2:
+        return None
+    left_edge = max(w["x1"] for w in left)
+    right_edge = min(w["x0"] for w in right)
+    return (left_edge, right_edge)
+
+
+def _table_rows_to_markdown(rows: list[list[Any]] | None) -> str:
+    """Render extracted table rows as a markdown pipe table."""
+    if not rows:
+        return ""
+    rendered: list[str] = []
+    for row in rows:
+        cells = [" ".join(str(cell).split()) if cell is not None else "" for cell in row]
+        if any(cells):
+            rendered.append("| " + " | ".join(cells) + " |")
+    if len(rendered) < 2:
+        return ""
+    column_count = rendered[0].count("|") - 1
+    separator = "|" + " --- |" * max(column_count, 1)
+    return "\n".join([rendered[0], separator, *rendered[1:]])
+
+
 def parse_markdown(content: bytes) -> str:
     """Decode markdown bytes to UTF-8 and return raw text."""
     return content.decode("utf-8")
+
+
+def parse_html(content: bytes) -> str:
+    """Extract main content from an HTML file as markdown-ish text.
+
+    Strips navigation/footer/script boilerplate and preserves headings as
+    ATX markdown so the heading-aware chunker applies downstream.
+    """
+    try:
+        html = content.decode("utf-8")
+    except UnicodeDecodeError:
+        html = content.decode("latin-1")
+    text = html_to_markdown_text(html)
+    if not text.strip():
+        raise ValueError("HTML has no extractable content")
+    return text
 
 
 def parse_docx(content: bytes) -> str:

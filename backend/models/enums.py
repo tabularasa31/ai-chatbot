@@ -10,6 +10,7 @@ class DocumentType(str, enum.Enum):
     url = "url"
     docx = "docx"
     plaintext = "plaintext"
+    html = "html"
 
 
 class DocumentStatus(str, enum.Enum):

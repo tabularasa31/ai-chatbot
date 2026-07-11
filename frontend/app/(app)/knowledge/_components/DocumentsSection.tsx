@@ -151,7 +151,7 @@ export function DocumentsSection({
             <input
               type="file"
               multiple
-              accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt"
+              accept=".pdf,.md,.mdx,.json,.yaml,.yml,.docx,.doc,.txt,.html,.htm"
               onChange={onUpload}
               disabled={uploading}
               className="sr-only"

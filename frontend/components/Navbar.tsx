@@ -5,24 +5,28 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, clearSession } from "@/lib/api";
 
-export function Navbar() {
+export function Navbar({
+  initialEmail = null,
+}: {
+  /** Session email decoded server-side in the layout; when present, skips the /auth/me fetch. */
+  initialEmail?: string | null;
+}) {
   const router = useRouter();
   const [isVerified, setIsVerified] = useState<boolean | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(initialEmail);
 
   useEffect(() => {
-    Promise.all([
-      api.clients.getMe().catch(() => null),
-      api.auth.getMe().catch(() => null),
-    ]).then(([client, user]) => {
-      if (client) {
-        setIsVerified(client.is_verified);
-      } else {
-        setIsVerified(null);
-      }
-      setUserEmail(user?.email ?? null);
-    });
-  }, []);
+    api.clients
+      .getMe()
+      .catch(() => null)
+      .then((client) => setIsVerified(client ? client.is_verified : null));
+    if (!initialEmail) {
+      api.auth
+        .getMe()
+        .catch(() => null)
+        .then((user) => setUserEmail(user?.email ?? null));
+    }
+  }, [initialEmail]);
 
   function handleLogout() {
     clearSession();

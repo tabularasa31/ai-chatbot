@@ -25,6 +25,7 @@
     "fumadocs-openapi": "5.11.8",
     "fumadocs-ui": "^14.7.7",
     "highlight.js": "^11.11.1",
+    "jose": "^6.2.3",
     "lucide-react": "^0.460",
     "next": "14.2.35",
     "posthog-js": "^1.371.3",

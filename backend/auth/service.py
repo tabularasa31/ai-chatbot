@@ -87,7 +87,7 @@ def get_current_user_from_token(token: str, db: Session) -> User:
 
 def create_token_for_user(user: User) -> tuple[str, int]:
     """Create JWT token for user. Returns (token, expires_in_seconds)."""
-    token = create_access_token(data={"sub": str(user.id)})
+    token = create_access_token(data={"sub": str(user.id), "email": user.email})
     return token, ACCESS_TOKEN_EXPIRE_SECONDS
 
 

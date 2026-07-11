@@ -168,6 +168,24 @@ def test_token_expiration(tenant: TestClient, db_session) -> None:
     assert response.json()["expires_in"] == 24 * 60 * 60
 
 
+def test_token_contains_email_claim(tenant: TestClient, db_session) -> None:
+    """Access token carries the user's email so the frontend server can read
+    session data from the cookie without calling /auth/me."""
+    from tests.conftest import register_and_verify_user
+    register_and_verify_user(tenant, db_session, email="claims@example.com")
+    response = tenant.post(
+        "/auth/login",
+        json={"email": "claims@example.com", "password": "SecurePass1!"},
+    )
+    assert response.status_code == 200
+    payload = jwt.decode(
+        response.json()["token"], settings.jwt_secret, algorithms=["HS256"]
+    )
+    assert payload["email"] == "claims@example.com"
+    assert payload["sub"]
+    assert payload["typ"] == "chat9_user"
+
+
 def test_health(tenant: TestClient) -> None:
     """Health check endpoint returns ok and reports Redis status."""
     response = tenant.get("/health")

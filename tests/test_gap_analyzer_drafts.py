@@ -37,17 +37,10 @@ def _bootstrap_tenant(
     if with_key:
         set_client_openai_key(tenant, token)
     if profile_language is not None:
-        db_session.add(
-            TenantProfile(
-                tenant_id=tenant_id,
-                escalation_language=profile_language,
-                topics=[],
-                glossary=[],
-                aliases=[],
-                support_urls=[],
-                extraction_status="done",
-            )
-        )
+        profile = db_session.get(TenantProfile, tenant_id)
+        assert profile is not None, "create_tenant must eager-create the profile"
+        profile.escalation_language = profile_language
+        profile.extraction_status = "done"
         db_session.commit()
     return token, tenant_id
 

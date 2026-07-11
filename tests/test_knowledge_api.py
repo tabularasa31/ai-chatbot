@@ -28,21 +28,28 @@ def _kbase(_client_row: Tenant) -> str:
     return "/api/v1/knowledge"
 
 
+def _update_profile(db: Session, tenant_id: uuid.UUID, **fields: object) -> TenantProfile:
+    """Update the profile eager-created by create_tenant."""
+    profile = db.get(TenantProfile, tenant_id)
+    assert profile is not None, "create_tenant must eager-create the profile"
+    for key, value in fields.items():
+        setattr(profile, key, value)
+    db.commit()
+    return profile
+
+
 def test_get_profile(tenant: TestClient, db_session: Session) -> None:
     token, client_row = _create_client(tenant, db_session, email="kapi-profile@example.com")
-    profile = TenantProfile(
-        tenant_id=client_row.id,
+    _update_profile(
+        db_session,
+        client_row.id,
         product_name="Acme API",
         topics=["Payments"],
-        glossary=[],
-        aliases=[],
         support_email="help@acme.com",
         support_urls=["https://acme.com/docs"],
         extraction_status="done",
         updated_at=datetime.now(timezone.utc),
     )
-    db_session.add(profile)
-    db_session.commit()
 
     resp = tenant.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200, resp.text
@@ -53,21 +60,40 @@ def test_get_profile(tenant: TestClient, db_session: Session) -> None:
     assert "modules" not in data
 
 
+def test_get_profile_is_pure_read(tenant: TestClient, db_session: Session) -> None:
+    """GET /knowledge/profile must never create DB rows (no lazy-create)."""
+    token, client_row = _create_client(tenant, db_session, email="kapi-pure-read@example.com")
+
+    # Profile is eager-created at tenant creation with pending defaults.
+    profile = db_session.get(TenantProfile, client_row.id)
+    assert profile is not None
+
+    resp = tenant.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["extraction_status"] == "pending"
+
+    # Without a profile row, GET returns 404 and does not create one.
+    db_session.delete(profile)
+    db_session.commit()
+
+    resp = tenant.get(f"{_kbase(client_row)}/profile", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 404, resp.text
+    db_session.expire_all()
+    assert db_session.get(TenantProfile, client_row.id) is None
+
+
 def test_patch_profile_partial(tenant: TestClient, db_session: Session) -> None:
     token, client_row = _create_client(tenant, db_session, email="kapi-patch@example.com")
-    profile = TenantProfile(
-        tenant_id=client_row.id,
+    _update_profile(
+        db_session,
+        client_row.id,
         product_name="Acme API",
         topics=["Payments"],
-        glossary=[],
-        aliases=[],
         support_email="help@acme.com",
         support_urls=["https://acme.com/docs"],
         extraction_status="done",
         updated_at=datetime.now(timezone.utc),
     )
-    db_session.add(profile)
-    db_session.commit()
 
     resp = tenant.patch(
         f"{_kbase(client_row)}/profile",
@@ -240,18 +266,13 @@ def test_tenant_isolation(tenant: TestClient, db_session: Session) -> None:
     token1, client1 = _create_client(tenant, db_session, email="kapi-owner-1@example.com")
     token2, client2 = _create_client(tenant, db_session, email="kapi-owner-2@example.com")
 
-    profile1 = TenantProfile(
-        tenant_id=client1.id,
+    _update_profile(
+        db_session,
+        client1.id,
         product_name="Tenant One Product",
-        topics=[],
-        glossary=[],
-        aliases=[],
-        support_urls=[],
         extraction_status="done",
         updated_at=datetime.now(timezone.utc),
     )
-    db_session.add(profile1)
-    db_session.commit()
 
     resp1 = tenant.get("/api/v1/knowledge/profile", headers={"Authorization": f"Bearer {token1}"})
     resp2 = tenant.get("/api/v1/knowledge/profile", headers={"Authorization": f"Bearer {token2}"})

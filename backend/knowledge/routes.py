@@ -31,16 +31,6 @@ knowledge_router = APIRouter(prefix="/api/v1/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)
 
 
-def _get_or_create_profile(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
-    profile = db.get(TenantProfile, tenant_id)
-    if profile is None:
-        profile = TenantProfile(tenant_id=tenant_id)
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
-    return profile
-
-
 def _profile_or_404(db: Session, tenant_id: uuid.UUID) -> TenantProfile:
     profile = db.get(TenantProfile, tenant_id)
     if profile is None:
@@ -101,7 +91,7 @@ def get_knowledge_profile(
     db: Annotated[Session, Depends(get_db)],
 ) -> KnowledgeProfileResponse:
     tenant = _get_tenant(db, current_user)
-    profile = _get_or_create_profile(db, tenant.id)
+    profile = _profile_or_404(db, tenant.id)
     return KnowledgeProfileResponse(
         product_name=profile.product_name,
         topics=list(profile.topics or []),

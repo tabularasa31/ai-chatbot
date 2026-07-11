@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.core.crypto import encrypt_value
-from backend.models import Bot, Tenant, User
+from backend.models import Bot, Tenant, TenantProfile, User
 from backend.privacy_config import public_redaction_config_dict, with_redaction_config
 from backend.support_config import public_support_config_dict, with_support_config
 from backend.tenants.api_keys_service import (
@@ -49,6 +49,9 @@ def create_tenant(
         if user:
             user.tenant_id = tenant.id
         db.add(Bot(tenant_id=tenant.id, name=name))
+        # Eager-create the knowledge profile so GET /knowledge/profile
+        # stays a pure read (no lazy-create side effects on GET).
+        db.add(TenantProfile(tenant_id=tenant.id))
         db.commit()
         db.refresh(tenant)
     except IntegrityError as exc:

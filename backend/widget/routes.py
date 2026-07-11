@@ -13,7 +13,6 @@ from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome
 from backend.chat.handlers.rag import _CitationStreamFilter
@@ -29,7 +28,7 @@ from backend.contact_sessions.service import (
 )
 from backend.core import db as core_db
 from backend.core.config import settings
-from backend.core.db import get_async_db, get_db, run_sync
+from backend.core.db import get_async_db, run_sync
 from backend.core.limiter import (
     limiter,
     widget_bot_rate_limit_key,
@@ -197,10 +196,10 @@ async def widget_config(
 
 @widget_router.post("/session/init", response_model=WidgetSessionInitResponse)
 @limiter.limit("10/minute", key_func=widget_init_rate_limit_key)
-def widget_session_init(
+async def widget_session_init(
     request: Request,
     body: Annotated[WidgetSessionInitRequest, Body()],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> WidgetSessionInitResponse:
     """
     Start a widget session. Optional `user_hints` attaches untrusted
@@ -208,7 +207,9 @@ def widget_session_init(
     frontend; sessions still work without them.
     """
     try:
-        _bot, tenant = get_bot_and_tenant_for_widget_session(db, body.bot_id)
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_session(s, body.bot_id)
+        )
     except WidgetChatTenantGateError as e:
         logger.info("widget_session_init_rejected", extra={"reason": e.reason})
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
@@ -251,54 +252,64 @@ def widget_session_init(
     # Identified users resume their most recent still-open session so history
     # survives cleared localStorage and follows them across devices.
     if resume_eligible and user_context and user_context.get("user_id"):
-        existing = (
-            db.query(Chat)
-            .filter(
-                Chat.tenant_id == tenant.id,
-                Chat.bot_id == _bot.id,
-                Chat.ended_at.is_(None),
-                Chat.user_context["user_id"].as_string()
-                == user_context["user_id"],
+
+        def _resume_existing(s):
+            existing = (
+                s.query(Chat)
+                .filter(
+                    Chat.tenant_id == tenant.id,
+                    Chat.bot_id == _bot.id,
+                    Chat.ended_at.is_(None),
+                    Chat.user_context["user_id"].as_string()
+                    == user_context["user_id"],
+                )
+                .order_by(Chat.created_at.desc())
+                .first()
             )
-            .order_by(Chat.created_at.desc())
-            .first()
-        )
-        if existing is not None:
+            if existing is None:
+                return None
             existing.user_context = apply_identity_context_patch(
                 existing.user_context,
                 user_context,
                 browser_locale=locale,
             )
             sync_user_session_identity(
-                db,
+                s,
                 tenant_id=tenant.id,
                 user_context=existing.user_context,
             )
-            db.commit()
+            s.commit()
+            return existing.session_id
+
+        resumed_session_id = await run_sync(db, _resume_existing)
+        if resumed_session_id is not None:
             logger.info("widget_session_init_resumed")
             return WidgetSessionInitResponse(
-                session_id=existing.session_id, mode=mode, resumed=True
+                session_id=resumed_session_id, mode=mode, resumed=True
             )
 
     # Always persist the session row so the returned session_id can be used
     # in the next /widget/chat call without hitting session_not_found.
     # Stamp bot_id up front to skip the lazy backfill in widget_chat.
-    chat = Chat(
-        tenant_id=tenant.id,
-        bot_id=_bot.id,
-        session_id=session_id,
-        user_context=user_context,
-    )
-    db.add(chat)
-    db.flush()
-    if mode == "hints" and user_context and user_context.get("user_id"):
-        start_user_session(
-            db,
+    def _create_session(s):
+        chat = Chat(
             tenant_id=tenant.id,
+            bot_id=_bot.id,
+            session_id=session_id,
             user_context=user_context,
-            started_at=chat.created_at,
         )
-    db.commit()
+        s.add(chat)
+        s.flush()
+        if mode == "hints" and user_context and user_context.get("user_id"):
+            start_user_session(
+                s,
+                tenant_id=tenant.id,
+                user_context=user_context,
+                started_at=chat.created_at,
+            )
+        s.commit()
+
+    await run_sync(db, _create_session)
 
     return WidgetSessionInitResponse(session_id=session_id, mode=mode, resumed=False)
 
@@ -325,7 +336,7 @@ def widget_session_init(
     key_func=widget_bot_rate_limit_key,
 )
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
-def widget_chat(
+async def widget_chat(
     request: Request,
     bot_id: Annotated[str, Query(description="Bot public ID")],
     body: Annotated[WidgetChatRequest | None, Body()] = None,
@@ -333,7 +344,7 @@ def widget_chat(
     locale: Annotated[
         str | None, Query(description="Browser locale hint (e.g. ru-RU)")
     ] = None,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> StreamingResponse:
     """
     PUBLIC endpoint for embedded widget.
@@ -346,7 +357,9 @@ def widget_chat(
     locale_hint = sanitize_locale((body.locale if body is not None else None) or locale)
 
     try:
-        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise HTTPException(status_code=404, detail="Bot not found") from e
@@ -357,7 +370,6 @@ def widget_chat(
             detail="OpenAI API key not configured. Add your key in dashboard settings.",
         ) from e
 
-    existing_chat: Chat | None = None
     if session_id:
         try:
             sid = uuid.UUID(session_id)
@@ -369,17 +381,32 @@ def widget_chat(
                     "Invalid session_id",
                 ),
             ) from None
-        existing_chat = (
-            db.query(Chat)
-            .filter(
-                Chat.tenant_id == tenant.id,
-                Chat.session_id == sid,
-                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+
+        def _lookup_existing_chat(s):
+            existing_chat = (
+                s.query(Chat)
+                .filter(
+                    Chat.tenant_id == tenant.id,
+                    Chat.session_id == sid,
+                    or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+                )
+                .order_by(Chat.created_at.desc())
+                .first()
             )
-            .order_by(Chat.created_at.desc())
-            .first()
-        )
-        if existing_chat is None:
+            if existing_chat is None:
+                return None
+            rotation_pending = should_rotate(existing_chat)
+            if existing_chat.bot_id is None and not rotation_pending:
+                # Skip the backfill when rotation is pending: the commit would
+                # refresh updated_at (onupdate) and make the pipeline see the
+                # stale chat as fresh; the new Chat gets its bot_id on creation.
+                existing_chat.bot_id = _bot.id
+                s.add(existing_chat)
+                s.commit()
+            return rotation_pending, existing_chat.ended_at is not None
+
+        chat_state = await run_sync(db, _lookup_existing_chat)
+        if chat_state is None:
             raise HTTPException(
                 status_code=409,
                 detail=widget_session_error_detail(
@@ -387,15 +414,8 @@ def widget_chat(
                     "Session not found",
                 ),
             )
-        rotation_pending = should_rotate(existing_chat)
-        if existing_chat.bot_id is None and not rotation_pending:
-            # Skip the backfill when rotation is pending: the commit would
-            # refresh updated_at (onupdate) and make the pipeline see the
-            # stale chat as fresh; the new Chat gets its bot_id on creation.
-            existing_chat.bot_id = _bot.id
-            db.add(existing_chat)
-            db.commit()
-        if existing_chat.ended_at is not None and not rotation_pending:
+        rotation_pending, chat_ended = chat_state
+        if chat_ended and not rotation_pending:
             # Within the idle window a closed chat still answers with the
             # "already closed" acknowledgement; past it, the turn falls
             # through and rotation opens a fresh conversation instead.
@@ -447,6 +467,12 @@ def widget_chat(
         bot_id=_bot.id,
         bot_public_id=getattr(_bot, "public_id", None),
     )
+
+    # All request-scoped DB work is done; the pipeline below runs on its own
+    # AsyncSessionLocal. Release this session's pooled connection now —
+    # FastAPI closes yield-dependencies only after the response finishes,
+    # which for SSE would pin the connection for the whole stream.
+    await db.close()
 
     return _widget_chat_stream(
         sid,
@@ -750,15 +776,17 @@ class WidgetHistoryResponse(BaseModel):
 
 @widget_router.get("/history", response_model=WidgetHistoryResponse)
 @limiter.limit("30/minute", key_func=widget_public_rate_limit_key)
-def widget_history(
+async def widget_history(
     request: Request,
     bot_id: Annotated[str, Query(description="Bot public ID")],
     session_id: Annotated[str, Query(description="Chat session UUID")],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> WidgetHistoryResponse:
     """Return message history for a widget session (public, no auth)."""
     try:
-        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise HTTPException(status_code=404, detail="Bot not found") from e
@@ -769,61 +797,67 @@ def widget_history(
     except (ValueError, TypeError):
         raise HTTPException(status_code=422, detail="Invalid session_id") from None
 
-    # Latest two conversations: the current one plus the previous one as
-    # read-only context after rotation (oldest first after the slice).
-    chats = (
-        db.query(Chat)
-        .filter(
-            Chat.tenant_id == tenant.id,
-            Chat.session_id == sid,
-            or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+    def _load_history(s) -> WidgetHistoryResponse | None:
+        # Latest two conversations: the current one plus the previous one as
+        # read-only context after rotation (oldest first after the slice).
+        chats = (
+            s.query(Chat)
+            .filter(
+                Chat.tenant_id == tenant.id,
+                Chat.session_id == sid,
+                or_(Chat.bot_id == _bot.id, Chat.bot_id.is_(None)),
+            )
+            .order_by(Chat.created_at.desc())
+            .limit(2)
+            .all()
         )
-        .order_by(Chat.created_at.desc())
-        .limit(2)
-        .all()
-    )
-    if not chats:
+        if not chats:
+            return None
+        chats.reverse()
+        latest = chats[-1]
+
+        messages = (
+            s.query(Message)
+            .filter(
+                Message.chat_id.in_([c.id for c in chats]),
+                Message.role.in_([MessageRole.user, MessageRole.assistant]),
+            )
+            .order_by(Message.created_at.asc(), Message.id.asc())
+            .all()
+        )
+
+        boundary_indices = [
+            idx
+            for idx, m in enumerate(messages)
+            if idx > 0 and m.chat_id != messages[idx - 1].chat_id
+        ]
+        # Read-only signal: the actual rotation happens on the next POST.
+        conversation_rotated = should_rotate(latest)
+
+        ticket_number: str | None = None
+        if latest.escalation_awaiting_ticket_id is not None:
+            ticket = s.get(EscalationTicket, latest.escalation_awaiting_ticket_id)
+            if ticket is not None:
+                ticket_number = ticket.ticket_number
+
+        return WidgetHistoryResponse(
+            session_id=sid,
+            messages=[
+                WidgetHistoryMessage(role=m.role.value, content=m.content)
+                for m in messages
+            ],
+            # A rotated-away closed chat must not lock the widget input — the
+            # visitor is about to start a fresh conversation.
+            chat_ended=latest.ended_at is not None and not conversation_rotated,
+            ticket_number=ticket_number,
+            boundary_indices=boundary_indices,
+            conversation_rotated=conversation_rotated,
+        )
+
+    history = await run_sync(db, _load_history)
+    if history is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    chats.reverse()
-    latest = chats[-1]
-
-    messages = (
-        db.query(Message)
-        .filter(
-            Message.chat_id.in_([c.id for c in chats]),
-            Message.role.in_([MessageRole.user, MessageRole.assistant]),
-        )
-        .order_by(Message.created_at.asc(), Message.id.asc())
-        .all()
-    )
-
-    boundary_indices = [
-        idx
-        for idx, m in enumerate(messages)
-        if idx > 0 and m.chat_id != messages[idx - 1].chat_id
-    ]
-    # Read-only signal: the actual rotation happens on the next POST.
-    conversation_rotated = should_rotate(latest)
-
-    ticket_number: str | None = None
-    if latest.escalation_awaiting_ticket_id is not None:
-        ticket = db.get(EscalationTicket, latest.escalation_awaiting_ticket_id)
-        if ticket is not None:
-            ticket_number = ticket.ticket_number
-
-    return WidgetHistoryResponse(
-        session_id=sid,
-        messages=[
-            WidgetHistoryMessage(role=m.role.value, content=m.content)
-            for m in messages
-        ],
-        # A rotated-away closed chat must not lock the widget input — the
-        # visitor is about to start a fresh conversation.
-        chat_ended=latest.ended_at is not None and not conversation_rotated,
-        ticket_number=ticket_number,
-        boundary_indices=boundary_indices,
-        conversation_rotated=conversation_rotated,
-    )
+    return history
 
 
 @widget_router.post("/escalate", response_model=ManualEscalateResponse)

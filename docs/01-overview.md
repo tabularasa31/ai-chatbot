@@ -44,7 +44,10 @@ Clients bring their own OpenAI key — full cost transparency, no platform marku
 - Documents/pages are parsed, chunked, and embedded automatically
 
 ### 3. Indexing
-- PDF/Markdown are split into **sentence-aware chunks**
+- Each content type gets a dedicated chunker (registry in `backend/chunkers/`):
+  - Markdown/HTML — heading-aware chunks, each prefixed with its heading path (`H1 > H2 > H3`)
+  - PDF — layout-aware extraction (two-column detection); tables become standalone chunks
+  - Plain text / Word — **sentence-aware chunks** (also the fallback for unknown types)
 - Swagger/OpenAPI is transformed into endpoint-aware chunks (`method + path`) with additional request/response schema detail chunks for rich operations
 - Each chunk vectorized using OpenAI `text-embedding-3-small`
 - Vectors stored in PostgreSQL with pgvector

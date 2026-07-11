@@ -39,7 +39,9 @@
   - Each client brings their own key — no platform markup
   
 - **Document Parsing:**
-  - pypdf>=4.0.0 (PDF extraction — replaces deprecated PyPDF2)
+  - pdfplumber>=0.11.0 (layout-aware PDF extraction: two-column detection, table extraction)
+  - pypdf>=4.0.0 (PDF extraction fallback — replaces deprecated PyPDF2)
+  - beautifulsoup4 (HTML main-content extraction for uploads and URL crawl)
   - markdown (Markdown parsing)
   - yaml/json (Swagger/OpenAPI specs with semantic endpoint-aware rendering)
   

@@ -98,6 +98,52 @@ cases:
       («правильно понял — оформляем тикет?») ИЛИ учесть новые данные и снова
       попытаться помочь. Ответ на русском.
 
+  # ─── context-aware escalation copy (86exn3x9u) ─────────────────────────
+  # Regression: the escalation offer used to be one canned template
+  # ("forward your request to support?") regardless of what the user spent
+  # the whole dialog describing. The offer must now acknowledge the specific
+  # problem and say what will be summarized for the support team.
+  - id: preconfirm_context_summary_ru_007
+    category: loop_detection
+    lang: ru
+    turns:
+      - "загрузил pdf с прайсом, статус документа висит в Processing"
+      - "прошло минут двадцать, статус не меняется, документ не ищется в чате"
+      - "удалил и загрузил заново — снова застрял в Processing"
+      - "уже больше получаса, бот так и не видит документ, что делать?"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      К 4-му ходу бот предлагает эскалацию. Оценивается ТЕКСТ этого
+      предложения, а не только факт оффера. Он должен: (1) признать
+      конкретную проблему юзера (PDF завис в статусе Processing, повторная
+      загрузка не помогла); (2) дать понять, что команде поддержки будет
+      передано краткое описание кейса (симптом / что уже пробовали), а не
+      безликий «ваш запрос»; (3) закончиться коротким вопросом-подтверждением.
+      FAIL, если оффер — generic «переслать ваш запрос в поддержку?» без
+      упоминания сути проблемы, или если бот утверждает, что запрос УЖЕ
+      передан / тикет уже создан. Ответ на русском.
+
+  - id: preconfirm_context_summary_en_008
+    category: loop_detection
+    lang: en
+    turns:
+      - "I embedded the widget script but the chat bubble never appears"
+      - "data-bot-id matches the dashboard, tried another browser, still nothing"
+      - "console shows the script loads with 200 but no widget is rendered"
+      - "I've been at this for an hour, nothing works — what now?"
+    expected_escalation_offered_by_turn: 4
+    judge_rubric: |
+      By turn 4 the bot must offer escalation. Judge the WORDING of the
+      offer, not just its presence. It must: (1) acknowledge the user's
+      specific problem (widget script loads but never renders despite a
+      correct data-bot-id and cross-browser attempts); (2) make clear that a
+      short summary of the case (symptom / steps already tried) will be
+      passed to the support team — not a faceless "your request"; (3) end
+      with one short confirmation question. FAIL if the offer is the generic
+      "forward your request to support?" with no mention of the actual
+      problem, or if the bot claims the request was ALREADY forwarded or a
+      ticket already created. Reply in English.
+
   # ─── control chains (must NOT offer escalation) ────────────────────────
   - id: no_loop_diverse_topics_ru_001
     category: loop_detection

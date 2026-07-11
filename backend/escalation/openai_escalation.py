@@ -35,11 +35,24 @@ FALLBACK_EN_GENERIC = (
 # bugs in PR-feedback / production screenshots both traced back to that
 # overlap.
 #
-# Pre-confirm content has essentially zero variation by case — it's the same
-# one-sentence question every time. We render it via the same canonical-text
-# + ``async_localize_text_to_language_result`` pipeline used for the fallback
-# message, which kills the prompt-mixing problem at the root. The yes/no
-# classification stays on the LLM, but in a separate narrow call
+# Pre-confirm content used to be rendered from these canonical templates
+# alone. That fixed the prompt-mixing bug but made the offer read as a canned
+# "forward your request?" even after the user spent four turns describing a
+# concrete problem — the bot looked like it gave up without listening, and
+# support received a ticket with no problem summary (eval fail in
+# loop_doc_upload_ru_003). Bot-initiated variants therefore now go through a
+# NARROW context-aware generation call (``_generate_context_pre_confirm``)
+# whose prompt only knows how to write the confirmation offer: acknowledge
+# the specific problem from the transcript, say what will be summarized for
+# the support team, ask for confirmation. It shares nothing with the handoff
+# phases' prompt, so the original phase-mixing failure mode ("Ваш запрос
+# передан … Хотите, чтобы я передал?") stays structurally impossible; the
+# prompt additionally forbids claiming the request was already forwarded and
+# inventing ticket numbers / emails. On any failure the render degrades to
+# the canonical-template + ``async_localize_text_to_language_result``
+# pipeline below, which remains the path for the administrative variants
+# (clarify / declined) and for callers without a transcript. The yes/no
+# classification stays in its own narrow call
 # (``classify_pre_confirm_reply``) whose only output is the decision label —
 # the model has no way to leak a handoff-style ``message_to_user`` because
 # the function doesn't ask for one.
@@ -128,6 +141,99 @@ def pre_confirm_fallback_result(variant: PreConfirmVariant) -> EscalationLlmResu
     )
 
 
+# Bot-initiated escalation offers: the user was mid-conversation with the bot
+# when the bot decided it cannot help, so there is real dialog context worth
+# reflecting back. The administrative variants (initial / clarify / declined)
+# are direct reactions to the user's own escalation answer and stay templated.
+_PRE_CONFIRM_CONTEXT_VARIANTS: frozenset[str] = frozenset(
+    {"no_answer", "support_contact", "support_complaint"}
+)
+
+_PRE_CONFIRM_CONTEXT_SYSTEM = """You write the single next assistant message in an embedded support chat.
+The assistant could not resolve the user's issue and is about to offer to hand the
+conversation over to the human support team. Draft that confirmation offer.
+
+Output a single JSON object: {"message_to_user": "<string>"}. No other keys, no prose.
+
+Rules for message_to_user:
+- Write ONLY in the requested RESPONSE_LANGUAGE (the language the user is writing in).
+- Ground the message in CHAT_TRANSCRIPT: briefly acknowledge the user's specific
+  problem and, when present, what they already tried.
+- Say what you will pass along — a one-clause summary of their case (the symptom,
+  key details, steps already tried) — so the offer reads as informed, not canned.
+- End with ONE short yes/no question asking whether to forward the request to the
+  support team so they can reply by email.
+- If the transcript contains no concrete problem (e.g. a single short question),
+  keep the message general, but still explicitly acknowledge that you could not
+  find an answer before asking — never open with the bare forwarding question.
+- VARIANT adjustments:
+  - support_complaint: open with a brief apology that the user is still waiting.
+  - support_contact: the user asked how to reach support — say they can reach the
+    team right here, and do NOT frame the handoff as a failure to find an answer.
+  - no_answer: no special framing beyond the rules above.
+- NEVER: claim the request was already forwarded or a ticket already created,
+  invent or mention ticket numbers, ask for or mention email addresses, promise
+  response times, or attempt further troubleshooting steps yourself.
+- At most three short sentences plus the confirmation question. Calm tone, no lists.
+"""
+
+
+async def _generate_context_pre_confirm(
+    *,
+    variant: PreConfirmVariant,
+    chat_messages: list[dict[str, str]],
+    response_language: str,
+    api_key: str,
+    model: str | None = None,
+) -> tuple[str | None, int]:
+    """Narrow LLM call: draft a context-aware pre_confirm offer.
+
+    Returns ``(text, tokens_used)``; ``text`` is ``None`` on any failure
+    (API error, malformed JSON, empty message) so the caller degrades to
+    the canonical-template path. Never raises.
+    """
+    model_name = model or settings.escalation_model
+    _reasoning = is_reasoning_model(model_name)
+    user_block = (
+        f"RESPONSE_LANGUAGE:\n{response_language}\n\n"
+        f"VARIANT:\n{variant}\n\n"
+        "CHAT_TRANSCRIPT:\n" + _format_thread(chat_messages)
+    )
+    messages = [
+        {"role": "system", "content": _PRE_CONFIRM_CONTEXT_SYSTEM},
+        {"role": "user", "content": user_block},
+    ]
+    try:
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
+            f"pre_confirm_context_{variant}",
+            lambda: client.chat.completions.create(
+                model=model_name,
+                messages=messages,
+                **({} if _reasoning else {"temperature": 0.3}),
+                max_completion_tokens=(
+                    settings.chat_response_max_tokens_reasoning
+                    if _reasoning
+                    else settings.escalation_max_completion_tokens
+                ),
+                **({} if _reasoning else {"response_format": {"type": "json_object"}}),
+            ),
+        )
+        raw = response.choices[0].message.content or "{}"
+        text = (json.loads(raw).get("message_to_user") or "").strip()
+        tokens = response.usage.total_tokens if response.usage else 0
+        log_llm_tokens(
+            operation=f"pre_confirm_context_{variant}",
+            target_language=response_language,
+            tokens=tokens,
+            model=model_name,
+        )
+        return (text or None), tokens
+    except Exception as exc:
+        logger.warning("context-aware pre_confirm generation failed: %s", exc)
+        return None, 0
+
+
 async def render_pre_confirm_text(
     *,
     variant: PreConfirmVariant,
@@ -136,16 +242,37 @@ async def render_pre_confirm_text(
     tenant_id: str | None = None,
     bot_id: str | None = None,
     chat_id: str | None = None,
+    chat_messages: list[dict[str, str]] | None = None,
 ) -> EscalationLlmResult:
-    """Localize one of the canonical pre_confirm templates.
+    """Render the pre_confirm offer, context-aware when a transcript is given.
 
     Always emits an ``EscalationLlmResult`` with ``followup_decision=None``
     so callers that store ``out.message_to_user`` and ``out.tokens_used``
-    keep working unchanged. The variant chooses which canonical phrase
-    gets localized — bare initial question (explicit human request),
-    no-answer question (failed KB lookup), repeat after an ambiguous reply,
-    or polite acknowledgement of a decline.
+    keep working unchanged.
+
+    When ``chat_messages`` is provided and the variant is a bot-initiated
+    offer (``no_answer`` / ``support_contact`` / ``support_complaint``), the
+    text is drafted by a narrow LLM call that summarizes the user's problem
+    from the transcript before asking for confirmation. On any failure it
+    degrades to the canonical-template path below. The administrative
+    variants — bare initial question (explicit human request), repeat after
+    an ambiguous reply, polite acknowledgement of a decline — always localize
+    their canonical phrase.
     """
+    if chat_messages and variant in _PRE_CONFIRM_CONTEXT_VARIANTS:
+        text, tokens = await _generate_context_pre_confirm(
+            variant=variant,
+            chat_messages=chat_messages,
+            response_language=response_language,
+            api_key=api_key,
+        )
+        if text:
+            # Dialog-specific by construction — never cached.
+            return EscalationLlmResult(
+                message_to_user=text,
+                followup_decision=None,
+                tokens_used=tokens,
+            )
     canonical = _PRE_CONFIRM_CANONICALS[variant]
     cache_key = (variant, (response_language or "en").lower())
     cached = _PRE_CONFIRM_RENDER_CACHE.get(cache_key)

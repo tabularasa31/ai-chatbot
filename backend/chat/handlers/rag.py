@@ -1599,7 +1599,10 @@ class RagHandler(PipelineHandler):
             TurnContext as DecisionTurnContext,
         )
         from backend.escalation.openai_escalation import pre_confirm_fallback_result
-        from backend.escalation.service import chunks_preview_from_results
+        from backend.escalation.service import (
+            build_chat_messages_for_openai,
+            chunks_preview_from_results,
+        )
         from backend.models import EscalationTrigger
         from backend.search.service import (
             build_reliability_projection,
@@ -1885,6 +1888,15 @@ class RagHandler(PipelineHandler):
                                 tenant_id=str(ctx.tenant_id),
                                 bot_id=str(ctx.bot_id) if ctx.bot_id else None,
                                 chat_id=str(chat.id),
+                                # Dialog transcript makes the offer context-
+                                # aware: acknowledge the user's problem and say
+                                # what will be summarized for support instead
+                                # of the canned forwarding question
+                                # (86exn3x9u). Degrades to the canonical
+                                # template inside the renderer on failure.
+                                chat_messages=build_chat_messages_for_openai(
+                                    chat, ctx.redacted_question
+                                ),
                             ),
                             timeout=settings.escalation_pre_confirm_render_timeout_seconds,
                         )

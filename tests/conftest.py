@@ -376,10 +376,6 @@ def mock_openai_client():
              return_value=mock_esc_client,
          ), \
          patch(
-             "backend.search.service._rewrite_query_for_retrieval",
-             return_value=None,
-         ), \
-         patch(
              "backend.search.service._async_rewrite_query_for_retrieval",
              new=AsyncMock(return_value=None),
          ):
@@ -573,3 +569,31 @@ async def async_db_session(async_engine_fx) -> "AsyncSession":  # type: ignore[n
             yield session
         finally:
             await session.rollback()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def async_search_session(engine: Engine) -> "AsyncSession":  # type: ignore[name-defined]
+    """AsyncSession over the SAME SQLite file as the sync ``db_session`` engine.
+
+    Lets a test create fixtures with the sync session (committed) and run the
+    async retrieval pipeline against the same data — mirroring the async-engine
+    rebind the ``tenant`` fixture performs for FastAPI dependency overrides.
+    """
+    sync_url = str(engine.url)
+    async_url = sync_url.replace("sqlite:///", "sqlite+aiosqlite:///").split("?")[0]
+    async_engine = create_async_engine(async_url, future=True)
+    SessionFactory = async_sessionmaker(
+        bind=async_engine,
+        class_=AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    try:
+        async with SessionFactory() as session:
+            try:
+                yield session
+            finally:
+                await session.rollback()
+    finally:
+        await async_engine.dispose()

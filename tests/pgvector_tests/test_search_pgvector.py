@@ -75,18 +75,20 @@ def test_pgvector_extension_enabled(pg_engine) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _pgvector_search — native cosine distance via HNSW
+# _async_pgvector_search — native cosine distance via HNSW
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.pgvector
-def test_pgvector_search_returns_results(
+@pytest.mark.asyncio
+async def test_pgvector_search_returns_results(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
-    """_pgvector_search returns embeddings ordered by cosine proximity."""
+    """_async_pgvector_search returns embeddings ordered by cosine proximity."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import _pgvector_search
+    from backend.search.service import _async_pgvector_search
 
     user = _create_user(pg_db_session, email="pv_basic@example.com")
     cl = _create_client(pg_db_session, user, name="PV Basic")
@@ -100,7 +102,7 @@ def test_pgvector_search_returns_results(
     _insert_embedding(pg_db_session, doc_id, "close chunk", close_vec)
     _insert_embedding(pg_db_session, doc_id, "far chunk", far_vec)
 
-    results = _pgvector_search(cl.id, query_vec, top_k=5, db=pg_db_session)
+    results = await _async_pgvector_search(cl.id, query_vec, top_k=5, db=pg_async_db_session)
 
     assert len(results) == 2
     texts = [emb.chunk_text for emb, _ in results]
@@ -114,13 +116,15 @@ def test_pgvector_search_returns_results(
 
 
 @pytest.mark.pgvector
-def test_pgvector_search_respects_client_isolation(
+@pytest.mark.asyncio
+async def test_pgvector_search_respects_client_isolation(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
-    """_pgvector_search must not leak embeddings across tenants."""
+    """_async_pgvector_search must not leak embeddings across tenants."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import _pgvector_search
+    from backend.search.service import _async_pgvector_search
 
     user_a = _create_user(pg_db_session, email="pv_iso_a@example.com")
     user_b = _create_user(pg_db_session, email="pv_iso_b@example.com")
@@ -134,21 +138,23 @@ def test_pgvector_search_respects_client_isolation(
     _insert_embedding(pg_db_session, doc_a, "tenant A secret", vec)
     _insert_embedding(pg_db_session, doc_b, "tenant B secret", vec)
 
-    results = _pgvector_search(cl_a.id, vec, top_k=10, db=pg_db_session)
+    results = await _async_pgvector_search(cl_a.id, vec, top_k=10, db=pg_async_db_session)
 
     assert len(results) == 1
     assert results[0][0].chunk_text == "tenant A secret"
 
 
 @pytest.mark.pgvector
-def test_pgvector_search_empty_when_no_vector(
+@pytest.mark.asyncio
+async def test_pgvector_search_empty_when_no_vector(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
-    """_pgvector_search skips rows with NULL vector column."""
+    """_async_pgvector_search skips rows with NULL vector column."""
     from tests.test_models import _create_client, _create_user
     from backend.models import Embedding
-    from backend.search.service import _pgvector_search
+    from backend.search.service import _async_pgvector_search
 
     user = _create_user(pg_db_session, email="pv_nullvec@example.com")
     cl = _create_client(pg_db_session, user, name="PV NullVec")
@@ -165,24 +171,26 @@ def test_pgvector_search_empty_when_no_vector(
     pg_db_session.commit()
 
     query_vec = [1.0] + [0.0] * 1535
-    results = _pgvector_search(cl.id, query_vec, top_k=5, db=pg_db_session)
+    results = await _async_pgvector_search(cl.id, query_vec, top_k=5, db=pg_async_db_session)
 
     assert results == []
 
 
 # ---------------------------------------------------------------------------
-# search_similar_chunks — hybrid BM25 + RRF path on PostgreSQL
+# search_similar_chunks_async — hybrid BM25 + RRF path on PostgreSQL
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.pgvector
-def test_hybrid_search_uses_pgvector_path(
+@pytest.mark.asyncio
+async def test_hybrid_search_uses_pgvector_path(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
-    """search_similar_chunks must take the pgvector branch (not SQLite fallback) on PG."""
+    """search_similar_chunks_async must take the pgvector branch (not SQLite fallback) on PG."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks
+    from backend.search.service import search_similar_chunks_async
 
     user = _create_user(pg_db_session, email="hybrid_basic@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Basic")
@@ -194,8 +202,8 @@ def test_hybrid_search_uses_pgvector_path(
     vec = [0.9, 0.1] + [0.0] * 1534
     _insert_embedding(pg_db_session, doc_id, "hybrid test chunk", vec)
 
-    results = search_similar_chunks(
-        cl.id, "hybrid test", top_k=3, db=pg_db_session, api_key="sk-test"
+    results = await search_similar_chunks_async(
+        cl.id, "hybrid test", top_k=3, db=pg_async_db_session, api_key="sk-test"
     )
 
     assert len(results) == 1
@@ -203,16 +211,18 @@ def test_hybrid_search_uses_pgvector_path(
 
 
 @pytest.mark.pgvector
-def test_hybrid_search_bm25_rrf_boosts_keyword_match(
+@pytest.mark.asyncio
+async def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
     """
     Hybrid search returns both vector-close and keyword-relevant chunks.
     BM25 + RRF merges the results: both chunks should appear in top_k=2.
     """
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks
+    from backend.search.service import search_similar_chunks_async
 
     user = _create_user(pg_db_session, email="hybrid_rrf@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid RRF")
@@ -229,8 +239,8 @@ def test_hybrid_search_bm25_rrf_boosts_keyword_match(
     query_vec = [1.0] + [0.0] * 1535
     mock_openai_client.embeddings.create.return_value.data = [Mock(embedding=query_vec)]
 
-    results = search_similar_chunks(
-        cl.id, "cors configuration", top_k=2, db=pg_db_session, api_key="sk-test"
+    results = await search_similar_chunks_async(
+        cl.id, "cors configuration", top_k=2, db=pg_async_db_session, api_key="sk-test"
     )
 
     # Both chunks should be returned — hybrid search merges vector and BM25 signals
@@ -241,13 +251,15 @@ def test_hybrid_search_bm25_rrf_boosts_keyword_match(
 
 
 @pytest.mark.pgvector
-def test_hybrid_search_limits_results_with_mixed_candidates(
+@pytest.mark.asyncio
+async def test_hybrid_search_limits_results_with_mixed_candidates(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
 ) -> None:
     """Hybrid search keeps top_k when candidates mix keyword and weak/noisy chunks."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks
+    from backend.search.service import search_similar_chunks_async
 
     user = _create_user(pg_db_session, email="hybrid_mixed@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Mixed")
@@ -260,8 +272,8 @@ def test_hybrid_search_limits_results_with_mixed_candidates(
     _insert_embedding(pg_db_session, doc_id, "random unrelated payload alpha beta", [0.6, 0.6] + [0.0] * 1534)
     _insert_embedding(pg_db_session, doc_id, "another noisy chunk", [0.2, 0.95] + [0.0] * 1534)
 
-    results = search_similar_chunks(
-        cl.id, "cors setting", top_k=2, db=pg_db_session, api_key="sk-test"
+    results = await search_similar_chunks_async(
+        cl.id, "cors setting", top_k=2, db=pg_async_db_session, api_key="sk-test"
     )
     assert len(results) == 2
     texts = [emb.chunk_text for emb, _ in results]
@@ -269,28 +281,34 @@ def test_hybrid_search_limits_results_with_mixed_candidates(
 
 
 @pytest.mark.pgvector
-def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
+@pytest.mark.asyncio
+async def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-EN query routes BM25 through the EN rewrite, producing lexical signal against English corpus."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_symmetric@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Symmetric")
     doc_id = _make_document(pg_db_session, cl.id)
 
     query_vec = [0.5] + [0.0] * 1535
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [query_vec for _ in queries],
-    )
+
+    async def fake_embed_queries(queries, **kwargs):
+        return [query_vec for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+
     # Simulate query rewrite: Cyrillic query → EN keyword phrase
+    async def fake_rewrite(query, **kwargs):
+        return "reset password instructions"
+
     monkeypatch.setattr(
-        "backend.search.service._rewrite_query_for_retrieval",
-        lambda query, **kwargs: "reset password instructions",
+        "backend.search.service._async_rewrite_query_for_retrieval", fake_rewrite
     )
 
     _insert_embedding(pg_db_session, doc_id, "unrelated foo content", [0.5] + [0.0] * 1535)
@@ -302,11 +320,11 @@ def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
     )
 
     # Russian query — non-EN, BM25 must use the EN rewrite to find lexical matches
-    result = search_similar_chunks_detailed(
+    result = await search_similar_chunks_detailed_async(
         cl.id,
         "сброс пароля",
         top_k=2,
-        db=pg_db_session,
+        db=pg_async_db_session,
         api_key="sk-test",
     )
 
@@ -319,24 +337,27 @@ def test_hybrid_search_symmetric_bm25_evaluates_extra_lexical_variants_on_pg(
 
 
 @pytest.mark.pgvector
-def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_results(
+@pytest.mark.asyncio
+async def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_results(
     mock_openai_client: Mock,
     pg_db_session: Session,
+    pg_async_db_session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """EN query uses original query for BM25; ranking is stable with or without a rewrite variant."""
     from tests.test_models import _create_client, _create_user
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
 
     user = _create_user(pg_db_session, email="hybrid_control@example.com")
     cl = _create_client(pg_db_session, user, name="Hybrid Control")
     doc_id = _make_document(pg_db_session, cl.id)
 
     query_vec = [1.0] + [0.0] * 1535
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [query_vec for _ in queries],
-    )
+
+    async def fake_embed_queries(queries, **kwargs):
+        return [query_vec for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
 
     _insert_embedding(
         pg_db_session,
@@ -352,28 +373,32 @@ def test_hybrid_search_symmetric_bm25_can_add_work_without_changing_final_result
     )
 
     # EN query with no rewrite (None returned) — BM25 uses the original query
+    async def no_rewrite_fn(query, **kwargs):
+        return None
+
     monkeypatch.setattr(
-        "backend.search.service._rewrite_query_for_retrieval",
-        lambda query, **kwargs: None,
+        "backend.search.service._async_rewrite_query_for_retrieval", no_rewrite_fn
     )
-    no_rewrite = search_similar_chunks_detailed(
+    no_rewrite = await search_similar_chunks_detailed_async(
         cl.id,
         "cors settings",
         top_k=2,
-        db=pg_db_session,
+        db=pg_async_db_session,
         api_key="sk-test",
     )
 
     # EN query with a rewrite present — BM25 still uses the original EN query (rewrite ignored for EN)
+    async def en_rewrite_fn(query, **kwargs):
+        return "cors origin configuration allow list"
+
     monkeypatch.setattr(
-        "backend.search.service._rewrite_query_for_retrieval",
-        lambda query, **kwargs: "cors origin configuration allow list",
+        "backend.search.service._async_rewrite_query_for_retrieval", en_rewrite_fn
     )
-    with_rewrite = search_similar_chunks_detailed(
+    with_rewrite = await search_similar_chunks_detailed_async(
         cl.id,
         "cors settings",
         top_k=2,
-        db=pg_db_session,
+        db=pg_async_db_session,
         api_key="sk-test",
     )
 

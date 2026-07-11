@@ -22,15 +22,15 @@ from backend.search.service import (
     ContradictionPair,
     ContradictionAdjudicationEvidence,
     SourceOverlapPair,
-    _rewrite_query_for_retrieval,
+    _async_rewrite_query_for_retrieval,
     apply_script_boost,
-    bm25_search_chunks,
+    async_bm25_search_chunks,
+    async_embed_queries_with_stats,
     build_reliability_assessment,
     build_reliability_projection,
     cosine_similarity,
     detect_metadata_contradictions,
     embed_queries,
-    embed_queries_with_stats,
     detect_query_script_bucket,
     detect_source_overlaps,
     expand_query,
@@ -67,8 +67,9 @@ def test_cosine_similarity_zero_vectors() -> None:
     assert cosine_similarity(zero, zero) == 0.0
 
 
-def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> None:
-    from backend.search.service import search_similar_chunks_detailed
+@pytest.mark.asyncio
+async def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> None:
+    from backend.search.service import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -95,14 +96,17 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     class FakeDB:
         bind = FakeBind()
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
-    )
-    monkeypatch.setattr("backend.search.service._pgvector_search", lambda *args, **kwargs: [])
+    async def fake_embed_queries(queries, **kwargs):
+        return [[0.1] * 3 for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    async def fake_pgvector_search(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr("backend.search.service._async_pgvector_search", fake_pgvector_search)
 
     trace = FakeTrace()
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=uuid.uuid4(),
         query="hello",
         top_k=3,
@@ -146,9 +150,10 @@ def test_search_trace_pgvector_empty_path_records_vector_span(monkeypatch) -> No
     }
 
 
-def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -182,17 +187,17 @@ def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> 
         metadata_json={"chunk_index": 0},
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
-    )
-    monkeypatch.setattr(
-        "backend.search.service._pgvector_search",
-        lambda *args, **kwargs: [(embedding, 0.91)],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[0.1] * 3 for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    async def fake_pgvector_search(*args, **kwargs):
+        return [(embedding, 0.91)]
+
+    monkeypatch.setattr("backend.search.service._async_pgvector_search", fake_pgvector_search)
 
     trace = FakeTrace()
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=3,
@@ -227,9 +232,12 @@ def test_search_trace_multi_variant_pgvector_reports_extra_work(monkeypatch) -> 
     assert bundle.retrieval_duration_ms >= bundle.vector_search_duration_ms
 
 
-def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: Session) -> None:
+@pytest.mark.asyncio
+async def test_search_trace_sqlite_runs_full_stage_contract(
+    monkeypatch, db_session: Session, async_search_session
+) -> None:
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     class FakeSpan:
@@ -288,17 +296,17 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
     )
     db_session.commit()
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[1.0, 0.0, 0.0] for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
 
     trace = FakeTrace()
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
         query="Reset-password!!   reset password",
         top_k=2,
-        db=db_session,
+        db=async_search_session,
         api_key="sk-test",
         trace=trace,
     )
@@ -347,9 +355,10 @@ def test_search_trace_sqlite_runs_full_stage_contract(monkeypatch, db_session: S
     assert overlap_span.output["contradiction_basis_types"] == []
 
 
-def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
 
     class FakeBind:
         url = "sqlite://test"
@@ -364,16 +373,18 @@ def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> No
         metadata_json={"chunk_index": 0},
     )
 
+    async def fake_embed_queries(queries, **kwargs):
+        return [[float(index)] for index, _ in enumerate(queries, start=1)]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    async def fake_python_cosine_search(*args, **kwargs):
+        return [(embedding, 0.91)]
+
     monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[float(index)] for index, _ in enumerate(queries, start=1)],
-    )
-    monkeypatch.setattr(
-        "backend.search.service._python_cosine_search",
-        lambda *args, **kwargs: [(embedding, 0.91)],
+        "backend.search.service._async_python_cosine_search", fake_python_cosine_search
     )
 
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=2,
@@ -386,9 +397,14 @@ def test_search_sqlite_observability_counts_executed_variants(monkeypatch) -> No
     assert bundle.extra_vector_search_calls == 2
 
 
-def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeypatch) -> None:
     from backend.models import Embedding
-    from backend.search.service import BM25SearchBundle, BM25Winner, search_similar_chunks_detailed
+    from backend.search.service import (
+        BM25SearchBundle,
+        BM25Winner,
+        search_similar_chunks_detailed_async,
+    )
 
     class FakeBind:
         url = "sqlite://test"
@@ -415,12 +431,12 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
         metadata_json={"chunk_index": 2},
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[float(index)] for index, _ in enumerate(queries, start=1)],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[float(index)] for index, _ in enumerate(queries, start=1)]
 
-    def fake_python_cosine_search(
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+
+    async def fake_python_cosine_search(
         tenant_id: uuid.UUID,
         query_vector: list[float],
         top_k: int,
@@ -461,7 +477,7 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
         )
 
     monkeypatch.setattr(
-        "backend.search.service._python_cosine_search",
+        "backend.search.service._async_python_cosine_search",
         fake_python_cosine_search,
     )
     monkeypatch.setattr(
@@ -469,7 +485,7 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
         fake_run_bm25_search,
     )
 
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=uuid.uuid4(),
         query="Reset-password!!   reset password",
         top_k=2,
@@ -481,22 +497,6 @@ def test_search_sqlite_deduplicates_variant_candidates_by_max_similarity(monkeyp
     assert candidate_ids == [shared.id, secondary.id, tertiary.id]
     assert bundle.best_vector_similarity == 0.9
     assert len({embedding.id for embedding, _ in bundle.results}) == len(bundle.results)
-
-
-def test_lexical_safe_query_variants_dedupes_after_normalization() -> None:
-    from backend.search.service import lexical_safe_query_variants
-
-    variants = lexical_safe_query_variants(
-        "Reset password",
-        base_variants=[
-            " Reset   password ",
-            "reset password",
-            "RESET PASSWORD",
-            "Reset password",
-        ],
-    )
-
-    assert variants == ["Reset password"]
 
 
 def test_run_bm25_search_symmetric_merge_deduplicates_hits_and_keeps_earliest_tie_winner(
@@ -635,11 +635,12 @@ def test_run_bm25_search_uses_final_merged_output_for_lexical_signal(
     assert bundle.has_lexical_signal is False
 
 
-def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
+@pytest.mark.asyncio
+async def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
     monkeypatch,
 ) -> None:
     from backend.models import Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
 
     class FakeSpan:
         def __init__(self, name: str) -> None:
@@ -685,27 +686,30 @@ def test_search_trace_uses_script_bucket_naming_for_script_boost_and_mmr(
         metadata_json={"language": "en", "chunk_index": 2},
     )
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[0.1] * 3 for _ in queries],
-    )
-    monkeypatch.setattr(
-        "backend.search.service._pgvector_search",
-        lambda *args, **kwargs: [
+    async def fake_embed_queries(queries, **kwargs):
+        return [[0.1] * 3 for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
+    async def fake_pgvector_search(*args, **kwargs):
+        return [
             (cyrillic_primary, 0.95),
             (cyrillic_duplicate, 0.92),
             (latin_diverse, 0.7),
-        ],
-    )
-    # FakeDB doesn't implement .query(); pretend the tenant has embeddings
+        ]
+
+    monkeypatch.setattr("backend.search.service._async_pgvector_search", fake_pgvector_search)
+    # FakeDB doesn't implement .execute(); pretend the tenant has embeddings
     # so the entity-overlap channel proceeds in this trace-contract test.
+    async def fake_tenant_has_embeddings(*args, **kwargs):
+        return True
+
     monkeypatch.setattr(
-        "backend.search.service._tenant_has_embeddings",
-        lambda *args, **kwargs: True,
+        "backend.search.service._async_tenant_has_embeddings",
+        fake_tenant_has_embeddings,
     )
 
     trace = FakeTrace()
-    bundle = search_similar_chunks_detailed(
+    bundle = await search_similar_chunks_detailed_async(
         tenant_id=uuid.uuid4(),
         query="как сбросить пароль",
         top_k=3,
@@ -781,7 +785,8 @@ def test_embed_queries_batches_variants_into_single_openai_call(mock_openai_clie
     assert call_kwargs.kwargs.get("input") == ["first", "second"]
 
 
-def test_embed_queries_with_stats_reports_actual_request_count(
+@pytest.mark.asyncio
+async def test_embed_queries_with_stats_reports_actual_request_count(
     mock_openai_client: Mock,
 ) -> None:
     mock_openai_client.embeddings.create.return_value.data = [
@@ -789,7 +794,7 @@ def test_embed_queries_with_stats_reports_actual_request_count(
         Mock(embedding=[0.2] * 3),
     ]
 
-    vectors, request_count = embed_queries_with_stats(
+    vectors, request_count = await async_embed_queries_with_stats(
         ["first", "second"],
         api_key="sk-test",
     )
@@ -3152,8 +3157,9 @@ def test_search_default_top_k(
 # --- BM25 search unit tests ---
 
 
-def test_bm25_search_chunks_finds_match(db_session) -> None:
-    """bm25_search_chunks returns chunks relevant to query tokens."""
+@pytest.mark.asyncio
+async def test_bm25_search_chunks_finds_match(db_session, async_search_session) -> None:
+    """async_bm25_search_chunks returns chunks relevant to query tokens."""
     from tests.test_models import _create_client, _create_user
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
@@ -3191,7 +3197,9 @@ def test_bm25_search_chunks_finds_match(db_session) -> None:
     db_session.add_all([emb, decoy_one, decoy_two])
     db_session.commit()
 
-    results = bm25_search_chunks(cl.id, "cors settings", top_k=5, db=db_session)
+    results = await async_bm25_search_chunks(
+        cl.id, "cors settings", top_k=5, db=async_search_session
+    )
     # decoy_one ("Billing export guide for invoices") shares no tokens with the
     # query and is filtered out at the SQL layer; only chunks containing at
     # least one query token are scored.
@@ -3507,51 +3515,57 @@ def test_search_skips_vector_with_wrong_dimension(
 # --- Unit tests for cross-lingual query expansion ---
 
 
-def test_rewrite_query_for_retrieval_returns_rewritten_query() -> None:
+@pytest.mark.asyncio
+async def test_rewrite_query_for_retrieval_returns_rewritten_query() -> None:
     """Happy path: LLM returns a documentation-style keyword phrase in the same language."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_response = MagicMock()
     mock_response.choices[0].message.content = "определение языка мультиязычная поддержка"
 
-    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
-        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
+        "backend.search.service.async_call_openai_with_retry",
+        new=AsyncMock(return_value=mock_response),
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _rewrite_query_for_retrieval(
+        result = await _async_rewrite_query_for_retrieval(
             "Почему бот не отвечает на русском?", api_key="test-key"
         )
 
     assert result == "определение языка мультиязычная поддержка"
 
 
-def test_rewrite_query_for_retrieval_returns_none_on_error() -> None:
+@pytest.mark.asyncio
+async def test_rewrite_query_for_retrieval_returns_none_on_error() -> None:
     """Rewrite failures degrade gracefully — None means caller skips the variant."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
-    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
-        "backend.search.service.call_openai_with_retry", side_effect=RuntimeError("timeout")
+    with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
+        "backend.search.service.async_call_openai_with_retry",
+        new=AsyncMock(side_effect=RuntimeError("timeout")),
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _rewrite_query_for_retrieval(
+        result = await _async_rewrite_query_for_retrieval(
             "Почему бот не отвечает на русском?", api_key="test-key"
         )
 
     assert result is None
 
 
-def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
+@pytest.mark.asyncio
+async def test_rewrite_query_for_retrieval_returns_none_on_empty_response() -> None:
     """Empty LLM output does not yield a blank variant."""
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     mock_response = MagicMock()
     mock_response.choices[0].message.content = ""
 
-    with patch("backend.search.service.get_openai_client") as mock_client_factory, patch(
-        "backend.search.service.call_openai_with_retry", return_value=mock_response
+    with patch("backend.search.service.get_async_openai_client") as mock_client_factory, patch(
+        "backend.search.service.async_call_openai_with_retry",
+        new=AsyncMock(return_value=mock_response),
     ):
         mock_client_factory.return_value = MagicMock()
-        result = _rewrite_query_for_retrieval("", api_key="test-key")
+        result = await _async_rewrite_query_for_retrieval("", api_key="test-key")
 
     assert result is None
 
@@ -3617,8 +3631,9 @@ def test_normalize_scored_results_empty_list_returns_empty() -> None:
 # ── Parallel NER (Step 5+ latency fix) ──────────────────────────────────────
 
 
-def test_entity_ner_runs_concurrently_with_vector_and_bm25(
-    monkeypatch: pytest.MonkeyPatch, db_session: Session
+@pytest.mark.asyncio
+async def test_entity_ner_runs_concurrently_with_vector_and_bm25(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session, async_search_session
 ) -> None:
     """NER must run in parallel with vector + BM25, not sequentially.
 
@@ -3632,10 +3647,11 @@ def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     Threshold of 0.5s gives margin for thread spin-up / scheduling
     jitter while still failing if NER is back to sequential.
     """
+    import asyncio
     import time as _time
 
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="parallel_ner@example.com")
@@ -3660,22 +3676,22 @@ def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     )
     db_session.commit()
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[1.0, 0.0, 0.0] for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
 
     # Make the vector candidate build "slow" so NER has time to run in parallel.
     real_build = __import__(
-        "backend.search.service", fromlist=["_build_vector_candidate_set"]
-    )._build_vector_candidate_set
+        "backend.search.service", fromlist=["_async_build_vector_candidate_set"]
+    )._async_build_vector_candidate_set
 
-    def slow_vector_build(*args, **kwargs):
-        _time.sleep(0.3)
-        return real_build(*args, **kwargs)
+    async def slow_vector_build(*args, **kwargs):
+        await asyncio.sleep(0.3)
+        return await real_build(*args, **kwargs)
 
     monkeypatch.setattr(
-        "backend.search.service._build_vector_candidate_set", slow_vector_build
+        "backend.search.service._async_build_vector_candidate_set", slow_vector_build
     )
 
     def slow_ner(query, _api_key, *, tenant_id=None, bot_id=None):  # noqa: ARG001
@@ -3687,11 +3703,11 @@ def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     )
 
     started = _time.perf_counter()
-    search_similar_chunks_detailed(
+    await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
         query="hello world",
         top_k=3,
-        db=db_session,
+        db=async_search_session,
         api_key="sk-test",
     )
     elapsed = _time.perf_counter() - started
@@ -3705,28 +3721,29 @@ def test_entity_ner_runs_concurrently_with_vector_and_bm25(
     )
 
 
-def test_entity_ner_skipped_for_tenant_with_no_embeddings(
-    monkeypatch: pytest.MonkeyPatch, db_session: Session
+@pytest.mark.asyncio
+async def test_entity_ner_skipped_for_tenant_with_no_embeddings(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session, async_search_session
 ) -> None:
     """Tenants with zero indexed chunks must not pay for a NER call.
 
     Codex P1 fix on PR #544: ``future.cancel()`` cannot stop a thread
     that already started running. Submitting NER unconditionally and
     then "cancelling" on the empty-vector early-return still pays for
-    the OpenAI call. Pre-check via _tenant_has_embeddings gates the
+    the OpenAI call. Pre-check via _async_tenant_has_embeddings gates the
     submission so freshly-onboarded / empty-FAQ tenants pay zero.
     """
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="no_emb@example.com")
     tenant_id = _create_client(db_session, user, name="No Embeddings").id
     # No documents, no embeddings — tenant exists but has nothing indexed.
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[1.0, 0.0, 0.0] for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
 
     ner_calls: list[str] = []
 
@@ -3738,11 +3755,11 @@ def test_entity_ner_skipped_for_tenant_with_no_embeddings(
         "backend.search.service.extract_entities_from_query", tracking_ner
     )
 
-    search_similar_chunks_detailed(
+    await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
         query="anything goes here",
         top_k=3,
-        db=db_session,
+        db=async_search_session,
         api_key="sk-test",
     )
 
@@ -3752,8 +3769,9 @@ def test_entity_ner_skipped_for_tenant_with_no_embeddings(
     )
 
 
-def test_entity_ner_future_cancelled_on_empty_vector_path(
-    monkeypatch: pytest.MonkeyPatch, db_session: Session
+@pytest.mark.asyncio
+async def test_entity_ner_future_cancelled_on_empty_vector_path(
+    monkeypatch: pytest.MonkeyPatch, db_session: Session, async_search_session
 ) -> None:
     """Empty vector candidates → NER future is cancelled, executor shut down.
 
@@ -3761,7 +3779,7 @@ def test_entity_ner_future_cancelled_on_empty_vector_path(
     keeps a thread + an OpenAI request alive for nothing.
     """
     from backend.models import Document, DocumentStatus, DocumentType, Embedding
-    from backend.search.service import search_similar_chunks_detailed
+    from backend.search.service import search_similar_chunks_detailed_async
     from tests.test_models import _create_client, _create_user
 
     user = _create_user(db_session, email="empty_path_ner@example.com")
@@ -3787,10 +3805,10 @@ def test_entity_ner_future_cancelled_on_empty_vector_path(
     )
     db_session.commit()
 
-    monkeypatch.setattr(
-        "backend.search.service.embed_queries",
-        lambda queries, **kwargs: [[1.0, 0.0, 0.0] for _ in queries],
-    )
+    async def fake_embed_queries(queries, **kwargs):
+        return [[1.0, 0.0, 0.0] for _ in queries]
+
+    monkeypatch.setattr("backend.search.service.async_embed_queries", fake_embed_queries)
 
     ner_completed = {"value": False}
 
@@ -3808,23 +3826,26 @@ def test_entity_ner_future_cancelled_on_empty_vector_path(
     )
 
     # Force vector candidates to be empty by blanking the candidate set.
-    monkeypatch.setattr(
-        "backend.search.service._build_vector_candidate_set",
-        lambda *args, **kwargs: type(  # noqa: SLF001
+    async def empty_candidate_set(*args, **kwargs):
+        return type(
             "EmptySet",
             (),
             {"candidates": [], "call_count": 1, "duration_ms": 0.0},
-        )(),
+        )()
+
+    monkeypatch.setattr(
+        "backend.search.service._async_build_vector_candidate_set",
+        empty_candidate_set,
     )
 
     import time as _time
 
     started = _time.perf_counter()
-    search_similar_chunks_detailed(
+    await search_similar_chunks_detailed_async(
         tenant_id=tenant_id,
         query="anything",
         top_k=3,
-        db=db_session,
+        db=async_search_session,
         api_key="sk-test",
     )
     elapsed = _time.perf_counter() - started

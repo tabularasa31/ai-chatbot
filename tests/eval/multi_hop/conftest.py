@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 
 import psycopg2
 import pytest
+import pytest_asyncio
 import sqlalchemy as sa
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine
@@ -128,6 +129,35 @@ def pg_db_session(pg_engine: sa.engine.Engine) -> Generator[Session, None, None]
         session.close()
 
 
+@pytest_asyncio.fixture(scope="function")
+async def pg_async_db_session(pg_engine: sa.engine.Engine):
+    """AsyncSession over the same disposable PostgreSQL database as ``pg_db_session``."""
+    from sqlalchemy.ext.asyncio import (
+        AsyncSession,
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    sync_url = pg_engine.url.render_as_string(hide_password=False)
+    async_url = sync_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://")
+    async_engine = create_async_engine(async_url, future=True, poolclass=NullPool)
+    SessionFactory = async_sessionmaker(
+        bind=async_engine,
+        class_=AsyncSession,
+        autocommit=False,
+        autoflush=False,
+        expire_on_commit=False,
+    )
+    try:
+        async with SessionFactory() as session:
+            try:
+                yield session
+            finally:
+                await session.rollback()
+    finally:
+        await async_engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def synthetic_openai_client() -> Generator[Mock, None, None]:
     """Replace OpenAI clients with a synthetic-embedding stub.
@@ -153,9 +183,27 @@ def synthetic_openai_client() -> Generator[Mock, None, None]:
         usage=Mock(total_tokens=1),
     )
 
+    # Async-capable mock delegating to the same sync mock so the async
+    # retrieval pipeline sees identical synthetic embeddings and the same
+    # "ok" rewrite the sync pipeline used to receive.
+    async_mock_client = Mock()
+
+    async def async_embeddings_create(*args: object, **kwargs: object) -> Mock:
+        return mock_client.embeddings.create(*args, **kwargs)
+
+    async def async_chat_completions_create(*args: object, **kwargs: object) -> Mock:
+        return mock_client.chat.completions.create(*args, **kwargs)
+
+    async_mock_client.embeddings.create.side_effect = async_embeddings_create
+    async_mock_client.chat.completions.create.side_effect = async_chat_completions_create
+
     with (
         patch("backend.embeddings.service.get_openai_client", return_value=mock_client),
         patch("backend.search.service.get_openai_client", return_value=mock_client),
+        patch(
+            "backend.search.service.get_async_openai_client",
+            return_value=async_mock_client,
+        ),
     ):
         yield mock_client
 

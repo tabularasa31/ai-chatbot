@@ -93,7 +93,7 @@ from backend.core.db import run_sync
 # Symbols below are re-exported so that tests can monkeypatch them through
 # ``backend.chat.service.<name>`` and the lazy ``_svc.*`` lookups in handlers
 # still see the patched versions.
-from backend.core.openai_client import get_async_openai_client, get_openai_client  # noqa: F401
+from backend.core.openai_client import get_async_openai_client  # noqa: F401
 from backend.core.openai_retry import async_call_openai_with_retry  # noqa: F401
 from backend.escalation.openai_escalation import (
     EscalationLlmResult,

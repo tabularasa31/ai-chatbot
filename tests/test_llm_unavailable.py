@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import uuid
 from unittest.mock import Mock
 
@@ -284,16 +285,30 @@ def test_perform_manual_escalation_llm_unavailable_skips_openai_call(
 
     cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
-    msg, tnum = esc_service.perform_manual_escalation(
-        db_session,
-        cl,
-        chat.session_id,
-        api_key="sk-broken",
-        user_note=None,
-        trigger=EscalationTrigger.llm_unavailable,
-        failure_type="provider_timeout",
-        original_user_message="What are your office hours?",
-    )
+
+    # perform_manual_escalation is async now; drive it on the test engine's
+    # AsyncSessionLocal (rebound by the ``tenant`` fixture). Commit/expire the
+    # sync session around the call so SQLite locks are released and reads see
+    # the async connection's writes.
+    from backend.core import db as core_db
+
+    db_session.commit()
+
+    async def _run():
+        async with core_db.AsyncSessionLocal() as adb:
+            return await esc_service.perform_manual_escalation(
+                adb,
+                cl,
+                chat.session_id,
+                api_key="sk-broken",
+                user_note=None,
+                trigger=EscalationTrigger.llm_unavailable,
+                failure_type="provider_timeout",
+                original_user_message="What are your office hours?",
+            )
+
+    msg, tnum = asyncio.run(_run())
+    db_session.expire_all()
 
     sentinel.assert_not_called()
     assert tnum.startswith("ESC-")

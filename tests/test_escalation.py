@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from unittest.mock import patch
 
@@ -64,7 +65,7 @@ def _mock_llm_human_request(result: bool):
     """Patch the OpenAI call inside detect_human_request to return a fixed result."""
     import json
     from contextlib import ExitStack
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     response = MagicMock()
     response.choices = [MagicMock()]
@@ -75,14 +76,14 @@ def _mock_llm_human_request(result: bool):
             self._stack = ExitStack()
             self._stack.enter_context(
                 patch(
-                    "backend.escalation.service.get_openai_client",
+                    "backend.escalation.service.get_async_openai_client",
                     return_value=MagicMock(),
                 )
             )
             self._stack.enter_context(
                 patch(
-                    "backend.escalation.service.call_openai_with_retry",
-                    return_value=response,
+                    "backend.escalation.service.async_call_openai_with_retry",
+                    new=AsyncMock(return_value=response),
                 )
             )
             return self
@@ -93,38 +94,30 @@ def _mock_llm_human_request(result: bool):
     return _Stack()
 
 
-def test_detect_human_request_english() -> None:
+@pytest.mark.asyncio
+async def test_detect_human_request_english() -> None:
     with _mock_llm_human_request(True):
-        assert (
-            detect_human_request(
-                "I need to talk to a human please", "sk-test"
-            ).human_request
-            is True
-        )
+        result = await detect_human_request("I need to talk to a human please", "sk-test")
+        assert result.human_request is True
     with _mock_llm_human_request(True):
-        assert (
-            detect_human_request(
-                "connect me to support, this is useless", "sk-test"
-            ).human_request
-            is True
+        result = await detect_human_request(
+            "connect me to support, this is useless", "sk-test"
         )
+        assert result.human_request is True
 
 
-def test_detect_human_request_russian() -> None:
+@pytest.mark.asyncio
+async def test_detect_human_request_russian() -> None:
     with _mock_llm_human_request(True):
-        assert (
-            detect_human_request(
-                "хочу поговорить с человеком", "sk-test"
-            ).human_request
-            is True
-        )
+        result = await detect_human_request("хочу поговорить с человеком", "sk-test")
+        assert result.human_request is True
 
 
 def _mock_llm_support_contact(result: bool):
     """Patch the OpenAI call inside detect_support_contact_question."""
     import json
     from contextlib import ExitStack
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     response = MagicMock()
     response.choices = [MagicMock()]
@@ -135,14 +128,14 @@ def _mock_llm_support_contact(result: bool):
             self._stack = ExitStack()
             self._stack.enter_context(
                 patch(
-                    "backend.escalation.service.get_openai_client",
+                    "backend.escalation.service.get_async_openai_client",
                     return_value=MagicMock(),
                 )
             )
             self._stack.enter_context(
                 patch(
-                    "backend.escalation.service.call_openai_with_retry",
-                    return_value=response,
+                    "backend.escalation.service.async_call_openai_with_retry",
+                    new=AsyncMock(return_value=response),
                 )
             )
             return self
@@ -153,7 +146,8 @@ def _mock_llm_support_contact(result: bool):
     return _Stack()
 
 
-def test_detect_support_contact_question_true_for_contact_question() -> None:
+@pytest.mark.asyncio
+async def test_detect_support_contact_question_true_for_contact_question() -> None:
     from backend.escalation.service import (
         _support_contact_cache,
         detect_support_contact_question,
@@ -162,12 +156,15 @@ def test_detect_support_contact_question_true_for_contact_question() -> None:
     _support_contact_cache.clear()
     with _mock_llm_support_contact(True):
         assert (
-            detect_support_contact_question("how can i write to the support?", "sk-test")
+            await detect_support_contact_question(
+                "how can i write to the support?", "sk-test"
+            )
             is True
         )
 
 
-def test_detect_support_contact_question_false_for_ordinary_question() -> None:
+@pytest.mark.asyncio
+async def test_detect_support_contact_question_false_for_ordinary_question() -> None:
     from backend.escalation.service import (
         _support_contact_cache,
         detect_support_contact_question,
@@ -176,12 +173,15 @@ def test_detect_support_contact_question_false_for_ordinary_question() -> None:
     _support_contact_cache.clear()
     with _mock_llm_support_contact(False):
         assert (
-            detect_support_contact_question("how do I configure DNS records?", "sk-test")
+            await detect_support_contact_question(
+                "how do I configure DNS records?", "sk-test"
+            )
             is False
         )
 
 
-def test_detect_human_request_cache_isolated_per_tenant(
+@pytest.mark.asyncio
+async def test_detect_human_request_cache_isolated_per_tenant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Same message must not leak a cached classification across tenants."""
@@ -197,7 +197,7 @@ def test_detect_human_request_cache_isolated_per_tenant(
 
     call_count = {"n": 0}
 
-    def _fake_call(_label, fn, **_kwargs):
+    async def _fake_call(_label, fn, **_kwargs):
         call_count["n"] += 1
         response = MagicMock()
         response.choices = [MagicMock()]
@@ -209,39 +209,40 @@ def test_detect_human_request_cache_isolated_per_tenant(
         return response
 
     monkeypatch.setattr(
-        "backend.escalation.service.get_openai_client",
+        "backend.escalation.service.get_async_openai_client",
         lambda _api_key: MagicMock(),
     )
     monkeypatch.setattr(
-        "backend.escalation.service.call_openai_with_retry",
+        "backend.escalation.service.async_call_openai_with_retry",
         _fake_call,
     )
 
     # Tenant A — first call hits LLM, returns True, gets cached.
-    assert detect_human_request(message, "sk-test", tenant_a).human_request is True
+    assert (await detect_human_request(message, "sk-test", tenant_a)).human_request is True
     # Same message, different tenant — must NOT reuse A's cached True; must
     # call the LLM again (returns False per the mock).
-    assert detect_human_request(message, "sk-test", tenant_b).human_request is False
+    assert (await detect_human_request(message, "sk-test", tenant_b)).human_request is False
     assert call_count["n"] == 2
 
     # Tenant A again — served from cache, no extra LLM call.
-    assert detect_human_request(message, "sk-test", tenant_a).human_request is True
+    assert (await detect_human_request(message, "sk-test", tenant_a)).human_request is True
     assert call_count["n"] == 2
 
 
-def test_detect_human_request_uses_human_request_model(
+@pytest.mark.asyncio
+async def test_detect_human_request_uses_human_request_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unittest.mock import MagicMock
+    from unittest.mock import AsyncMock, MagicMock
 
     response = MagicMock()
     response.choices = [MagicMock()]
     response.choices[0].message.content = '{"human_request": true}'
     mock_client = MagicMock()
-    mock_client.chat.completions.create.return_value = response
+    mock_client.chat.completions.create = AsyncMock(return_value=response)
 
     monkeypatch.setattr(
-        "backend.escalation.service.get_openai_client",
+        "backend.escalation.service.get_async_openai_client",
         lambda _api_key: mock_client,
     )
     monkeypatch.setattr(
@@ -249,12 +250,10 @@ def test_detect_human_request_uses_human_request_model(
         "gpt-test-human-guard",
     )
 
-    assert (
-        detect_human_request(
-            "please connect me to an operator now", "sk-test"
-        ).human_request
-        is True
+    result = await detect_human_request(
+        "please connect me to an operator now", "sk-test"
     )
+    assert result.human_request is True
     assert mock_client.chat.completions.create.call_args.kwargs["model"] == "gpt-test-human-guard"
 
 
@@ -1198,6 +1197,28 @@ def test_notify_email_body_omits_user_note_section_when_absent(
     assert "USER'S NOTE" not in body
 
 
+def _run_manual_escalation(db_session: Session, *args, **kwargs):
+    """Drive the async ``perform_manual_escalation`` from sync tests.
+
+    Mirrors the ``process_chat_message`` compat shim: commit the caller's sync
+    session first so SQLite releases its lock before the async entry point
+    opens its own connection, and expire the sync session after so subsequent
+    reads see the writes made on that connection. Requires the ``tenant``
+    fixture (it rebinds ``core_db.AsyncSessionLocal`` to the test engine).
+    """
+    from backend.core import db as core_db
+
+    db_session.commit()
+
+    async def _inner():
+        async with core_db.AsyncSessionLocal() as adb:
+            return await perform_manual_escalation(adb, *args, **kwargs)
+
+    result = asyncio.run(_inner())
+    db_session.expire_all()
+    return result
+
+
 def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
     tenant: TestClient,
     db_session: Session,
@@ -1223,7 +1244,7 @@ def test_perform_manual_escalation_sets_awaiting_ticket_when_email_missing(
 
     cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
-    msg, tnum = perform_manual_escalation(
+    msg, tnum = _run_manual_escalation(
         db_session,
         cl,
         chat.session_id,
@@ -1277,7 +1298,7 @@ def test_perform_manual_escalation_sets_followup_when_email_known(
 
     cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
-    _msg, tnum = perform_manual_escalation(
+    _msg, tnum = _run_manual_escalation(
         db_session,
         cl,
         chat.session_id,
@@ -1526,7 +1547,7 @@ def test_perform_manual_escalation_emits_chat_escalated_event(
     cl = db_session.query(Tenant).filter(Tenant.id == tenant_id).first()
     assert cl is not None
 
-    perform_manual_escalation(
+    _run_manual_escalation(
         db_session,
         cl,
         chat.session_id,
@@ -1922,7 +1943,8 @@ def test_notify_ticket_update_skips_yes_no_admin_replies_via_handler(
 # ---------------------------------------------------------------------------
 
 
-def test_render_pre_confirm_text_initial_localizes_canonical_template(
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_initial_localizes_canonical_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Initial pre_confirm reply must come from the canonical English text,
@@ -1946,7 +1968,7 @@ def test_render_pre_confirm_text_initial_localizes_canonical_template(
         _fake_localize,
     )
 
-    out = render_pre_confirm_text(
+    out = await render_pre_confirm_text(
         variant="initial",
         response_language="ru",
         api_key="sk-test",
@@ -1959,7 +1981,8 @@ def test_render_pre_confirm_text_initial_localizes_canonical_template(
     assert out.tokens_used == 7
 
 
-def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The variants must localize different canonical strings.
@@ -1989,11 +2012,11 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
         _fake_localize,
     )
 
-    render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
-    render_pre_confirm_text(variant="no_answer", response_language="en", api_key="k")
-    render_pre_confirm_text(variant="support_contact", response_language="en", api_key="k")
-    render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
-    render_pre_confirm_text(variant="declined", response_language="en", api_key="k")
+    await render_pre_confirm_text(variant="initial", response_language="en", api_key="k")
+    await render_pre_confirm_text(variant="no_answer", response_language="en", api_key="k")
+    await render_pre_confirm_text(variant="support_contact", response_language="en", api_key="k")
+    await render_pre_confirm_text(variant="clarify", response_language="en", api_key="k")
+    await render_pre_confirm_text(variant="declined", response_language="en", api_key="k")
 
     assert seen == [
         PRE_CONFIRM_QUESTION_EN,
@@ -2008,7 +2031,8 @@ def test_render_pre_confirm_text_declined_and_clarify_use_distinct_canonicals(
     assert "couldn't find" not in PRE_CONFIRM_SUPPORT_CONTACT_EN.lower()
 
 
-def test_detect_human_request_empty_message_skips_llm(
+@pytest.mark.asyncio
+async def test_detect_human_request_empty_message_skips_llm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A bootstrap (empty) message is answered deterministically without an
@@ -2018,16 +2042,17 @@ def test_detect_human_request_empty_message_skips_llm(
     def _fail(*args, **kwargs):
         raise AssertionError("empty message must not reach the OpenAI client")
 
-    monkeypatch.setattr("backend.escalation.service.get_openai_client", _fail)
+    monkeypatch.setattr("backend.escalation.service.get_async_openai_client", _fail)
 
     for message in ("", "   ", "\n\t"):
-        result = esc_service.detect_human_request(message, "sk-test")
+        result = await esc_service.detect_human_request(message, "sk-test")
         assert result.human_request is False
         assert result.message_has_request_content is False
-        assert esc_service.detect_support_contact_question(message, "sk-test") is False
+        assert await esc_service.detect_support_contact_question(message, "sk-test") is False
 
 
-def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The canonical templates are static, so a successful localization is
@@ -2047,18 +2072,19 @@ def test_render_pre_confirm_text_caches_localization_per_variant_and_language(
         _fake_localize,
     )
 
-    first = render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
-    second = render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    first = await render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    second = await render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
     assert len(calls) == 1, "second render of the same (variant, language) must hit the cache"
     assert second.message_to_user == first.message_to_user
     assert second.tokens_used == 0
 
-    render_pre_confirm_text(variant="initial", response_language="de", api_key="k")
-    render_pre_confirm_text(variant="declined", response_language="ru", api_key="k")
+    await render_pre_confirm_text(variant="initial", response_language="de", api_key="k")
+    await render_pre_confirm_text(variant="declined", response_language="ru", api_key="k")
     assert len(calls) == 3, "a different language or variant is localized separately"
 
 
-def test_render_pre_confirm_text_does_not_cache_degraded_localization(
+@pytest.mark.asyncio
+async def test_render_pre_confirm_text_does_not_cache_degraded_localization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A 0-token result for a non-English target means the localization helper
@@ -2077,8 +2103,8 @@ def test_render_pre_confirm_text_does_not_cache_degraded_localization(
         _fake_localize,
     )
 
-    render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
-    render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    await render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
+    await render_pre_confirm_text(variant="initial", response_language="ru", api_key="k")
     assert len(calls) == 2, "degraded localization must not be cached"
 
 
@@ -2094,7 +2120,8 @@ def test_pre_confirm_fallback_result_returns_canonical_text() -> None:
     assert out.followup_decision is None
 
 
-def test_classify_pre_confirm_reply_parses_decision_field(
+@pytest.mark.asyncio
+async def test_classify_pre_confirm_reply_parses_decision_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Narrow classifier returns only the decision label; never a message."""
@@ -2117,19 +2144,22 @@ def test_classify_pre_confirm_reply_parses_decision_field(
         class chat:  # noqa: N801
             class completions:  # noqa: N801
                 @staticmethod
-                def create(**_kwargs: object) -> object:
+                async def create(**_kwargs: object) -> object:
                     return _FakeResponse()
 
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_openai_client",
+        "backend.escalation.openai_escalation.get_async_openai_client",
         lambda *_a, **_k: _FakeClient(),
     )
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.call_openai_with_retry",
-        lambda _name, fn, **_k: fn(),
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
     )
 
-    decision, tokens = classify_pre_confirm_reply(
+    decision, tokens = await classify_pre_confirm_reply(
         latest_user_text="yes please",
         api_key="sk-test",
     )
@@ -2137,7 +2167,8 @@ def test_classify_pre_confirm_reply_parses_decision_field(
     assert tokens == 4
 
 
-def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
+@pytest.mark.asyncio
+async def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A substantive non-yes/no reply (e.g. user describes a new problem) is
@@ -2163,19 +2194,22 @@ def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
         class chat:  # noqa: N801
             class completions:  # noqa: N801
                 @staticmethod
-                def create(**_kwargs: object) -> object:
+                async def create(**_kwargs: object) -> object:
                     return _FakeResponse()
 
+    async def _fake_retry(_name, fn, **_k):
+        return await fn()
+
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_openai_client",
+        "backend.escalation.openai_escalation.get_async_openai_client",
         lambda *_a, **_k: _FakeClient(),
     )
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.call_openai_with_retry",
-        lambda _name, fn, **_k: fn(),
+        "backend.escalation.openai_escalation.async_call_openai_with_retry",
+        _fake_retry,
     )
 
-    decision, tokens = classify_pre_confirm_reply(
+    decision, tokens = await classify_pre_confirm_reply(
         latest_user_text="my site is down with a 502",
         api_key="sk-test",
     )
@@ -2183,7 +2217,8 @@ def test_classify_pre_confirm_reply_returns_none_for_non_yes_no(
     assert tokens == 3
 
 
-def test_classify_pre_confirm_reply_fails_safe_on_exception(
+@pytest.mark.asyncio
+async def test_classify_pre_confirm_reply_fails_safe_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """API blowups must degrade to ``("unclear", 0)`` rather than raise — and
@@ -2198,10 +2233,10 @@ def test_classify_pre_confirm_reply_fails_safe_on_exception(
         raise RuntimeError("openai down")
 
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_openai_client", _boom
+        "backend.escalation.openai_escalation.get_async_openai_client", _boom
     )
 
-    decision, tokens = classify_pre_confirm_reply(
+    decision, tokens = await classify_pre_confirm_reply(
         latest_user_text="yes",
         api_key="sk-test",
     )

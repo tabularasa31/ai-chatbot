@@ -80,9 +80,12 @@ def test_process_chat_message_ends_followup_span_on_exception(
 
     fake_trace = FakeTrace()
     monkeypatch.setattr("backend.chat.service.begin_trace", lambda **kwargs: fake_trace)
+    async def _boom_escalation(**kwargs):
+        raise RuntimeError("boom")
+
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+        _boom_escalation,
     )
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -334,11 +337,12 @@ def test_process_chat_message_passes_kyc_locale_fallback_before_language_signal(
     assert captured_kwargs["target_language"] == "fr-FR"
 
 
-def test_complete_escalation_openai_turn_localizes_fallback_to_question_language(
+@pytest.mark.asyncio
+async def test_complete_escalation_openai_turn_localizes_fallback_to_question_language(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "backend.escalation.openai_escalation.get_openai_client",
+        "backend.escalation.openai_escalation.get_async_openai_client",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
@@ -349,7 +353,7 @@ def test_complete_escalation_openai_turn_localizes_fallback_to_question_language
         ),
     )
 
-    result = complete_escalation_openai_turn(
+    result = await complete_escalation_openai_turn(
         phase=__import__("backend.models", fromlist=["EscalationPhase"]).EscalationPhase.handoff_email_known,
         chat_messages=[],
         fact_json={"ticket_number": "ESC-1234"},

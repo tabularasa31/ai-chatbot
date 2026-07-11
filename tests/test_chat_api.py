@@ -708,7 +708,7 @@ def test_chat_pre_confirm_non_yes_no_reply_does_not_escalate(
     # The user's reply to the pre_confirm question is a substantive new
     # symptom, not a yes/no answer.
     monkeypatch.setattr(
-        "backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)
+        "backend.chat.service.classify_pre_confirm_reply", _as_async(lambda **_kw: (None, 0))
     )
     # Force the consecutive-zero-hits relevance verdict to "relevant" so the
     # pipeline reliably arms pre_confirm (without depending on the fail-open

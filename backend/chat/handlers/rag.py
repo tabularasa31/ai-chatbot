@@ -1856,9 +1856,8 @@ class RagHandler(PipelineHandler):
                 # the downstream _persist_turn_with_response_language call.
                 #
                 # We are inside a SQLAlchemy run_sync greenlet that runs ON the
-                # event loop thread, so a direct sync OpenAI call here would
-                # freeze the loop for the duration of the localization call.
-                # Bridge back to the loop via ``await_only`` + ``asyncio.to_thread``.
+                # event loop thread; ``render_pre_confirm_text`` is async, so
+                # bridge back to the loop via ``await_only``.
                 # "How do I contact support?" is an informational question the
                 # human-request classifier deliberately routes to RAG (not an
                 # immediate handoff). When the KB has no contact page it lands
@@ -1879,8 +1878,7 @@ class RagHandler(PipelineHandler):
                 try:
                     esc = await_only(
                         asyncio.wait_for(
-                            asyncio.to_thread(
-                                render_pre_confirm_text,
+                            render_pre_confirm_text(
                                 variant=_pre_confirm_variant,
                                 response_language=ctx.language_context.response_language,
                                 api_key=ctx.api_key,

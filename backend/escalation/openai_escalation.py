@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Literal
@@ -13,8 +14,8 @@ from backend.chat.language import (
     log_llm_tokens,
 )
 from backend.core.config import settings
-from backend.core.openai_client import get_openai_client, is_reasoning_model
-from backend.core.openai_retry import call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client, is_reasoning_model
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.models import EscalationPhase
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,7 @@ def pre_confirm_fallback_result(variant: PreConfirmVariant) -> EscalationLlmResu
     )
 
 
-def render_pre_confirm_text(
+async def render_pre_confirm_text(
     *,
     variant: PreConfirmVariant,
     response_language: str,
@@ -145,6 +146,10 @@ def render_pre_confirm_text(
     gets localized — bare initial question (explicit human request),
     no-answer question (failed KB lookup), repeat after an ambiguous reply,
     or polite acknowledgement of a decline.
+
+    The localization helper (``backend/chat/language.py``) is still sync and
+    makes its own OpenAI call for non-English targets, so it runs in a worker
+    thread here; cache hits stay on the event loop.
     """
     canonical = _PRE_CONFIRM_CANONICALS[variant]
     cache_key = (variant, (response_language or "en").lower())
@@ -155,7 +160,8 @@ def render_pre_confirm_text(
             followup_decision=None,
             tokens_used=0,
         )
-    localization = localize_text_to_language_result(
+    localization = await asyncio.to_thread(
+        localize_text_to_language_result,
         canonical_text=canonical,
         target_language=response_language,
         api_key=api_key,
@@ -205,7 +211,7 @@ _PRE_CONFIRM_CLASSIFIER_SYSTEM = (
 )
 
 
-def classify_pre_confirm_reply(
+async def classify_pre_confirm_reply(
     *,
     latest_user_text: str,
     api_key: str,
@@ -232,8 +238,8 @@ def classify_pre_confirm_reply(
         },
     ]
     try:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             "classify_pre_confirm_reply",
             lambda: client.chat.completions.create(
                 model=model_name,
@@ -291,7 +297,7 @@ def _format_thread(chat_messages: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def complete_escalation_openai_turn(
+async def complete_escalation_openai_turn(
     *,
     phase: EscalationPhase,
     chat_messages: list[dict[str, str]],
@@ -328,14 +334,14 @@ def complete_escalation_openai_turn(
     ]
 
     try:
-        client = get_openai_client(api_key)
+        client = get_async_openai_client(api_key)
         _esc_reasoning = is_reasoning_model(model_name)
         _esc_max_tokens = (
             settings.chat_response_max_tokens_reasoning
             if _esc_reasoning
             else settings.escalation_max_completion_tokens
         )
-        response = call_openai_with_retry(
+        response = await async_call_openai_with_retry(
             "escalation_complete_turn",
             lambda: client.chat.completions.create(
                 model=model_name,
@@ -357,7 +363,10 @@ def complete_escalation_openai_turn(
         )
         msg = (data.get("message_to_user") or "").strip()
         if not msg:
-            localization = localize_text_to_language_result(
+            # Sync localization helper (see render_pre_confirm_text) — keep it
+            # off the event loop.
+            localization = await asyncio.to_thread(
+                localize_text_to_language_result,
                 canonical_text=FALLBACK_EN_GENERIC,
                 target_language=response_language,
                 api_key=api_key,
@@ -381,7 +390,8 @@ def complete_escalation_openai_turn(
             tokens=0,
             model=model_name,
         )
-        localization = localize_text_to_language_result(
+        localization = await asyncio.to_thread(
+            localize_text_to_language_result,
             canonical_text=FALLBACK_EN_GENERIC,
             target_language=response_language,
             api_key=api_key,

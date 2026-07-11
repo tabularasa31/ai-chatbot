@@ -202,14 +202,25 @@ def mock_openai_client() -> Generator[Mock, None, None]:
     async_mock_client.embeddings.create.side_effect = _async_embeddings_create
     async_mock_client.chat.completions.create.side_effect = _async_chat_completions_create
 
+    # Async escalation client delegating to the sync ``mock_esc_client`` (the
+    # escalation LLM path is async-only).
+    async_mock_esc_client = AsyncMock()
+
+    async def _async_esc_chat_completions_create(*args: object, **kwargs: object) -> Mock:
+        return mock_esc_client.chat.completions.create(*args, **kwargs)
+
+    async_mock_esc_client.chat.completions.create.side_effect = (
+        _async_esc_chat_completions_create
+    )
+
     with (
         patch("backend.embeddings.service.get_openai_client", return_value=mock_client),
         patch("backend.search.service.get_async_openai_client", return_value=async_mock_client),
         patch("backend.chat.service.get_openai_client", return_value=mock_client),
         patch("backend.documents.service.get_openai_client", return_value=mock_client, create=True),
         patch(
-            "backend.escalation.openai_escalation.get_openai_client",
-            return_value=mock_esc_client,
+            "backend.escalation.openai_escalation.get_async_openai_client",
+            return_value=async_mock_esc_client,
         ),
         patch(
             "backend.search.service._async_rewrite_query_for_retrieval",

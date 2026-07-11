@@ -14,6 +14,7 @@ Covers:
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -235,9 +236,11 @@ def test_consecutive_zero_hits_relevant_escalates(
     # Pre-confirm rendering hits OpenAI in production; stub it.
     monkeypatch.setattr(
         "backend.chat.service.render_pre_confirm_text",
-        lambda **_kw: SimpleNamespace(
-            message_to_user="Want me to escalate this to a human?",
-            tokens_used=1,
+        _as_async(
+            lambda **_kw: SimpleNamespace(
+                message_to_user="Want me to escalate this to a human?",
+                tokens_used=1,
+            )
         ),
     )
 
@@ -268,8 +271,6 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
     """A slow pre-confirm localization call (observed up to 21s in prod) is cut
     by the hard deadline; the canonical English template is used and the
     escalation FSM stays armed instead of the turn stalling."""
-    import time as _time
-
     from backend.escalation.openai_escalation import PRE_CONFIRM_NO_ANSWER_EN
 
     cl_row, api_key = _create_client(tenant, db_session, email="zh-esc-timeout@example.com")
@@ -304,8 +305,8 @@ def test_pre_confirm_render_timeout_falls_back_to_canonical_template(
         0.05,
     )
 
-    def _slow_render(**_kw):
-        _time.sleep(0.5)
+    async def _slow_render(**_kw):
+        await asyncio.sleep(0.5)
         return SimpleNamespace(message_to_user="too late", tokens_used=1)
 
     monkeypatch.setattr("backend.chat.service.render_pre_confirm_text", _slow_render)

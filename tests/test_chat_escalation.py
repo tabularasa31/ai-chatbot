@@ -15,6 +15,16 @@ from tests.chat_utils import _chat_completion_side_effect
 from tests.conftest import register_and_verify_user, set_client_openai_key
 
 
+def _async_esc_stub(result):
+    """Wrap a canned EscalationLlmResult-like Mock as an async stub for the
+    now-async ``complete_escalation_openai_turn``."""
+
+    async def _stub(**kwargs):
+        return result
+
+    return _stub
+
+
 def test_chat_awaiting_email_valid_email_transitions_to_followup(
     mock_openai_client: Mock,
     tenant: TestClient,
@@ -164,10 +174,12 @@ def test_chat_followup_no_ends_chat(
 
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: Mock(
-            message_to_user="Understood, closing chat.",
-            followup_decision="no",
-            tokens_used=3,
+        _async_esc_stub(
+            Mock(
+                message_to_user="Understood, closing chat.",
+                followup_decision="no",
+                tokens_used=3,
+            )
         ),
     )
 
@@ -233,10 +245,12 @@ def test_chat_followup_no_closes_active_user_session(
 
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: Mock(
-            message_to_user="Understood, closing chat.",
-            followup_decision="no",
-            tokens_used=3,
+        _async_esc_stub(
+            Mock(
+                message_to_user="Understood, closing chat.",
+                followup_decision="no",
+                tokens_used=3,
+            )
         ),
     )
 
@@ -303,10 +317,12 @@ def test_chat_followup_yes_keeps_user_session_open_and_increments_turns(
 
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: Mock(
-            message_to_user="Understood, we will continue.",
-            followup_decision="yes",
-            tokens_used=3,
+        _async_esc_stub(
+            Mock(
+                message_to_user="Understood, we will continue.",
+                followup_decision="yes",
+                tokens_used=3,
+            )
         ),
     )
 
@@ -367,10 +383,12 @@ def test_chat_followup_unclear_twice_falls_back_to_yes(
 
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: Mock(
-            message_to_user="Could you clarify?",
-            followup_decision="unclear",
-            tokens_used=2,
+        _async_esc_stub(
+            Mock(
+                message_to_user="Could you clarify?",
+                followup_decision="unclear",
+                tokens_used=2,
+            )
         ),
     )
 
@@ -426,10 +444,12 @@ def test_chat_when_already_closed_uses_closed_phase(
 
     monkeypatch.setattr(
         "backend.chat.service.complete_escalation_openai_turn",
-        lambda **kwargs: Mock(
-            message_to_user="Chat already ended.",
-            followup_decision=None,
-            tokens_used=1,
+        _async_esc_stub(
+            Mock(
+                message_to_user="Chat already ended.",
+                followup_decision=None,
+                tokens_used=1,
+            )
         ),
     )
 
@@ -682,7 +702,7 @@ def test_manual_escalate_openai_error_returns_503(
     db_session.add(chat)
     db_session.commit()
 
-    def _raise_api_error(*args, **kwargs):
+    async def _raise_api_error(*args, **kwargs):
         raise APIError("Service unavailable", request=Mock(), body=None)
 
     monkeypatch.setattr("backend.chat.routes.perform_manual_escalation", _raise_api_error)
@@ -715,9 +735,12 @@ def test_manual_escalate_success_for_both_triggers(
     db_session.add(chat)
     db_session.commit()
 
+    async def _fake_manual_escalation(*args, **kwargs):
+        return ("Escalated.", "ESC-0009")
+
     monkeypatch.setattr(
         "backend.chat.routes.perform_manual_escalation",
-        lambda *args, **kwargs: ("Escalated.", "ESC-0009"),
+        _fake_manual_escalation,
     )
 
     r1 = tenant.post(

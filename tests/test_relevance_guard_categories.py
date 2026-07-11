@@ -201,7 +201,7 @@ def test_support_complaint_offers_escalation_not_refusal(
 
     render_calls: list[dict] = []
 
-    def _render(**kwargs):
+    async def _render(**kwargs):
         render_calls.append(kwargs)
         return SimpleNamespace(
             message_to_user="Sorry for the wait — forward this to support?",

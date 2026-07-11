@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 
-from backend.embeddings.service import chunk_text
+from backend.chunkers import get_chunker
 
 
 def _get_unverified_user_token(tenant: TestClient, db_session=None) -> str:
@@ -197,7 +197,7 @@ def test_create_embeddings_allowed_for_verified_user(
     assert r.status_code == 200
 
     md_content = b"# Test\n\n" + b"Lorem ipsum. " * 50
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]

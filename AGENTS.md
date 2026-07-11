@@ -268,9 +268,9 @@ ai-chatbot/
 │   ├── main.py               # FastAPI entry, router wiring
 │   ├── models.py             # SQLAlchemy models and Base (single models file)
 │   ├── core/                 # db, config, security, limiter, utils, openai_client, …
-│   ├── auth/, admin/, bots/, chat/, contact_sessions/, documents/, embeddings/,
-│   │   escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/, knowledge/,
-│   │   observability/, search/, tenant_knowledge/, tenants/, widget/, email/
+│   ├── auth/, admin/, bots/, chat/, chunkers/, contact_sessions/, documents/,
+│   │   embeddings/, escalation/, evals/, faq/, gap_analyzer/, guards/, jobs/,
+│   │   knowledge/, observability/, search/, tenant_knowledge/, tenants/, widget/, email/
 │   │   ├── routes.py         # HTTP routes (often APIRouter)
 │   │   ├── service.py        # business logic, DB access
 │   │   └── schemas.py        # Pydantic request/response schemas
@@ -293,6 +293,7 @@ ai-chatbot/
 ```
 
 Notable non-obvious modules:
+- `backend/chunkers/` — per-content-type chunkers (markdown/html/pdf/plaintext) + registry keyed by `Document.file_type`; see its README to add a new type. Swagger chunking stays in `backend/embeddings/service.py`.
 - `backend/knowledge/` — extracts and serves the tenant's knowledge profile (topics) from indexed documents; dashboard `/knowledge` page.
 - `backend/tenant_knowledge/` — low-level FAQ and `TenantProfile` service helpers used by the chat pipeline.
 - `backend/contact_sessions/` — tracks contact-level session state across escalation flows.

@@ -73,6 +73,7 @@ CI runs both on every push/PR to `main` and `deploy`.
 | `backend/core/config.py` | Settings and all env vars (guards, trace, RAG knobs, etc.) |
 | `backend/core/openai_client.py` | Per-tenant OpenAI client factory |
 | `backend/search/service.py` | Hybrid RAG retrieval (pgvector + BM25 + RRF) |
+| `backend/chunkers/` | Per-content-type chunkers (markdown/html/pdf/plaintext) + registry; see its README to add a new type |
 | `backend/guards/` | Injection detection (2-level) + relevance guard — gate on every chat turn |
 | `backend/observability/` | Langfuse trace helpers, Sentry, PostHog metrics formatters |
 | `backend/gap_analyzer/` | Gap Analyzer orchestration (see AGENTS.md for full layout) |

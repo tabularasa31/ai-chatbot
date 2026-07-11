@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 import logging
-import re
 import uuid
-from typing import TypedDict
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+# ChunkInfo / chunk_text / CHUNKING_CONFIG re-exported for backward
+# compatibility; per-content-type chunkers live in backend/chunkers/.
+from backend.chunkers import (
+    CHUNKING_CONFIG,
+    ChunkInfo,  # noqa: F401
+    get_chunker,
+)
+from backend.chunkers import (
+    CHUNKING_DEFAULT as _CHUNKING_DEFAULT,  # noqa: F401
+)
+from backend.chunkers.plaintext import chunk_plaintext as chunk_text
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.documents.parsers import (
@@ -24,17 +33,6 @@ from backend.models import Document, DocumentStatus, DocumentType, Embedding
 
 logger = logging.getLogger(__name__)
 
-# Optimal chunking parameters per document type.
-# Tune these values here when re-evaluating retrieval quality.
-CHUNKING_CONFIG: dict[str, dict[str, int]] = {
-    "swagger": {"chunk_size": 500, "overlap_sentences": 0},
-    "markdown": {"chunk_size": 700, "overlap_sentences": 1},
-    "pdf":      {"chunk_size": 1000, "overlap_sentences": 1},
-    # future types
-    "logs":     {"chunk_size": 300, "overlap_sentences": 0},
-    "code":     {"chunk_size": 600, "overlap_sentences": 1},
-}
-_CHUNKING_DEFAULT: dict[str, int] = {"chunk_size": 700, "overlap_sentences": 1}
 _OPENAPI_DETAIL_SPLIT_LIMIT = 2200
 
 
@@ -44,101 +42,6 @@ def _should_keep_openapi_as_single_chunk(
     has_forced_detail_split: bool,
 ) -> bool:
     return len(text_body) <= _OPENAPI_DETAIL_SPLIT_LIMIT and not has_forced_detail_split
-
-
-class ChunkInfo(TypedDict):
-    """One text chunk with position in the original document."""
-
-    text: str
-    chunk_index: int
-    char_offset: int
-    char_end: int
-
-
-def _sentence_spans(text: str) -> list[tuple[str, int, int]]:
-    """
-    Split like chunk_text (sentence boundaries); return (sentence, start, end) in `text`.
-    """
-    if not text.strip():
-        return []
-    lead = len(text) - len(text.lstrip())
-    trail = len(text) - len(text.rstrip())
-    body = text[lead : len(text) - trail]
-    raw_parts = re.split(r"(?<=[.?!])\s+|\n{2,}", body)
-    sentences = [p.strip() for p in raw_parts if p.strip()]
-    if not sentences:
-        return []
-
-    spans: list[tuple[str, int, int]] = []
-    cursor = 0
-    for sent in sentences:
-        while cursor < len(body) and body[cursor].isspace():
-            cursor += 1
-        idx = body.find(sent, cursor)
-        if idx < 0:
-            idx = cursor
-        start = lead + idx
-        end = start + len(sent)
-        spans.append((sent, start, end))
-        cursor = idx + len(sent)
-    return spans
-
-
-def _joined_char_len(parts: list[tuple[str, int, int]]) -> int:
-    if not parts:
-        return 0
-    return sum(len(p[0]) for p in parts) + (len(parts) - 1)
-
-
-def chunk_text(
-    text: str,
-    chunk_size: int = 500,
-    overlap_sentences: int = 1,
-) -> list[ChunkInfo]:
-    """
-    Split text into chunks by sentences (not raw characters).
-
-    Returns list of dicts with text, chunk_index, char_offset, char_end (offsets in original `text`).
-    """
-    spans = _sentence_spans(text)
-    if not spans:
-        return []
-
-    chunks: list[ChunkInfo] = []
-    current: list[tuple[str, int, int]] = []
-    current_len = 0
-
-    for sentence, s_start, s_end in spans:
-        sentence_len = len(sentence)
-        if current_len + sentence_len > chunk_size and current:
-            chunk_text_str = " ".join(s[0] for s in current)
-            chunks.append(
-                {
-                    "text": chunk_text_str,
-                    "chunk_index": len(chunks),
-                    "char_offset": current[0][1],
-                    "char_end": current[-1][2],
-                }
-            )
-            overlap = current[-overlap_sentences:] if overlap_sentences > 0 else []
-            current = list(overlap)
-            current_len = _joined_char_len(current)
-
-        current.append((sentence, s_start, s_end))
-        current_len += sentence_len + 1
-
-    if current:
-        chunk_text_str = " ".join(s[0] for s in current)
-        chunks.append(
-            {
-                "text": chunk_text_str,
-                "chunk_index": len(chunks),
-                "char_offset": current[0][1],
-                "char_end": current[-1][2],
-            }
-        )
-
-    return chunks
 
 
 def _build_swagger_chunks(text: str) -> list[dict[str, object]]:
@@ -342,8 +245,8 @@ def create_embeddings_for_document(
     if doc.file_type == DocumentType.swagger:
         chunks = _build_swagger_chunks(doc.parsed_text)
     else:
-        cfg = CHUNKING_CONFIG.get(doc.file_type.value, _CHUNKING_DEFAULT)
-        chunks = chunk_text(doc.parsed_text, **cfg)
+        chunker = get_chunker(doc.file_type.value)
+        chunks = chunker(doc.parsed_text)
     if not chunks:
         return []
 

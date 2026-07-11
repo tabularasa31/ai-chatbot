@@ -177,7 +177,7 @@ embeddings
 ├─ document_id (FK → documents, NOT NULL)
 ├─ chunk_text (TEXT — текст чанка для поиска и RAG)
 ├─ vector (vector(1536), pgvector — native column, not JSON)
-├─ metadata (JSONB: chunk_index, char_offset, char_end, filename, file_type; см. `embeddings.service.chunk_text`)
+├─ metadata (JSONB: chunk_index, char_offset, char_end, filename, file_type, опционально heading_path/subtype; см. `backend/chunkers/`)
 ├─ created_at (TIMESTAMP)
 └─ updated_at (TIMESTAMP)
 

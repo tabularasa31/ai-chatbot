@@ -55,6 +55,8 @@ EXT_TO_TYPE = {
     ".yml": "swagger",
     ".docx": "docx",
     ".txt": "plaintext",
+    ".html": "html",
+    ".htm": "html",
 }
 
 

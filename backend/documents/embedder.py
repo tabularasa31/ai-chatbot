@@ -11,8 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
-
+from backend.chunkers.html import clean_html_root
 from backend.core.config import settings
 from backend.core.openai_client import get_openai_client
 from backend.documents.parsers import OpenAPIChunk
@@ -104,11 +103,7 @@ def _build_chunks(title: str, sections: list[tuple[str, str]]) -> list[dict[str,
 
 
 def _extract_page(url: str, html: str) -> ExtractedPage | None:
-    soup = BeautifulSoup(html, "html.parser")
-    for selector in ("script", "style", "nav", "footer", "aside", "noscript"):
-        for node in soup.select(selector):
-            node.decompose()
-    root = soup.find("main") or soup.find("article") or soup.body or soup
+    soup, root = clean_html_root(html)
 
     title = ""
     h1 = root.find("h1")

@@ -16,6 +16,7 @@ from backend.documents.constants import KNOWLEDGE_DOCUMENT_CAPACITY, MAX_FILE_SI
 from backend.documents.language_detection import detect_document_language
 from backend.documents.parsers import (
     parse_docx,
+    parse_html,
     parse_markdown,
     parse_pdf,
     parse_swagger,
@@ -363,7 +364,7 @@ def run_document_health_check(
         db.refresh(doc)
         return err_result
 
-ALLOWED_TYPES = {"pdf", "markdown", "swagger", "docx", "doc", "plaintext"}
+ALLOWED_TYPES = {"pdf", "markdown", "swagger", "docx", "doc", "plaintext", "html"}
 
 
 def _parse_content(content: bytes, file_type: str) -> str:
@@ -378,6 +379,8 @@ def _parse_content(content: bytes, file_type: str) -> str:
         return parse_docx(content)
     if file_type == "plaintext":
         return parse_txt(content)
+    if file_type == "html":
+        return parse_html(content)
     raise ValueError(f"Unsupported file type: {file_type}")
 
 

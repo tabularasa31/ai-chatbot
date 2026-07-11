@@ -67,8 +67,9 @@ Each client provides their own OpenAI key. It is **encrypted at rest** (AES-GCM 
 
 | Format | Extensions | Parser | Notes |
 |--------|------------|--------|-------|
-| PDF | `.pdf` | pypdf | Text extraction, multi-page |
+| PDF | `.pdf` | pdfplumber (fallback: pypdf) | Layout-aware: two-column detection, tables rendered as markdown tables |
 | Markdown | `.md`, `.mdx` | — | CommonMark |
+| HTML | `.html`, `.htm` | beautifulsoup4 | Readability-style main-content extraction; nav/footer/aside/script stripped; headings preserved |
 | Swagger / OpenAPI | `.json`, `.yaml`, `.yml` | PyYAML / json | JSON/YAML parse, OpenAPI validation, endpoint-aware rendering |
 | Word (DOCX) | `.docx` | python-docx | Paragraph-level text extraction |
 | Word (legacy DOC) | `.doc` | antiword | Plain-text extraction via system tool |
@@ -111,14 +112,23 @@ Embedding is expensive for large documents (20+ chunks → multiple OpenAI calls
 
 ### Chunking (FI-009, TD-033)
 
-Documents are split into chunks before embedding. For text documents, chunk boundaries follow sentence endings (not character positions) to preserve semantic coherence.
+Documents are split into chunks before embedding by a **per-content-type chunker** selected from the registry in `backend/chunkers/registry.py` (keyed by `Document.file_type`). Adding a new format means registering a new chunker — the embedding pipeline core stays untouched. See `backend/chunkers/README.md` for the extension guide.
 
-Optimal parameters differ by document type:
+| Content type | Chunker | Strategy |
+|--------------|---------|----------|
+| Markdown | `chunk_markdown` | Split on ATX headings; every chunk starts with its heading path (`H1 > H2 > H3`); oversized sections recursively sentence-split; pipe tables become standalone chunks |
+| HTML | `chunk_markdown` | HTML is rendered to markdown-ish text at parse time (boilerplate stripped, headings preserved), then chunked like markdown |
+| PDF | `chunk_pdf` | Table-aware: tables detected at parse time become standalone chunks (oversized tables split by rows with the header repeated); prose is sentence-split |
+| Plain text / DOCX | `chunk_plaintext` | Sentence-boundary chunking (the universal fallback for unknown types) |
+| Swagger / OpenAPI | `_build_swagger_chunks` | Operation-aware (special-cased outside the registry — needs per-operation metadata) |
+
+Chunk-size budgets per type (soft limits, sentence boundaries preserved):
 
 | Document type | Chunk size | Overlap |
 |---------------|-----------|---------|
 | PDF | 1000 chars | 1 sentence |
-| Markdown | 700 chars | 1 sentence |
+| Markdown / HTML | 700 chars | 1 sentence |
+| Plain text / DOCX / unknown | 700 chars | 1 sentence |
 | Swagger / OpenAPI | Operation-aware chunks | No sentence overlap between operations |
 | Logs *(planned)* | 300 chars | 0 sentences |
 | Code *(planned)* | 600 chars | 1 sentence |
@@ -130,7 +140,9 @@ Swagger/OpenAPI chunking rules:
 - Rich operations may emit secondary chunks for request schema and response schema detail
 - Secondary chunks repeat the endpoint header for retrieval context, but do not duplicate neighbouring operations
 
-Each chunk stores: `chunk_text`, `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`.
+Each chunk stores: `chunk_text`, `chunk_index`, `char_offset`, `char_end`, `filename`, `file_type`; markdown/HTML chunks additionally store `heading_path`, and table chunks store `subtype: "table"`.
+
+**Note on re-indexing:** changing a chunking strategy only affects newly embedded documents. Existing tenants keep their old chunks until re-embedded (delete-and-recreate via `POST /embeddings/documents/{id}` or re-crawl). Retrieval-quality evals comparing before/after must bracket the re-index, not the deploy.
 
 ### Document health check (FI-032)
 

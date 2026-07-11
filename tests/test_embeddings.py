@@ -17,6 +17,7 @@ from backend.documents.parsers import (
     build_openapi_ingestion_payload,
     extract_openapi_chunks_from_rendered_text,
 )
+from backend.chunkers import get_chunker
 from backend.embeddings.service import _build_swagger_chunks, chunk_text
 from backend.models import Embedding
 
@@ -107,10 +108,8 @@ def test_create_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    # Use the same chunking config as the service uses for markdown documents
-    from backend.embeddings.service import CHUNKING_CONFIG
-    md_cfg = CHUNKING_CONFIG.get("markdown", {"chunk_size": 700, "overlap_sentences": 1})
-    chunks = chunk_text(md_content.decode(), **md_cfg)
+    # Use the same chunker as the service uses for markdown documents
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -589,7 +588,7 @@ def test_create_embeddings_reruns_delete_old(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -636,7 +635,7 @@ def test_get_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -685,7 +684,7 @@ def test_get_embeddings_wrong_client(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]
@@ -727,7 +726,7 @@ def test_delete_embeddings_success(
     )
     doc_id = upload_resp.json()["id"]
 
-    chunks = chunk_text(md_content.decode(), chunk_size=500, overlap_sentences=1)
+    chunks = get_chunker("markdown")(md_content.decode())
     mock_client = Mock()
     mock_client.embeddings.create.return_value = Mock(
         data=[Mock(embedding=[0.1] * 1536) for _ in range(len(chunks))]

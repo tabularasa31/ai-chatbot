@@ -95,7 +95,17 @@ def _finalize_persisted_messages(
             chat.session_id,
             exc_info=True,
         )
-    db.commit()
+    # Explicit rollback-on-error keeps a failed flush (e.g. an asyncpg
+    # ``DataError`` on a naive/aware datetime mismatch) from leaving the
+    # session in a broken state. Without it, the next statement on the same
+    # session — the widget source lookup or an analytics event emitted after
+    # this turn — would raise ``PendingRollbackError`` instead of the real
+    # cause. Re-raise so the caller still learns the persist failed.
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _persist_turn(

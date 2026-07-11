@@ -88,7 +88,7 @@ from backend.core import db as core_db
 from backend.core.config import (
     settings,  # noqa: F401  (re-export for monkeypatch via backend.chat.service.settings)
 )
-from backend.core.db import run_sync
+from backend.core.db import async_commit_or_rollback, run_sync
 
 # Symbols below are re-exported so that tests can monkeypatch them through
 # ``backend.chat.service.<name>`` and the lazy ``_svc.*`` lookups in handlers
@@ -499,7 +499,7 @@ async def _ensure_chat_async(
                 started_at=chat.created_at,
             ),
         )
-        await db.commit()
+        await async_commit_or_rollback(db)
         if rotated_from is not None:
             # No chat_session_ended emission here: the old chat is past the
             # same idle threshold the sweeper uses, so the sweeper reports it
@@ -532,7 +532,7 @@ async def _ensure_chat_async(
             chat_updated = True
         if chat_updated:
             db.add(chat)
-            await db.commit()
+            await async_commit_or_rollback(db)
             # Re-query with selectinload so chat.messages is eagerly loaded.
             _res = await db.execute(
                 select(Chat).options(selectinload(Chat.messages)).where(Chat.id == chat.id)

@@ -258,9 +258,18 @@ def _fail_if_ticket_created(_self: Any, _ctx: HandlerContext, **_kwargs: Any) ->
 
 
 def _drive(awaitable: Any) -> Any:
-    """Run the handler's ``await_only(asyncio.to_thread(...))`` calls in a sync
-    test, which has no SQLAlchemy greenlet context."""
+    """Run the handler's ``await_only(...)`` coroutines in a sync test, which
+    has no SQLAlchemy greenlet context."""
     return asyncio.run(awaitable)
+
+
+def _async_ret(value: Any):
+    """Async stub factory for the now-async escalation LLM helpers."""
+
+    async def _stub(**_kw: Any) -> Any:
+        return value
+
+    return _stub
 
 
 def test_pre_confirm_non_yes_no_reply_falls_through_without_ticket(
@@ -284,7 +293,7 @@ def test_pre_confirm_non_yes_no_reply_falls_through_without_ticket(
 
     with (
         patch("backend.chat.handlers.escalation.await_only", _drive),
-        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)),
+        patch("backend.chat.service.classify_pre_confirm_reply", _async_ret((None, 0))),
         patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_created),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
@@ -317,8 +326,8 @@ def test_pre_confirm_repeated_unclear_never_auto_escalates(
     sentinel = object()
     with (
         patch("backend.chat.handlers.escalation.await_only", _drive),
-        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: ("unclear", 0)),
-        patch("backend.chat.service.render_pre_confirm_text", lambda **_kw: Mock(tokens_used=0)),
+        patch("backend.chat.service.classify_pre_confirm_reply", _async_ret(("unclear", 0))),
+        patch("backend.chat.service.render_pre_confirm_text", _async_ret(Mock(tokens_used=0))),
         patch("backend.chat.service._escalation_turn_response", lambda **_kw: sentinel),
         patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_created),
     ):
@@ -360,7 +369,7 @@ def test_pre_confirm_null_reply_with_explicit_human_request_escalates(
 
     with (
         patch("backend.chat.handlers.escalation.await_only", _drive),
-        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: (None, 0)),
+        patch("backend.chat.service.classify_pre_confirm_reply", _async_ret((None, 0))),
         patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
@@ -480,7 +489,7 @@ def test_pre_confirm_explicit_yes_creates_ticket(db_session: Session) -> None:
 
     with (
         patch("backend.chat.handlers.escalation.await_only", _drive),
-        patch("backend.chat.service.classify_pre_confirm_reply", lambda **_kw: ("yes", 5)),
+        patch("backend.chat.service.classify_pre_confirm_reply", _async_ret(("yes", 5))),
         patch.object(EscalationStateMachine, "_create_ticket_and_handoff", _fake_handoff),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
@@ -523,8 +532,11 @@ def test_bare_human_request_enters_awaiting_without_ticket(db_session: Session) 
         message_has_request_content=False,
     )
 
-    with patch.object(
-        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch.object(
+            EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+        ),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
@@ -615,8 +627,11 @@ def test_human_request_after_greeting_only_elicits_not_escalates(db_session: Ses
         message_has_request_content=False,
     )
 
-    with patch.object(
-        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch.object(
+            EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+        ),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
@@ -676,8 +691,11 @@ def test_awaiting_request_repeated_bare_ping_re_elicits(db_session: Session) -> 
         message_has_request_content=False,
     )
 
-    with patch.object(
-        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch.object(
+            EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+        ),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 
@@ -703,8 +721,11 @@ def test_awaiting_request_unrelated_message_falls_through_to_rag(db_session: Ses
         message_has_request_content=False,
     )
 
-    with patch.object(
-        EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+    with (
+        patch("backend.chat.handlers.escalation.await_only", _drive),
+        patch.object(
+            EscalationStateMachine, "_create_ticket_and_handoff", _fail_if_ticket_handoff
+        ),
     ):
         outcome = EscalationStateMachine()._handle_sync(ctx, db_session)
 

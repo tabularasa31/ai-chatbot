@@ -357,6 +357,18 @@ def mock_openai_client():
     async_mock_client.embeddings.create.side_effect = _async_embeddings_create
     async_mock_client.chat.completions.create.side_effect = _async_chat_completions_create
 
+    # Async escalation client delegating to the sync ``mock_esc_client`` so
+    # tests that reconfigure its return_value/side_effect keep working against
+    # the async escalation LLM path.
+    async_mock_esc_client = AsyncMock()
+
+    async def _async_esc_chat_completions_create(*args: object, **kwargs: object) -> Any:
+        return mock_esc_client.chat.completions.create(*args, **kwargs)
+
+    async_mock_esc_client.chat.completions.create.side_effect = (
+        _async_esc_chat_completions_create
+    )
+
     # Patch where get_openai_client is used (not where defined) so imports see the mock
     with patch("backend.embeddings.service.get_openai_client", return_value=mock_client, create=True), \
          patch("backend.search.service.get_async_openai_client", return_value=async_mock_client), \
@@ -369,8 +381,8 @@ def mock_openai_client():
          patch("backend.tenant_knowledge.extract_tenant_knowledge.get_openai_client", return_value=mock_client), \
          patch("backend.tenant_knowledge.faq_service.get_openai_client", return_value=mock_client), \
          patch(
-             "backend.escalation.openai_escalation.get_openai_client",
-             return_value=mock_esc_client,
+             "backend.escalation.openai_escalation.get_async_openai_client",
+             return_value=async_mock_esc_client,
          ), \
          patch(
              "backend.search.service._async_rewrite_query_for_retrieval",
@@ -390,23 +402,25 @@ def escalation_openai_override(monkeypatch: pytest.MonkeyPatch):
         tokens_used: int = 15,
     ) -> Mock:
         esc_client = Mock()
-        esc_client.chat.completions.create.return_value = Mock(
-            choices=[
-                Mock(
-                    message=Mock(
-                        content=json.dumps(
-                            {
-                                "message_to_user": message_to_user,
-                                "followup_decision": followup_decision,
-                            }
+        esc_client.chat.completions.create = AsyncMock(
+            return_value=Mock(
+                choices=[
+                    Mock(
+                        message=Mock(
+                            content=json.dumps(
+                                {
+                                    "message_to_user": message_to_user,
+                                    "followup_decision": followup_decision,
+                                }
+                            )
                         )
                     )
-                )
-            ],
-            usage=Mock(total_tokens=tokens_used),
+                ],
+                usage=Mock(total_tokens=tokens_used),
+            )
         )
         monkeypatch.setattr(
-            "backend.escalation.openai_escalation.get_openai_client",
+            "backend.escalation.openai_escalation.get_async_openai_client",
             lambda _api_key: esc_client,
         )
         return esc_client

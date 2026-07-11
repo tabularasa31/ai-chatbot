@@ -568,7 +568,7 @@ def test_chat_escalation_uses_user_response_language(
 
     captured: dict[str, str] = {}
 
-    def _fake_render_pre_confirm(**kwargs):
+    async def _fake_render_pre_confirm(**kwargs):
         captured["response_language"] = kwargs.get("response_language", "")
         return type(
             "EscalationOut",
@@ -644,7 +644,7 @@ def test_rag_escalation_engages_pre_confirm_fsm(
 
     monkeypatch.setattr("backend.chat.service.async_run_chat_pipeline", _escalating_pipeline)
 
-    def _fake_render_pre_confirm(**kwargs):
+    async def _fake_render_pre_confirm(**kwargs):
         return type(
             "EscalationOut",
             (),

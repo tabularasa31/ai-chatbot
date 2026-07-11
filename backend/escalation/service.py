@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -9,21 +10,23 @@ import re
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import MissingGreenlet
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.util import await_only
 
 from backend.chat.language import resolve_language_context
 from backend.chat.pii import redact
 from backend.contact_sessions.service import sync_user_session_identity
 from backend.core.config import settings
 from backend.core.crypto import decrypt_value, encrypt_value
-from backend.core.openai_client import get_openai_client
-from backend.core.openai_retry import call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.email.service import send_email
 from backend.models import (
     Chat,
@@ -82,10 +85,12 @@ class HumanRequestResult:
 class _LockedTTLCache:
     """Thread-safe TTL cache for classifier results.
 
-    The intent classifiers run inside ``asyncio.to_thread`` worker threads, so
-    every operation — including the compound eviction scan — runs under a lock
-    to avoid "dict changed size during iteration" when one thread iterates
-    ``.items()`` while another inserts. Hits/misses are reported under ``name``.
+    The intent classifiers are now coroutines on the event loop, but the cache
+    is process-global and may still be reached from worker threads (tests,
+    sync tooling), so every operation — including the compound eviction scan —
+    runs under a lock to avoid "dict changed size during iteration". All ops
+    are in-memory and cheap, so holding the lock on the loop is fine.
+    Hits/misses are reported under ``name``.
     """
 
     def __init__(self, *, name: str, ttl: float, maxsize: int) -> None:
@@ -179,7 +184,7 @@ def should_escalate(
     return False, None
 
 
-def detect_human_request(
+async def detect_human_request(
     message: str,
     api_key: str,
     tenant_id: UUID | str | None = None,
@@ -195,8 +200,10 @@ def detect_human_request(
     The result is truthy iff ``human_request`` is True, preserving the legacy
     bool contract at call sites.
 
-    Uses LLM classification so it works across all languages. Falls back to
-    ``(False, False)`` on timeout or error to avoid false-positive escalations.
+    Uses LLM classification so it works across all languages. The call is
+    bounded by ``asyncio.wait_for`` — on timeout the underlying HTTP request
+    is cancelled (the old thread-pool version could only abandon the thread).
+    Falls back on timeout or error to avoid false-positive escalations.
 
     `tenant_id` partitions the in-memory result cache so tenants never read
     each other's classifications.
@@ -255,9 +262,9 @@ def detect_human_request(
         '"message_has_request_content": true/false}'
     )
 
-    def _call_llm() -> HumanRequestResult:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+    async def _call_llm() -> HumanRequestResult:
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             "detect_human_request",
             lambda: client.chat.completions.create(
                 model=settings.human_request_model,
@@ -280,15 +287,9 @@ def detect_human_request(
             ),
         )
 
-    ex = ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(_call_llm)
     try:
-        result = future.result(timeout=_HUMAN_REQUEST_TIMEOUT)
-    except (TimeoutError, Exception):
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
+        result = await asyncio.wait_for(_call_llm(), timeout=_HUMAN_REQUEST_TIMEOUT)
+    except Exception:
         # Fail safe toward answering, not greeting. ``message_has_request_content``
         # gates whether the turn is treated as a bare social greeting (routed to
         # GreetingHandler) versus a real question (routed to RAG). On classifier
@@ -296,11 +297,6 @@ def detect_human_request(
         # greeting, so default to True (the message has content worth answering).
         # ``human_request`` stays False so a failure never auto-escalates.
         return HumanRequestResult(human_request=False, message_has_request_content=True)
-    else:
-        try:
-            ex.shutdown(wait=False)
-        except Exception:
-            pass
 
     _human_request_cache.set(cache_key, result)
     return result
@@ -311,7 +307,7 @@ _support_contact_cache = _LockedTTLCache(
 )
 
 
-def detect_support_contact_question(
+async def detect_support_contact_question(
     message: str,
     api_key: str,
     tenant_id: UUID | str | None = None,
@@ -359,9 +355,9 @@ def detect_support_contact_question(
         'Answer ONLY with JSON: {"support_contact": true/false}'
     )
 
-    def _call_llm() -> bool:
-        client = get_openai_client(api_key)
-        response = call_openai_with_retry(
+    async def _call_llm() -> bool:
+        client = get_async_openai_client(api_key)
+        response = await async_call_openai_with_retry(
             "detect_support_contact_question",
             lambda: client.chat.completions.create(
                 model=settings.human_request_model,
@@ -378,21 +374,10 @@ def detect_support_contact_question(
         raw = response.choices[0].message.content or "{}"
         return bool(json.loads(raw).get("support_contact", False))
 
-    ex = ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(_call_llm)
     try:
-        result = future.result(timeout=_HUMAN_REQUEST_TIMEOUT)
-    except (TimeoutError, Exception):
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
+        result = await asyncio.wait_for(_call_llm(), timeout=_HUMAN_REQUEST_TIMEOUT)
+    except Exception:
         return False
-    else:
-        try:
-            ex.shutdown(wait=False)
-        except Exception:
-            pass
 
     _support_contact_cache.set(cache_key, result)
     return result
@@ -723,6 +708,23 @@ def _build_escalation_email_headers(
 _FOLLOWUP_NOTIFY_DEBOUNCE_SECONDS = 60
 
 
+def _send_email_off_loop(*args: Any, **kwargs: Any) -> str | None:
+    """Send the notification without blocking the event loop.
+
+    ``send_email`` is a synchronous Brevo HTTP call (up to 10s). The escalation
+    notify helpers run in two contexts: inside the chat pipeline / async
+    escalate routes they execute in a ``run_sync`` greenlet ON the event-loop
+    thread, where a direct call would stall every in-flight turn for the
+    duration of the send — bridge it to a worker thread via ``await_only`` +
+    ``asyncio.to_thread``. In plain sync contexts (tests, sync tooling) there
+    is no greenlet, so fall back to the direct call.
+    """
+    try:
+        return await_only(asyncio.to_thread(send_email, *args, **kwargs))
+    except MissingGreenlet:
+        return send_email(*args, **kwargs)
+
+
 def _notify_tenant_new_ticket(
     tenant: Tenant,
     ticket: EscalationTicket,
@@ -782,7 +784,7 @@ def _notify_tenant_new_ticket(
     # know from the bot's acknowledgement message.
     subject = f"[{ticket.ticket_number}] {question_preview}".rstrip(" —-")
     try:
-        send_result = send_email(
+        send_result = _send_email_off_loop(
             recipient,
             subject,
             body,
@@ -1014,7 +1016,7 @@ def _notify_tenant_ticket_update(
     subject = f"Re: [{ticket.ticket_number}] {question_preview}".rstrip(" —-")
 
     try:
-        send_result = send_email(
+        send_result = _send_email_off_loop(
             recipient,
             subject,
             body,
@@ -1321,8 +1323,8 @@ def _clear_escalation_clarify_flag(chat: Chat) -> None:
     chat.user_context = ctx
 
 
-def perform_manual_escalation(
-    db: Session,
+async def perform_manual_escalation(
+    db: AsyncSession,
     tenant: Tenant,
     session_id: uuid.UUID,
     *,
@@ -1337,11 +1339,52 @@ def perform_manual_escalation(
     Create ticket + OpenAI handoff; persist assistant message only (no user bubble).
     Returns (message_to_user, ticket_number).
 
+    Async entry point: the ORM work runs on the session's sync facade inside a
+    ``run_sync`` greenlet, and the escalation LLM call inside it is awaited on
+    the event loop via ``await_only`` — no executor thread is held for the
+    OpenAI round-trip.
+
     For ``trigger == EscalationTrigger.llm_unavailable`` the OpenAI handoff is
     skipped entirely (the LLM is the failing dependency) and the user-facing
     message is taken from the static i18n table. ``failure_type`` is recorded
     in ``user_note``; ``original_user_message`` becomes the ticket's
     ``primary_question``.
+    """
+    from backend.core.db import run_sync
+
+    return await run_sync(
+        db,
+        lambda s: _perform_manual_escalation_impl(
+            s,
+            tenant,
+            session_id,
+            api_key=api_key,
+            user_note=user_note,
+            trigger=trigger,
+            bot_public_id=bot_public_id,
+            failure_type=failure_type,
+            original_user_message=original_user_message,
+        ),
+    )
+
+
+def _perform_manual_escalation_impl(
+    db: Session,
+    tenant: Tenant,
+    session_id: uuid.UUID,
+    *,
+    api_key: str,
+    user_note: str | None,
+    trigger: EscalationTrigger,
+    bot_public_id: str | None = None,
+    failure_type: str | None = None,
+    original_user_message: str | None = None,
+) -> tuple[str, str]:
+    """Greenlet body of :func:`perform_manual_escalation`.
+
+    Runs on the ``AsyncSession`` sync facade, so it may only be called from
+    inside ``run_sync`` (the ``await_only`` bridge below requires the active
+    greenlet context).
     """
     from backend.chat.llm_unavailable_copy import support_notified_text
     from backend.escalation.openai_escalation import complete_escalation_openai_turn
@@ -1423,13 +1466,15 @@ def perform_manual_escalation(
             tenant_id=getattr(tenant, "public_id", None),
             chat_id=str(chat.id) if chat is not None else None,
         )
-        out = complete_escalation_openai_turn(
-            phase=phase,
-            chat_messages=msgs,
-            fact_json=fact_from_ticket(ticket, chat=chat),
-            latest_user_text="[User requested support via the Talk to support action.]",
-            api_key=api_key,
-            response_language=language_context.response_language,
+        out = await_only(
+            complete_escalation_openai_turn(
+                phase=phase,
+                chat_messages=msgs,
+                fact_json=fact_from_ticket(ticket, chat=chat),
+                latest_user_text="[User requested support via the Talk to support action.]",
+                api_key=api_key,
+                response_language=language_context.response_language,
+            )
         )
         message_to_user = out.message_to_user
         tokens_used = out.tokens_used

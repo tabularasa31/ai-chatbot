@@ -261,16 +261,16 @@ async def chat(
 
 @chat_router.post("/{session_id}/escalate", response_model=ManualEscalateResponse)
 @limiter.limit("30/minute")
-def chat_escalate(
+async def chat_escalate(
     request: Request,
     session_id: uuid.UUID,
     body: ManualEscalateRequest,
-    db: Annotated[Session, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_async_db)],
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
 ) -> ManualEscalateResponse:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    tenant = get_tenant_by_api_key(x_api_key, db)
+    tenant = await run_sync(db, lambda s: get_tenant_by_api_key(x_api_key, s))
     if not tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
     if not tenant.openai_api_key:
@@ -284,7 +284,7 @@ def chat_escalate(
         "llm_unavailable": EscalationTrigger.llm_unavailable,
     }[body.trigger]
     try:
-        msg, tnum = perform_manual_escalation(
+        msg, tnum = await perform_manual_escalation(
             db,
             tenant,
             session_id,
@@ -299,10 +299,13 @@ def chat_escalate(
     except RateLimitError as exc:
         if is_quota_exceeded(exc):
             lang = detect_language(body.user_note).detected_language if body.user_note else "en"
-            raise HTTPException(
-                status_code=402,
-                detail=_notify_quota_exceeded(tenant, db, lang=lang, api_key=tenant.openai_api_key),
-            ) from None
+            detail = await run_sync(
+                db,
+                lambda s: _notify_quota_exceeded(
+                    tenant, s, lang=lang, api_key=tenant.openai_api_key
+                ),
+            )
+            raise HTTPException(status_code=402, detail=detail) from None
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None
     except APIError:
         raise HTTPException(status_code=503, detail="OpenAI service unavailable") from None

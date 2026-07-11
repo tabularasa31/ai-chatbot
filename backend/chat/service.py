@@ -704,9 +704,9 @@ async def async_process_chat_message(
     ``asyncio.create_task`` so guard checks, embedding, and retrieval run
     concurrently on the event loop without blocking OS threads.
 
-    Non-RAG handlers (Greeting, Escalation) are dispatched via
-    ``asyncio.to_thread`` using the sync session (``db.sync_session``) so
-    their DB operations do not need to be migrated in this PR.
+    Non-RAG handlers (Greeting, Escalation) run their DB work on the
+    ``AsyncSession`` sync facade via ``run_sync`` (greenlet); their LLM calls
+    are async and awaited on the event loop through ``await_only``.
     """
     _turn_started_at = perf_counter()
 
@@ -716,15 +716,14 @@ async def async_process_chat_message(
     redacted_question = redact(question, optional_entity_types=optional_entity_types).redacted_text
 
     # Release the pooled connection before the human-request classifier:
-    # detect_human_request makes a sync OpenAI call (up to 3s) and there are
+    # detect_human_request makes an OpenAI call (up to 3s) and there are
     # no DB operations until _ensure_chat_async below.
     await db.close()
 
-    # Run the sync classifiers off the event loop so other coroutines can
-    # progress during their OpenAI calls. The human-request and support-contact
-    # classifiers are independent, so run them concurrently — the support-contact
-    # result is consumed only on the rarer escalation path but classifying it
-    # here (in parallel) keeps that path from paying a second serialized ~3s call.
+    # The human-request and support-contact classifiers are independent async
+    # coroutines, so run them concurrently — the support-contact result is
+    # consumed only on the rarer escalation path but classifying it here (in
+    # parallel) keeps that path from paying a second serialized ~3s call.
     _hrc_start = perf_counter()
     if not redacted_question.strip():
         # Bootstrap turn (widget open) carries an empty question — there is
@@ -736,10 +735,8 @@ async def async_process_chat_message(
         support_contact_question = False
     else:
         human_request_result, support_contact_question = await asyncio.gather(
-            asyncio.to_thread(detect_human_request, redacted_question, api_key, tenant_id),
-            asyncio.to_thread(
-                detect_support_contact_question, redacted_question, api_key, tenant_id
-            ),
+            detect_human_request(redacted_question, api_key, tenant_id),
+            detect_support_contact_question(redacted_question, api_key, tenant_id),
         )
     explicit_human_request = human_request_result.human_request
     _human_request_classifier_ms = round((perf_counter() - _hrc_start) * 1000, 2)

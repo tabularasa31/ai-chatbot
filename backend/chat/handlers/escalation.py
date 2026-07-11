@@ -168,13 +168,15 @@ class EscalationStateMachine(PipelineHandler):
                 name="chat-state-check",
                 input={"state": "closed"},
             ).end(output={"chat_ended": True})
-        out = _svc.complete_escalation_openai_turn(
-            phase=EscalationPhase.chat_already_closed,
-            chat_messages=msgs,
-            fact_json={},
-            latest_user_text=ctx.redacted_question,
-            api_key=ctx.api_key,
-            response_language=ctx.language_context.response_language,
+        out = await_only(
+            _svc.complete_escalation_openai_turn(
+                phase=EscalationPhase.chat_already_closed,
+                chat_messages=msgs,
+                fact_json={},
+                latest_user_text=ctx.redacted_question,
+                api_key=ctx.api_key,
+                response_language=ctx.language_context.response_language,
+            )
         )
         return _svc._escalation_turn_response(
             db=ctx.db,
@@ -226,13 +228,15 @@ class EscalationStateMachine(PipelineHandler):
                 ctx.db.refresh(chat)
                 ctx.db.expire(chat, ["messages"])
                 msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
-                out = _svc.complete_escalation_openai_turn(
-                    phase=EscalationPhase.handoff_email_known,
-                    chat_messages=msgs,
-                    fact_json=_svc.fact_from_ticket(ticket, chat=chat),
-                    latest_user_text=ctx.redacted_question,
-                    api_key=ctx.api_key,
-                    response_language=ctx.language_context.response_language,
+                out = await_only(
+                    _svc.complete_escalation_openai_turn(
+                        phase=EscalationPhase.handoff_email_known,
+                        chat_messages=msgs,
+                        fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                        latest_user_text=ctx.redacted_question,
+                        api_key=ctx.api_key,
+                        response_language=ctx.language_context.response_language,
+                    )
                 )
                 if awaiting_email_span is not None:
                     awaiting_email_span.end(
@@ -269,13 +273,15 @@ class EscalationStateMachine(PipelineHandler):
                     ctx.db.rollback()
                 return outcome
             msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
-            out = _svc.complete_escalation_openai_turn(
-                phase=EscalationPhase.email_parse_failed,
-                chat_messages=msgs,
-                fact_json=_svc.fact_from_ticket(ticket, chat=chat),
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
+            out = await_only(
+                _svc.complete_escalation_openai_turn(
+                    phase=EscalationPhase.email_parse_failed,
+                    chat_messages=msgs,
+                    fact_json=_svc.fact_from_ticket(ticket, chat=chat),
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
             )
             if awaiting_email_span is not None:
                 awaiting_email_span.end(
@@ -328,16 +334,18 @@ class EscalationStateMachine(PipelineHandler):
         ticket = get_latest_escalation_ticket_for_chat(chat.id, ctx.db)
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         try:
-            out = _svc.complete_escalation_openai_turn(
-                phase=EscalationPhase.followup_awaiting_yes_no,
-                chat_messages=msgs,
-                fact_json={
-                    **_svc.fact_from_ticket(ticket, chat=chat),
-                    "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
-                },
-                latest_user_text=ctx.redacted_question,
-                api_key=ctx.api_key,
-                response_language=ctx.language_context.response_language,
+            out = await_only(
+                _svc.complete_escalation_openai_turn(
+                    phase=EscalationPhase.followup_awaiting_yes_no,
+                    chat_messages=msgs,
+                    fact_json={
+                        **_svc.fact_from_ticket(ticket, chat=chat),
+                        "clarify_round": 1 if _escalation_clarify_already_asked(chat) else 0,
+                    },
+                    latest_user_text=ctx.redacted_question,
+                    api_key=ctx.api_key,
+                    response_language=ctx.language_context.response_language,
+                )
             )
             decision = out.followup_decision or "unclear"
             if decision == "unclear" and _escalation_clarify_already_asked(chat):
@@ -496,8 +504,7 @@ class EscalationStateMachine(PipelineHandler):
         )
         msgs = _svc.build_chat_messages_for_openai(chat, ctx.redacted_question)
         out_handoff = await_only(
-            asyncio.to_thread(
-                _svc.complete_escalation_openai_turn,
+            _svc.complete_escalation_openai_turn(
                 phase=phase,
                 chat_messages=msgs,
                 fact_json=_svc.fact_from_ticket(ticket, chat=chat),
@@ -655,13 +662,20 @@ class EscalationStateMachine(PipelineHandler):
     ) -> ChatTurnOutcome:
         _svc = _svc_lookup()
 
-        localized = localize_text_to_language_result(
-            canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
-            target_language=ctx.language_context.response_language,
-            api_key=ctx.api_key,
-            tenant_id=str(ctx.tenant_id),
-            bot_id=str(ctx.bot_id) if ctx.bot_id else None,
-            chat_id=str(ctx.chat.id),
+        # The localization helper is still sync (language.py migration is a
+        # separate wave) and makes its own OpenAI call for non-English targets.
+        # We run inside a run_sync greenlet ON the event loop thread, so bridge
+        # it through a worker thread instead of freezing the loop.
+        localized = await_only(
+            asyncio.to_thread(
+                localize_text_to_language_result,
+                canonical_text=_AWAITING_REQUEST_CANONICAL_TEXT,
+                target_language=ctx.language_context.response_language,
+                api_key=ctx.api_key,
+                tenant_id=str(ctx.tenant_id),
+                bot_id=str(ctx.bot_id) if ctx.bot_id else None,
+                chat_id=str(ctx.chat.id),
+            )
         )
         _svc._persist_turn_with_response_language(
             db=ctx.db,
@@ -728,8 +742,7 @@ class EscalationStateMachine(PipelineHandler):
         pre_confirm_ctx = chat.escalation_pre_confirm_context or {}
         try:
             decision, classify_tokens = await_only(
-                asyncio.to_thread(
-                    _svc.classify_pre_confirm_reply,
+                _svc.classify_pre_confirm_reply(
                     latest_user_text=ctx.redacted_question,
                     api_key=ctx.api_key,
                 )
@@ -758,8 +771,7 @@ class EscalationStateMachine(PipelineHandler):
                 try:
                     out_declined = await_only(
                         asyncio.wait_for(
-                            asyncio.to_thread(
-                                _svc.render_pre_confirm_text,
+                            _svc.render_pre_confirm_text(
                                 variant="declined",
                                 response_language=ctx.language_context.response_language,
                                 api_key=ctx.api_key,
@@ -816,8 +828,7 @@ class EscalationStateMachine(PipelineHandler):
             try:
                 out_clarify = await_only(
                     asyncio.wait_for(
-                        asyncio.to_thread(
-                            _svc.render_pre_confirm_text,
+                        _svc.render_pre_confirm_text(
                             variant="clarify",
                             response_language=ctx.language_context.response_language,
                             api_key=ctx.api_key,

@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from openai import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from backend.chat.handlers.base import ChatTurnOutcome
@@ -28,7 +29,7 @@ from backend.contact_sessions.service import (
 )
 from backend.core import db as core_db
 from backend.core.config import settings
-from backend.core.db import get_db
+from backend.core.db import get_async_db, get_db, run_sync
 from backend.core.limiter import (
     limiter,
     widget_bot_rate_limit_key,
@@ -839,16 +840,18 @@ def widget_history(
 
 @widget_router.post("/escalate", response_model=ManualEscalateResponse)
 @limiter.limit("20/minute", key_func=widget_public_rate_limit_key)
-def widget_escalate(
+async def widget_escalate(
     request: Request,
     body: ManualEscalateRequest,
     bot_id: Annotated[str, Query(description="Bot public ID")],
     session_id: Annotated[str, Query(description="Chat session UUID")],
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> ManualEscalateResponse:
     """Manual escalation for embedded widget (bot public_id + session)."""
     try:
-        _bot, tenant = get_bot_and_tenant_for_widget_chat(db, bot_id)
+        _bot, tenant = await run_sync(
+            db, lambda s: get_bot_and_tenant_for_widget_chat(s, bot_id)
+        )
     except WidgetChatTenantGateError as e:
         if e.reason == WidgetChatTenantGateError.NOT_FOUND:
             raise HTTPException(status_code=404, detail="Bot not found") from e
@@ -868,7 +871,7 @@ def widget_escalate(
         "llm_unavailable": EscalationTrigger.llm_unavailable,
     }[body.trigger]
     try:
-        msg, tnum = perform_manual_escalation(
+        msg, tnum = await perform_manual_escalation(
             db,
             tenant,
             sid,

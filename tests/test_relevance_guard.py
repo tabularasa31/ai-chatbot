@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -204,103 +203,6 @@ def test_low_retrieval_rejects_when_all_vector_similarities_present_and_low(
     assert outcome.text.startswith("Sorry")
     assert "Product" in outcome.text
     assert "ModA" in outcome.text
-
-
-def test_relevance_checker_timeout_bounded_by_executor_shutdown(
-    tenant: TestClient,
-    db_session: Session,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Reduce timeout for a fast unit test.
-    monkeypatch.setattr("backend.guards.relevance_checker.TIMEOUT_SECONDS", 0.05)
-
-    cl_row, api_key = _create_client(tenant, db_session, email="reltime@example.com")
-    tenant_id = cl_row.id
-
-    profile = TenantProfile(
-        tenant_id=tenant_id,
-        product_name="Product",
-        topics=["ModA"],
-        glossary=[],
-        aliases=[],
-        support_email=None,
-        support_urls=[],
-        escalation_policy=None,
-        updated_at=datetime.now(timezone.utc),
-    )
-    db_session.add(profile)
-    db_session.commit()
-
-    def slow_create(*args, **kwargs):
-        time.sleep(0.2)
-        return Mock(
-            choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))]
-        )
-
-    mock_openai = Mock()
-    mock_openai.chat.completions.create = slow_create
-    monkeypatch.setattr(
-        "backend.guards.relevance_checker.get_openai_client",
-        lambda _key, **_kw: mock_openai,
-    )
-
-    from backend.guards.relevance_checker import check_relevance_precheck
-
-    start = time.monotonic()
-    relevant, reason, _profile = check_relevance_precheck(
-        tenant_id=tenant_id,
-        user_question="how do I configure the integration here",
-        db=db_session,
-        api_key=api_key,
-        trace=None,
-    )
-    elapsed = time.monotonic() - start
-
-    assert elapsed < 0.3
-    assert relevant is True
-    assert reason == "timeout"
-
-
-def test_relevance_checker_uses_relevance_guard_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    tenant_id = uuid.uuid4()
-    profile = TenantProfile(
-        tenant_id=tenant_id,
-        product_name="Product",
-        topics=["ModA"],
-        glossary=[],
-        aliases=[],
-        support_email=None,
-        support_urls=[],
-        escalation_policy=None,
-        updated_at=datetime.now(timezone.utc),
-    )
-    mock_openai = Mock()
-    mock_openai.chat.completions.create.return_value = Mock(
-        choices=[Mock(message=Mock(content='{"relevant": true, "reason": "ok"}'))]
-    )
-    monkeypatch.setattr(
-        "backend.guards.relevance_checker.get_openai_client",
-        lambda _key, **_kw: mock_openai,
-    )
-    monkeypatch.setattr(
-        "backend.guards.relevance_checker.settings.relevance_guard_model",
-        "gpt-test-relevance",
-    )
-
-    from backend.guards.relevance_checker import check_relevance_with_profile
-
-    relevant, reason, _profile = check_relevance_with_profile(
-        tenant_id=tenant_id,
-        user_question="how do I configure the integration here",
-        profile=profile,
-        api_key="sk-test",
-    )
-
-    assert relevant is True
-    assert reason == "relevant"
-    assert mock_openai.chat.completions.create.call_args.kwargs["model"] == "gpt-test-relevance"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -623,6 +525,47 @@ async def test_async_relevance_uses_model_from_settings(monkeypatch: pytest.Monk
     )
 
     assert async_mock.call_args.kwargs["model"] == "gpt-test-async"
+
+
+@pytest.mark.asyncio
+async def test_async_relevance_precheck_loads_profile_and_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The precheck wrapper loads the profile via ``AsyncSession.get`` and
+    returns the guard verdict for it."""
+    from backend.guards.relevance_checker import _cache, async_check_relevance_precheck
+
+    _cache.clear()
+
+    async_mock = AsyncMock(
+        return_value=Mock(
+            choices=[Mock(message=Mock(content='{"category": "relevant", "reason": "ok"}'))]
+        )
+    )
+    mock_client = Mock()
+    mock_client.chat.completions.create = async_mock
+    monkeypatch.setattr(
+        "backend.guards.relevance_checker.get_async_openai_client",
+        lambda _key, **_kw: mock_client,
+    )
+
+    tid = uuid.uuid4()
+    profile = _make_profile(tid)
+    db = Mock()
+    db.get = AsyncMock(return_value=profile)
+
+    relevant, reason, p = await async_check_relevance_precheck(
+        tenant_id=tid,
+        user_question="how do I configure the integration module",
+        db=db,
+        api_key="sk-test",
+    )
+
+    db.get.assert_awaited_once_with(TenantProfile, tid)
+    assert relevant is True
+    assert reason == "relevant"
+    assert p is profile
+    assert async_mock.await_count == 1
 
 
 # ---------------------------------------------------------------------------

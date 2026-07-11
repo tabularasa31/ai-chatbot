@@ -16,6 +16,19 @@ Each fires exactly once per real retry. Per-turn retry rate =
 ``<one of the above> / count(chat turns)``. Do NOT sum a per-attempt counter
 like ``attempt - 1`` — summed across the attempt events of one call it
 double-counts (0+1+2 = 3 for a call that retried twice).
+
+``openai_retry.exhausted`` does NOT imply any retry happened. Two exhaustion
+reasons are hard stops on the *first* attempt — ``timeout_no_retry`` (any
+``APITimeoutError``: retrying a call that already burned the client timeout
+only doubles user-facing latency under the per-turn budget) and
+``rate_limit_over_budget`` (``retry-after`` exceeds the whole retry budget).
+Both fire ``exhausted`` at ``final_attempt=1`` with no preceding
+``retry_scheduled`` / ``is_retry=true``. So ``count(exhausted) > 0`` while
+``count(attempt WHERE is_retry=true) = 0`` is EXPECTED, not a tracking bug —
+it just means every exhaustion that window was a non-retryable kind. Break
+``exhausted`` down by its ``reason`` property before reading it as lost
+retries; only ``max_attempts`` / ``budget_exhausted`` / ``delay_over_remaining``
+are preceded by real retry attempts.
 """
 
 from __future__ import annotations

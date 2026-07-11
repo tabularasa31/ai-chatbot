@@ -6,14 +6,12 @@ import json
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.core.openai_client import get_async_openai_client, get_openai_client
-from backend.core.openai_retry import async_call_openai_with_retry, call_openai_with_retry
+from backend.core.openai_client import get_async_openai_client
+from backend.core.openai_retry import async_call_openai_with_retry
 from backend.models import TenantProfile as TenantProfileModel
 from backend.observability import TraceHandle, record_stage_ms
 from backend.observability.cache_metrics import record_hit, record_miss
@@ -262,7 +260,7 @@ def _record_success() -> None:
         _circuit_opened_at = None
 
 
-def check_relevance_with_profile(
+async def async_check_relevance_with_profile(
     *,
     tenant_id: uuid.UUID,
     user_question: str,
@@ -274,9 +272,8 @@ def check_relevance_with_profile(
 ) -> tuple[bool, str, TenantProfileModel | None]:
     """Relevance pre-check using an already-loaded profile (no DB access).
 
-    Callers that need to run this concurrently should pre-fetch the profile
-    on the main thread and pass it here to avoid sharing a SQLAlchemy session
-    across threads.
+    The OpenAI call is bounded by ``asyncio.wait_for`` so the event loop is
+    not blocked and a slow guard fails open after ``TIMEOUT_SECONDS``.
 
     When ``force_llm_check`` is True, the short-query and circuit-breaker
     fast-paths are skipped and the LLM is always consulted. Used by the chat
@@ -318,139 +315,6 @@ def check_relevance_with_profile(
     # different conversation state. The profile version (updated_at) is included
     # so a topics/glossary edit invalidates prior verdicts immediately rather
     # than after the TTL.
-    key_src = (
-        f"{tenant_id}:{_profile_cache_version(profile)}:"
-        f"{user_question[:100]}:{(dialog_context or '')[-200:]}"
-    )
-    cache_key = hashlib.sha256(key_src.encode("utf-8")).hexdigest()
-    cached = _cache_get(cache_key)
-    if cached is not None:
-        relevant, reason = cached
-        if span is not None:
-            span.end(
-                output={"relevant": relevant, "reason": reason},
-                metadata={"cache_hit": True, "latency_ms": 0},
-            )
-        _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=True, blocked=not relevant, score=reason)
-        return relevant, reason, profile
-
-    system_prompt, user_prompt = _build_prompts(profile, user_question, dialog_context)
-
-    def _call_llm() -> tuple[bool, str]:
-        openai_client = get_openai_client(api_key, timeout=settings.guards_openai_timeout_seconds)
-        response = call_openai_with_retry(
-            "guard_relevance_check",
-            lambda: openai_client.chat.completions.create(
-                model=settings.relevance_guard_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0,
-                max_completion_tokens=80,
-                response_format={"type": "json_object"},
-            ),
-            endpoint="chat.completions",
-            langfuse_observation=span,
-        )
-        return _parse_llm_response(response.choices[0].message.content)
-
-    ex = ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(_call_llm)
-    try:
-        relevant, reason = future.result(timeout=TIMEOUT_SECONDS)
-    except TimeoutError:
-        if span is not None:
-            span.end(
-                output={"relevant": True, "reason": "timeout"},
-                metadata={"timeout": True},
-            )
-        # Don't wait for the potentially stuck OpenAI request thread.
-        try:
-            ex.shutdown(wait=False, cancel_futures=True)
-        except TypeError:
-            ex.shutdown(wait=False)
-        # See async variant: force callers must not contribute to the shared
-        # CB counter, otherwise one tenant's pathological force-stream during
-        # an OpenAI outage trips the breaker for every other tenant.
-        if not force_llm_check:
-            _record_failure()
-        return True, "timeout", None
-    except Exception:
-        if span is not None:
-            span.end(output={"relevant": True, "reason": "error"}, metadata={"error": True})
-        try:
-            ex.shutdown(wait=False)
-        except Exception:
-            pass
-        if not force_llm_check:
-            _record_failure()
-        return True, "error", None
-    else:
-        try:
-            ex.shutdown(wait=False)
-        except Exception:
-            pass
-
-    if not force_llm_check:
-        _record_success()
-
-    latency_ms = round((time.perf_counter() - start) * 1000, 2)
-
-    if span is not None:
-        span.end(
-            output={"relevant": relevant, "reason": reason},
-            metadata={"latency_ms": latency_ms, "cache_hit": False},
-        )
-    if trace is not None:
-        record_stage_ms(trace, "relevance_guard_ms", latency_ms)
-
-    _emit_relevance_guard_metric(tenant_id=tenant_id, cache_hit=False, blocked=not relevant, score=reason)
-    _cache_set(cache_key, relevant, reason)
-    return relevant, reason, profile
-
-
-async def async_check_relevance_with_profile(
-    *,
-    tenant_id: uuid.UUID,
-    user_question: str,
-    profile: TenantProfileModel | None,
-    api_key: str,
-    trace: TraceHandle | None = None,
-    force_llm_check: bool = False,
-    dialog_context: str | None = None,
-) -> tuple[bool, str, TenantProfileModel | None]:
-    """Async counterpart of :func:`check_relevance_with_profile`.
-
-    Replaces the ThreadPoolExecutor timeout pattern with ``asyncio.wait_for``
-    so the event loop is not blocked during the OpenAI HTTP call.
-
-    See :func:`check_relevance_with_profile` for ``force_llm_check`` semantics.
-
-    Returns: (relevant, reason, profile_for_guard)
-    """
-    if not profile or _profile_is_empty(profile):
-        return True, "no_profile", None
-
-    if not force_llm_check:
-        word_count = len(user_question.split())
-        if word_count <= SHORT_QUERY_WORD_LIMIT:
-            return True, "short_query_bypass", profile
-
-        cb = _check_circuit_breaker()
-        if cb is not None:
-            return cb[0], cb[1], None
-
-    start = time.perf_counter()
-    span = None
-    if trace is not None:
-        span = trace.span(
-            name="relevance_guard",
-            input={"tenant_id": str(tenant_id), "question_preview": user_question[:60]},
-        )
-
-    # See sync variant: the profile version invalidates cached verdicts on a
-    # profile edit instead of leaving them stale for the TTL.
     key_src = (
         f"{tenant_id}:{_profile_cache_version(profile)}:"
         f"{user_question[:100]}:{(dialog_context or '')[-200:]}"
@@ -531,30 +395,6 @@ async def async_check_relevance_with_profile(
     return relevant, reason, profile
 
 
-def check_relevance_precheck(
-    *,
-    tenant_id: uuid.UUID,
-    user_question: str,
-    db: Session,
-    api_key: str,
-    trace: TraceHandle | None = None,
-) -> tuple[bool, str, TenantProfileModel | None]:
-    """Relevance pre-check before RAG (sync).
-
-    Thin wrapper around check_relevance_with_profile that loads the profile
-    from the DB. Use check_relevance_with_profile directly when the profile
-    has already been fetched (e.g. for concurrent execution).
-    """
-    profile = db.get(TenantProfileModel, tenant_id)
-    return check_relevance_with_profile(
-        tenant_id=tenant_id,
-        user_question=user_question,
-        profile=profile,
-        api_key=api_key,
-        trace=trace,
-    )
-
-
 async def async_check_relevance_precheck(
     *,
     tenant_id: uuid.UUID,
@@ -563,10 +403,11 @@ async def async_check_relevance_precheck(
     api_key: str,
     trace: TraceHandle | None = None,
 ) -> tuple[bool, str, TenantProfileModel | None]:
-    """Async counterpart of :func:`check_relevance_precheck`.
+    """Relevance pre-check before RAG.
 
-    Loads the profile via AsyncSession and delegates to
-    :func:`async_check_relevance_with_profile`.
+    Thin wrapper around :func:`async_check_relevance_with_profile` that loads
+    the profile from the DB. Use the profile variant directly when the profile
+    has already been fetched (e.g. for concurrent execution).
     """
     profile = await db.get(TenantProfileModel, tenant_id)
     return await async_check_relevance_with_profile(

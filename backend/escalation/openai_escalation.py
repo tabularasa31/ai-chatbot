@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Literal
@@ -204,7 +205,9 @@ async def _generate_context_pre_confirm(
         {"role": "user", "content": user_block},
     ]
     try:
-        client = get_async_openai_client(api_key)
+        client = get_async_openai_client(
+            api_key, timeout=settings.escalation_openai_timeout_seconds
+        )
         response = await async_call_openai_with_retry(
             f"pre_confirm_context_{variant}",
             lambda: client.chat.completions.create(
@@ -359,7 +362,9 @@ async def classify_pre_confirm_reply(
         },
     ]
     try:
-        client = get_async_openai_client(api_key)
+        client = get_async_openai_client(
+            api_key, timeout=settings.escalation_openai_timeout_seconds
+        )
         response = await async_call_openai_with_retry(
             "classify_pre_confirm_reply",
             lambda: client.chat.completions.create(
@@ -418,6 +423,34 @@ def _format_thread(chat_messages: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+async def _localized_generic_fallback(
+    *, response_language: str, api_key: str
+) -> tuple[str, int]:
+    """Localize ``FALLBACK_EN_GENERIC`` within the escalation deadline.
+
+    The fallback localization is itself an OpenAI call; when the primary
+    completion just timed out, the provider is likely slow across the board,
+    so an unbounded localization here would stall the turn a second time
+    (for up to the general 60s client timeout). Bound it with the same
+    escalation deadline and degrade to the canonical English text — the
+    same trade-off ``pre_confirm_fallback_result`` makes. Never raises.
+    """
+    try:
+        localization = await asyncio.wait_for(
+            async_localize_text_to_language_result(
+                canonical_text=FALLBACK_EN_GENERIC,
+                target_language=response_language,
+                api_key=api_key,
+            ),
+            timeout=settings.escalation_openai_timeout_seconds,
+        )
+        return localization.text, localization.tokens_used
+    except Exception:
+        # Realistically only wait_for's TimeoutError: the localization helper
+        # itself degrades to canonical text instead of raising.
+        return FALLBACK_EN_GENERIC, 0
+
+
 async def complete_escalation_openai_turn(
     *,
     phase: EscalationPhase,
@@ -455,7 +488,9 @@ async def complete_escalation_openai_turn(
     ]
 
     try:
-        client = get_async_openai_client(api_key)
+        client = get_async_openai_client(
+            api_key, timeout=settings.escalation_openai_timeout_seconds
+        )
         _esc_reasoning = is_reasoning_model(model_name)
         _esc_max_tokens = (
             settings.chat_response_max_tokens_reasoning
@@ -484,13 +519,10 @@ async def complete_escalation_openai_turn(
         )
         msg = (data.get("message_to_user") or "").strip()
         if not msg:
-            localization = await async_localize_text_to_language_result(
-                canonical_text=FALLBACK_EN_GENERIC,
-                target_language=response_language,
-                api_key=api_key,
+            msg, fallback_tokens = await _localized_generic_fallback(
+                response_language=response_language, api_key=api_key
             )
-            msg = localization.text
-            tokens += localization.tokens_used
+            tokens += fallback_tokens
         fd = data.get("followup_decision")
         followup: Literal["yes", "no", "unclear"] | None = None
         if fd in ("yes", "no", "unclear"):
@@ -508,13 +540,11 @@ async def complete_escalation_openai_turn(
             tokens=0,
             model=model_name,
         )
-        localization = await async_localize_text_to_language_result(
-            canonical_text=FALLBACK_EN_GENERIC,
-            target_language=response_language,
-            api_key=api_key,
+        msg, fallback_tokens = await _localized_generic_fallback(
+            response_language=response_language, api_key=api_key
         )
         return EscalationLlmResult(
-            message_to_user=localization.text,
+            message_to_user=msg,
             followup_decision=None,
-            tokens_used=localization.tokens_used,
+            tokens_used=fallback_tokens,
         )

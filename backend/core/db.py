@@ -73,6 +73,23 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+async def async_commit_or_rollback(db: AsyncSession) -> None:
+    """Commit ``db``, rolling back if the flush/commit raises.
+
+    A failed commit (e.g. an asyncpg ``DataError``) leaves the async session
+    with a transaction that has been rolled back at the DB level but is still
+    marked active in SQLAlchemy — the next statement on the same session then
+    raises ``PendingRollbackError`` masking the real cause. Rolling back
+    explicitly returns the session to a clean state; the original exception is
+    re-raised so the caller still fails loudly.
+    """
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+
+
 async def run_sync(
     db: AsyncSession,
     fn: Callable[[Session], T],
@@ -93,9 +110,20 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
 
     Use this for new async services. Existing sync code keeps using
     ``get_db``; both contours run side-by-side against the same database.
+
+    An explicit ``rollback`` on error is defense-in-depth against
+    ``PendingRollbackError``: if a handler lets a DB exception (e.g. an
+    asyncpg ``DataError`` mid-flush) propagate, the transaction is put back
+    into a clean state before the session's connection returns to the pool.
+    The ``async with`` teardown would also roll back on close, but rolling
+    back here keeps a poisoned transaction from ever outliving the request.
     """
     async with AsyncSessionLocal() as db:
-        yield db
+        try:
+            yield db
+        except Exception:
+            await db.rollback()
+            raise
 
 
 def _build_async_readonly_engine_kwargs(url: str) -> dict:
@@ -142,6 +170,12 @@ async def get_async_readonly_db() -> AsyncGenerator[AsyncSession, None]:
 
     On SQLite (tests) the engine has no read-only mechanism; the dependency
     still works for query-shape parity but does not block writes.
+
+    Rolls back on error for the same reason as :func:`get_async_db`.
     """
     async with AsyncReadOnlySessionLocal() as db:
-        yield db
+        try:
+            yield db
+        except Exception:
+            await db.rollback()
+            raise

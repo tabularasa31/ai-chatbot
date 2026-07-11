@@ -80,6 +80,23 @@ def _finalize_persisted_messages(
     # turn don't collapse into the consecutive-failure path.
     chat.last_reply_was_rephrase_prompt = set_rephrase_flag
     db.add(chat)
+    # Flush the turn's own rows (messages + chat update) BEFORE the best-effort
+    # session-turn tracking savepoint. ``begin_nested()`` implicitly flushes all
+    # pending state when it opens the savepoint, so without this a real failure
+    # on *these* rows (e.g. an asyncpg ``DataError`` on a naive/aware datetime,
+    # or a constraint violation) would be raised inside the ``try`` below,
+    # swallowed and mislabeled by the tracking ``except``, and then re-surface as
+    # a masked ``PendingRollbackError`` at commit. Flushing here lets the
+    # original exception propagate; the explicit rollback keeps the session from
+    # returning to the pool in a broken state.
+    try:
+        db.flush()
+    except Exception:
+        db.rollback()
+        raise
+    # Session-turn tracking is best-effort and isolated in a savepoint: the
+    # turn's messages are already flushed above, so a failure here rolls back
+    # only the tracking writes and never masks the persisted turn.
     try:
         with db.begin_nested():
             record_user_session_turn(
@@ -95,7 +112,14 @@ def _finalize_persisted_messages(
             chat.session_id,
             exc_info=True,
         )
-    db.commit()
+    # Defense-in-depth: a failed commit still rolls the session back and
+    # re-raises rather than leaving a poisoned transaction for the next
+    # statement on the same session (widget source lookup, post-turn analytics).
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def _persist_turn(
